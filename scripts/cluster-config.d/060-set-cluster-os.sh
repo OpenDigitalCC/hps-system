@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 
 [[ -z "${HPS_CLUSTER_CONFIG_DIR:-}" ]] && { echo "[ERROR] hps.conf not loaded properly or missing required variables." >&2; exit 1; }

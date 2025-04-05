@@ -1,18 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 shopt -s nullglob
 configs=("${HPS_CLUSTER_CONFIG_DIR}"/*.cluster)
 shopt -u nullglob
 
-active_cluster=$(get_active_cluster_filename)
 
 #TODO: This doesn't work well, reselecting the same config should reload, also needs a delete config. plus choosing a diffent configndoesnt work
 
 if ((${#configs[@]}))
  then
+  active_cluster=$(get_active_cluster_filename)
   echo "[*] Found ${#configs[@]} existing cluster(s) - Active cluster: $(basename ${active_cluster})"
   select opt in "${configs[@]}" "Create new cluster"
    do

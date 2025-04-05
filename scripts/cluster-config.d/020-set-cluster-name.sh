@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 read -rp "Enter technical name for this cluster [alphanumeric, underscore, hyphen only]: " CLUSTER_NAME
 
