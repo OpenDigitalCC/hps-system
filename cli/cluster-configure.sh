@@ -9,7 +9,7 @@ trap cleanup EXIT
 cleanup() {
   if [[ $? -eq 0 ]]
    then
-    echo "[✓] Finished configuring."
+    echo "[✓] Reconfiguring..."
 
   # Check for CLUSTER_NAME and write the config
     if [[ -v CLUSTER_NAME && -n "$CLUSTER_NAME" ]]; then
@@ -40,5 +40,7 @@ for script in "$SCRIPT_DIR"/*.sh; do
         echo "[!] Skipping non-executable: $script"
     fi
 done
+
+echo "[✓] Finished configuration."
 
 
