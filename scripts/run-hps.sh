@@ -30,6 +30,7 @@ if cluster_file=$(get_active_cluster_filename 2>/dev/null)
     configure_supervisor_services
     configure_dnsmasq
     configure_nginx
+    configure_ipxe
   fi
  else
   echo "[INFO] No active cluster configured — continuing without starting services"

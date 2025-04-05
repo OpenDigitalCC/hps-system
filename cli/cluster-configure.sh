@@ -18,6 +18,7 @@ cleanup() {
       configure_supervisor_services
       configure_dnsmasq
       configure_nginx
+      configure_ipxe
       hps_services_restart  # Restart all services
   else
     echo "[ERROR] No cluster name, not reloading"

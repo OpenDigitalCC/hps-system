@@ -9,5 +9,6 @@ echo "Reloading $(get_active_cluster_filename)"
 configure_supervisor_services
 configure_dnsmasq
 configure_nginx
+configure_ipxe
 hps_services_restart  # Restart all services
       
