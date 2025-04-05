@@ -11,69 +11,66 @@ source $(get_active_cluster_filename 2>/dev/null)
 local NGINX_CONF="${HPS_SERVICE_CONFIG_DIR}/nginx.conf"
 
 cat > "${NGINX_CONF}" <<EOF
+
 worker_processes auto;
 events {
-    worker_connections 1024;
+  worker_connections 1024;
 }
 
 http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-    sendfile      on;
-    keepalive_timeout  65;
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+  sendfile      on;
+  keepalive_timeout  65;
+  access_log /dev/stdout;
+  error_log /dev/stderr warn;
 
-    server {
-        listen 80 default_server;
-        server_name _;
+  server {
+    listen 80 default_server;
+    server_name _;
+    root ${HPS_HTTP}/;
+    
+    # Text-based file types
+#    location ~* \.(cfg|conf|ks|ipxe|sh|txt|ini)\$ {
+#        default_type text/plain;
+#    }
 
-        # Root directory for PXE HTTP content
-        root ${HPS_HTTP};
-
-        # iPXE menu files (e.g. /boot.ipxe, /menus/*.ipxe)
-        location ~ \.ipxe\$ {
-            default_type text/plain;
-        }
-
-        # Kickstart files
-        location ~ \.ks\$ {
-            default_type text/plain;
-        }
-
-        # CGI Bash scripts via fcgiwrap (e.g. /cgi-bin/host-config.sh)
-        location /cgi-bin/ {
-            gzip off;
-            include /etc/nginx/fastcgi_params;
-            fastcgi_pass unix:/var/run/fcgiwrap.socket;
-            fastcgi_param SCRIPT_FILENAME ${HPS_HTTP}\$fastcgi_script_name;
-            fastcgi_param DOCUMENT_ROOT ${HPS_HTTP};
-        }
-
-        # ISO trees (multiple distros/versions)
-        location /distros/ {
-            autoindex on;
-            alias ${HPS_HTTP}/distros/;
-        }
-
-        # Default Rocky Linux ISO tree
-        location /rocky/ {
-            autoindex on;
-            alias ${HPS_HTTP}/distros/rocky/;
-        }
-
-        # Text-based file types
-        location ~* \.(cfg|conf|ks|ipxe|sh|txt|ini)\$ {
-            default_type text/plain;
-        }
-
-        # Optional: logs directory (for debugging)
-        location /logs/ {
-            autoindex on;
-            alias /var/log/nginx/;
-        }
+    location / {
+    # Root directory for HTTP content
+      alias ${HPS_HTTP}/;
+# TODO: turn off autoindex
+      autoindex on;
     }
+
+    location /hosts/ {
+      alias ${HPS_CONFIG_BASE}/hosts/;
+      default_type text/plain;
+      autoindex on;
+# TODO: turn off autoindex
+#      autoindex off;
+#      try_files \$uri =404;
+    }
+
+
+    # CGI Bash scripts via fcgiwrap (e.g. /cgi-bin/host-config.sh)
+    location /cgi-bin/ {
+      root ${HPS_HTTP}/cgi-bin;
+      gzip off;
+      include /etc/nginx/fastcgi_params;
+      fastcgi_pass unix:/var/run/fcgiwrap.socket;
+      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP}\$fastcgi_script_name;
+      fastcgi_param DOCUMENT_ROOT ${HPS_HTTP};
+    }
+
+    # ISO trees (multiple distros/versions)
+    location /distros/ {
+      autoindex on;
+      alias ${HPS_HTTP}/distros/;
+    }
+  }
 }
 EOF
 
-echo "[OK] NGINX config generated at: ${NGINX_CONF}"
+echo "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP}"
 
 }
