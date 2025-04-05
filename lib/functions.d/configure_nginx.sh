@@ -43,7 +43,7 @@ http {
     }
 
     location /menu/ {
-      alias ${HPS_HOST_CONFIG_DIR}/;
+      alias ${HPS_MENU_CONFIG_DIR}/;
       default_type text/plain;
       autoindex on;
 # TODO: turn off autoindex

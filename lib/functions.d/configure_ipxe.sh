@@ -4,7 +4,7 @@ __guard_source || return
 
 
 configure_ipxe () {
-  local output_file="${HPS_HOST_CONFIG_DIR}/boot.ipxe"
+  local output_file="${HPS_MENU_CONFIG_DIR}/boot.ipxe"
   local server_ip="${DHCP_IP}"
 
   mkdir -p "$(dirname "$output_file")"
