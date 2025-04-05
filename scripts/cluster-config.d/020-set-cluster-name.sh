@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-FUNCLIB=/srv/hps/lib/functions.sh
-source $FUNCLIB
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 
 read -rp "Enter technical name for this cluster [alphanumeric, underscore, hyphen only]: " CLUSTER_NAME
 

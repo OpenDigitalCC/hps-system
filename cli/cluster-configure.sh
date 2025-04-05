@@ -1,9 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Source the necessary configurations
-FUNCLIB=/srv/hps/lib/functions.sh
-source $FUNCLIB
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 
 trap cleanup EXIT
 

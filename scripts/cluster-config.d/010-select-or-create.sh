@@ -1,8 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-FUNCLIB=/srv/hps/lib/functions.sh
-source $FUNCLIB
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 
 shopt -s nullglob
 configs=("${HPS_CLUSTER_CONFIG_DIR}"/*.cluster)

@@ -13,8 +13,7 @@ done
 echo "[✓] File '$HPS_CONFIG' is available. Continuing..."
 
 
-FUNCLIB=/srv/hps/lib/functions.sh
-source $FUNCLIB
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 
 configure_supervisor_core
 
