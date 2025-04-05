@@ -50,3 +50,26 @@ generate_dhcp_range_simple() {
     echo "$(int_to_ip "$range_start"),$(int_to_ip "$range_end"),1h"
 }
 
+
+normalise_mac() {
+  local mac="$1"
+
+  # Remove all common delimiters
+  mac="${mac//:/}"
+  mac="${mac//-/}"
+  mac="${mac//./}"
+  mac="${mac// /}"
+
+  # Convert to lowercase
+  mac="${mac,,}"
+
+  # Validate: must be exactly 12 hex characters
+  if [[ ! "$mac" =~ ^[0-9a-f]{12}$ ]]; then
+    echo "[✗] Invalid MAC address format: $1" >&2
+    return 1
+  fi
+
+  echo "$mac"
+}
+
+
