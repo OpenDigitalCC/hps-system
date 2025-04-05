@@ -11,7 +11,7 @@ HPS_SYSTEM_TFTP="${HPS_SYSTEM_BASE}/tftp"
 
 CONFIG_BASE="${HPS_ROOT}/hps-config"
 CONFIG_CLUSTER="${CONFIG_BASE}/cluster"
-CONFIG_HOST="${CONFIG_BASE}/host"
+CONFIG_HOST="${CONFIG_BASE}/hosts"
 CONFIG_SERVICE="${CONFIG_BASE}/services"
 HPS_CONF="${CONFIG_BASE}/hps.conf"
 
@@ -43,9 +43,9 @@ if [[ ! -d "${CONFIG_BASE}/cluster" ]]; then
   mkdir -p ${CONFIG_BASE}/cluster
 fi
 
-if [[ ! -d "${CONFIG_BASE}/hosts" ]]; then
-  echo "[*] Creating ${CONFIG_BASE}/hosts"
-  mkdir -p ${CONFIG_BASE}/hosts
+if [[ ! -d "${CONFIG_HOST}" ]]; then
+  echo "[*] Creating ${CONFIG_HOST}"
+  mkdir -p ${CONFIG_HOST}
 fi
 
 if [[ ! -d "${CONFIG_BASE}/services" ]]; then
