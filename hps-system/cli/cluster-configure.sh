@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euo pipefail
+
+# Source the necessary configurations
+FUNCLIB=/srv/hps/lib/functions.sh
+source $FUNCLIB
+
+trap cleanup EXIT
+
+
+cleanup() {
+  if [[ $? -eq 0 ]]
+   then
+    echo "[✓] Finished configuring."
+
+  # Check for CLUSTER_NAME and write the config
+    if [[ -v CLUSTER_NAME && -n "$CLUSTER_NAME" ]]; then
+      write_cluster_config "${HPS_CLUSTER_CONFIG_DIR}/${CLUSTER_NAME}.cluster" "${CLUSTER_VARS[@]}"
+      set_active_cluster "${HPS_CLUSTER_CONFIG_DIR}/${CLUSTER_NAME}.cluster"
+      configure_supervisor_services
+      configure_dnsmasq
+      configure_nginx
+      hps_services_restart  # Restart all services
+  else
+    echo "[ERROR] No cluster name, not reloading"
+  fi
+   else
+    echo "[ERROR] Non-zero exit, not reloading"
+  fi
+}
+
+
+# Define the cluster configuration directory
+SCRIPT_DIR="${HPS_SCRIPTS_BASE}/cluster-config.d"
+
+# Running the config fragments
+export CLUSTER_VARS=()
+for script in "$SCRIPT_DIR"/*.sh; do
+    if [[ -x "$script" ]]; then
+        source "$script"  # Ensure it sources the scripts, not executes them
+    else
+        echo "[!] Skipping non-executable: $script"
+    fi
+done
+
+
