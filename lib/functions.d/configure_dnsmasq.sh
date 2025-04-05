@@ -48,7 +48,7 @@ log-dhcp
 # PXE boot filename (BIOS)
 dhcp-boot=undionly.kpxe   # For BIOS
 dhcp-match=set:ipxe,175   # Match iPXE clients by option 175
-dhcp-boot=tag:ipxe,http://${DHCP_IP}/boot.ipxe  # For iPXE clients
+dhcp-boot=tag:ipxe,http://${DHCP_IP}/menu/boot.ipxe  # For iPXE clients
 
 EOF
 

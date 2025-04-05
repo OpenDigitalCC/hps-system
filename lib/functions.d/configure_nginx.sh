@@ -42,8 +42,17 @@ http {
       autoindex on;
     }
 
+    location /menu/ {
+      alias ${HPS_HOST_CONFIG_DIR}/;
+      default_type text/plain;
+      autoindex on;
+# TODO: turn off autoindex
+#      autoindex off;
+#      try_files \$uri =404;
+    }
+
     location /hosts/ {
-      alias ${HPS_CONFIG_BASE}/hosts/;
+      alias ${HPS_HOST_CONFIG_DIR}/;
       default_type text/plain;
       autoindex on;
 # TODO: turn off autoindex
