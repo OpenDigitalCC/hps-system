@@ -7,9 +7,8 @@ HPS_CONFIG_BASE="${HPS_ROOT}/hps-config"
 
 # Path variables (flat map)
 declare -A HPS_PATHS=(
-  [HPS_BASE]="${HPS_SYSTEM_BASE}"
   [HPS_SCRIPTS_DIR]="${HPS_SYSTEM_BASE}/scripts"
-  [HPS_TFTP_DIR]="${HPS_SYSTEM_BASE}/tftp"
+  [HPS_TFTP_DIR]="${HPS_CONFIG_BASE}/tftp"
   [HPS_HTTP_DIR]="${HPS_CONFIG_BASE}/http"
   [HPS_HOST_CONFIG_DIR]="${HPS_CONFIG_BASE}/http/hosts"
   [HPS_MENU_CONFIG_DIR]="${HPS_CONFIG_BASE}/http/menu"
