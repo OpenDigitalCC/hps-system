@@ -30,7 +30,7 @@ cleanup() {
 
 
 # Define the cluster configuration directory
-SCRIPT_DIR="${HPS_SCRIPTS_BASE}/cluster-config.d"
+SCRIPT_DIR="${HPS_SCRIPTS_DIR}/cluster-config.d"
 
 # Running the config fragments
 export CLUSTER_VARS=()
