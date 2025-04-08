@@ -73,6 +73,7 @@ stdout_logfile=/var/log/nginx.out.log
 
 [program:fcgiwrap]
 command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
+umask=002
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/fcgiwrap.out.log

@@ -13,6 +13,7 @@ local NGINX_CONF="${HPS_SERVICE_CONFIG_DIR}/nginx.conf"
 cat > "${NGINX_CONF}" <<EOF
 
 worker_processes auto;
+user www-data;
 events {
   worker_connections 1024;
 }
@@ -28,7 +29,7 @@ http {
   server {
     listen 80 default_server;
     server_name _;
-    root ${HPS_HTTP_DIR}/;
+    root ${HPS_HTTP_CONFIG_DIR}/;
     
     # Text-based file types
 #    location ~* \.(cfg|conf|ks|ipxe|sh|txt|ini)\$ {
@@ -37,7 +38,7 @@ http {
 
     location / {
     # Root directory for HTTP content
-      alias ${HPS_HTTP_DIR}/;
+      alias ${HPS_HTTP_CONFIG_DIR}/;
 # TODO: turn off autoindex
       autoindex on;
     }
@@ -61,25 +62,32 @@ http {
     }
 
 
-    # CGI Bash scripts via fcgiwrap (e.g. /cgi-bin/host-config.sh)
+    # CGI Bash scripts via fcgiwrap
     location /cgi-bin/ {
-      root ${HPS_HTTP_DIR}/cgi-bin;
+      root ${HPS_HTTP_CGI_DIR};
       gzip off;
       include /etc/nginx/fastcgi_params;
       fastcgi_pass unix:/var/run/fcgiwrap.socket;
-      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP_DIR}\$fastcgi_script_name;
-      fastcgi_param DOCUMENT_ROOT ${HPS_HTTP_DIR};
+      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP_STATIC_DIR}\$fastcgi_script_name;
+      fastcgi_param DOCUMENT_ROOT ${HPS_HTTP_STATIC_DIR};
     }
 
     # ISO trees (multiple distros/versions)
     location /distros/ {
       autoindex on;
-      alias ${HPS_HTTP_DIR}/distros/;
+      alias ${HPS_HTTP_CONFIG_DIR}/distros/;
     }
+
+    location = /favicon.ico {
+      access_log off;
+     log_not_found off;
+     return 204;
+   }
+
   }
 }
 EOF
 
-echo "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP_DIR}"
+echo "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP_CONFIG_DIR}"
 
 }
