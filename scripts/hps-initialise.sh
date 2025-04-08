@@ -2,61 +2,46 @@
 set -euo pipefail
 
 HPS_ROOT="/srv"
-
 HPS_SYSTEM_BASE="${HPS_ROOT}/hps-system"
+HPS_CONFIG_BASE="${HPS_ROOT}/hps-config"
 
-HPS_SYSTEM_SCRIPTS="${HPS_SYSTEM_BASE}/scripts"
-HPS_SYSTEM_TFTP="${HPS_SYSTEM_BASE}/tftp"
+# Path variables (flat map)
+declare -A HPS_PATHS=(
+  [HPS_BASE]="${HPS_SYSTEM_BASE}"
+  [HPS_SCRIPTS_DIR]="${HPS_SYSTEM_BASE}/scripts"
+  [HPS_TFTP_DIR]="${HPS_SYSTEM_BASE}/tftp"
+  [HPS_HTTP_DIR]="${HPS_CONFIG_BASE}/http"
+  [HPS_HOST_CONFIG_DIR]="${HPS_CONFIG_BASE}/http/hosts"
+  [HPS_MENU_CONFIG_DIR]="${HPS_CONFIG_BASE}/http/menu"
+  [HPS_CLUSTER_CONFIG_DIR]="${HPS_CONFIG_BASE}/cluster"
+  [HPS_SERVICE_CONFIG_DIR]="${HPS_CONFIG_BASE}/services"
+)
 
-CONFIG_BASE="${HPS_ROOT}/hps-config"
-CONFIG_HTTP="${CONFIG_BASE}/http"
-CONFIG_HTTP_HOST="${CONFIG_HTTP}/hosts"
-CONFIG_HTTP_MENU="${CONFIG_HTTP}/menu"
-CONFIG_CLUSTER="${CONFIG_BASE}/cluster"
-CONFIG_SERVICE="${CONFIG_BASE}/services"
-HPS_CONF="${CONFIG_BASE}/hps.conf"
+HPS_CONF="${HPS_CONFIG_BASE}/hps.conf"
 
+# If already initialized, exit
 if [[ -f "$HPS_CONF" ]]; then
   echo "[✓] $0 Cluster already initialised. Using existing config at $HPS_CONF"
-else
-  echo "[*] $0 Initialising HPS configuration in $CONFIG_BASE..."
-
-  mkdir -p "$CONFIG_CLUSTER" "$CONFIG_HTTP_HOST" "$CONFIG_SERVICE"
-
-  cat > "$HPS_CONF" <<EOF
-# Central HPS configuration paths
-export HPS_BASE=${HPS_SYSTEM_BASE}
-export HPS_SCRIPTS_BASE="${HPS_SYSTEM_SCRIPTS}"
-export HPS_HTTP="${CONFIG_HTTP}"
-export HPS_TFTP="${HPS_SYSTEM_TFTP}"
-export HPS_CONFIG_BASE="${CONFIG_BASE}"
-export HPS_CLUSTER_CONFIG_DIR="${CONFIG_CLUSTER}"
-export HPS_MENU_CONFIG_DIR="${CONFIG_HTTP_MENU}"
-export HPS_HOST_CONFIG_DIR="${CONFIG_HTTP_HOST}"
-export HPS_SERVICE_CONFIG_DIR="${CONFIG_SERVICE}"
-
-EOF
-
-  echo "[✓] $0 Created hps.conf with path definitions."
-
-# Create the configuration directory structure if not already present
-if [[ ! -d "${CONFIG_BASE}/cluster" ]]; then
-  echo "[*] Creating ${CONFIG_BASE}/cluster"
-  mkdir -p ${CONFIG_BASE}/cluster
+  exit 0
 fi
 
-if [[ ! -d "${CONFIG_HTTP_HOST}" ]]; then
-  echo "[*] Creating ${CONFIG_HTTP_HOST}"
-  mkdir -p ${CONFIG_HTTP_HOST}
-fi
+echo "[*] $0 Initialising HPS configuration in $HPS_CONFIG_BASE..."
 
-if [[ ! -d "${CONFIG_BASE}/services" ]]; then
-  echo "[*] Creating ${CONFIG_BASE}/services"
-  mkdir -p ${CONFIG_BASE}/services
-fi
+# Export variables and create directories for all *DIR
+mkdir -p "$(dirname "$HPS_CONF")"
+{
+  echo "# HPS configuration"
+  for key in "${!HPS_PATHS[@]}"; do
+    val="${HPS_PATHS[$key]}"
+    echo "export ${key}=\"${val}\""
+    if [[ "$key" == *DIR ]]; then
+      mkdir -p "$val"
+    fi
+  done
+} > "$HPS_CONF"
 
+echo "[✓] $0 Created $HPS_CONF with exported path definitions."
 
-fi
 
 
 
