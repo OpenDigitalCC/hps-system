@@ -28,7 +28,7 @@ http {
   server {
     listen 80 default_server;
     server_name _;
-    root ${HPS_HTTP}/;
+    root ${HPS_HTTP_DIR}/;
     
     # Text-based file types
 #    location ~* \.(cfg|conf|ks|ipxe|sh|txt|ini)\$ {
@@ -37,7 +37,7 @@ http {
 
     location / {
     # Root directory for HTTP content
-      alias ${HPS_HTTP}/;
+      alias ${HPS_HTTP_DIR}/;
 # TODO: turn off autoindex
       autoindex on;
     }
@@ -63,23 +63,23 @@ http {
 
     # CGI Bash scripts via fcgiwrap (e.g. /cgi-bin/host-config.sh)
     location /cgi-bin/ {
-      root ${HPS_HTTP}/cgi-bin;
+      root ${HPS_HTTP_DIR}/cgi-bin;
       gzip off;
       include /etc/nginx/fastcgi_params;
       fastcgi_pass unix:/var/run/fcgiwrap.socket;
-      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP}\$fastcgi_script_name;
-      fastcgi_param DOCUMENT_ROOT ${HPS_HTTP};
+      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP_DIR}\$fastcgi_script_name;
+      fastcgi_param DOCUMENT_ROOT ${HPS_HTTP_DIR};
     }
 
     # ISO trees (multiple distros/versions)
     location /distros/ {
       autoindex on;
-      alias ${HPS_HTTP}/distros/;
+      alias ${HPS_HTTP_DIR}/distros/;
     }
   }
 }
 EOF
 
-echo "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP}"
+echo "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP_DIR}"
 
 }

@@ -34,7 +34,7 @@ dhcp-range=$(generate_dhcp_range_simple "$NETWORK_CIDR" "$DHCP_IP" 20)
 
 # Enable TFTP
 enable-tftp
-tftp-root=${HPS_TFTP}
+tftp-root=${HPS_TFTP_DIR}
 
 # Optional: Log DHCP requests
 log-dhcp
@@ -52,11 +52,11 @@ dhcp-boot=tag:ipxe,http://${DHCP_IP}/menu/boot.ipxe  # For iPXE clients
 
 EOF
 
-mkdir -p ${HPS_TFTP}
+mkdir -p ${HPS_TFTP_DIR}
 
-cp /usr/lib/ipxe/undionly.kpxe "${HPS_TFTP}"
-cp /usr/lib/ipxe/snponly.efi "${HPS_TFTP}"
-cp /usr/lib/ipxe/ipxe.efi "${HPS_TFTP}"
+cp /usr/lib/ipxe/undionly.kpxe "${HPS_TFTP_DIR}"
+cp /usr/lib/ipxe/snponly.efi "${HPS_TFTP_DIR}"
+cp /usr/lib/ipxe/ipxe.efi "${HPS_TFTP_DIR}"
 
 echo "[OK] dnsmasq config generated at: ${DNSMASQ_CONF}"
 

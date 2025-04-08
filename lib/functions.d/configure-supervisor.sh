@@ -17,9 +17,13 @@ cat > "${SUPERVISORD_CONF}" <<EOF
 [unix_http_server]
 file=/var/run/supervisor.sock
 chmod=0700
+username=admin
+password=ignored-but-needed
 
 [supervisorctl]
 serverurl=unix:///var/run/supervisor.sock
+username=admin
+password=ignored-but-needed
 
 [rpcinterface:supervisor]
 supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface

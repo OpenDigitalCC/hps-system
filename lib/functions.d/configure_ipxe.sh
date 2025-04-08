@@ -35,7 +35,7 @@ imgexec config
 :no_config
 echo No host config found for MAC: \${mac:hexraw}
 echo Waiting
-sleep 20
+sleep 5
 goto main_menu
 
 :main_menu
