@@ -74,9 +74,25 @@ item TCH Thin Compute Host
 item CCH Container Cluster Host
 item local Boot from local disk
 item reboot Reboot
-choose host_type && goto \${host_type}
+#choose host_type && goto \${host_type}
+choose host_type && goto INSTALL
+
+:INSTALL
+
+set base-url http://\${next-server}/distros/rocky/9.5
+
+kernel \${base-url}/images/pxeboot/vmlinuz \
+  inst.stage2=\${base-url} \
+  inst.ks= http://\${next-server}/cgi-bin/kickstart.sh?mac=\${mac:hexraw}&type=\${host_type} \
+  ip=dhcp \
+  console=ttyS0,115200n8
+
+initrd \${base-url}/images/pxeboot/initrd.img
+boot
+
 
 :TCH
+
 chain http://\${next-server}/cgi-bin/boot_manager.sh?cmd=config_host&mac=\${mac:hexraw}&hosttype=TCH || goto no_chain_config
 :DRH
 chain http://\${next-server}/cgi-bin/boot_manager.sh?cmd=config_host&mac=\${mac:hexraw}&hosttype=DRH || goto no_chain_config
@@ -98,24 +114,4 @@ EOF
 
 }
 
-install_rocky () {
-
-ipxe_header
-
-cat <<EOF
-
-set base-url http://\${next-server}/distros/rocky/9/x86_64
-
-kernel ${base-url}/images/pxeboot/vmlinuz \
-  inst.stage2=${base-url} \
-  inst.ks= http://\${next-server}/cgi-bin/kickstart.sh?mac=\${mac:hexraw} \
-  ip=dhcp \
-  console=ttyS0,115200n8
-
-initrd ${base-url}/images/pxeboot/initrd.img
-boot
-
-EOF
-
-}
 
