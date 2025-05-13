@@ -1,0 +1,4 @@
+# Ignore Vim swap files
+# Matches .swp, .swo, .swn, etc.
+*.sw?
+
