@@ -12,7 +12,7 @@ if [[ -z "${DHCP_IP}" ]]; then
     exit 0
 fi
 
-echo "[*] Configuring dnsmasq on $DHCP_IP..."
+echo "[*] Configuring dnsmasq on $DHCP_IP..." 
 
 cat > "${DNSMASQ_CONF}" <<EOF
 
@@ -48,7 +48,7 @@ log-dhcp
 # PXE boot filename (BIOS)
 dhcp-boot=undionly.kpxe   # For BIOS
 dhcp-match=set:ipxe,175   # Match iPXE clients by option 175
-dhcp-boot=tag:ipxe,http://${DHCP_IP}/menu/boot.ipxe  # For iPXE clients
+dhcp-boot=tag:ipxe,http://${DHCP_IP}/cgi-bin/boot_manager.sh?cmd=firstboot  # For iPXE clients
 
 EOF
 
