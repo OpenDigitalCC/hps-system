@@ -28,14 +28,32 @@ This script:
 ## 📁 Directory Structure
 
 ```
-hps/
-├── http/
-├── scripts/
-│   ├── start-*.sh
-│   └── cluster-config/
-│       └── *.sh
-├── cluster-configure.sh
-└── README.md
+└── hps-system
+    ├── cli
+    │   ├── check-and-download-rocky.sh
+    │   ├── cluster-configure.sh
+    │   ├── reload.sh
+    │   └── test.sh
+    ├── http
+    │   ├── cgi-bin
+    │   └── distros
+    ├── lib
+    │   ├── functions.d
+    │   └── functions.sh
+    ├── log
+    ├── README.md
+    ├── scripts
+    │   ├── cluster-config.d
+    │   ├── hps-initialise.sh
+    │   └── run-hps.sh
+    ├── templates
+    │   └── script-init-boilerplate.sh
+    ├── tftp
+    │   ├── ipxe.efi
+    │   ├── snponly.efi
+    │   └── undionly.kpxe
+    └── update-paths.sh
+
 ```
 
 ## 📚 Configuration
@@ -45,3 +63,5 @@ Global config is saved in `/srv/hps-config/hps.conf` and sourced by:
 - service startup scripts
 
 See the `hps-container` README for runtime container info.
+
+
