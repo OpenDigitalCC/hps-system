@@ -1,12 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
+# Source the necessary configurations
+source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
+
+
 # Output as plain text
 echo "Content-Type: text/plain"
 echo
 
 echo "===== CGI Environment Tester ====="
 echo "Time: $(date)"
+echo
+echo "Active cluster: $(get_active_cluster_filename)"
 echo
 
 echo "== Basic Info =="
