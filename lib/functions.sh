@@ -36,4 +36,10 @@ else
 fi
 
 
+# Automatically export dynamic paths only if cluster base dir exists
+if declare -f export_dynamic_paths >/dev/null; then
+  if [[ -d "${HPS_CLUSTER_CONFIG_BASE_DIR:-/srv/hps-config/clusters}" ]]; then
+    export_dynamic_paths >/dev/null 2>&1 || true
+  fi
+fi
 
