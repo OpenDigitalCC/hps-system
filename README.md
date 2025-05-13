@@ -10,6 +10,33 @@ This package contains the **core logic and configuration** for the Host Provisio
 ```
 
 
+## HPS platform layers
+
+All the things that you need to get up and running
+
+### Platform infrastructure
+
+- Computer devices
+- Local network
+- Upstream network
+- Initial provisioning node
+
+### Software infrastructure
+
+Layer 0: Docker (compose) installation
+
+Layer 1: hps-system installation
+
+Layer 2: hps initialisation
+
+Layer 4: cluster configuration
+
+Layer 5: storage host configuration
+
+Layer 6: compute host configuration
+
+### Service plane
+
 
 ## 📦 How to Start
 
