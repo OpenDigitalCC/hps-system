@@ -4,18 +4,21 @@ set -euo pipefail
 HPS_ROOT="/srv"
 HPS_SYSTEM_BASE="${HPS_ROOT}/hps-system"
 HPS_CONFIG_BASE="${HPS_ROOT}/hps-config"
+HPS_RESOURCES="${HPS_ROOT}/hps-resources"
+
 
 # Path variables (flat map)
 declare -A HPS_PATHS=(
+  [HPS_LOG_DIR]="${HPS_SYSTEM_BASE}/log"
   [HPS_SCRIPTS_DIR]="${HPS_SYSTEM_BASE}/scripts"
-  [HPS_TFTP_DIR]="${HPS_CONFIG_BASE}/tftp"
   [HPS_HTTP_STATIC_DIR]="${HPS_SYSTEM_BASE}/http"
-  [HPS_HTTP_CGI_DIR]="${HPS_SYSTEM_BASE}/http/cgi-bin"
-  [HPS_HTTP_CONFIG_DIR]="${HPS_CONFIG_BASE}/http"
-  [HPS_HOST_CONFIG_DIR]="${HPS_CONFIG_BASE}/http/hosts"
-  [HPS_MENU_CONFIG_DIR]="${HPS_CONFIG_BASE}/http/menu"
-  [HPS_CLUSTER_CONFIG_DIR]="${HPS_CONFIG_BASE}/cluster"
+  [HPS_TFTP_DIR]="${HPS_CONFIG_BASE}/tftp"
+  [HPS_CLUSTER_CONFIG_BASE_DIR]="${HPS_CONFIG_BASE}/clusters"
   [HPS_SERVICE_CONFIG_DIR]="${HPS_CONFIG_BASE}/services"
+  [HPS_HTTP_CONFIG_DIR]="${HPS_HTTP_STATIC_DIR}"
+  [HPS_HTTP_CGI_DIR]="${HPS_HTTP_CONFIG_DIR}/cgi-bin"
+  [HPS_MENU_CONFIG_DIR]="${HPS_HTTP_CONFIG_DIR}/menu"
+  [HPS_DISTROS]="${HPS_RESOURCES}/distros"
 )
 
 HPS_CONF="${HPS_CONFIG_BASE}/hps.conf"
