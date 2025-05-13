@@ -23,7 +23,7 @@ get_active_cluster_file() {
 
 get_active_cluster_filename() {
     # Now returns path to cluster.conf in active cluster dir
-    local link="${HPS_CLUSTER_CONFIG_DIR}/active-cluster"
+    local link="${HPS_CLUSTER_CONFIG_BASE_DIR}/active-cluster"
     if [[ ! -L "$link" ]]; then
         echo "[ERROR] No active cluster symlink at: $link" >&2
         return 1
@@ -69,13 +69,28 @@ get_active_cluster_info() {
   fi
 }
 
-
 count_clusters() {
+  local base_dir="${HPS_CLUSTER_CONFIG_BASE_DIR}"
+  [[ ! -d "$base_dir" ]] && {
+    echo "[!] Cluster config base directory not found: $base_dir" >&2
+    echo 0
+    return 0
+  }
+
   shopt -s nullglob
-  local clusters=("${HPS_CLUSTER_CONFIG_BASE_DIR}"/*/)
+  local clusters=("$base_dir"/*/)
   shopt -u nullglob
+
+  if [[ ${#clusters[@]} -eq 0 ]]; then
+    echo "[!] No clusters found in $base_dir" >&2
+    echo 0
+    return 0
+  fi
+
   echo "${#clusters[@]}"
 }
+
+
 
 list_clusters() {
   shopt -s nullglob
@@ -173,6 +188,38 @@ cluster_config() {
       return 2
       ;;
   esac
+}
+
+initialise_cluster() {
+  local cluster_name="$1"
+  local base_dir="${HPS_CLUSTER_CONFIG_BASE_DIR:-/srv/hps-config/clusters}"
+  local cluster_dir="${base_dir}/${cluster_name}"
+  local cluster_file="${cluster_dir}/cluster.conf"
+
+  if [[ -z "$cluster_name" ]]; then
+    echo "[✗] Cluster name must be provided." >&2
+    return 1
+  fi
+
+  if [[ -d "$cluster_dir" ]]; then
+    echo "[!] Cluster directory already exists: $cluster_dir" >&2
+    return 2
+  fi
+
+  mkdir -p "${cluster_dir}/hosts"
+
+  cat > "$cluster_file" <<EOF
+# Cluster configuration
+CLUSTER_NAME=${cluster_name}
+EOF
+
+  echo "[✓] Cluster initialised at: $cluster_dir"
+  echo "[✓] Created config: $cluster_file"
+
+  export_dynamic_paths "$cluster_name" || {
+    echo "[✗] Failed to export cluster paths for $cluster_name" >&2
+    return 3
+  }
 }
 
 

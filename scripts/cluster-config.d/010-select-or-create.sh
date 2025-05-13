@@ -3,38 +3,62 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
-shopt -s nullglob
-configs=("${HPS_CLUSTER_CONFIG_DIR}"/*.cluster)
-shopt -u nullglob
+count=$(count_clusters)
 
+if [[ "$count" -eq 0 ]]; then
+  echo "[*] No clusters found. Proceeding to create a new one..."
+elif [[ "$count" -eq 1 ]]; then
+  echo "[*] One cluster found."
+  cluster_name=$(list_clusters | head -n1)
 
-#TODO: This doesn't work well, reselecting the same config should reload, also needs a delete config. plus choosing a diffent configndoesnt work
-
-if ((${#configs[@]}))
- then
-  active_cluster=$(get_active_cluster_filename)
-  echo "[*] Found ${#configs[@]} existing cluster(s) - Active cluster: $(basename ${active_cluster})"
-  select opt in "${configs[@]}" "Create new cluster"
-   do
-    if [[ "$REPLY" -gt 0 && "$REPLY" -le ${#configs[@]} ]]
-     then
-      CLUSTER_CHOICE=${configs[$((REPLY-1))]}
-      echo "[✓] Re-using existing cluster: $(basename "${CLUSTER_CHOICE}")"
-#      set_active_cluster "${CLUSTER_CHOICE}"
-      source "${CLUSTER_CHOICE}"
-      if [[ -v CLUSTER_NAME && -n "$CLUSTER_NAME" ]]
-       then
-        exit 0
-       else
-        echo "[ERROR] Cluster configuration not saved"
-        exit 1
-      fi
-    elif [[ "$REPLY" -eq $(( ${#configs[@]} + 1 )) ]]; then
-      break
-    else
-      echo "[!] Invalid selection."
-    fi
+  echo ""
+  echo "[?] What would you like to do?"
+  select action in "Reconfigure '${cluster_name}'" "Add new cluster"; do
+    case "$REPLY" in
+      1)
+        set_active_cluster "$cluster_name"
+        export_dynamic_paths
+        # Your cluster reconfiguration logic goes here
+        break
+        ;;
+      2)
+        # Proceed to new cluster creation
+        break
+        ;;
+      *)
+        echo "[!] Invalid selection."
+        ;;
+    esac
   done
 else
-  echo "[*] No existing cluster configurations found, proceeding to create a new cluster."
+  echo "[*] Multiple clusters found:"
+  list_clusters
+  echo ""
+
+  echo "[?] What would you like to do?"
+  select action in "Select active cluster" "Reconfigure a cluster" "Add new cluster"; do
+    case "$REPLY" in
+      1)
+        selected=$(select_cluster)
+        set_active_cluster "$(basename "$selected")"
+        export_dynamic_paths
+        break
+        ;;
+      2)
+        selected=$(select_cluster)
+        set_active_cluster "$(basename "$selected")"
+        export_dynamic_paths
+        # Cluster reconfiguration logic here
+        break
+        ;;
+      3)
+        # Proceed to new cluster creation
+        break
+        ;;
+      *)
+        echo "[!] Invalid selection."
+        ;;
+    esac
+  done
 fi
+

@@ -10,4 +10,4 @@ fi
 
 
 read -rp "Enter descriptive name for this cluster: " desc
-CLUSTER_VARS+=("NAME=\"$desc\"")
+CLUSTER_VARS+=("DESCRIPTION=\"$desc\"")
