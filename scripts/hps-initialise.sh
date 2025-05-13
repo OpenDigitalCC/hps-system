@@ -8,6 +8,7 @@ HPS_RESOURCES="${HPS_ROOT}/hps-resources"
 
 
 # Path variables (flat map)
+# NOTE: only refer to the above variables, as the mapped variables won't exist until all are defined
 declare -A HPS_PATHS=(
   [HPS_LOG_DIR]="${HPS_SYSTEM_BASE}/log"
   [HPS_SCRIPTS_DIR]="${HPS_SYSTEM_BASE}/scripts"
@@ -15,13 +16,16 @@ declare -A HPS_PATHS=(
   [HPS_TFTP_DIR]="${HPS_CONFIG_BASE}/tftp"
   [HPS_CLUSTER_CONFIG_BASE_DIR]="${HPS_CONFIG_BASE}/clusters"
   [HPS_SERVICE_CONFIG_DIR]="${HPS_CONFIG_BASE}/services"
-  [HPS_HTTP_CONFIG_DIR]="${HPS_HTTP_STATIC_DIR}"
-  [HPS_HTTP_CGI_DIR]="${HPS_HTTP_CONFIG_DIR}/cgi-bin"
-  [HPS_MENU_CONFIG_DIR]="${HPS_HTTP_CONFIG_DIR}/menu"
+  [HPS_HTTP_CONFIG_DIR]="${HPS_SYSTEM_BASE}/http"
+  [HPS_HTTP_CGI_DIR]="${HPS_SYSTEM_BASE}/http/cgi-bin"
+  [HPS_MENU_CONFIG_DIR]="${HPS_SYSTEM_BASE}/http/menu"
   [HPS_DISTROS]="${HPS_RESOURCES}/distros"
 )
 
 HPS_CONF="${HPS_CONFIG_BASE}/hps.conf"
+
+mkdir -p ${HPS_ROOT} ${HPS_SYSTEM_BASE} ${HPS_CONFIG_BASE} ${HPS_RESOURCES} 
+
 
 # If already initialized, exit
 if [[ -f "$HPS_CONF" ]]; then
