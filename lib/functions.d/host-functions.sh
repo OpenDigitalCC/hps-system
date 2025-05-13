@@ -31,6 +31,7 @@ host_config() {
   local cmd="$1"
   local key="$2"
   local value="${3:-}"
+  local mac=$(cgi_param get mac)
 
   # Load config file into HOST_CONFIG map
   if [[ $__HOST_CONFIG_PARSED -eq 0 ]]; then
