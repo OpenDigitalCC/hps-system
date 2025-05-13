@@ -72,7 +72,7 @@ if cgi_param equals cmd get_config
 
   if host_config equals STATE CONFIGURED
    then
-    [[ has_sch_host ]] !! cgi_fail "Cluster $(cluster_config get CLUSTER_NAME) has no storage nodes configured, can't continue"
+    [[ has_sch_host ]] || cgi_fail "Cluster $(cluster_config get CLUSTER_NAME) has no storage nodes configured, can't continue"
     hps_log info "[$(cgi_param get mac)] Delivering CONFIGURED file state: $(host_config get STATE)"
     # deliver the ipxe config to install tie o/s
     cgi_fail "CONFIGURED section not yet written"
@@ -84,6 +84,7 @@ if cgi_param equals cmd get_config
   elif cgi_param equals cmd config_host
    then
    # run the menu-based autoconfig for this host type
+   host_config set TYPE $(cgi_param get hosttype)
    hps_log info "[$(cgi_param get mac)] config_host requested for type $(cgi_param get hosttype)"
   fi
 fi
