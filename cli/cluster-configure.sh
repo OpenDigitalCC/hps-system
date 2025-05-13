@@ -12,19 +12,20 @@ cleanup() {
     echo "[✓] Reconfiguring..."
 
   # Check for CLUSTER_NAME and write the config
-    if [[ -v CLUSTER_NAME && -n "$CLUSTER_NAME" ]]; then
-      write_cluster_config "${HPS_CLUSTER_CONFIG_DIR}/${CLUSTER_NAME}.cluster" "${CLUSTER_VARS[@]}"
-      set_active_cluster "${HPS_CLUSTER_CONFIG_DIR}/${CLUSTER_NAME}.cluster"
+    if [[ -v CLUSTER_NAME && -n "$CLUSTER_NAME" ]]
+     then
+      write_cluster_config "${HPS_CLUSTER_CONFIG_DIR}/cluster.conf" "${CLUSTER_VARS[@]}"
+      set_active_cluster "$CLUSTER_NAME"
       configure_supervisor_services
       configure_dnsmasq
       configure_nginx
       configure_ipxe
       hps_services_restart  # Restart all services
-  else
-    echo "[ERROR] No cluster name, not reloading"
-  fi
+     else
+      echo "[ERROR] No cluster name, not reloading"
+    fi
    else
-    echo "[ERROR] Non-zero exit, not reloading"
+    echo "[ERROR] $0 Trapped non-zero exit at clean-up ($?)."
   fi
 }
 
