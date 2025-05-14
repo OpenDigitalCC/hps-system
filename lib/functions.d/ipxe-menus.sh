@@ -17,12 +17,21 @@ echo
 EOF
 }
 
+ipxe_boot_from_disk () {
+ipxe_header
+cat <<EOF
+echo This device has already been insttalled, booting from disk
+sleep 5
+sanboot --no-describe --drive 0x80
+EOF
+}
+
 
 ipxe_first_boot () {
 
 # This menu is delivered if the cluster is configured, but the host is not
 
-
+hps_log debug "Delivering firstboot"
 
 # iPXE output as heredoc
 
@@ -60,6 +69,8 @@ ipxe_config_menu () {
 
 # iPXE output as heredoc
 
+hps_log debug "[$mac] Delivering install menu"
+
 ipxe_header
 
 cat <<EOF
@@ -74,7 +85,6 @@ item TCH Thin Compute Host
 item CCH Container Cluster Host
 item local Boot from local disk
 item reboot Reboot
-#choose host_type && goto \${host_type}
 choose host_type && goto INSTALL
 
 :INSTALL
@@ -83,7 +93,7 @@ set base-url http://\${next-server}/distros/rocky/9.5
 
 kernel \${base-url}/images/pxeboot/vmlinuz \
   inst.stage2=\${base-url} \
-  inst.ks= http://\${next-server}/cgi-bin/kickstart.sh?mac=\${mac:hexraw}&type=\${host_type} \
+  inst.ks=http://\${next-server}/cgi-bin/boot_manager.sh?mac=\${mac:hexraw}&hosttype=\${host_type}&cmd=kickstart \
   ip=dhcp \
   console=ttyS0,115200n8
 
@@ -91,8 +101,8 @@ initrd \${base-url}/images/pxeboot/initrd.img
 boot
 
 
+#choose host_type && goto \${host_type}
 :TCH
-
 chain http://\${next-server}/cgi-bin/boot_manager.sh?cmd=config_host&mac=\${mac:hexraw}&hosttype=TCH || goto no_chain_config
 :DRH
 chain http://\${next-server}/cgi-bin/boot_manager.sh?cmd=config_host&mac=\${mac:hexraw}&hosttype=DRH || goto no_chain_config
