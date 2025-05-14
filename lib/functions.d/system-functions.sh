@@ -1,6 +1,10 @@
 __guard_source || return
 # Define your functions below
 
+make_timestamp() {
+  date -u '+%Y-%m-%d %H:%M:%S UTC'
+}
+
 
 hps_services_start() {
   configure_supervisor_services
