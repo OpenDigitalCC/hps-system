@@ -75,7 +75,7 @@ http {
     # ISO trees (multiple distros/versions)
     location /distros/ {
       autoindex on;
-      alias ${HPS_DISTROS}/;
+      alias ${HPS_DISTROS_DIR}/;
     }
 
     location = /favicon.ico {

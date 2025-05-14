@@ -6,7 +6,7 @@ check_and_download_latest_rocky() {
   local arch="x86_64"
   local iso_pattern="minimal"
 
-  local target_base="${HPS_DISTROS}/rocky"
+  local target_base="${HPS_DISTROS_DIR}/rocky"
   mkdir -p "$target_base"
 
   echo "[*] Checking for latest Rocky Linux ${arch} ISO..."
@@ -41,7 +41,7 @@ check_and_download_latest_rocky() {
 extract_rocky_iso_for_pxe() {
   local iso_path="$1"
   local version="$2"
-  local extract_dir="${HPS_DISTROS}/rocky/${version}"
+  local extract_dir="${HPS_DISTROS_DIR}/rocky/${version}"
 
   echo "[*] Extracting Rocky Linux ISO for PXE to: $extract_dir"
   mkdir -p "$extract_dir"
@@ -67,7 +67,7 @@ verify_rocky_checksum_signature() {
   local version="$1"
   local arch="x86_64"
   local base_url="https://download.rockylinux.org/pub/rocky/${version}/${arch}/iso/"
-  local target_dir="${HPS_DISTROS}/rocky"
+  local target_dir="${HPS_DISTROS_DIR}/rocky"
   local checksum_path="${target_dir}/CHECKSUM"
   local sig_path="${checksum_path}.sig"
 
