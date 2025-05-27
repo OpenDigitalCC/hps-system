@@ -11,10 +11,48 @@ fi
 
 
 
-echo "Select OS for Storage Cluster Hosts:"
-select os in "Rocky" "Alma" "RedHat"; do
-    if [[ -n "$os" ]]; then
-        CLUSTER_VARS+=("STORAGE_OS=$os")
+echo "Configure Cluster Hosts:"
+
+echo "CPU type:"
+
+select cpu in "x86_64"; do
+    if [[ -n "$cpu" ]]; then
+        CLUSTER_VARS+=("SCH_CPU=$cpu")
+        CLUSTER_VARS+=("TCH_CPU=$cpu")
+        CLUSTER_VARS+=("CCH_CPU=$cpu")
+        CLUSTER_VARS+=("DRN_CPU=$cpu")
         break
     fi
 done
+
+echo "Manufacturer:"
+
+select make in "linux"; do
+    if [[ -n "$make" ]]; then
+        CLUSTER_VARS+=("SCH_MFR=$make")
+        CLUSTER_VARS+=("TCH_CPU=$make")
+        CLUSTER_VARS+=("CCH_CPU=$make")
+        CLUSTER_VARS+=("DRN_CPU=$make")
+
+        break
+    fi
+done
+
+echo "Operating system:"
+
+select os in "rockylinux" "almalinux" "debian"; do
+    if [[ -n "$os" ]]; then
+        CLUSTER_VARS+=("SCH_OSNAME=$os")
+        CLUSTER_VARS+=("SCH_OSVER=9.5")
+        CLUSTER_VARS+=("TCH_OSNAME=$os")
+        CLUSTER_VARS+=("TCH_OSVER=9.5")
+        CLUSTER_VARS+=("CCH_OSNAME=$os")
+        CLUSTER_VARS+=("CCH_OSVER=9.5")
+        CLUSTER_VARS+=("DRH_OSNAME=$os")
+        CLUSTER_VARS+=("DRH_OSVER=9.5")
+        break
+    fi
+done
+
+
+
