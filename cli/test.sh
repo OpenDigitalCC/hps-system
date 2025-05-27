@@ -7,3 +7,7 @@ hps_log debug "Running $0"
 
 
 get_active_cluster_filename
+
+
+ipxe_show_info show_paths
+
