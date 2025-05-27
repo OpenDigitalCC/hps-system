@@ -18,10 +18,32 @@ STATE=UNCONFIGURED
 CREATED="$created_ts"
 EOF
 
-  hps_log info "Initialised new host config: $config_file"
+  hps_log info "[$mac] Initialised host config: $config_file"
   echo "$config_file"
 }
 
+
+host_config_delete() {
+  local mac="$1"
+  local config_file="${HPS_HOST_CONFIG_DIR}/${mac}.conf"
+
+  if [[ -f "$config_file" ]]; then
+    rm -f "$config_file"
+    hps_log info "[$mac] Deleted host config"
+    return 0
+  else
+    hps_log warn "[$mac] Host config not found"
+    return 1
+  fi
+}
+
+
+host_config_exists() {
+  local mac="$1"
+  local config_file="${HPS_HOST_CONFIG_DIR}/${mac}.conf"
+
+  [[ -f "$config_file" ]]
+}
 
 declare -gA HOST_CONFIG
 declare -g __HOST_CONFIG_PARSED=0
@@ -33,7 +55,7 @@ host_config() {
   local key="$3"
   local value="${4:-}"
 
-  # Load config file into HOST_CONFIG map
+  # Load config file into HOST_CONFIG map (once)
   if [[ $__HOST_CONFIG_PARSED -eq 0 ]]; then
     __HOST_CONFIG_FILE="${HOST_CONFIG_FILE:-${HPS_HOST_CONFIG_DIR}/${mac}.conf}"
 
@@ -66,7 +88,11 @@ host_config() {
 
     set)
       HOST_CONFIG["$key"]="$value"
-      HOST_CONFIG["UPDATED"]="$(make_timestamp)"
+      hps_log info "[$mac] host_config update: $key = $value"
+
+      timestamp="$(make_timestamp)"
+      HOST_CONFIG["UPDATED"]="$timestamp"
+      hps_log info "[$mac] host_config UPDATED = $timestamp"
 
       {
         echo "# Auto-generated host config"

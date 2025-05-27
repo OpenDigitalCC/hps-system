@@ -6,11 +6,12 @@ generate_ks() {
   local type="$2"
 
   host_config "$macid" || {
-    echo "[✗] Failed to load host config for $macid" >&2
+    hps_log debug "[✗] Failed to load host config for $macid"
     return 1
   }
-hps_log info "[$macid]" "Requesting kickstart for $type"
 
+
+hps_log info "[$macid]" "Requesting kickstart for $type"
 ks_common
 ks_host_${type}
 
@@ -119,7 +120,7 @@ echo "Hardening TCH install..."
 sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 systemctl enable sshd
 systemctl disable firewalld NetworkManager
-curl -X POST http://${${DHCP_IP}/cgi-bin/boot_manager.sh?mac=$macid&cmd=mark_installed
+curl -X POST http://${${DHCP_IP}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=INSTALLED
 %end
 
 EOF

@@ -15,14 +15,15 @@ cgi_header_plain() {
 }
 
 cgi_fail() {
-  hps_log error "[$(cgi_param get mac)] Command $(cgi_param get cmd) not matched or another error"
+  local cfmsg="$1"
+  hps_log error "[$(cgi_param get mac)] ${FUNCNAME[1]} $cfmsg"
 #  cgi_header_plain
   echo "#!ipxe"
   echo "echo == ERROR =="
   echo "echo"
   echo "echo Error: $1"
   echo "echo"
-  echo "sleep 5"
+  echo "sleep 10"
   echo "reboot"
   exit
 }
