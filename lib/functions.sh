@@ -1,15 +1,84 @@
 #!/bin/bash
-set -euo pipefail
+# functions.sh - Common functions for HPS
 
-HPS_CONFIG=/srv/hps-config/hps.conf
-source $HPS_CONFIG
+# Default location for hps.conf inside container
+HPS_CONFIG_DEFAULT="/srv/hps-config/hps.conf"
+
+# Allow override
+if [[ -n "${HPS_CONFIG:-}" && -f "$HPS_CONFIG" ]]; then
+  :
+elif [[ -f "$HPS_CONFIG_DEFAULT" ]]; then
+  HPS_CONFIG="$HPS_CONFIG_DEFAULT"
+elif [[ -f "$PWD/$HPS_CONFIG_DEFAULT" ]]; then
+  HPS_CONFIG="$PWD/$HPS_CONFIG_DEFAULT"
+else
+  echo "[✗] Could not locate hps.conf" >&2
+  return 1
+fi
+
+# Load config
+source "$HPS_CONFIG"
+echo "[debug $(realpath "${BASH_SOURCE[0]}")] Loaded hps.conf from: $HPS_CONFIG"
+
+# Extract the directory part
+HPS_CONFIG_DIR="$(dirname "$HPS_CONFIG")"
+
+# Adjust all *_DIR paths based on where HPS_CONFIG was actually found
+while IFS='=' read -r k v; do
+  [[ "$k" =~ ^#.*$ || -z "$k" || ! "$k" =~ _DIR$ ]] && continue
+  varname="${k//[[:space:]]/}"  # Strip whitespace
+  raw="${v%\"}"; raw="${raw#\"}"  # Strip quotes
+  relpath=$(realpath -m "$HPS_CONFIG_DIR/$raw")
+  export "$varname=$relpath"
+done < "$HPS_CONFIG"
+
+# Re-export for debug
+for var in $(grep -E '^export [A-Z0-9_]+_DIR=' "$HPS_CONFIG" | awk '{print $2}' | cut -d= -f1); do
+  echo "[debug $(realpath "${BASH_SOURCE[0]}")] $var = ${!var}"
+done
+
+# Validate that all *_DIR variables point to existing directories
+for var in $(grep -E '^export [A-Z0-9_]+_DIR=' "$HPS_CONFIG" | awk '{print $2}' | cut -d= -f1); do
+  val="${!var:-}"
+  if [[ -z "$val" ]]; then
+    echo "[✗] $var is not set in environment after sourcing $HPS_CONFIG" >&2
+    return 1
+  elif [[ ! -d "$val" ]]; then
+    echo "[✗] $var points to a non-existent directory: $val" >&2
+    return 1
+  else
+    echo "[✓] $var: $val"
+  fi
+done
+
+
+# Guard: avoid sourcing hps.conf again if already sourced and initialized
+if [[ -z "${__HPS_CONF_LOADED:-}" ]]; then
+  if [[ -n "${HPS_CONF_FILE:-}" && -f "$HPS_CONF_FILE" ]]; then
+    source "$HPS_CONF_FILE"
+  elif [[ -f "/srv/hps-config/hps.conf" ]]; then
+    HPS_CONF_FILE="/srv/hps-config/hps.conf"
+    source "$HPS_CONF_FILE"
+  else
+    echo "[✗] Could not locate hps.conf" >&2
+    return 1
+  fi
+  export __HPS_CONF_LOADED=1
+fi
+
+
+echo "[debug ${BASH_SOURCE[0]}] Loaded hps.conf from: $HPS_CONF_FILE" >&2
+echo "[debug ${BASH_SOURCE[0]}] HPS_DISTROS_DIR = $HPS_DISTROS_DIR" >&2
 
 # Get the directory where this file resides
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
+
 # Optional: main guard to avoid multiple sourcing
 [[ -n "${_HPS_FUNCTIONS_LOADED:-}" ]] && return
 _HPS_FUNCTIONS_LOADED=1
+
+
 
 # Directory for function fragments
 FUNCDIR="${SCRIPT_DIR}/functions.d"
