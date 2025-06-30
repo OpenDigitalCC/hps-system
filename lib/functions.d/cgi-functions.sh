@@ -9,23 +9,15 @@ cgi_log() {
 }
 
 
+
 cgi_header_plain() {
   echo "Content-Type: text/plain"
   echo
 }
 
-cgi_fail() {
-  local cfmsg="$1"
-  hps_log error "[$(cgi_param get mac)] ${FUNCNAME[1]} $cfmsg"
-#  cgi_header_plain
-  echo "#!ipxe"
-  echo "echo == ERROR =="
-  echo "echo"
-  echo "echo Error: $1"
-  echo "echo"
-  echo "sleep 10"
-  echo "reboot"
-  exit
+cgi_success () {
+  cgi_header_plain
+  echo "$1"
 }
 
 
@@ -72,7 +64,7 @@ cgi_param() {
       return
       ;;
     *)
-      echo "[✗] Invalid cgi_param command: $cmd" >&2
+      echo "[x] Invalid cgi_param command: $cmd" >&2
       return 2
       ;;
   esac

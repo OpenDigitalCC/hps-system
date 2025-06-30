@@ -65,6 +65,6 @@ sanboot --no-describe --drive 0x80
 reboot
 EOF
 
-  echo "[✓] boot.ipxe written to $output_file"
+  echo "[OK] boot.ipxe written to $output_file"
 }
 

@@ -65,7 +65,7 @@ normalise_mac() {
 
   # Validate: must be exactly 12 hex characters
   if [[ ! "$mac" =~ ^[0-9a-f]{12}$ ]]; then
-    echo "[✗] Invalid MAC address format: $1" >&2
+    echo "[x] Invalid MAC address format: $1" >&2
     return 1
   fi
 

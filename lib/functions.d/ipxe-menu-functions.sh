@@ -13,17 +13,39 @@ TITLE_PREFIX="$(cluster_config get CLUSTER_NAME) \${mac:hexraw} \${net0/ip}:"
 cat <<EOF
 #!ipxe
 
-set logmsg ${FUNCNAME[1]} $(cluster_config get CLUSTER_NAME) \${net0/ip} ipxe_header
+set logmsg ${FUNCNAME[1]} $(cluster_config get CLUSTER_NAME) \${net0/ip}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
-# Print some info
-#echo
-#echo Connected to cluster $(cluster_config get CLUSTER_NAME)
-#echo Client IP: \${client_ip} MAC address: \${mac:hexraw}
-#echo
+echo
+echo Connected to cluster $(cluster_config get CLUSTER_NAME)
+echo Client IP: \${client_ip} MAC address: \${mac:hexraw}
+echo
 EOF
 }
 
+
+ipxe_cgi_fail () {
+  local cfmsg="$1"
+  hps_log error "[$(cgi_param get mac)] ${FUNCNAME[1]} $cfmsg"
+#  cgi_header_plain
+  echo "#!ipxe"
+  echo "echo == ERROR =="
+  echo "echo"
+  echo "echo Error: $1"
+  echo "echo"
+  echo "sleep 10"
+  echo "reboot"
+  exit
+}
+
+
+ipxe_boot_from_disk () {
+ipxe_header
+echo "echo This device is installed."
+echo "echo Handing back to BIOS to boot"
+echo "sleep 5"
+echo "exit"
+}
 
 handle_menu_item() {
   local item="$1"
@@ -97,7 +119,7 @@ handle_menu_item() {
 
     *)
       hps_log info "[$mac] Unknown menu item: $item"
-      cgi_fail "Unknown menu item: $item"
+      ipxe_cgi_fail "Unknown menu item: $item"
       ;;
   esac
 }
@@ -111,20 +133,21 @@ ipxe_header
 
 cat <<EOF
 
-set config_url ${CGI_URL}?mac=\${mac:hexraw}&cmd=determine_state
+set config_url ${CGI_URL}?mac=\${mac:hexraw}&cmd=boot_action
 echo Requesting: \${config_url}
 
-# If we can find a config, load it (replaces this iPXE config)
-imgfetch --name config \${config_url} || goto no_host_config
+## If we can find a config, load it (replaces this iPXE config)
+imgfetch --name config \${config_url} 
+#|| goto no_host_config
 imgload config
 imgstat
 imgexec config
 
 # If there is no config - this should never happen as the boot manager will create it
-:no_host_config
-echo No host config found for MAC \${mac:hexraw} at \${config_url}
-sleep 5
-reboot
+#:no_host_config
+#echo No host config found for MAC \${mac:hexraw} at \${config_url}
+#sleep 10
+#reboot
 
 EOF
 
@@ -149,7 +172,7 @@ choose selection && goto HANDLE_MENU
 set logmsg ${FUNCNAME[1]} Menu selected: \${selection}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
-chain ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
 
 EOF
 
@@ -175,7 +198,7 @@ choose selection && goto HANDLE_MENU
 set logmsg ${FUNCNAME[1]} Menu selected: \${selection}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
-chain ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
 
 EOF
 
@@ -216,7 +239,7 @@ choose selection && goto HANDLE_MENU
 set logmsg ${FUNCNAME[1]} Menu selected: \${selection}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
-chain ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
 
 EOF
 
@@ -232,17 +255,25 @@ ipxe_boot_installer () {
   local MFR="$(get_host_type_param ${host_type} MFR)"
   local OSNAME="$(get_host_type_param ${host_type} OSNAME)"
   local OSVER="$(get_host_type_param ${host_type} OSVER)"
+  local state="$(host_config "$mac" get STATE)"
+
+  ipxe_header
+
+
+  # check that we are not already installed
+  if [ "$state" == "INSTALLED" ]
+   then
+    echo "echo Host already installed, aborting installation"
+    echo "sleep 10"
+    echo "reboot"
+  fi
+
 
   host_config "$mac" set TYPE "$host_type"
   host_config "$mac" set STATE INSTALLING
 
-
-  DIST_PATH="$HPS_DISTROS_DIR/${CPU}-${MFR}-${OSNAME}/${OSVER}"
-  DIST_URL="distros/${CPU}-${MFR}-${OSNAME}/${OSVER}"
-
-  ipxe_header
-
-# HPS_PACKAGES_DIR
+  DIST_PATH="$HPS_DISTROS_DIR/${CPU}-${MFR}-${OSNAME}-${OSVER}"
+  DIST_URL="distros/${CPU}-${MFR}-${OSNAME}-${OSVER}"
 
   case "${OSNAME}" in
     rockylinux)
@@ -253,38 +284,64 @@ ipxe_boot_installer () {
     # check that the file exists
     if [ ! -f $DIST_PATH/${KERNEL_FILE} ]
      then
-      cgi_fail "$DIST_PATH/${KERNEL_FILE} doesn't exist"
+      ipxe_cgi_fail "$DIST_PATH/${KERNEL_FILE} doesn't exist for type $host_type"
     fi
 
-  hps_log debug "[$mac] Preparing PXE Boot for ${OSNAME} install"
+  hps_log debug "[$mac] Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
 
-  cat <<EOF
 
-kernel http://\${next-server}/${DIST_URL}/${KERNEL_FILE} \
-  inst.stage2=http://\${next-server}/${DIST_URL} \
-  inst.ks=${CGI_URL}?cmd=kickstart&mac=\${mac:hexraw}&hosttype=${host_type} \
-  ip=dhcp \
-  console=ttyS0,115200n8
+IPXE_BOOT_INSTALL=$(cat <<EOF
+# created at $(date)
 
-initrd http://\${next-server}/${DIST_URL}/${INITRD_FILE}
+# Detect CPU architecture
+cpuid --ext 29 && set arch x86_64 || set arch i386
+
+set diststring \${arch}-${MFR}-${OSNAME}-${OSVER}
+set repo_base http://\${dhcp-server}/distros/\${diststring}
+
+set kernel_url \${repo_base}/${KERNEL_FILE}
+set initrd_url \${repo_base}/${INITRD_FILE}
+set repo_url \${repo_base}
+set ks ${CGI_URL}?cmd=kickstart&mac=\${mac:hexraw}&hosttype=${host_type}
+
+# set kernel_args initrd=initrd.img inst.repo=\${repo_url} ip=dhcp rd.debug rd.live.debug console=ttyS0,115200n8 inst.ks=\${ks}
+set kernel_args initrd=initrd.img inst.repo=\${repo_url} ip=dhcp console=ttyS0,115200n8 inst.ks=\${ks}
+
+# Required to prevent corrupt initrd
+imgfree
+
+kernel \${kernel_url} \${kernel_args}
+initrd \${initrd_url}
+
+sleep 10
 boot
 
+
+#echo Booting image
+#imgstat
+#set logmsg ${FUNCNAME[1]} \${kernel_url} \${kernel_args} \${initrd_url}
+#imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
+
 EOF
+)
+
+# debug: make file with the ipxe menu
+echo "${IPXE_BOOT_INSTALL}"  > /tmp/ipxe-boot-install.ipxe
+echo "${IPXE_BOOT_INSTALL}"
+
+
   ;;
   
   debian)
-    cgi_fail "No Debian config yet"
+    ipxe_cgi_fail "No Debian config yet"
   ;;
   *)
-    cgi_fail "No configuration for ${CPU}-${MFR}-${OSNAME}-${OSVER}"
+    ipxe_cgi_fail "No configuration for ${CPU}-${MFR}-${OSNAME}-${OSVER}"
   ;;
 esac
 
 
 }
-
-
-
 
 
 
@@ -314,7 +371,7 @@ item show_paths   > Show system paths
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
 EOF
       ;;
 
@@ -323,7 +380,7 @@ EOF
 
       local config_file="${HPS_CLUSTER_CONFIG_DIR}/cluster.conf"
       if [[ ! -f "$config_file" ]]; then
-        echo "item --gap [✗] Cluster config not found: $config_file"
+        echo "item --gap [x] Cluster config not found: $config_file"
       else
         while IFS='=' read -r k v; do
           [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
@@ -344,7 +401,7 @@ item show_paths    > Show system paths
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
 EOF
       ;;
 
@@ -353,7 +410,7 @@ EOF
 
       local config_file="${HPS_HOST_CONFIG_DIR}/${mac}.conf"
       if [[ ! -f "$config_file" ]]; then
-        echo "item --gap [✗] Host config not found: $config_file"
+        echo "item --gap [x] Host config not found: $config_file"
       else
         while IFS='=' read -r k v; do
           [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
@@ -374,7 +431,7 @@ item show_paths    > Show system paths
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
 EOF
       ;;
 
@@ -382,7 +439,7 @@ EOF
       echo "menu System Paths"
 
       if [[ ! -f "${HPS_CONFIG}" ]]; then
-        echo "item --gap [✗]  hps.conf not found: ${HPS_CONFIG}"
+        echo "item --gap [x]  hps.conf not found: ${HPS_CONFIG}"
       else
         grep -E '^export ' "${HPS_CONFIG}" | while read -r line; do
           varname=$(echo "$line" | cut -d= -f1 | awk '{print $2}')
@@ -403,7 +460,7 @@ item show_host     > Show host configuration
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
 EOF
       ;;
 

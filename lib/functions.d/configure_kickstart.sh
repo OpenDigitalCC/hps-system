@@ -98,6 +98,6 @@ systemctl enable sysstat
 %end
 EOF
 
-echo "[✓] Kickstart file generated at $KICKSTART_PATH"
+echo "[OK] Kickstart file generated at $KICKSTART_PATH"
 
 }

@@ -1,24 +1,39 @@
 #!/bin/bash
 # functions.sh - Common functions for HPS
 
-# Default location for hps.conf inside container
-HPS_CONFIG_DEFAULT="/srv/hps-config/hps.conf"
+# Candidate locations in order of priority (customize as needed)
+HPS_CONFIG_LOCATIONS=(
+  "${HPS_CONFIG:-}"                   # Explicit override
+  "$PWD/hps-config/hps.conf"          # Relative to current dir
+  "$PWD/../hps-config/hps.conf"       # One up, in dev setups
+  "/srv/hps-config/hps.conf"          # Inside-container default
+)
 
-# Allow override
-if [[ -n "${HPS_CONFIG:-}" && -f "$HPS_CONFIG" ]]; then
-  :
-elif [[ -f "$HPS_CONFIG_DEFAULT" ]]; then
-  HPS_CONFIG="$HPS_CONFIG_DEFAULT"
-elif [[ -f "$PWD/$HPS_CONFIG_DEFAULT" ]]; then
-  HPS_CONFIG="$PWD/$HPS_CONFIG_DEFAULT"
+find_hps_config() {
+  local found=""
+  for candidate in "${HPS_CONFIG_LOCATIONS[@]}"; do
+    [[ -n "$candidate" && -f "$candidate" ]] && found="$candidate"
+  done
+  if [[ -n "$found" ]]; then
+    echo "$found"
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Try to find config file
+if HPS_CONFIG="$(find_hps_config)"; then
+  export HPS_CONFIG
 else
-  echo "[✗] Could not locate hps.conf" >&2
+  echo "[✗] Could not locate hps.conf in any expected location" >&2
   return 1
 fi
 
+
 # Load config
 source "$HPS_CONFIG"
-echo "[debug $(realpath "${BASH_SOURCE[0]}")] Loaded hps.conf from: $HPS_CONFIG"
+#echo "[debug $(realpath "${BASH_SOURCE[0]}")] Loaded hps.conf from: $HPS_CONFIG"
 
 # Extract the directory part
 HPS_CONFIG_DIR="$(dirname "$HPS_CONFIG")"
@@ -33,23 +48,23 @@ while IFS='=' read -r k v; do
 done < "$HPS_CONFIG"
 
 # Re-export for debug
-for var in $(grep -E '^export [A-Z0-9_]+_DIR=' "$HPS_CONFIG" | awk '{print $2}' | cut -d= -f1); do
-  echo "[debug $(realpath "${BASH_SOURCE[0]}")] $var = ${!var}"
-done
+#for var in $(grep -E '^export [A-Z0-9_]+_DIR=' "$HPS_CONFIG" | awk '{print $2}' | cut -d= -f1); do
+#  echo "[debug $(realpath "${BASH_SOURCE[0]}")] $var = ${!var}"
+#done
 
 # Validate that all *_DIR variables point to existing directories
-for var in $(grep -E '^export [A-Z0-9_]+_DIR=' "$HPS_CONFIG" | awk '{print $2}' | cut -d= -f1); do
-  val="${!var:-}"
-  if [[ -z "$val" ]]; then
-    echo "[✗] $var is not set in environment after sourcing $HPS_CONFIG" >&2
-    return 1
-  elif [[ ! -d "$val" ]]; then
-    echo "[✗] $var points to a non-existent directory: $val" >&2
-    return 1
-  else
-    echo "[✓] $var: $val"
-  fi
-done
+#or var in $(grep -E '^export [A-Z0-9_]+_DIR=' "$HPS_CONFIG" | awk '{print $2}' | cut -d= -f1); do
+# val="${!var:-}"
+# if [[ -z "$val" ]]; then
+#   echo "[x] $var is not set in environment after sourcing $HPS_CONFIG" >&2
+#   return 1
+# elif [[ ! -d "$val" ]]; then
+#   echo "[x] $var points to a non-existent directory: $val" >&2
+#   return 1
+# else
+#echo "[OK] $var: $val"
+# fi
+#one
 
 
 # Guard: avoid sourcing hps.conf again if already sourced and initialized
@@ -60,15 +75,15 @@ if [[ -z "${__HPS_CONF_LOADED:-}" ]]; then
     HPS_CONF_FILE="/srv/hps-config/hps.conf"
     source "$HPS_CONF_FILE"
   else
-    echo "[✗] Could not locate hps.conf" >&2
+    echo "[x] Could not locate hps.conf" >&2
     return 1
   fi
   export __HPS_CONF_LOADED=1
 fi
 
 
-echo "[debug ${BASH_SOURCE[0]}] Loaded hps.conf from: $HPS_CONF_FILE" >&2
-echo "[debug ${BASH_SOURCE[0]}] HPS_DISTROS_DIR = $HPS_DISTROS_DIR" >&2
+#echo "[debug ${BASH_SOURCE[0]}] Loaded hps.conf from: $HPS_CONF_FILE" >&2
+#echo "[debug ${BASH_SOURCE[0]}] HPS_DISTROS_DIR = $HPS_DISTROS_DIR" >&2
 
 # Get the directory where this file resides
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"

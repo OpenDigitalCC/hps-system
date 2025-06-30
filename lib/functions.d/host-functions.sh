@@ -8,18 +8,22 @@ host_initialise_config() {
 
   mkdir -p "${HPS_HOST_CONFIG_DIR}"
 
-  local created_ts
-  created_ts=$(make_timestamp)
+  host_config "$macid" set STATE "UNCONFIGURED"
 
-  cat > "$config_file" <<EOF
-# Host config generated automatically
-# MAC: $mac
-STATE=UNCONFIGURED
-CREATED="$created_ts"
-EOF
+#  local created_ts
+#  created_ts=$(make_timestamp)
+
+#  cat > "$config_file" <<EOF
+## Host config generated automatically
+## MAC: $mac
+#STATE=UNCONFIGURED
+#CREATED="$created_ts"
+#EOF
 
   hps_log info "[$mac] Initialised host config: $config_file"
-  echo "$config_file"
+# commented out as this creates error on first boot when called from boot manager which needs no output 
+#  echo "$config_file"
+
 }
 
 
@@ -106,7 +110,7 @@ host_config() {
       ;;
 
     *)
-      echo "[✗] Invalid host_config command: $cmd" >&2
+      echo "[x] Invalid host_config command: $cmd" >&2
       return 2
       ;;
   esac
@@ -119,7 +123,7 @@ has_sch_host() {
   local host_dir="${HPS_HOST_CONFIG_DIR}"
 
   [[ ! -d "$host_dir" ]] && {
-    echo "[✗] Host config directory not found: $host_dir" >&2
+    echo "[x] Host config directory not found: $host_dir" >&2
     return 1
   }
 
@@ -140,12 +144,12 @@ host_network_configure() {
   dhcp_cidr=$(cluster_config get DHCP_CIDR)
 
   [[ -z "$dhcp_ip" || -z "$dhcp_cidr" ]] && {
-    hps_log debug "[✗] Missing DHCP_IP or DHCP_CIDR in cluster config"
+    hps_log debug "[x] Missing DHCP_IP or DHCP_CIDR in cluster config"
     return 1
   }
 
   if ! command -v ipcalc &>/dev/null; then
-    hps_log debug "[✗] ipcalc is required."
+    hps_log debug "[x] ipcalc is required."
     return 1
   fi
 
@@ -174,7 +178,7 @@ host_network_configure() {
   done
 
   if [[ -z "$try_ip" ]]; then
-    hps_log debug "[✗] No available IPs in range."
+    hps_log debug "[x] No available IPs in range."
     return 1
   fi
 
@@ -186,7 +190,7 @@ host_network_configure() {
   done
 
   [[ -z "$hostname" ]] && {
-    hps_log debug "[✗] Failed to generate unique hostname"
+    hps_log debug "[x] Failed to generate unique hostname"
     return 1
   }
 
@@ -196,8 +200,8 @@ host_network_configure() {
   host_config "$macid" set TYPE "$hosttype"
   host_config "$macid" set STATE "CONFIGURED"
 
-  hps_log debug "[✓] Assigned IP: $try_ip"
-  hps_log debug "[✓] Assigned Hostname: $hostname"
+  hps_log debug "[OK] Assigned IP: $try_ip"
+  hps_log debug "[OK] Assigned Hostname: $hostname"
 }
 
 

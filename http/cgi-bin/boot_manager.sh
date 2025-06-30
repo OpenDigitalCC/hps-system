@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 # Retrieve config file name of the cluster
 CLUSTER_FILE=$(get_active_cluster_filename) || {
-  cgi_fail "No active cluster"
+  ipxe_cgi_fail "No active cluster"
   exit 1
 }
 
@@ -14,7 +14,7 @@ CLUSTER_FILE=$(get_active_cluster_filename) || {
 
 # Condition: do we have $cmd
 if ! cgi_param exists cmd; then
-  cgi_fail "Command not specified"
+  ipxe_cgi_fail "Command not specified"
   exit
 else
   cmd="$(cgi_param get cmd)"
@@ -33,7 +33,7 @@ fi
 
 # Condition: do we have $mac
 if ! cgi_param exists mac; then
-  cgi_fail "MAC address is required for command $cmd"
+  ipxe_cgi_fail "MAC address is required for command $cmd"
   exit
 else
   mac="$(cgi_param get mac)"
@@ -41,19 +41,28 @@ fi
 
 ### ───── Commands that require a MAC ─────
 
-# Condition: If the host is already installed, exit script and boot from disk
 
-if host_config "$mac" equals STATE INSTALLED; then
-  hps_log info "[$mac] STATE=INSTALLED → Booting from disk"
-  ipxe_boot_from_disk
+# Command: set status
+if [[ "$cmd" == "set_status" ]]
+ then
+  if ! cgi_param exists status
+   then
+    ipxe_cgi_fail "Param status is required for command $cmd"
+    exit
+  else
+    SET_STATUS="$(cgi_param get status)"
+  fi
+  host_config "$mac" set STATE $SET_STATUS
+  cgi_success "$mac set to $SET_STATUS"
   exit
 fi
+
 
 # Command: Process ipxe menu
 
 if [[ "$cmd" == "process_menu_item" ]]; then
   if ! cgi_param exists menu_item; then
-    cgi_fail "Missing required parameter: menu_item"
+    ipxe_cgi_fail "Missing required parameter: menu_item"
     exit
   fi
   menu_item="$(cgi_param get menu_item)"
@@ -68,7 +77,7 @@ if [[ "$cmd" == "log_message" ]]
  then
   if ! cgi_param exists message
    then
-    cgi_fail "Param message is required for command $cmd"
+    ipxe_cgi_fail "Param message is required for command $cmd"
     exit
   else
     LOG_MESSAGE="$(cgi_param get message)"
@@ -80,44 +89,40 @@ if [[ "$cmd" == "log_message" ]]
   exit
 fi
 
-# Command: set status
-if [[ "$cmd" == "set_status" ]]
- then
-  if ! cgi_param exists status
-   then
-    cgi_fail "Param status is required for command $cmd"
-    exit
-  else
-    SET_STATUS="$(cgi_param get status)"
-  fi
-  host_config "$mac" set STATE $SET_STATUS
-  exit
-fi
-
 
 
 # Command: Network bootstrap via kickstart
 if [[ "$cmd" == "kickstart" ]]; then
   if ! cgi_param exists hosttype; then
-    cgi_fail "Param hosttype is required for kickstart"
+    ipxe_cgi_fail "Param hosttype is required for kickstart"
   fi
   hosttype="$(cgi_param get hosttype)"
-  hps_log info "[$mac] Configuring host network for type $hosttype"
+  hps_log info "[$mac] Kickstart - Configuring host $hosttype"
   host_network_configure "$mac" "$hosttype"
-  cgi_header_plain
   generate_ks "$mac" "$hosttype"
   exit
 fi
 
 # Conditional: Determine state
-
 if [[ "$cmd" == "determine_state" ]]; then
   hps_log info "[$mac] Host wants to know its state"
+  state="$(host_config "$mac" get STATE)"
+  hps_log info "[$mac] State: $state"
+  cgi_success "$state"
+  exit
+fi
+
+# Conditional: Decide what to do next
+if [[ "$cmd" == "boot_action" ]]; then
+  hps_log info "[$mac] Host wants to know what to do next"
 
   host_config_exists "$mac" || host_initialise_config "$mac"
 
   state="$(host_config "$mac" get STATE)"
   hps_log info "[$mac] STATE: $state"
+
+
+  # Condition: If the host is already installed, exit script and boot from disk
 
   case "$state" in
     UNCONFIGURED)
@@ -134,6 +139,7 @@ if [[ "$cmd" == "determine_state" ]]; then
     INSTALLED)
       hps_log info "[$mac] Already installed. Booting from disk."
       ipxe_boot_from_disk
+      exit
       ;;
 
     INSTALLING)
@@ -146,7 +152,7 @@ if [[ "$cmd" == "determine_state" ]]; then
     ACTIVE)
 #      hps_log info "[$mac] Active and provisioned. Booting configured image."
 #      ipxe_boot_provisioned
-      cgi_fail "Section not yet written for state $state"
+      ipxe_cgi_fail "Section not yet written for state $state"
       ;;
 
     REINSTALL)
@@ -159,7 +165,7 @@ if [[ "$cmd" == "determine_state" ]]; then
 
     *)
       hps_log info "[$mac] Unknown or unset state. Failing.."
-      cgi_fail "State $state unknown or unhandled"
+      ipxe_cgi_fail "State $state unknown or unhandled"
       ;;
   esac
 
@@ -167,18 +173,10 @@ if [[ "$cmd" == "determine_state" ]]; then
 fi
 
 
-
-
-
-
 if [[ "$cmd" == "get_config" ]]; then
   hps_log info "[$mac] Config requested: $config_file"
-
-
-
 #    ipxe_config_menu
-    exit
-  fi
+  exit
 fi
 
 ### ───── Manual host configuration ─────
@@ -186,7 +184,7 @@ fi
 # Command: Configure this host
 if [[ "$cmd" == "config_host" ]]; then
   if ! cgi_param exists hosttype; then
-    cgi_fail "hosttype is required for config_host"
+    ipxe_cgi_fail "hosttype is required for config_host"
   fi
   hosttype="$(cgi_param get hosttype)"
   host_config "$mac" set TYPE "$hosttype"
@@ -195,7 +193,7 @@ fi
 
 ### ───── Unknown or unhandled command ─────
 
-cgi_fail "Unknown or unsupported command: $cmd"
+ipxe_cgi_fail "Unknown or unsupported command: $cmd"
 
 
 

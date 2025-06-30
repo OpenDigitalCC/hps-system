@@ -126,13 +126,13 @@ write_cluster_config() {
   local values=("$@")
 
   if [[ ${#values[@]} -eq 0 ]]; then
-    echo "[✗] Cannot write empty cluster config to $target_file" >&2
+    echo "[x] Cannot write empty cluster config to $target_file" >&2
     return 1
   fi
 
   echo "Writing: ${values[*]}"
   printf "%s\n" "${values[@]}" > "$target_file"
-  echo "[✓] Cluster configuration written to $target_file"
+  echo "[OK] Cluster configuration written to $target_file"
 }
 
 set_active_cluster() {
@@ -141,17 +141,17 @@ set_active_cluster() {
   local active_link="${HPS_CLUSTER_CONFIG_BASE_DIR}/active-cluster"
 
   if [[ ! -d "$cluster_dir" ]]; then
-    echo "[✗] Cluster directory not found: $cluster_dir" >&2
+    echo "[x] Cluster directory not found: $cluster_dir" >&2
     return 1
   fi
 
   if [[ ! -f "$cluster_dir/cluster.conf" ]]; then
-    echo "[✗] cluster.conf not found in: $cluster_dir" >&2
+    echo "[x] cluster.conf not found in: $cluster_dir" >&2
     return 2
   fi
 
   ln -sfn "$cluster_dir" "$active_link"
-  echo "[✓] Active cluster set to: $cluster_name"
+  echo "[OK] Active cluster set to: $cluster_name"
 }
 
 
@@ -162,7 +162,7 @@ cluster_config() {
 
   local cluster_file
   cluster_file=$(get_active_cluster_filename) || {
-    echo "[✗] No active cluster config found." >&2
+    echo "[x] No active cluster config found." >&2
     return 1
   }
 
@@ -184,7 +184,7 @@ cluster_config() {
       ;;
 
     *)
-      echo "[✗] Unknown cluster_config operation: $op" >&2
+      echo "[x] Unknown cluster_config operation: $op" >&2
       return 2
       ;;
   esac
@@ -197,7 +197,7 @@ initialise_cluster() {
   local cluster_file="${cluster_dir}/cluster.conf"
 
   if [[ -z "$cluster_name" ]]; then
-    echo "[✗] Cluster name must be provided." >&2
+    echo "[x] Cluster name must be provided." >&2
     return 1
   fi
 
@@ -213,11 +213,11 @@ initialise_cluster() {
 CLUSTER_NAME=${cluster_name}
 EOF
 
-  echo "[✓] Cluster initialised at: $cluster_dir"
-  echo "[✓] Created config: $cluster_file"
+  echo "[OK] Cluster initialised at: $cluster_dir"
+  echo "[OK] Created config: $cluster_file"
 
   export_dynamic_paths "$cluster_name" || {
-    echo "[✗] Failed to export cluster paths for $cluster_name" >&2
+    echo "[x] Failed to export cluster paths for $cluster_name" >&2
     return 3
   }
 }
@@ -227,7 +227,7 @@ print_cluster_variables() {
   local k v
 
   if [[ ! -f "$config_file" ]]; then
-    echo "[✗] Cluster config not found: $config_file" >&2
+    echo "[x] Cluster config not found: $config_file" >&2
     return 1
   fi
 

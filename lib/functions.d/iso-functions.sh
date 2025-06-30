@@ -9,7 +9,7 @@ get_iso_path() {
   if [[ -n "${HPS_DISTROS_DIR:-}" && -d "$HPS_DISTROS_DIR" ]]; then
     echo "$HPS_DISTROS_DIR/iso"
   else
-    echo "[✗] HPS_DISTROS_DIR is not set or not a directory." >&2
+    echo "[x] HPS_DISTROS_DIR is not set or not a directory." >&2
     return 1
   fi
 }
@@ -59,22 +59,22 @@ check_latest_version() {
       echo "[*] Checking latest version of $osname from $base_url"
 
       if ! html=$(curl -fsSL "$base_url"); then
-        echo "[✗] Failed to fetch $base_url" >&2
+        echo "[x] Failed to fetch $base_url" >&2
         return 1
       fi
 
       versions=($(echo "$html" | grep -oE '[0-9]+\.[0-9]+/' | sed 's|/||' | sort -Vr))
       if [[ ${#versions[@]} -eq 0 ]]; then
-        echo "[✗] No versions found for $osname" >&2
+        echo "[x] No versions found for $osname" >&2
         return 1
       fi
 
-      echo "[✓] Latest $osname version: ${versions[0]}"
+      echo "[OK] Latest $osname version: ${versions[0]}"
       return 0
       ;;
 
     *)
-      echo "[✗] Unknown OS variant: $osname" >&2
+      echo "[x] Unknown OS variant: $osname" >&2
       return 1
       ;;
   esac
@@ -97,29 +97,30 @@ download_iso() {
   case "$osname" in
     rockylinux)
       filename="Rocky-${osver}-${cpu}-minimal.iso"
+      # https://download.rockylinux.org/pub/rocky/10/isos/x86_64/Rocky-10.0-x86_64-minimal.iso
       base_url="https://download.rockylinux.org/pub/rocky/${osver}/isos/${cpu}"
       iso_url="${base_url}/${filename}"
       iso_file="${iso_dir}/${cpu}-${mfr}-${osname}-${osver}.iso"
       ;;
     *)
-      echo "[✗] Unsupported OS variant: $osname" >&2
+      echo "[x] Unsupported OS variant: $osname" >&2
       return 1
       ;;
   esac
 
   if [[ -f "$iso_file" ]]; then
-    echo "[✓] ISO already exists: $iso_file"
+    echo "[OK] ISO already exists: $iso_file"
     return 0
   fi
 
-  echo "[*] Downloading ISO from $iso_url"
+  echo "[*] Downloading ISO from $iso_url to $iso_file"
   if ! curl -fSL "$iso_url" -o "$iso_file"; then
-    echo "[✗] Failed to download ISO: $iso_url" >&2
+    echo "[x] Failed to download ISO: $iso_url" >&2
     rm -f "$iso_file"
     return 1
   fi
 
-  echo "[✓] ISO saved to $iso_file"
+  echo "[OK] ISO saved to $iso_file"
 }
 
 
@@ -133,12 +134,12 @@ extract_iso_for_pxe() {
   local extract_dir="${HPS_DISTROS_DIR}/${cpu}-${mfr}-${osname}-${osver}"
 
   if [[ ! -f "$iso_file" ]]; then
-    echo "[✗] ISO not found: $iso_file" >&2
+    echo "[x] ISO not found: $iso_file" >&2
     return 1
   fi
 
   if [[ -d "$extract_dir/LiveOS" && -f "$extract_dir/.treeinfo" ]]; then
-    echo "[✓] ISO already extracted to: $extract_dir"
+    echo "[OK] ISO already extracted to: $extract_dir"
     return 0
   fi
 
@@ -146,11 +147,11 @@ extract_iso_for_pxe() {
 
   mkdir -p "$extract_dir"
   if ! bsdtar -C "$extract_dir" -xf "$iso_file"; then
-    echo "[✗] Failed to extract ISO with bsdtar: $iso_file" >&2
+    echo "[x] Failed to extract ISO with bsdtar: $iso_file" >&2
     return 1
   fi
 
-  echo "[✓] Extracted to $extract_dir"
+  echo "[OK] Extracted to $extract_dir"
 }
 
 verify_checksum_signature() {
@@ -162,7 +163,7 @@ verify_checksum_signature() {
   local iso_file="${iso_dir}/${cpu}-${mfr}-${osname}-${osver}.iso"
 
   if [[ ! -f "$iso_file" ]]; then
-    echo "[✗] ISO not found: $iso_file" >&2
+    echo "[x] ISO not found: $iso_file" >&2
     return 1
   fi
 
@@ -179,24 +180,24 @@ verify_checksum_signature() {
 
       echo "[*] Fetching CHECKSUM and .sig..."
       curl -fsSL "$checksums_url" -o "$checksum_file" || {
-        echo "[✗] Failed to download CHECKSUM file." >&2
+        echo "[x] Failed to download CHECKSUM file." >&2
         return 1
       }
 
       curl -fsSL "$sig_url" -o "$sig_file" || {
-        echo "[✗] Failed to download CHECKSUM.sig file." >&2
+        echo "[x] Failed to download CHECKSUM.sig file." >&2
         return 1
       }
 
       echo "[*] Importing Rocky Linux GPG key..."
       curl -fsSL "$gpg_key_url" | gpg --import || {
-        echo "[✗] Failed to import Rocky Linux GPG key." >&2
+        echo "[x] Failed to import Rocky Linux GPG key." >&2
         return 1
       }
 
       echo "[*] Verifying GPG signature on CHECKSUM..."
       gpg --verify "$sig_file" "$checksum_file" || {
-        echo "[✗] Signature verification failed." >&2
+        echo "[x] Signature verification failed." >&2
         return 1
       }
 
@@ -205,17 +206,17 @@ verify_checksum_signature() {
       actual_checksum=$(sha256sum "$iso_file" | awk '{print $1}')
 
       if grep -q "$actual_checksum" "$checksum_file"; then
-        echo "[✓] ISO checksum verified."
+        echo "[OK] ISO checksum verified."
         rm -rf "$temp_dir"
         return 0
       else
-        echo "[✗] Checksum mismatch!" >&2
+        echo "[x] Checksum mismatch!" >&2
         return 1
       fi
       ;;
 
     *)
-      echo "[✗] Checksum verification not implemented for OS: $osname" >&2
+      echo "[x] Checksum verification not implemented for OS: $osname" >&2
       return 1
       ;;
   esac
@@ -258,7 +259,7 @@ check_and_download_latest_rocky() {
 #  latest_version=$(curl -sL "$base_url/" | grep -oE '[0-9]+\.[0-9]+/' | sort -V | tail -n1 | tr -d '/')
   hps_log debug  "Latest: $latest_version"
 #
-#  [[ -z "$latest_version" ]] && echo "[✗] Could not detect version." >&2 && return 1
+#  [[ -z "$latest_version" ]] && echo "[x] Could not detect version." >&2 && return 1
 
 
   local version_url="${base_url}/${latest_version}/isos/${arch}/"
@@ -273,7 +274,7 @@ check_and_download_latest_rocky() {
     echo "[*] Downloading ISO: $iso_url"
     curl --fail --show-error --location -o "$iso_path" "$iso_url"
   else
-    echo "[✓] ISO already exists: $iso_path"
+    echo "[OK] ISO already exists: $iso_path"
   fi
 
 #  verify_rocky_checksum_signature $latest_version
@@ -305,11 +306,11 @@ extract_rocky_iso_for_pxe() {
     fusermount -u "$temp_mount"
     rmdir "$temp_mount"
   else
-    echo "[✗] Neither bsdtar nor fuseiso found. Cannot extract ISO." >&2
+    echo "[x] Neither bsdtar nor fuseiso found. Cannot extract ISO." >&2
     return 1
   fi
 
-  echo "[✓] Rocky Linux PXE tree ready at: $extract_dir"
+  echo "[OK] Rocky Linux PXE tree ready at: $extract_dir"
 }
 
 verify_rocky_checksum_signature() {
@@ -331,17 +332,17 @@ verify_rocky_checksum_signature() {
   # Import Rocky GPG key
   echo "[*] Importing Rocky Linux GPG key..."
   curl --fail --show-error --location -sL https://download.rockylinux.org/pub/rocky/RPM-GPG-KEY-Rocky-9 | gpg --import || {
-    echo "[✗] Failed to import Rocky Linux GPG key." >&2
+    echo "[x] Failed to import Rocky Linux GPG key." >&2
     return 1
   }
 
   # Verify GPG signature
   echo "[*] Verifying CHECKSUM signature..."
   if gpg --verify "$sig_path" "$checksum_path" 2>/dev/null; then
-    echo "[✓] GPG signature verified for CHECKSUM"
+    echo "[OK] GPG signature verified for CHECKSUM"
     return 0
   else
-    echo "[✗] GPG signature verification failed!" >&2
+    echo "[x] GPG signature verification failed!" >&2
     return 2
   fi
 
@@ -349,7 +350,7 @@ verify_rocky_checksum_signature() {
   local expected_checksum
   expected_checksum=$(awk "/$iso_name/ {print \$1}" "$checksum_path" | head -n1)
   [[ -z "$expected_checksum" ]] && {
-    echo "[✗] Could not find matching checksum for $iso_name." >&2
+    echo "[x] Could not find matching checksum for $iso_name." >&2
     return 3
   }
 
@@ -357,12 +358,12 @@ verify_rocky_checksum_signature() {
   local actual_checksum
   actual_checksum=$(sha256sum "$iso_path" | awk '{print $1}')
   if [[ "$expected_checksum" != "$actual_checksum" ]]; then
-    echo "[✗] Checksum mismatch for $iso_name"
+    echo "[x] Checksum mismatch for $iso_name"
     echo "Expected: $expected_checksum"
     echo "Actual:   $actual_checksum"
     return 4
   fi
-  echo "[✓] ISO checksum verified."
+  echo "[OK] ISO checksum verified."
 
 
 }

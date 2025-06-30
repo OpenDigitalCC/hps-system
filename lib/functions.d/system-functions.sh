@@ -30,7 +30,7 @@ export_dynamic_paths() {
 
   if [[ -z "$cluster_name" ]]; then
     [[ -L "$active_link" ]] || {
-      echo "[✗] No active cluster and none specified." >&2
+      echo "[x] No active cluster and none specified." >&2
       return 1
     }
     cluster_name=$(basename "$(readlink -f "$active_link")" .cluster)
