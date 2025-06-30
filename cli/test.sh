@@ -26,3 +26,11 @@ get_active_cluster_filename
 
 #ipxe_show_info show_paths
 
+#echo "---- ipxe ----"
+
+#ipxe_init
+
+
+# generate_ks 52540061c8c9 SCH
+
+
