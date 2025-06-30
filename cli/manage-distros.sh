@@ -8,8 +8,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 CPU="x86_64"
 MFR="linux"
 OSNAME="rockylinux"
-OSVER="9.5"
-OSVER_MAJ="9"
+OSVER="10.0"
+OSVER_MAJ="10"
 
 OSNAME_VARIANTS=("rockylinux" "almalinux" "debian")
 
