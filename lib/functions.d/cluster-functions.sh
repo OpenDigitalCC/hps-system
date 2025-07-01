@@ -2,6 +2,7 @@ __guard_source || return
 
 
 get_active_cluster_file() {
+    # Return contents of active cluster config
     local link="${HPS_CLUSTER_CONFIG_DIR}/active-cluster"
 
     if [[ ! -L "$link" ]]; then
@@ -22,7 +23,7 @@ get_active_cluster_file() {
 
 
 get_active_cluster_filename() {
-    # Now returns path to cluster.conf in active cluster dir
+    # returns path to cluster.conf in active cluster dir
     local link="${HPS_CLUSTER_CONFIG_BASE_DIR}/active-cluster"
     if [[ ! -L "$link" ]]; then
         echo "[ERROR] No active cluster symlink at: $link" >&2
@@ -278,5 +279,33 @@ load_cluster_host_type_profiles() {
   done < "$config_file"
 }
 
+
+cluster_has_installed_sch() {
+  local config_dir="${HPS_HOST_CONFIG_DIR}"
+  local config_file
+  local type state
+
+  for config_file in "$config_dir"/*.conf; do
+    [[ -f "$config_file" ]] || continue
+
+    type=""
+    state=""
+
+    while IFS='=' read -r key val; do
+      key="${key//[$'\r\n']}"
+      val="${val%\"}"; val="${val#\"}"
+      case "$key" in
+        TYPE) type="$val" ;;
+        STATE) state="$val" ;;
+      esac
+    done < "$config_file"
+
+    if [[ "$type" == "SCH" && "$state" == "INSTALLED" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
 
 

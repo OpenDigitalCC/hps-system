@@ -8,7 +8,7 @@ timezone UTC --utc
 
 # ------------ Network
 
-network --bootproto=static --ip=${HOST_IP} --netmask=${HOST_NETMASK} --gateway=${HOST_GATEWAY} --nameserver=${HOST_DNS} --hostname=${HOST_NAME} --activate
+network --bootproto=static --ip=@HOST_IP@ --netmask=@HOST_NETMASK@ --gateway=@HOST_GATEWAY@ --nameserver=@HOST_DNS@ --hostname=@HOST_NAME@ --activate
 firewall --disabled
 
 # ------------ Authentication
@@ -54,7 +54,33 @@ reboot
 
 %pre --interpreter /bin/bash
 
-curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=Entering pre stage"
+
+# Consider making a remote function lib to download in pre and post
+# for example:
+# source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=get_remote_function_lib")
+
+remote_log() {
+  local message="$1"
+  local encoded
+  local macid="${macid:-unknown}"
+  local gateway="${HOST_GATEWAY:-localhost}"
+
+  # URL-encode the message
+  local c
+  encoded=""
+  for (( i=0; i<${#message}; i++ )); do
+    c="${message:$i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) encoded+="$c" ;;
+      *) printf -v encoded '%s%%%02X' "$encoded" "'$c" ;;
+    esac
+  done
+
+  # Send log message
+  curl -s -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=log_message&message=${encoded}"
+}
+
+remote_log "Entering pre stage"
 
 # Detect first disk with >= 15 GiB and no partitions
 for DEV in $(lsblk -ndo NAME,TYPE | awk '$2=="disk" {print $1}'); do
@@ -68,10 +94,10 @@ for DEV in $(lsblk -ndo NAME,TYPE | awk '$2=="disk" {print $1}'); do
     if lsblk -n "$DISK" | awk '$6=="part"' | grep -q .; then
         echo "ABORTING: Disk $DISK has existing partitions." > /dev/ttyS0
         echo "Please wipe the disk manually before installing." > /dev/ttyS0
-        curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=Disk $DISK already partitioned"
-        curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=FAILED"
+        remote_log "Disk $DISK already partitioned, refusing to continue"
+        curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=FAILED"
         sleep 60
-        exit 1
+        reboot
     fi
 
     # Disk is usable
@@ -81,10 +107,10 @@ done
 # If no usable disk was found
 if [ -z "$DISK" ]; then
     echo "No suitable empty disk found!" > /dev/ttyS0
-    curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=No usable disk found"
-    curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=FAILED"
+    remote_log "No usable disk found"
+    curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=FAILED"
     sleep 60
-    exit 1
+    reboot
 fi
 
 # Convert size to MiB
@@ -105,7 +131,14 @@ clearpart --all --initlabel --drives=$DISK
 bootloader --location=mbr --boot-drive=$DISK
 part /     --fstype=xfs --size=$ROOT_SIZE   --ondisk=$DISK
 part /var  --fstype=xfs --size=$VAR_SIZE    --ondisk=$DISK
+%end
 
+
+# ----------- Add the local repo 
+
+repo --name=baseos --baseurl=http://@HOST_GATEWAY@/distros/x86_64-linux-rockylinux-10.0/BaseOS/ --install --noverifyssl
+repo --name=minimal --baseurl=http://@HOST_GATEWAY@/distros/x86_64-linux-rockylinux-10.0/Minimal/ --install --noverifyssl
+repo --name=appstream --baseurl=http://docker-01/distros/x86_64-linux-rockylinux-10.0/AppStream/ --install
 
 #  ------------ Packages
 
@@ -121,15 +154,41 @@ python3-configshell
 %end
 
 
-#  ------------ Post nochroot (installer environment)
-
-%post --log=/root/ks-post.log --nochroot
-curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=Entering post stage"
-%end
 
 #  ------------ Post chroot (installed system environment)
 
-%post --log=/root/ks-post.log --chroot
+%post --log=/root/ks-post.log 
+
+# Consider making a remote function lib to download in pre and post
+# for example:
+# source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=get_remote_function_lib")
+
+remote_log() {
+  local message="$1"
+  local encoded
+  local macid="${macid:-unknown}"
+  local gateway="${HOST_GATEWAY:-localhost}"
+
+  # URL-encode the message
+  local c
+  encoded=""
+  for (( i=0; i<${#message}; i++ )); do
+    c="${message:$i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) encoded+="$c" ;;
+      *) printf -v encoded '%s%%%02X' "$encoded" "'$c" ;;
+    esac
+  done
+
+  # Send log message
+  curl -s -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=log_message&message=${encoded}"
+}
+
+
+dnf install -y epel-release
+dnf install -y https://zfsonlinux.org/epel/zfs-release.el9_$(uname -r).noarch.rpm
+dnf install -y kernel-devel zfs targetcli python3-rtslib python3-configshell
+
 
 # Enable target service
 systemctl enable target
@@ -142,16 +201,7 @@ passwd -l root
 #systemctl mask firewalld NetworkManager
 nmcli connection modify "Wired connection 1" connection.autoconnect yes
 
-%end
 
-#  ------------ Post nochroot (installer environment)
-
-%post --log=/root/ks-post.log --nochroot
-curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=INSTALLED"
-%end
-
-
-#%post --log=/root/ks-post.log --nochroot
 #echo "Hardening install..."
 #sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 #passwd -l root
@@ -159,6 +209,10 @@ curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_
 ##systemctl disable firewalld NetworkManager
 ##systemctl mask firewalld NetworkManager
 #nmcli connection modify "Wired connection 1" connection.autoconnect yes
-#curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=INSTALLED"
-#%end
+#curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=INSTALLED"
+
+remote_log "Install completed"
+curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=INSTALLED"
+
+%end
 

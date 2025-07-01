@@ -78,12 +78,10 @@ if [[ "$cmd" == "log_message" ]]
   if ! cgi_param exists message
    then
     ipxe_cgi_fail "Param message is required for command $cmd"
-    exit
   else
     LOG_MESSAGE="$(cgi_param get message)"
     cgi_header_plain
     echo "Log updated"
-    exit
   fi
   hps_log info "[$mac] $cmd $LOG_MESSAGE"
   exit
@@ -128,13 +126,13 @@ if [[ "$cmd" == "boot_action" ]]
   case "$state" in
     UNCONFIGURED)
       hps_log info "[$mac] Unconfigured — offering install options."
-      ipxe_configure_menu
+      ipxe_configure_main_menu
       ;;
 
     CONFIGURED)
       hps_log info "[$mac] Configured — offering install options."
       # establish type and o/s from config and cluster, then go to install that
-      ipxe_install_menu
+      ipxe_host_install_menu
       ;;
 
     INSTALLED)
@@ -147,7 +145,7 @@ if [[ "$cmd" == "boot_action" ]]
       hps_log info "[$mac] Currently installing. Continuing install."
       HTYPE=$(host_config "$mac" get TYPE)
       hps_log debug "[$mac] Installing TYPE: $HTYPE"
-      ipxe_boot_installer "$HTYPE"
+      ipxe_boot_installer "$HTYPE" ""
       ;;
 
     ACTIVE)
@@ -158,14 +156,15 @@ if [[ "$cmd" == "boot_action" ]]
 
     REINSTALL)
 #      hps_log info "[$mac] Reinstall requested. Returning to install menu."
-#      ipxe_install_menu
+#      ipxe_host_install_menu
       host_config "$mac" set STATE UNCONFIGURED
       ipxe_init
       ;;
 
     FAILED)
       hps_log info "[$mac] Install failed"
-      exit
+      ipxe_configure_main_menu
+#      ipxe_cgi_fail "Installation marked as FAILED"
     ;;
 
     *)

@@ -25,9 +25,10 @@ EOF
 
 
 ipxe_cgi_fail () {
+  # IPXE failure message
+  ipxe_header
   local cfmsg="$1"
   hps_log error "[$(cgi_param get mac)] ${FUNCNAME[1]} $cfmsg"
-#  cgi_header_plain
   echo "#!ipxe"
   echo "echo == ERROR =="
   echo "echo"
@@ -39,15 +40,17 @@ ipxe_cgi_fail () {
 }
 
 
+
 ipxe_boot_from_disk () {
-ipxe_header
-echo "echo This device is installed."
-echo "echo Handing back to BIOS to boot"
-echo "sleep 5"
-echo "exit"
+  # Boot from local disk via bios by exiting the iPXE stack
+  ipxe_header
+  echo "echo Handing back to BIOS to boot"
+  echo "sleep 5"
+  echo "exit"
 }
 
 handle_menu_item() {
+  # This function handles any menu function across all menus
   local item="$1"
   local mac="$2"
 
@@ -58,11 +61,11 @@ handle_menu_item() {
       ;;
 
     install_menu)
-      if has_sch_host
+      if cluster_has_installed_sch
        then
         ipxe_install_hosts_menu
       else
-        ipxe_install_sch
+        ipxe_host_install_sch
        fi
       ;;
 
@@ -75,19 +78,14 @@ handle_menu_item() {
       ;;
 
     unconfigure)
-      ipxe_header
       host_config_delete "$mac"
-      echo "sleep 1"
-      echo "reboot"
+      ipxe_reboot "Menu selected - Unconfigure $mac and reboot"
       ;;
 
   
     reboot)
       hps_log info "[$mac] $item Reboot requested"
-      ipxe_header
-      echo "echo Rebooting"
-      echo "sleep 1"
-      echo "reboot"
+      ipxe_reboot "Menu selected - reboot"
       ;;
 
     local_boot)
@@ -101,7 +99,7 @@ handle_menu_item() {
     reinstall)
       hps_log info "[$mac] $item Reinstall requested"
       host_config "$mac" set STATE REINSTALL
-      ipxe_install_menu
+      ipxe_host_install_menu
       ;;
 
     rescue)
@@ -112,9 +110,12 @@ handle_menu_item() {
       echo "shell"
       ;;
 
-    install_TCH|install_DRH|install_SCH|install_CCH)
-      local type="${item#install_}"
-      ipxe_boot_installer "$type"
+    install_*)
+      local HOST_TYPE="${item#install_}"
+      local HOST_TYPE="${HOST_TYPE%_*}"
+      local HOST_PROFILE="${item##*_}"
+      hps_log info "[$mac] $item Running boot installer for type: "${HOST_TYPE}" profile: "${HOST_PROFILE}""
+      ipxe_boot_installer "${HOST_TYPE}" "${HOST_PROFILE}"
       ;;
 
     *)
@@ -126,12 +127,9 @@ handle_menu_item() {
 
 
 ipxe_init () {
-
-# This menu is delivered if the cluster is configured and we don't know who the host is yet
-
-ipxe_header
-
-cat <<EOF
+  # This menu is delivered if the cluster is configured and we don't know who the host is yet as we don't yet have the MAC
+  ipxe_header
+  cat <<EOF
 
 set config_url ${CGI_URL}?mac=\${mac:hexraw}&cmd=boot_action
 echo Requesting: \${config_url}
@@ -150,35 +148,36 @@ imgexec config
 #reboot
 
 EOF
-
 }
 
 
-ipxe_install_sch () {
-ipxe_header
+ipxe_host_install_sch () {
+  # Run this to present menu to install SCH
+  ipxe_header
 
 cat <<EOF
+# Fixed iPXE menu for Storage Cluster Host installation
+:start
 menu ${TITLE_PREFIX} Install Storage Cluster Host
 item --gap 
-item --gap At least one Storage Cluster Hosts must be configured.
+item --gap At least one Storage Cluster Host must be configured for a cluster.
+item --gap Note: This will execute the installation immediately
 item --gap 
 item init_menu    < Back to initialisation menu
 item --gap 
-item install_SCH  > Install Storage Cluster Host
+item install_SCH_STORAGESINGLE  > Install now: ZFS single-disk (for testing or multiple hosts)
+item install_SCH_STORAGERAID    > Install now: ZFS RAID (for multiple local disks)
+choose action
 
-choose selection && goto HANDLE_MENU
-
-:HANDLE_MENU
-set logmsg ${FUNCNAME[1]} Menu selected: \${selection}
+set logmsg "Menu selected: \${action}"
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
-
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${action}
 
 EOF
 
 }
 
-ipxe_install_menu () {
+ipxe_host_install_menu () {
 ipxe_header
 
 cat <<EOF
@@ -204,14 +203,10 @@ EOF
 
 }
 
-ipxe_configure_menu () {
+ipxe_configure_main_menu () {
 
 # This menu is delivered if the cluster is configured, but the host is not
 # Main menu, if we are not configured
-
-# has_sch_host - otherwise can only configure storage
-
-# iPXE output as heredoc
 
 hps_log debug "[$mac] Delivering configure menu"
 
@@ -245,8 +240,19 @@ EOF
 
 }
 
+ipxe_reboot () {
+  local MSG=$1
+  hps_log info "[$mac] Reboot requested $MSG"
+  ipxe_header
+  [[ -n $MSG ]] && echo "echo $MSG"
+  echo "sleep 10"
+  echo "reboot"
+}
+
 ipxe_boot_installer () {
   local host_type=$1
+  local profile=$2
+  
   hps_log info "[$mac] Installing new host of type $host_type"
   
   load_cluster_host_type_profiles
@@ -257,23 +263,21 @@ ipxe_boot_installer () {
   local OSVER="$(get_host_type_param ${host_type} OSVER)"
   local state="$(host_config "$mac" get STATE)"
 
-  ipxe_header
-
-
   # check that we are not already installed
   if [ "$state" == "INSTALLED" ]
    then
-    echo "echo Host already installed, aborting installation"
-    echo "sleep 10"
-    echo "reboot"
+    ipxe_reboot "Host already installed, aborting installation"
   fi
 
-
   host_config "$mac" set TYPE "$host_type"
-  host_config "$mac" set STATE INSTALLING
+  if [[ -n "$profile" ]]
+   then
+    host_config "$mac" set PROFILE "$profile"
+  fi
 
   DIST_PATH="$HPS_DISTROS_DIR/${CPU}-${MFR}-${OSNAME}-${OSVER}"
   DIST_URL="distros/${CPU}-${MFR}-${OSNAME}-${OSVER}"
+  mount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
 
   case "${OSNAME}" in
     rockylinux)
@@ -287,10 +291,9 @@ ipxe_boot_installer () {
       ipxe_cgi_fail "$DIST_PATH/${KERNEL_FILE} doesn't exist for type $host_type"
     fi
 
-  hps_log debug "[$mac] Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
-
-
-IPXE_BOOT_INSTALL=$(cat <<EOF
+    hps_log debug "[$mac] Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
+  ipxe_header
+  IPXE_BOOT_INSTALL=$(cat <<EOF
 # created at $(date)
 
 # Detect CPU architecture
@@ -316,7 +319,6 @@ initrd \${initrd_url}
 sleep 10
 boot
 
-
 #echo Booting image
 #imgstat
 #set logmsg ${FUNCNAME[1]} \${kernel_url} \${kernel_args} \${initrd_url}
@@ -325,11 +327,10 @@ boot
 EOF
 )
 
-# debug: make file with the ipxe menu
-echo "${IPXE_BOOT_INSTALL}"  > /tmp/ipxe-boot-install.ipxe
-echo "${IPXE_BOOT_INSTALL}"
-
-
+  # debug: make file with the ipxe menu
+  #echo "${IPXE_BOOT_INSTALL}"  > /tmp/ipxe-boot-install.ipxe
+  host_config "$mac" set STATE INSTALLING
+  echo "${IPXE_BOOT_INSTALL}"
   ;;
   
   debian)
@@ -339,10 +340,7 @@ echo "${IPXE_BOOT_INSTALL}"
     ipxe_cgi_fail "No configuration for ${CPU}-${MFR}-${OSNAME}-${OSVER}"
   ;;
 esac
-
-
 }
-
 
 
 ipxe_show_info() {

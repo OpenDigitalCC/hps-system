@@ -81,6 +81,34 @@ check_latest_version() {
 }
 
 
+mount_distro_iso() {
+
+  DISTRO_STRING="$1"
+  if [[ -z "$DISTRO_STRING" ]]; then
+    hps_log info "Usage: mount_distro_iso <CPU>-<MFR>-<OSNAME>-<OSVER>"
+    return 1
+  fi
+  local iso_path="${HPS_DISTROS_DIR}/iso/${DISTRO_STRING}.iso"
+  local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
+
+  if [[ ! -f "$iso_path" ]]; then
+    hps_log info "ISO file not found: $iso_path"
+    return 1
+  fi
+
+  if mountpoint -q "$mount_point"; then
+     hps_log info "Already mounted: $mount_point"
+    return 0
+  fi
+
+  mkdir -p "$mount_point"
+  hps_log info "Mounting $iso_path to $mount_point"
+  mount -o loop "$iso_path" "$mount_point"
+}
+
+
+
+
 download_iso() {
   local cpu="$1"
   local mfr="$2"
