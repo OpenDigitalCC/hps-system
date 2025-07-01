@@ -8,7 +8,7 @@ host_initialise_config() {
 
   mkdir -p "${HPS_HOST_CONFIG_DIR}"
 
-  host_config "$macid" set STATE "UNCONFIGURED"
+  host_config "$mac" set STATE "UNCONFIGURED"
 
 #  local created_ts
 #  created_ts=$(make_timestamp)
