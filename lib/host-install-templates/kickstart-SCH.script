@@ -1,0 +1,164 @@
+
+
+# ------------ Locale
+
+lang en_GB.UTF-8
+keyboard uk
+timezone UTC --utc
+
+# ------------ Network
+
+network --bootproto=static --ip=${HOST_IP} --netmask=${HOST_NETMASK} --gateway=${HOST_GATEWAY} --nameserver=${HOST_DNS} --hostname=${HOST_NAME} --activate
+firewall --disabled
+
+# ------------ Authentication
+
+rootpw --plaintext changeme
+#authconfig --enableshadow --passalgo=sha512
+
+# ------------ Hardening
+
+selinux --enforcing
+#services --enabled=sshd
+
+
+# ------------ Disk / boot
+
+zerombr
+clearpart --all --initlabel
+
+part / --fstype=xfs --size=10240
+part /var --fstype=xfs --size=10240
+
+bootloader --location=mbr
+
+# If you prefer manual partitioning, uncomment below and comment 'autopart' above:
+# clearpart --all --initlabel
+# part biosboot --fstype=biosboot --size=1
+# part /boot --fstype=xfs --size=512
+# part swap --size=2048
+# part / --fstype=xfs --grow --size=1024
+#part / --fstype=ext4 --size=10240
+
+# Disk / boot - autopartition
+#zerombr
+#clearpart --all --initlabel
+#autopart --nohome --nolvm
+#bootloader --location=mbr
+
+# ------------ Reboot when done
+reboot
+
+
+# ------------ pre
+
+%pre --interpreter /bin/bash
+
+curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=Entering pre stage"
+
+# Detect first disk with >= 15 GiB and no partitions
+for DEV in $(lsblk -ndo NAME,TYPE | awk '$2=="disk" {print $1}'); do
+    DISK="/dev/$DEV"
+    SIZE=$(lsblk -nbdo SIZE "$DISK")
+    
+    # Skip if too small
+    [ "$SIZE" -lt $((15 * 1024 * 1024 * 1024)) ] && continue
+
+    # Check for existing partitions (e.g. /dev/sdX1, /dev/nvme0n1p1)
+    if lsblk -n "$DISK" | awk '$6=="part"' | grep -q .; then
+        echo "ABORTING: Disk $DISK has existing partitions." > /dev/ttyS0
+        echo "Please wipe the disk manually before installing." > /dev/ttyS0
+        curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=Disk $DISK already partitioned"
+        curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=FAILED"
+        sleep 60
+        exit 1
+    fi
+
+    # Disk is usable
+    break
+done
+
+# If no usable disk was found
+if [ -z "$DISK" ]; then
+    echo "No suitable empty disk found!" > /dev/ttyS0
+    curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=No usable disk found"
+    curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=FAILED"
+    sleep 60
+    exit 1
+fi
+
+# Convert size to MiB
+DISK_SIZE_MIB=$((SIZE / 1024 / 1024))
+ROOT_SIZE=10240
+VAR_SIZE=10240
+ZFS_START_MIB=$((ROOT_SIZE + VAR_SIZE))
+ZFS_SIZE_MIB=$((DISK_SIZE_MIB - ZFS_START_MIB))
+
+# Store info for use later
+echo "$DISK" > /tmp/target-disk
+echo "$ZFS_START_MIB" > /tmp/zfs_start
+
+# Generate dynamic partition layout
+cat <<EOF > /tmp/part-include.ks
+ignoredisk --only-use=$DISK
+clearpart --all --initlabel --drives=$DISK
+bootloader --location=mbr --boot-drive=$DISK
+part /     --fstype=xfs --size=$ROOT_SIZE   --ondisk=$DISK
+part /var  --fstype=xfs --size=$VAR_SIZE    --ondisk=$DISK
+
+
+#  ------------ Packages
+
+%packages
+@^minimal-environment
+@core
+openssh-server
+zfs
+kernel-devel
+targetcli
+python3-rtslib
+python3-configshell
+%end
+
+
+#  ------------ Post nochroot (installer environment)
+
+%post --log=/root/ks-post.log --nochroot
+curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=log_message&message=Entering post stage"
+%end
+
+#  ------------ Post chroot (installed system environment)
+
+%post --log=/root/ks-post.log --chroot
+
+# Enable target service
+systemctl enable target
+
+echo "Hardening install..."
+sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+systemctl enable sshd
+passwd -l root
+#systemctl disable firewalld NetworkManager
+#systemctl mask firewalld NetworkManager
+nmcli connection modify "Wired connection 1" connection.autoconnect yes
+
+%end
+
+#  ------------ Post nochroot (installer environment)
+
+%post --log=/root/ks-post.log --nochroot
+curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=INSTALLED"
+%end
+
+
+#%post --log=/root/ks-post.log --nochroot
+#echo "Hardening install..."
+#sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+#passwd -l root
+#systemctl enable sshd
+##systemctl disable firewalld NetworkManager
+##systemctl mask firewalld NetworkManager
+#nmcli connection modify "Wired connection 1" connection.autoconnect yes
+#curl -X POST "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=$macid&cmd=set_status&status=INSTALLED"
+#%end
+
