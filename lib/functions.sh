@@ -86,17 +86,15 @@ fi
 #echo "[debug ${BASH_SOURCE[0]}] HPS_DISTROS_DIR = $HPS_DISTROS_DIR" >&2
 
 # Get the directory where this file resides
-SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+export LIB_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 
 # Optional: main guard to avoid multiple sourcing
 [[ -n "${_HPS_FUNCTIONS_LOADED:-}" ]] && return
 _HPS_FUNCTIONS_LOADED=1
 
-
-
 # Directory for function fragments
-FUNCDIR="${SCRIPT_DIR}/functions.d"
+FUNCDIR="${LIB_DIR}/functions.d"
 
 __guard_source() {
     local src="${BASH_SOURCE[1]}"
