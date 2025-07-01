@@ -90,7 +90,6 @@ if [[ "$cmd" == "log_message" ]]
 fi
 
 
-
 # Command: Network bootstrap via kickstart
 if [[ "$cmd" == "kickstart" ]]; then
   if ! cgi_param exists hosttype; then
@@ -103,7 +102,7 @@ if [[ "$cmd" == "kickstart" ]]; then
   exit
 fi
 
-# Conditional: Determine state
+# Conditional: Determine current state
 if [[ "$cmd" == "determine_state" ]]; then
   hps_log info "[$mac] Host wants to know its state"
   state="$(host_config "$mac" get STATE)"
@@ -113,16 +112,18 @@ if [[ "$cmd" == "determine_state" ]]; then
 fi
 
 # Conditional: Decide what to do next
-if [[ "$cmd" == "boot_action" ]]; then
+if [[ "$cmd" == "boot_action" ]]
+ then
   hps_log info "[$mac] Host wants to know what to do next"
-
-  host_config_exists "$mac" || host_initialise_config "$mac"
-
+  if host_config_exists "$mac"
+   then
+    hps_log info "[$mac] Found config"
+   else
+    hps_log info "[$mac] No config found, initialising"
+    host_initialise_config "$mac"
+  fi
   state="$(host_config "$mac" get STATE)"
   hps_log info "[$mac] STATE: $state"
-
-
-  # Condition: If the host is already installed, exit script and boot from disk
 
   case "$state" in
     UNCONFIGURED)
@@ -145,7 +146,7 @@ if [[ "$cmd" == "boot_action" ]]; then
     INSTALLING)
       hps_log info "[$mac] Currently installing. Continuing install."
       HTYPE=$(host_config "$mac" get TYPE)
-      hps_log debug "HTYPE: $HTYPE"
+      hps_log debug "[$mac] Installing TYPE: $HTYPE"
       ipxe_boot_installer "$HTYPE"
       ;;
 
@@ -162,6 +163,10 @@ if [[ "$cmd" == "boot_action" ]]; then
       ipxe_init
       ;;
 
+    FAILED)
+      hps_log info "[$mac] Install failed"
+      exit
+    ;;
 
     *)
       hps_log info "[$mac] Unknown or unset state. Failing.."
