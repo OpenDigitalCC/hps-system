@@ -192,6 +192,7 @@ repo --name=hps-packages --baseurl=http://@HOST_GATEWAY@/packages/x86_64-linux-r
 @core
 # Core services
 openssh-server
+
 # Build packages - hope to not need them with prebuilt zfs
 kernel-devel
 targetcli
@@ -216,14 +217,7 @@ python
 python-setuptools
 python-cffi
 libffi-devel
-
-# KVM etc
-qemu-kvm
-libvirt
-virt-install
-libguestfs-tools
-virt-top
-qemu-img
+rsync
 
 #opensvc-server
 #zfs-release
@@ -262,12 +256,11 @@ remote_log() {
 
 remote_log "Entering POST stage"
 
-chroot /mnt/sysimage /bin/bash 
+chroot /mnt/sysimage /bin/bash <<EOF
+
 remote_log() {
   local message="$1"
   local encoded
-  local macid="${macid:-unknown}"
-  local gateway="${HOST_GATEWAY:-localhost}"
 
   # URL-encode the message
   local c
@@ -316,7 +309,8 @@ nmcli connection modify "Wired connection 1" connection.autoconnect yes
 #curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=INSTALLED"
 
 remote_log "Exiting post chroot"
-exit
+EOF
+
 
 curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=INSTALLED"
 remote_log "Install completed, status updated"

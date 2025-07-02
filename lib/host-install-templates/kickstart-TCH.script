@@ -9,11 +9,15 @@ part / --fstype=ext4 --size=10240
 
 %packages
 @^minimal-environment
-kvm
+# core services
+openssh-server
+
+# KVM etc
 qemu-kvm
 libvirt
 virt-install
-virt-manager
-openssh-server
+libguestfs-tools
+virt-top
+qemu-img
 %end
 
