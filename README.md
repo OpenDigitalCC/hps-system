@@ -91,4 +91,18 @@ Global config is saved in `/srv/hps-config/hps.conf` and sourced by:
 
 See the `hps-container` README for runtime container info.
 
+## Hardware requirements
+
+### Initial Provisioning Node
+
+- Docker container
+- Storage 10GB (Redhat DVD)
+
+### Storage node:
+
+- Base O/S: min 30GB
+- Swap: min 20GB
+- Storage service: As you wish, probably 100G or more
+- RAM: 16GB min, as much as you have
+
 
