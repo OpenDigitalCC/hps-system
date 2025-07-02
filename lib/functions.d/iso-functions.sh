@@ -79,32 +79,81 @@ check_latest_version() {
       ;;
   esac
 }
-
-
 mount_distro_iso() {
-
-  DISTRO_STRING="$1"
-  if [[ -z "$DISTRO_STRING" ]]; then
-    hps_log info "Usage: mount_distro_iso <CPU>-<MFR>-<OSNAME>-<OSVER>"
-    return 1
-  fi
+  local DISTRO_STRING="$1"
   local iso_path="${HPS_DISTROS_DIR}/iso/${DISTRO_STRING}.iso"
   local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
 
   if [[ ! -f "$iso_path" ]]; then
-    hps_log info "ISO file not found: $iso_path"
+    hps_log info "[mount_distro_iso] ISO not found: $iso_path"
     return 1
   fi
 
   if mountpoint -q "$mount_point"; then
-     hps_log info "Already mounted: $mount_point"
+    hps_log info "[mount_distro_iso] Already mounted: $mount_point"
     return 0
   fi
 
   mkdir -p "$mount_point"
-  hps_log info "Mounting $iso_path to $mount_point"
-  mount -o loop "$iso_path" "$mount_point"
+  hps_log info "[mount_distro_iso] Mounting $iso_path to $mount_point"
+  mount -o loop "$iso_path" "$mount_point" >/dev/null 2>&1
 }
+unmount_distro_iso() {
+  local DISTRO_STRING="$1"
+  local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
+
+  if ! mountpoint -q "$mount_point"; then
+    hps_log info "[unmount_distro_iso] Not mounted: $mount_point"
+    return 0
+  fi
+
+  hps_log info "[unmount_distro_iso] Unmounting $mount_point"
+  umount "$mount_point" >/dev/null 2>&1 || {
+    hps_log info "[unmount_distro_iso] Failed to unmount $mount_point"
+    return 1
+  }
+}
+
+
+update_distro_iso() {
+  local DISTRO_STRING="$1"
+  local iso_path="${HPS_DISTROS_DIR}/iso/${DISTRO_STRING}.iso"
+  local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
+
+  if [[ -z "$DISTRO_STRING" ]]; then
+    echo "Usage: update_distro_iso <CPU>-<MFR>-<OSNAME>-<OSVER>"
+    return 1
+  fi
+
+  unmount_distro_iso "$DISTRO_STRING" || {
+    echo "❌ Failed to unmount $mount_point"
+    return 1
+  }
+
+  if mountpoint -q "$mount_point"; then
+    echo "❌ Still mounted after unmount attempt. Aborting."
+    return 1
+  fi
+
+  echo
+  echo "🛠️  Please update the ISO file now:"
+  echo "    → $iso_path"
+  echo "Press ENTER when ready to re-mount..."
+  read -r
+
+  if [[ ! -f "$iso_path" ]]; then
+    echo "❌ ISO file not found: $iso_path"
+    return 1
+  fi
+
+  if ! mount_distro_iso "$DISTRO_STRING"; then
+    echo "❌ Failed to re-mount ISO."
+    return 1
+  fi
+
+  echo "✅ ISO re-mounted: $mount_point"
+}
+
 
 
 

@@ -78,6 +78,12 @@ http {
       alias ${HPS_DISTROS_DIR}/;
     }
 
+    # Local package repo (multiple distros/versions)
+    location /packages/ {
+      autoindex on;
+      alias ${HPS_PACKAGES_DIR}/;
+    }
+
     location = /favicon.ico {
       access_log off;
      log_not_found off;

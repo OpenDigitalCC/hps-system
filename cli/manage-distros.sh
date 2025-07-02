@@ -29,11 +29,19 @@ echo "[*] Using ISO path: $ISO_PATH"
 #echo "[*] Checking for latest ${OSNAME} version..."
 #check_latest_version "${CPU}" "${MFR}" "${OSNAME}"
 
+#echo "[*] Unmounting distro if it is mounted"
+#unmount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
+
 echo "[*] Ensuring ISO for ${CPU}-${MFR}-${OSNAME}-${OSVER} is present..."
 download_iso "${CPU}" "${MFR}" "${OSNAME}" "${OSVER}"
 
-echo "[*] Extracting ISO for PXE..."
-extract_iso_for_pxe "${CPU}" "${MFR}" "${OSNAME}" "${OSVER}"
+update_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
+
+#echo "[*] Mounting distro"
+#mount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
+
+#echo "[*] Extracting ISO for PXE..."
+#extract_iso_for_pxe "${CPU}" "${MFR}" "${OSNAME}" "${OSVER}"
 
 #echo "[*] Verifying ISO signature..."
 #verify_checksum_signature "${CPU}" "${MFR}" "${OSNAME}" "${OSVER}"
