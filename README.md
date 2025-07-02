@@ -1,14 +1,18 @@
 # HPS System
 
+
 The hps-system is the Magrathea - "Magrathea was the planet whose business it was to build other planets." — Douglas Adams, The Hitchhiker's Guide to the Galaxy.
 
 
-This package contains the **core logic and configuration** for the Host Provisioning Service (HPS). It is designed to be mounted inside a Debian-based container at:
+This package contains the **core logic and configuration** for the Host Provisioning Service (HPS). 
+
+Although functional, it is an ALPHA release. The logic is overall sound however implementation requires improving.
+
+HPS is designed to be mounted inside a Debian-based container at:
 
 ```
-/srv/hps
+/srv/hps-container
 ```
-
 
 ## HPS platform layers
 
@@ -83,6 +87,8 @@ This script:
 
 ```
 
+
+
 ## 📚 Configuration
 
 Global config is saved in `/srv/hps-config/hps.conf` and sourced by:
@@ -90,6 +96,15 @@ Global config is saved in `/srv/hps-config/hps.conf` and sourced by:
 - service startup scripts
 
 See the `hps-container` README for runtime container info.
+
+## Performance
+
+To install a new storage node on a virtual machine, using a commodity home PC takes about 7 minutes and 3 key-presses.
+
+
+# Getting started
+
+You need hardware, the IPS and a download of your preferred O/S. Rocky 10 has been used for testing.
 
 ## Hardware requirements
 
@@ -104,5 +119,20 @@ See the `hps-container` README for runtime container info.
 - Swap: min 20GB
 - Storage service: As you wish, probably 100G or more
 - RAM: 16GB min, as much as you have
+
+
+# Troubleshooting
+
+Watch the console for errors, and alsop the logfile which is probably too verbose. Grep for the MAC address for server-specific info.
+
+Common issues:
+
+- insufficient disks - see minimum disk sizes for redhat-based distros
+- BIOS not set to boot the disk before the network
+
+
+# How to help
+
+- Download, install, PR
 
 
