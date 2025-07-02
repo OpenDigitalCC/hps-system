@@ -41,6 +41,27 @@ host_config_delete() {
   fi
 }
 
+host_config_show() {
+  local mac="$1"
+  local config_file="${HPS_HOST_CONFIG_DIR}/${mac}.conf"
+
+  if [[ ! -f "$config_file" ]]; then
+    hps_log info "No host config found for MAC: $mac"
+    return 0
+  fi
+
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
+    # Strip quotes
+    v="${v%\"}"; v="${v#\"}"
+    # Escape embedded quotes and backslashes
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    echo "${k}=\"${v}\""
+  done < "$config_file"
+}
+
+
 
 host_config_exists() {
   local mac="$1"

@@ -118,6 +118,19 @@ handle_menu_item() {
       ipxe_boot_installer "${HOST_TYPE}" "${HOST_PROFILE}"
       ;;
 
+    force_install_*)
+      if [[ "${item}" == "force_install_on" ]] 
+       then
+        host_config "$mac" set FORCE_INSTALL YES
+        host_config "$mac" set STATUS UNCONFIGURED
+        ipxe_reboot "FORCE_INSTALL set to YES"
+       else
+        host_config "$mac" set FORCE_INSTALL NO
+#        host_config "$mac" set STATUS UNCONFIGURED
+        ipxe_reboot "FORCE_INSTALL set to NO"
+      fi       
+      ;;
+
     *)
       hps_log info "[$mac] Unknown menu item: $item"
       ipxe_cgi_fail "Unknown menu item: $item"
@@ -212,21 +225,34 @@ hps_log debug "[$mac] Delivering configure menu"
 
 ipxe_header
 
+FORCE_INSTALL_VALUE="$(host_config "$mac" get FORCE_INSTALL 2>/dev/null)"
+
+if [[ "$(host_config "$mac" get FORCE_INSTALL)" == "YES" ]]; then
+  FI_MENU="item force_install_off Disable forced installation"
+else
+  FI_MENU="item force_install_on  Enable forced installation, wiping disks"
+fi
+
+
 cat <<EOF
 
 menu ${TITLE_PREFIX} Select a host option:
 
+item --gap Host options
 item install_menu > Host install menu
 item --gap 
 item recover_DRH  > NOT YET IMPLEMENTED: Recover from Disaster Recovery Host (DRH) 
 item --gap 
-item local_boot   Boot from local disk
-item reboot       Reboot system
-item --gap 
+item --gap System options
 item show_ipxe    Show host and cluster configuration
 item rescue       Enter rescue shell
 item reinstall    Reinstall current host
 item unconfigure  Unconfigure this host
+item local_boot   Boot from local disk
+item reboot       Reboot system
+item --gap 
+item --gap Advanced
+${FI_MENU}
 
 choose selection && goto HANDLE_MENU
 
@@ -245,7 +271,8 @@ ipxe_reboot () {
   hps_log info "[$mac] Reboot requested $MSG"
   ipxe_header
   [[ -n $MSG ]] && echo "echo $MSG"
-  echo "sleep 10"
+  echo "echo Rebooting..."
+  echo "sleep 5"
   echo "reboot"
 }
 
@@ -343,6 +370,8 @@ esac
 }
 
 
+
+
 ipxe_show_info() {
   ipxe_header
   local category="$1"
@@ -405,9 +434,8 @@ EOF
 
     show_host)
       echo "menu Host Configuration"
-
-      local config_file="${HPS_HOST_CONFIG_DIR}/${mac}.conf"
-      if [[ ! -f "$config_file" ]]; then
+      if ! host_config_exists 
+       then
         echo "item --gap [x] Host config not found: $config_file"
       else
         while IFS='=' read -r k v; do
@@ -463,8 +491,7 @@ EOF
       ;;
 
     *)
-      echo "#!ipxe"
-      echo "echo Unknown category: $category"
+      echo "echo Unknown item: $category"
       echo "sleep 3"
       echo "chain ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=init_menu"
       ;;

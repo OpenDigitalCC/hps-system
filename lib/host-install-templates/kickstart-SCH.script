@@ -54,10 +54,11 @@ reboot
 
 %pre --interpreter /bin/bash
 
-
 # Consider making a remote function lib to download in pre and post
 # for example:
 # source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=get_remote_function_lib")
+
+#source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=host_get_config")
 
 remote_log() {
   local message="$1"
@@ -80,85 +81,160 @@ remote_log() {
   curl -s -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=log_message&message=${encoded}"
 }
 
-remote_log "Entering pre stage"
+load_remote_host_config() {
+  local conf
+  conf="$(curl -fsSL "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=host_get_config")" || {
+    remote_log "Failed to load host config"
+    return 1
+  }
+  # Optional debug
+  remote_log "Remote config: $conf"
+  eval "$conf"
+}
 
-# Detect first disk with >= 15 GiB and no partitions
+load_remote_host_config
+
+remote_log "Entering PRE stage"
+
+# Detect first disk with >= 15 GiB and no existing partitions/signatures
 for DEV in $(lsblk -ndo NAME,TYPE | awk '$2=="disk" {print $1}'); do
     DISK="/dev/$DEV"
     SIZE=$(lsblk -nbdo SIZE "$DISK")
-    
+
     # Skip if too small
     [ "$SIZE" -lt $((15 * 1024 * 1024 * 1024)) ] && continue
 
-    # Check for existing partitions (e.g. /dev/sdX1, /dev/nvme0n1p1)
-    if lsblk -n "$DISK" | awk '$6=="part"' | grep -q .; then
-        echo "ABORTING: Disk $DISK has existing partitions." > /dev/ttyS0
-        echo "Please wipe the disk manually before installing." > /dev/ttyS0
-        remote_log "Disk $DISK already partitioned, refusing to continue"
-        curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=FAILED"
-        sleep 60
-        reboot
+    remote_log "VAR FORCE_INSTALL set to: ${FORCE_INSTALL}"
+
+    if [[ "${FORCE_INSTALL:-}" == "YES" ]]
+    then
+     remote_log "FORCE_INSTALL is set, wiping disk $DISK"
+     wipefs -a $DISK
+     sgdisk --zap-all "$DISK"
     fi
 
-    # Disk is usable
+    # Check for existing partitions or signatures
+    if lsblk -n "$DISK" | awk 'NR>1' | grep -q . || wipefs -n "$DISK" | grep -q .; then
+        remote_log "Disk $DISK already partitioned or has signatures, refusing to continue, rebooting"
+        curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=FAILED"
+        reboot
+    fi
     break
 done
+
+
+remote_log "lsblk: $(lsblk -n $DISK)"
+
+remote_log "Completed disk detection, found disk $DISK"
 
 # If no usable disk was found
 if [ -z "$DISK" ]; then
     echo "No suitable empty disk found!" > /dev/ttyS0
-    remote_log "No usable disk found"
+    remote_log "No usable disk found, rebooting"
     curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=FAILED"
-    sleep 60
     reboot
 fi
 
+remote_log "Usability check for $DISK passed"
+
 # Convert size to MiB
 DISK_SIZE_MIB=$((SIZE / 1024 / 1024))
-ROOT_SIZE=10240
-VAR_SIZE=10240
+ROOT_SIZE=15000
+VAR_SIZE=15000
 ZFS_START_MIB=$((ROOT_SIZE + VAR_SIZE))
 ZFS_SIZE_MIB=$((DISK_SIZE_MIB - ZFS_START_MIB))
+
+remote_log "Disk size: $DISK_SIZE_MIB"
 
 # Store info for use later
 echo "$DISK" > /tmp/target-disk
 echo "$ZFS_START_MIB" > /tmp/zfs_start
+
+remote_log "Starting dynamic partitioning"
+
+
+# if PROFILE = STORAGESINGLE, elsif STORAGERAID else
 
 # Generate dynamic partition layout
 cat <<EOF > /tmp/part-include.ks
 ignoredisk --only-use=$DISK
 clearpart --all --initlabel --drives=$DISK
 bootloader --location=mbr --boot-drive=$DISK
+part biosboot --fstype=biosboot --size=1 --ondisk=$DISK
 part /     --fstype=xfs --size=$ROOT_SIZE   --ondisk=$DISK
 part /var  --fstype=xfs --size=$VAR_SIZE    --ondisk=$DISK
+# Calculate optimal swap, should be 20-30G assuming space
+part swap --size=5000 --ondisk=$DISK
+EOF
+
+remote_log "$(cat /tmp/part-include.ks)"
+
+remote_log "Pre section ended"
 %end
 
 
 # ----------- Add the local repo 
 
 repo --name=baseos --baseurl=http://@HOST_GATEWAY@/distros/x86_64-linux-rockylinux-10.0/BaseOS/ --install --noverifyssl
-repo --name=minimal --baseurl=http://@HOST_GATEWAY@/distros/x86_64-linux-rockylinux-10.0/Minimal/ --install --noverifyssl
-repo --name=appstream --baseurl=http://docker-01/distros/x86_64-linux-rockylinux-10.0/AppStream/ --install
+#repo --name=minimal --baseurl=http://@HOST_GATEWAY@/distros/x86_64-linux-rockylinux-10.0/Minimal/ --install --noverifyssl
+repo --name=appstream --baseurl=http://@HOST_GATEWAY@/distros/x86_64-linux-rockylinux-10.0/AppStream/ --install
+
+# Install packages not available in the official repo
+repo --name=hps-packages --baseurl=http://@HOST_GATEWAY@/packages/x86_64-linux-rockylinux-10.0/Repo/ --install
+
+
+%include /tmp/part-include.ks
 
 #  ------------ Packages
 
 %packages
 @^minimal-environment
 @core
+# Core services
 openssh-server
-zfs
+# Build packages - hope to not need them with prebuilt zfs
 kernel-devel
 targetcli
 python3-rtslib
 python3-configshell
+gcc 
+make
+#dkms
+autoconf
+automake
+libtool
+rpm-build
+libblkid-devel
+libuuid-devel
+libudev-devel
+openssl-devel
+zlib-devel
+libaio-devel
+libattr-devel
+elfutils-libelf-devel
+python
+python-setuptools
+python-cffi
+libffi-devel
+
+# KVM etc
+qemu-kvm
+libvirt
+virt-install
+libguestfs-tools
+virt-top
+qemu-img
+
+#opensvc-server
+#zfs-release
+#ncompress
 %end
 
 
 
 #  ------------ Post chroot (installed system environment)
 
-%post --log=/root/ks-post.log 
-
+%post --nochroot --log=/root/ks-post.log 
 # Consider making a remote function lib to download in pre and post
 # for example:
 # source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=get_remote_function_lib")
@@ -184,23 +260,51 @@ remote_log() {
   curl -s -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=log_message&message=${encoded}"
 }
 
+remote_log "Entering POST stage"
 
-dnf install -y epel-release
-dnf install -y https://zfsonlinux.org/epel/zfs-release.el9_$(uname -r).noarch.rpm
-dnf install -y kernel-devel zfs targetcli python3-rtslib python3-configshell
+chroot /mnt/sysimage /bin/bash 
+remote_log() {
+  local message="$1"
+  local encoded
+  local macid="${macid:-unknown}"
+  local gateway="${HOST_GATEWAY:-localhost}"
 
+  # URL-encode the message
+  local c
+  encoded=""
+  for (( i=0; i<${#message}; i++ )); do
+    c="${message:$i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) encoded+="$c" ;;
+      *) printf -v encoded '%s%%%02X' "$encoded" "'$c" ;;
+    esac
+  done
 
-# Enable target service
+  # Send log message
+  curl -s -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=log_message&message=${encoded}"
+}
+
+remote_log "Inside post chroot"
+
+#remote_log "[+] Building ZFS via DKMS..."
+#dkms autoinstall
+#modprobe zfs
+#dnf install -y epel-release
+#dnf install -y https://zfsonlinux.org/epel/zfs-release.el9_$(uname -r).noarch.rpm
+#dnf install -y kernel-devel zfs targetcli python3-rtslib python3-configshell
+
+# Enable services
 systemctl enable target
+systemctl enable libvirtd
+systemctl start libvirtd
 
 echo "Hardening install..."
 sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 systemctl enable sshd
-passwd -l root
+#passwd -l root
 #systemctl disable firewalld NetworkManager
 #systemctl mask firewalld NetworkManager
 nmcli connection modify "Wired connection 1" connection.autoconnect yes
-
 
 #echo "Hardening install..."
 #sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
@@ -211,8 +315,11 @@ nmcli connection modify "Wired connection 1" connection.autoconnect yes
 #nmcli connection modify "Wired connection 1" connection.autoconnect yes
 #curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=INSTALLED"
 
-remote_log "Install completed"
+remote_log "Exiting post chroot"
+exit
+
 curl -X POST "http://@HOST_GATEWAY@/cgi-bin/boot_manager.sh?mac=@macid@&cmd=set_status&status=INSTALLED"
+remote_log "Install completed, status updated"
 
 %end
 

@@ -58,6 +58,23 @@ if [[ "$cmd" == "set_status" ]]
 fi
 
 
+# Command: set host_name_value
+if [[ "$cmd" == "set_host_name_value" ]]
+ then
+  if ! cgi_param exists name
+   then
+    ipxe_cgi_fail "Param name is required for command $cmd"
+    exit
+  else
+    name="$(cgi_param get name)"
+    value="$(cgi_param get value)"
+  fi
+  host_config "$mac" set $name $value
+  cgi_success "$mac set $name to $value"
+  exit
+fi
+
+
 # Command: Process ipxe menu
 
 if [[ "$cmd" == "process_menu_item" ]]; then
@@ -100,7 +117,7 @@ if [[ "$cmd" == "kickstart" ]]; then
   exit
 fi
 
-# Conditional: Determine current state
+# Command: Determine current state
 if [[ "$cmd" == "determine_state" ]]; then
   hps_log info "[$mac] Host wants to know its state"
   state="$(host_config "$mac" get STATE)"
@@ -109,7 +126,17 @@ if [[ "$cmd" == "determine_state" ]]; then
   exit
 fi
 
-# Conditional: Decide what to do next
+
+if [[ "$cmd" == "host_get_config" ]]; then
+  hps_log info "[$mac] Config requested"
+  cgi_header_plain
+  host_config_show $mac
+  exit
+fi
+
+# ----------------------
+
+# Router: Decide what to do next
 if [[ "$cmd" == "boot_action" ]]
  then
   hps_log info "[$mac] Host wants to know what to do next"
@@ -177,11 +204,6 @@ if [[ "$cmd" == "boot_action" ]]
 fi
 
 
-if [[ "$cmd" == "get_config" ]]; then
-  hps_log info "[$mac] Config requested: $config_file"
-#    ipxe_config_menu
-  exit
-fi
 
 ### ───── Manual host configuration ─────
 
