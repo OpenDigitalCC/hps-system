@@ -54,11 +54,8 @@ reboot
 
 %pre --interpreter /bin/bash
 
-# Consider making a remote function lib to download in pre and post
-# for example:
-# source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=get_remote_function_lib")
-
-#source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=host_get_config")
+# load remote functions
+curl -fsSL "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?cmd=bootstrap_initialise_distro"  | bash
 
 remote_log() {
   local message="$1"
@@ -229,9 +226,10 @@ rsync
 #  ------------ Post chroot (installed system environment)
 
 %post --nochroot --log=/root/ks-post.log 
-# Consider making a remote function lib to download in pre and post
-# for example:
-# source <(curl -s "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?mac=@macid@&cmd=get_remote_function_lib")
+
+# load remote functions
+curl -fsSL "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?cmd=bootstrap_initialise_distro"  | bash
+## the below functions can be deleted when verified that they are loaded from above
 
 remote_log() {
   local message="$1"
@@ -257,6 +255,13 @@ remote_log() {
 remote_log "Entering POST stage"
 
 chroot /mnt/sysimage /bin/bash <<EOF
+
+
+# load remote functions
+curl -fsSL "http://${HOST_GATEWAY}/cgi-bin/boot_manager.sh?cmd=bootstrap_initialise_distro"  | bash
+## the below functions can be deleted when verified that they are loaded from above
+
+
 
 remote_log() {
   local message="$1"
