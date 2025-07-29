@@ -73,3 +73,61 @@ normalise_mac() {
 }
 
 
+get_client_mac() {
+  local ip="$1"
+  local mac=""
+
+  # Ensure IP is valid
+  [[ -z "$ip" ]] && return 1
+  # Trigger ARP update
+  ping -c1 -W1 "$ip" > /dev/null 2>&1
+
+  # Use regex to extract MAC from matching line
+  mac="$(ip neigh | awk -v ip="$ip" '
+    $1 == ip {
+      for (i=1; i<=NF; i++) {
+        if ($i ~ /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/) {
+          print $i
+          exit
+        }
+      }
+    }
+  ')"
+
+  # Fallback to arp
+  if [[ -z "$mac" ]]; then
+    mac="$(arp -n | awk -v ip="$ip" '
+      $1 == ip {
+        for (i=1; i<=NF; i++) {
+          if ($i ~ /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/) {
+            print $i
+            exit
+          }
+        }
+      }
+    ')"
+  fi
+
+  echo "${mac:-}"
+}
+
+
+xget_client_mac() {
+  local ip="$1"
+  local mac
+  hps_log debug "IP: $ip"
+  # Ping to ensure the ARP cache has the IP
+  ping -c1 -W1 "$ip" > /dev/null 2>&1
+
+  # Parse ARP table to find matching MAC
+  mac="$(ip neigh | awk -v ip="$ip" '$1 == ip && $3 == "lladdr" { print $5 }')"
+
+  # Fallback to arp (older systems)
+  if [[ -z "$mac" ]]; then
+    mac="$(arp -n | awk -v ip="$ip" '$1 == ip { print $3 }')"
+  fi
+
+  echo "${mac:-}"
+}
+
+

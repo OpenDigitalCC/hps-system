@@ -70,4 +70,17 @@ cgi_param() {
   esac
 }
 
+urlencode() {
+  local s="$1"
+  local out=""
+  for (( i=0; i<${#s}; i++ )); do
+    local c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) out+="$c" ;;
+      *) printf -v hex '%%%02X' "'$c"; out+="$hex" ;;
+    esac
+  done
+  printf '%s\n' "$out"
+}
+
 
