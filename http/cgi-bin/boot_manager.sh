@@ -4,11 +4,15 @@ set -euo pipefail
 # read HPS config
 source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
+client_ip="${REMOTE_ADDR:-}"
+mac="$(get_client_mac "$client_ip")"
+
 # Retrieve config file name of the cluster
 CLUSTER_FILE=$(get_active_cluster_filename) || {
   ipxe_cgi_fail "No active cluster"
   exit 1
 }
+
 
 ### ───── Ensure command is present else fail fast ─────
 
@@ -24,23 +28,34 @@ fi
 
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
-  hps_log info "[CGI] Initialisation requested from DHCP"
+  hps_log info "[$mac] Initialisation requested from DHCP"
   ipxe_init
   exit
 fi
 
 ### ───── Get the MAC or fail ─────
 
+
 # Condition: do we have $mac
-if ! cgi_param exists mac; then
-  ipxe_cgi_fail "MAC address is required for command $cmd"
-  exit
-else
-  mac="$(cgi_param get mac)"
+# Ensure $mac is set from CGI param or fallback
+if [[ -z "${mac:-}" ]]; then
+  if cgi_param exists mac; then
+    mac="$(cgi_param get mac)"
+  else
+    ipxe_cgi_fail "MAC address is required for command $cmd"
+    exit 1
+  fi
 fi
 
-### ───── Commands that require a MAC ─────
 
+#if ! cgi_param exists mac; then
+#  ipxe_cgi_fail "MAC address is required for command $cmd"
+#  exit
+#else
+#  mac="$(cgi_param get mac)"
+#fi
+
+### ───── Commands that require a MAC ─────
 
 # Command: set status
 if [[ "$cmd" == "set_status" ]]
@@ -100,7 +115,7 @@ if [[ "$cmd" == "log_message" ]]
     cgi_header_plain
     echo "Log updated"
   fi
-  hps_log info "[$mac] $cmd $LOG_MESSAGE"
+  hps_log info "[$mac] $LOG_MESSAGE"
   exit
 fi
 
@@ -127,12 +142,35 @@ if [[ "$cmd" == "determine_state" ]]; then
 fi
 
 
+# get the host config file
 if [[ "$cmd" == "host_get_config" ]]; then
   hps_log info "[$mac] Config requested"
   cgi_header_plain
   host_config_show $mac
   exit
 fi
+
+# Command: get the distro bootsrtap script
+
+if [[ "$cmd" == "bootstrap_initialise_distro" ]]; then
+  hps_log info "[$mac] Bootstrap config requested"
+  cgi_header_plain
+  bootstrap_initialise_distro "$mac"
+  exit
+fi
+
+
+# Command: get the host script library
+
+if [[ "$cmd" == "initialise_host_scripts" ]]; then
+  hps_log info "[$mac] distro script lib requested"
+  cgi_header_plain
+  initialise_host_scripts "$(cgi_param get distro)"
+  exit
+fi
+
+
+
 
 # ----------------------
 
