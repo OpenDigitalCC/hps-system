@@ -35,11 +35,10 @@ initialise_host_scripts() {
 
 
 
-
-
 bootstrap_initialise_distro() {
   local mac="$1"
 
+# The following is sent literally
   cat <<'EOF'
 #!/bin/bash
 # Offline bootstrap initialiser from provisioning server
@@ -62,18 +61,6 @@ initialise_distro_string() {
   echo "${cpu}-${mfr}-${osname}-${osver}"
 }
 
-urlencode() {
-  local s="$1"
-  local out=""
-  for (( i=0; i<${#s}; i++ )); do
-    local c="${s:i:1}"
-    case "$c" in
-      [a-zA-Z0-9.~_-]) out+="$c" ;;
-      *) printf -v hex '%%%02X' "'$c"; out+="$hex" ;;
-    esac
-  done
-  printf '%s\n' "$out"
-}
 
 
 get_provisioning_node() {
@@ -110,6 +97,10 @@ initialise_host_scripts() {
 initialise_host_scripts
 
 EOF
+
+# Include functions here from the internal lib as required, to expand and send
+  declare -f urlencode
+
 }
 
 
