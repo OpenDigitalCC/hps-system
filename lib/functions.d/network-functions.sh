@@ -112,22 +112,5 @@ get_client_mac() {
 }
 
 
-xget_client_mac() {
-  local ip="$1"
-  local mac
-  hps_log debug "IP: $ip"
-  # Ping to ensure the ARP cache has the IP
-  ping -c1 -W1 "$ip" > /dev/null 2>&1
-
-  # Parse ARP table to find matching MAC
-  mac="$(ip neigh | awk -v ip="$ip" '$1 == ip && $3 == "lladdr" { print $5 }')"
-
-  # Fallback to arp (older systems)
-  if [[ -z "$mac" ]]; then
-    mac="$(arp -n | awk -v ip="$ip" '$1 == ip { print $3 }')"
-  fi
-
-  echo "${mac:-}"
-}
 
 
