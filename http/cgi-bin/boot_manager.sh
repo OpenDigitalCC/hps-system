@@ -98,7 +98,7 @@ if [[ "$cmd" == "process_menu_item" ]]; then
     exit
   fi
   menu_item="$(cgi_param get menu_item)"
-  hps_log info "[$mac] Processing menu item: $menu_item"
+  hps_log info "[$mac] Processing ipxe menu item: $menu_item"
   handle_menu_item "$menu_item" "$mac"
   exit
 fi

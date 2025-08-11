@@ -1,6 +1,8 @@
-
 __guard_source || return
 # Define your functions below
+
+
+
 
 configure_dnsmasq () {
 source $(get_active_cluster_filename 2>/dev/null)
@@ -25,12 +27,11 @@ no-resolv
 # Bind only to this IP (set dynamically from cluster config)
 listen-address=${DHCP_IP}
 
-# Interface to bind to
-interface=eth0
+# Interface to bind to within the container
+interface=eth0 # Should this be ${DHCP_IFACE}?
 
 # Enable DHCP
 dhcp-range=$(generate_dhcp_range_simple "$NETWORK_CIDR" "$DHCP_IP" 20)
-
 
 # Enable TFTP
 enable-tftp
@@ -39,8 +40,10 @@ tftp-root=${HPS_TFTP_DIR}
 # Optional: Log DHCP requests
 log-dhcp
 
-# Optional: Don't forward DNS (acts as DHCP/TFTP only)
-#port=0
+# DNS configuration
+domain="${DNS_DOMAIN}"
+dhcp-option=option:domain-search,"${DNS_DOMAIN}"
+addn-hosts="${HPS_SERVICE_CONFIG_DIR}/dns_hosts"
 
 # PXE-specific options (optional)
 #pxe-service=x86PC, "PXE Boot", pxelinux
@@ -52,11 +55,13 @@ dhcp-boot=tag:ipxe,http://${DHCP_IP}/cgi-bin/boot_manager.sh?cmd=init  # For iPX
 
 EOF
 
-mkdir -p ${HPS_TFTP_DIR}
+# TODO: I am sure this isn't needed now, delete
+#mkdir -p ${HPS_TFTP_DIR}
+#cp /usr/lib/ipxe/undionly.kpxe "${HPS_TFTP_DIR}"
+#cp /usr/lib/ipxe/snponly.efi "${HPS_TFTP_DIR}"
+#cp /usr/lib/ipxe/ipxe.efi "${HPS_TFTP_DIR}"
 
-cp /usr/lib/ipxe/undionly.kpxe "${HPS_TFTP_DIR}"
-cp /usr/lib/ipxe/snponly.efi "${HPS_TFTP_DIR}"
-cp /usr/lib/ipxe/ipxe.efi "${HPS_TFTP_DIR}"
+touch ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
 
 echo "[OK] dnsmasq config generated at: ${DNSMASQ_CONF}"
 

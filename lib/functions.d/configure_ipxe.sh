@@ -3,7 +3,7 @@ __guard_source || return
 # Define your functions below
 
 
-configure_ipxe () {
+xconfigure_ipxe () {
   local output_file="${HPS_MENU_CONFIG_DIR}/boot.ipxe"
   local server_ip="${DHCP_IP}"
 

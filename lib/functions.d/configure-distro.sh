@@ -89,17 +89,13 @@ initialise_host_scripts() {
     return 1
   fi
 }
-
-
-
-
-# Start the bootstrapping
-initialise_host_scripts
-
 EOF
 
 # Include functions here from the internal lib as required, to expand and send
   declare -f urlencode
+
+# Start the bootstrapping
+  echo "initialise_host_scripts"
 
 }
 

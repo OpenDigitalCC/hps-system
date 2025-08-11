@@ -50,7 +50,7 @@ ipxe_boot_from_disk () {
 }
 
 handle_menu_item() {
-  # This function handles any menu function across all menus
+  # This function handles any ipxe menu function across all menus
   local item="$1"
   local mac="$2"
 
@@ -60,10 +60,10 @@ handle_menu_item() {
       ipxe_init
       ;;
 
-    install_menu)
+    host_install_menu)
       if cluster_has_installed_sch
        then
-        ipxe_install_hosts_menu
+        ipxe_host_install_menu
       else
         ipxe_host_install_sch
        fi
@@ -225,12 +225,12 @@ hps_log debug "[$mac] Delivering configure menu"
 
 ipxe_header
 
-FORCE_INSTALL_VALUE="$(host_config "$mac" get FORCE_INSTALL 2>/dev/null)"
-
 if [[ "$(host_config "$mac" get FORCE_INSTALL)" == "YES" ]]; then
   FI_MENU="item force_install_off Disable forced installation"
+  hps_log debug "[$mac] Forced install set"
 else
   FI_MENU="item force_install_on  Enable forced installation, wiping disks"
+  hps_log debug "[$mac] Forced install set"
 fi
 
 
@@ -239,7 +239,7 @@ cat <<EOF
 menu ${TITLE_PREFIX} Select a host option:
 
 item --gap Host options
-item install_menu > Host install menu
+item host_install_menu > Host install menu
 item --gap 
 item recover_DRH  > NOT YET IMPLEMENTED: Recover from Disaster Recovery Host (DRH) 
 item --gap 
@@ -304,6 +304,7 @@ ipxe_boot_installer () {
 
   DIST_PATH="$HPS_DISTROS_DIR/${CPU}-${MFR}-${OSNAME}-${OSVER}"
   DIST_URL="distros/${CPU}-${MFR}-${OSNAME}-${OSVER}"
+
   mount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
 
   case "${OSNAME}" in

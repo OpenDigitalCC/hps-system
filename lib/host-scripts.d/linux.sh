@@ -1,0 +1,405 @@
+
+
+
+# ---- Minimal OpenSVC commands to attach to the cluster
+
+
+
+
+
+
+# ----- zvol etc in bash
+
+add_zvol_to_iscsi_target() {
+  local remote_host="$1"
+  local zvol_suffix="$2"
+  local size="$3"
+
+  if [[ -z "$remote_host" || -z "$zvol_suffix" || -z "$size" ]]; then
+    echo "Usage: add_zvol_to_iscsi_target <remote_host> <suffix> <size>"
+    return 1
+  fi
+
+  local pool
+  pool="$(get_zfs_pool)"
+  local zvol_name="${remote_host}-${zvol_suffix}"
+  local zvol_path="/dev/zvol/${pool}/${zvol_name}"
+  local backstore_name="${zvol_name}_bs"
+  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
+
+  create_zvol_for_iscsi "$zvol_name" "$size" "$pool"
+  rtslib_add_lun "$remote_host" "$zvol_path"
+  
+  echo "✅ Added zvol '${zvol_name}' to existing target '${iqn}'"
+}
+
+
+create_iscsi_target() {
+  local remote_host="$1"
+  local ip="${2:-0.0.0.0}"
+  local port="${3:-3260}"
+
+  if [[ -z "$remote_host" ]]; then
+    echo "Usage: create_iscsi_target <remote_host> [ip] [port]"
+    return 1
+  fi
+
+  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
+
+  if ! check_iscsi_export_available; then
+    echo "❌ iSCSI target prerequisites not met"
+    return 1
+  fi
+
+  targetcli <<EOF
+/iscsi create ${iqn}
+/iscsi/${iqn}/tpg1/portals create ${ip} ${port}
+/iscsi/${iqn}/tpg1 set attribute authentication=0
+/iscsi/${iqn}/tpg1 set attribute generate_node_acls=1
+/iscsi/${iqn}/tpg1 set attribute demo_mode_write_protect=0
+EOF
+  rtslib_save_config
+  echo "✅ Created iSCSI target '${iqn}' on ${ip}:${port}"
+}
+
+
+get_zfs_pool() {
+  hostname | tr '[:upper:]' '[:lower:]'
+}
+
+zvol_exists() {
+  local pool="$1"
+  local zvol="$2"
+  zfs list -H -o name | grep -q "^${pool}/${zvol}$"
+}
+
+create_zvol_for_iscsi() {
+  local zvol_name="$1"
+  local size="$2"
+  local pool="${3:-$(get_zfs_pool)}"
+
+  local full_path="${pool}/${zvol_name}"
+
+  if ! zpool list -H -o name | grep -qw "$pool"; then
+    echo "❌ Zpool '$pool' does not exist. Aborting."
+    return 1
+  fi
+
+  if zvol_exists "$pool" "$zvol_name"; then
+    echo "⚠️ ZVOL '${full_path}' already exists"
+    return 0
+  fi
+
+  echo "Creating ZVOL '${full_path}' (${size}) for iSCSI use..."
+  zfs create -V "$size" \
+    -s \
+    -b 4096 \
+    -o compression=lz4 \
+    -o logbias=throughput \
+    -o sync=disabled \
+    -o primarycache=metadata \
+    "$full_path"
+
+  udevadm settle
+  echo "✅ ZVOL created: /dev/zvol/${full_path}"
+}
+
+
+iscsi_targetcli_export() {
+  local iqn="$1"
+  local zvol_path="$2"
+  local backstore_name="$3"
+  local bind_ip="$4"
+  local port="$5"
+  local new_target="$6"  # 1 if new target, 0 if existing
+
+  targetcli <<EOF
+/backstores/block create ${backstore_name} ${zvol_path}
+$( [[ "$new_target" == 1 ]] && echo "/iscsi create ${iqn}" )
+/iscsi/${iqn}/tpg1/luns create /backstores/block/${backstore_name}
+$( [[ "$new_target" == 1 ]] && echo "/iscsi/${iqn}/tpg1/portals create ${bind_ip} ${port}" )
+$( [[ "$new_target" == 1 ]] && cat <<EOT
+/iscsi/${iqn}/tpg1 set attribute authentication=0
+/iscsi/${iqn}/tpg1 set attribute generate_node_acls=1
+/iscsi/${iqn}/tpg1 set attribute demo_mode_write_protect=0
+EOT
+)
+EOF
+rtslib_save_config
+}
+
+
+
+
+enable_iscsi_target_reload_on_boot() {
+  # Check for required files and services
+  if [[ ! -f /etc/target/saveconfig.json ]]; then
+    echo "⚠️ No saved iSCSI configuration found at /etc/target/saveconfig.json"
+    return 1
+  fi
+
+  if ! systemctl list-unit-files | grep -q '^target.service'; then
+    echo "❌ 'target.service' not found. Is 'rtslib-fb-target' installed?"
+    return 1
+  fi
+
+  echo "🔧 Enabling iSCSI target config reload at boot..."
+
+  systemctl enable target && systemctl restart target
+
+  if systemctl is-enabled target &>/dev/null; then
+    echo "✅ iSCSI target.service enabled and started."
+  else
+    echo "❌ Failed to enable target.service."
+    return 1
+  fi
+}
+
+
+check_iscsi_export_available() {
+  # Check for targetcli
+  if ! command -v targetcli >/dev/null 2>&1; then
+    echo "❌ 'targetcli' not found. Please install the targetcli package."
+    return 1
+  fi
+
+  # Check for configfs mount (used by LIO)
+  if ! mountpoint -q /sys/kernel/config; then
+    echo "⚠️ configfs not mounted. Attempting to mount..."
+    if ! mount -t configfs configfs /sys/kernel/config 2>/dev/null; then
+      echo "❌ Failed to mount configfs. iSCSI export via LIO not available."
+      return 1
+    fi
+  fi
+
+  # Check if LIO kernel modules are available (needed for /sys/kernel/config/target)
+  if [[ ! -d /sys/kernel/config/target ]]; then
+    echo "❌ LIO kernel target modules are not loaded or supported."
+    return 1
+  fi
+
+  echo "✅ iSCSI export environment is ready (targetcli + LIO)"
+  return 0
+}
+
+
+
+
+create_zpool_for_iscsi() {
+  check_zfs_loaded
+  local pool="$1"           # e.g. tank
+  local main_dev="$2"       # e.g. /dev/sdX
+  local slog_dev="$3"       # optional: SLOG device Used for sync writes. Use high-endurance, low-latency devices (e.g. Optane).
+  local l2arc_dev="$4"      # optional: L2ARC device Secondary read cache. Use large fast NVMe if reads dominate.
+
+  if [[ -z "$pool" || -z "$main_dev" ]]; then
+    echo "Usage: create_zpool_for_iscsi <poolname> <main_dev> [slog_dev] [l2arc_dev]"
+    return 1
+  fi
+
+  for dev in "$main_dev" "$slog_dev" "$l2arc_dev"; do
+    [[ -n "$dev" && ! -b "$dev" ]] && {
+      echo "❌ Device $dev is not a valid block device"
+      return 1
+    }
+  done
+
+  if zpool list -H -o name | grep -qw "$pool"; then
+    echo "❌ Zpool '$pool' already exists"
+    return 1
+  fi
+
+  local args=(create -f -o ashift=12 -o autoreplace=on \
+    -O compression=off \
+    -O sync=disabled \
+    -O logbias=throughput \
+    -O xattr=sa \
+    -O atime=off)
+
+  args+=("$pool" "$main_dev")
+
+  [[ -n "$slog_dev" ]] && args+=("log" "$slog_dev")
+  [[ -n "$l2arc_dev" ]] && args+=("cache" "$l2arc_dev")
+
+  echo "Creating zpool '${pool}' with:"
+  echo "  main: $main_dev"
+  [[ -n "$slog_dev" ]] && echo "  slog: $slog_dev"
+  [[ -n "$l2arc_dev" ]] && echo "  l2arc: $l2arc_dev"
+
+  zpool "${args[@]}"
+}
+
+check_zfs_loaded() {
+  # Check for zfs command
+  if ! command -v zfs >/dev/null 2>&1; then
+    echo "❌ 'zfs' command not found. Is ZFS installed?"
+    return 1
+  fi
+
+  # Check if ZFS kernel module is loaded
+  if ! lsmod | grep -q "^zfs"; then
+    echo "⚠️ ZFS module not loaded. Attempting to load..."
+    if modprobe zfs 2>/dev/null; then
+      echo "✅ ZFS module loaded successfully."
+    else
+      echo "❌ Failed to load ZFS kernel module. Check DKMS or installation status."
+      return 1
+    fi
+  else
+    echo "✅ ZFS module is loaded."
+  fi
+
+  return 0
+}
+
+
+# lib/functions.d/rtslib.sh
+
+# Check if rtslib is usable
+rtslib_check_available() {
+  python3 -c 'import rtslib_fb' 2>/dev/null || {
+    echo "❌ python3-rtslib_fb is not available"
+    return 1
+  }
+  return 0
+}
+
+
+# ---- Bash Python wrappers
+
+
+
+
+# Check if rtslib is usable
+rtslib_check_available() {
+  python3 -c 'import rtslib_fb' 2>/dev/null || {
+    echo "❌ python3-rtslib_fb is not available"
+    return 1
+  }
+  return 0
+}
+
+# Save config persistently
+rtslib_save_config() {
+  python3 - <<'EOF'
+from rtslib_fb import RTSRoot
+RTSRoot().save_to_file()
+EOF
+}
+
+# Create iSCSI target for remote host
+rtslib_create_target() {
+  local remote_host="$1"
+  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
+
+  python3 - <<EOF
+from rtslib_fb import RTSRoot, Target, TPG, FabricModule
+
+name = "$iqn"
+fm = FabricModule("iscsi")
+try:
+    target = Target(fm, wwn=name)
+    tpg = TPG(target, mode="create")
+    tpg.set_attribute("generate_node_acls", True)
+    tpg.set_attribute("authentication", False)
+    tpg.set_attribute("demo_mode_write_protect", False)
+    tpg.enable = True
+    RTSRoot().save_to_file()
+except Exception as e:
+    print(f"❌ Failed to create target: {e}")
+    exit(1)
+EOF
+}
+
+# Add LUN (zvol) to target
+rtslib_add_lun() {
+  local remote_host="$1"
+  local zvol_path="$2"
+  local zvol_name
+  zvol_name=$(basename "$zvol_path")
+  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
+
+  python3 - <<EOF
+from rtslib_fb import RTSRoot, BlockStorageObject
+
+iqn = "$iqn"
+zvol_path = "$zvol_path"
+zvol_name = "$zvol_name"
+found = False
+
+for target in RTSRoot().targets:
+    if target.wwn == iqn:
+        found = True
+        tpg = target.tpgs[0]
+        bs = BlockStorageObject(name=zvol_name, dev=zvol_path)
+        tpg.luns.append(bs)
+        break
+
+if not found:
+    print("❌ Target not found")
+    exit(1)
+
+RTSRoot().save_to_file()
+EOF
+}
+
+# List all iSCSI targets
+rtslib_list_targets() {
+  python3 - <<EOF
+from rtslib_fb import RTSRoot
+
+for t in RTSRoot().targets:
+    if t.fabric_module.name == "iscsi":
+        print(t.wwn)
+EOF
+}
+
+# List LUNs for a given target
+rtslib_list_luns_for_target() {
+  local remote_host="$1"
+  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
+
+  echo "📦 LUNs for iSCSI target '${iqn}':"
+
+  python3 - <<EOF
+from rtslib_fb import RTSRoot
+
+iqn = "$iqn"
+found = False
+for t in RTSRoot().targets:
+    if t.wwn == iqn:
+        found = True
+        for tpg in t.tpgs:
+            for i, lun in enumerate(tpg.luns):
+                try:
+                    obj = lun.storage_object
+                    print(f"   {i} → {obj.name} ({obj.udev_path})")
+                except Exception as e:
+                    print(f"   {i} → <error: {e}>")
+        break
+if not found:
+    print("   ❌ Target not found")
+EOF
+}
+
+# Delete a target by hostname
+rtslib_delete_target() {
+  local remote_host="$1"
+  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
+
+  python3 - <<EOF
+from rtslib_fb import RTSRoot
+
+iqn = "$iqn"
+for t in list(RTSRoot().targets):
+    if t.wwn == iqn:
+        t.delete()
+        RTSRoot().save_to_file()
+        print("✅ Target deleted")
+        break
+else:
+    print("❌ Target not found")
+EOF
+}
+
+

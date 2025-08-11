@@ -107,8 +107,7 @@ get_client_mac() {
       }
     ')"
   fi
-
-  echo "${mac:-}"
+  echo $(normalise_mac "$mac")
 }
 
 
