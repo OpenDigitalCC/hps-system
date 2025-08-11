@@ -1,0 +1,122 @@
+---
+title: "Platform documentation"
+subtitle: "HOX project"
+author: Stuart J Mackintosh
+subject: subject
+Robots: noindex,nofollow
+institute: Open Digital Consulting
+
+from: markdown-smart
+pdf-engine: xelatex
+
+#titlepage-color: "99e7ff"
+titlepage: true
+
+titlepage-text-color: "3c3c3b"
+titlepage-rule-color: "32707e"
+titlepage-rule-height: 5
+
+#linkcolor: "#32707e"
+#filecolor: "#32707e"
+#citecolor: "#32707e"
+#urlcolor: "#32707e"
+
+titlepage-text-color: #3c3c3b
+titlepage-rule-color: #32707e
+titlepage-rule-height: 1
+page-background-opacity: 0.1
+
+titlepage-background: /home/sjm//Nextcloud/SJM/Work shares/Companies/OpenDigital CC FR/Graphics/pages/titlepage.pdf
+#page-background: /home/sjm//Nextcloud/SJM/Work shares/Companies/OpenDigital CC FR/Graphics/pages/page.pdf
+
+page-background-opacity: 0.04
+
+toc: true # Table of contents?
+toc-depth: 1 # how many levels for the TOC?
+toc-own-page: true
+
+book: true # required with cover pages etc
+documentclass: scrartcl
+
+mainfont: "Open Sans"
+fontsize: 11pt
+
+numbersections: true
+secnumdepth: 3 # how many levels deep to number
+top-level-division: chapter
+classoption: 
+   - oneside
+#   - twoside
+#   - twocolumn
+colorlinks: true
+
+header-center: 
+header-left: 
+footnotes-pretty: true
+
+margin-left: 2cm
+margin-right: 5cm
+margin-top: 2cm
+margin-bottom: 3cm
+
+pandoc-template: report
+#pdf-engine: xelatex
+# pdf-engine must be one of wkhtmltopdf, weasyprint, pagedjs-cli, prince, pdflatex, lualatex, xelatex, latexmk, tectonic, pdfroff, typst, context
+
+float-placement-figure: H
+listings: true # code syntax higlighting
+pandoc-latex-environment:
+  noteblock: [note]
+  tipblock: [tip]
+  warningblock: [warning]
+  cautionblock: [caution]
+  importantblock: [important]
+header-includes: |
+  \usepackage[labelfont=bf]{caption}
+  \usepackage{microtype}
+  \usepackage{parskip}
+  \usepackage{longtable,booktabs,colortbl}
+  \usepackage{tabularx}
+  \usepackage[table]{xcolor}
+  \usepackage{ifoddpage}
+  \usepackage{pdfpages}
+  \usepackage{marginnote}
+  \usepackage{endnotes}
+  \usepackage{graphicx}
+  \usepackage{markdown}
+  \usepackage{wrapfig}
+  \usepackage{needspace}
+  \usepackage[default]{sourcesanspro}
+  \usepackage{sourcecodepro}
+  \usepackage{fontawesome5}
+  \renewcommand{\arrayrulewidth}{1mm}
+  \renewcommand{\arraystretch}{2}
+  \renewcommand{\tabcolsep}{2mm}
+  \setkeys{Gin}{width=1\textwidth,keepaspectratio}
+  \usepackage{hyperref}
+  \hyphenpenalty=5000
+  \tolerance=1000
+  \usepackage{lastpage}
+   \renewcommand{\chaptermark}[1]{%
+    \markboth{\thechapter.\ #1}{}}
+  \renewcommand{\footnote}[1]{\endnote{#1}} 
+  \let\footnote=\endnote
+  \renewcommand{\notesname}{}
+  \usepackage{newunicodechar}
+
+# redefine footnotes as endnotes
+# Redirects footnotes to endnotes
+#  \documentclass{tufte-book} # alternatove to marginnote with \marginnote{This is a margin quote.} for beautifully formatted
+#  % \documentclass{memoir} # alternative to marginnote with \sidepar{This is a margin quote.}
+#  % place with \theendnotes
+
+
+# install `awesomebox.sty' 
+#  ```{=latex}
+#  \usepackage{awesomebox}
+#  
+
+---
+
+
+
