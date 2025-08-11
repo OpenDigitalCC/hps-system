@@ -105,7 +105,7 @@ $func"
 
   mkdir -p "$DST_DIR"
   {
-    echo "## \`$name\`" 
+    echo "### \`$name\`" 
     echo
     echo "Contained in \`$file\`"
     echo
