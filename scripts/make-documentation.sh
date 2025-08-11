@@ -108,6 +108,7 @@ $func"
     echo "## \`$name\`" 
     echo
     echo "Contained in \`$file\`"
+    echo
     echo "Function signature: $function_hash"
     echo
     echo "$content"
