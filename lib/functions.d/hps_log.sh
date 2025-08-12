@@ -18,7 +18,7 @@ hps_log() {
 
   # Decode the message
   local msg
-  msg="$(url_decode "$raw_msg")"
+  msg="[${mac}] $(url_decode "$raw_msg")"
 
   # Send to syslog
   logger -t "$ident" -p "user.${level,,}" "$msg"

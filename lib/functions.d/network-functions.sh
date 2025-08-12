@@ -110,6 +110,24 @@ get_client_mac() {
   echo $(normalise_mac "$mac")
 }
 
+# Get MAC depending on call context.
+# - CGI: use client IP from REMOTE_ADDR and resolve via get_client_mac
+# - SCRIPT/SOURCED: return 00:00:00:00:00:00 → normalized form
+get_request_mac() {
+    local ctx raw_mac
+    ctx="$(detect_call_context)"
 
+    case "$ctx" in
+        CGI)
+          get_client_mac
+            ;;
+        SCRIPT|SOURCED|*)
+            raw_mac="00:00:00:00:00:00"
+            ;;
+    esac
+
+    # Always normalize using shared helper
+    normalise_mac "$raw_mac"
+}
 
 

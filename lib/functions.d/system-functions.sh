@@ -43,5 +43,30 @@ export_dynamic_paths() {
   return 0
 }
 
+# Returns one of: CGI | SCRIPT | SOURCED
+detect_call_context() {
+    # Sourced? (not the main entrypoint)
+    if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+        echo "SOURCED"
+        return
+    fi
+
+    # CGI? (must have both variables set)
+    if [[ -n "$GATEWAY_INTERFACE" && -n "$REQUEST_METHOD" ]]; then
+        echo "CGI"
+        return
+    fi
+
+    # Explicit SCRIPT detection: running in a shell, directly executed
+    # Must have a terminal OR be reading from stdin without CGI env
+    if [[ -t 0 || -p /dev/stdin || -n "$PS1" ]]; then
+        echo "SCRIPT"
+        return
+    fi
+
+    # Fallback (should not hit this unless in a weird non-interactive, non-CGI case)
+    echo "SCRIPT"
+}
+
 
 
