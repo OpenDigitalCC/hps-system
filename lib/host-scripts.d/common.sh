@@ -33,9 +33,7 @@ load_remote_host_config() {
 remote_log() {
   local message="$1"
   local encoded
-  local macid="${macid:-unknown}"
   local gateway="$(get_provisioning_node)"
-
   # URL-encode the message
   local c
   encoded=""
