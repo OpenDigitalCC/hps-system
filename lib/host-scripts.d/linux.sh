@@ -1,7 +1,117 @@
 
 
+# Commands in this file are sourced on the host node, not IPS
 
 # ---- Minimal OpenSVC commands to attach to the cluster
+
+initialise_opensvc_cluster () {
+# Set the cluster name and other initial config
+# om cluster config get --kw cluster.name
+# om cluster config update --set  cluster.name=whatever
+true
+}
+
+
+# This gets the config from boot manager
+load_opensvc_conf () {
+  local conf_file="/etc/opensvc/opensvc.conf"
+  local conf
+  local gateway="$(get_provisioning_node)"
+  conf="$(curl -fsSL "http://${gateway}/cgi-bin/boot_manager.sh?cmd=generate_opensvc_conf")" || {
+    remote_log "Failed to load host config"
+    return 1
+  }
+  # Optional debug
+  echo "${conf}" > ${conf_file}
+  remote_log "OpenSVC config generated"
+  echo "Updated ${conf_file}, restarting..."
+  systemctl restart opensvc-server
+}
+
+
+# helper: run a command, log stdout+stderr, return code intact
+_osvc_run() {
+  local desc="$1"; shift
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  remote_log "[osvc] ${desc} rc=${rc}\n${out}"
+  return $rc
+}
+
+opensvc_create_zvol_iscsi() {
+  _require_cmd om zpool zfs || return 127
+
+  local svc="$1" pool="$2" zname="$3" size="$4"; shift 4 || {
+    remote_log "usage: opensvc_create_zvol_iscsi <svc> <pool> <zvol_name> <size> [...]"
+    return 2
+  }
+
+  local vbs="32k" sparse="yes" comp="lz4" placement="tags=storage" iqn="" initiators=""
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --volblocksize=*) vbs="${a#*=}";;
+      --sparse=*)       sparse="${a#*=}";;
+      --compression=*)  comp="${a#*=}";;
+      --placement=*)    placement="${a#*=}";;
+      --iqn=*)          iqn="${a#*=}";;
+      --initiators=*)   initiators="${a#*=}";;
+      *) remote_log "unknown arg: $a"; return 2;;
+    esac
+  done
+
+  zpool list -H -o name | grep -qx "$pool" || { remote_log "pool '$pool' not found"; return 1; }
+  [[ "$size" =~ ^[0-9]+[kKmMgGtTpP]?$ ]] || { remote_log "invalid size: $size"; return 2; }
+  [[ -n "$iqn" ]] || iqn="iqn.$(date +%Y-%m).local.hps:${svc}.${zname}"
+
+  remote_log "Defining OpenSVC service '${svc}' zvol=${pool}/${zname} size=${size} iqn=${iqn} (local node)"
+
+  # If service already exists, warn (avoid duplicate disk# indexes)
+  if om "${svc}" print config >/dev/null 2>&1; then
+    remote_log "WARN: service '${svc}' already exists. Validation errors may indicate duplicate resource indexes (disk#1, disk#2, share#1)."
+  fi
+
+  # create/update in one go; capture output
+  if ! _osvc_run "om ${svc} create" \
+        om "$svc" create \
+          --kw placement="$placement" \
+          --kw disk#1.type=zpool \
+          --kw disk#1.name="$pool" \
+          --kw disk#2.type=zvol \
+          --kw disk#2.name="${pool}/${zname}" \
+          --kw disk#2.size="$size" \
+          --kw disk#2.volblocksize="$vbs" \
+          --kw disk#2.compression="$comp" \
+          --kw disk#2.sparse="$sparse" \
+          --kw share#1.type=iscsi \
+          --kw share#1.name="$iqn" \
+          --kw share#1.backstore=disk#2 \
+          ${initiators:+--kw share#1.initiators="$initiators"} \
+          --wait
+  then
+    # dump validation & current config for diagnostics
+    _osvc_run "om ${svc} print validation" om "$svc" print validation || true
+    _osvc_run "om ${svc} print config"     om "$svc" print config     || true
+    return 1
+  fi
+
+  if ! _osvc_run "om ${svc} provision" om "$svc" provision --wait; then
+    _osvc_run "om ${svc} print validation" om "$svc" print validation || true
+    _osvc_run "om ${svc} print config"     om "$svc" print config     || true
+    return 1
+  fi
+
+  local dev="/dev/zvol/${pool}/${zname}"
+  if [[ -e "$dev" ]]; then
+    remote_log "ZVOL ready: $dev"
+  else
+    remote_log "WARN: zvol device not present yet: $dev (udev delay?)"
+  fi
+  remote_log "iSCSI target exported as: $iqn"
+}
+
+
+
 
 
 

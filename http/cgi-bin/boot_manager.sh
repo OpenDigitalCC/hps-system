@@ -4,15 +4,16 @@ set -euo pipefail
 # read HPS config
 source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
-client_ip="${REMOTE_ADDR:-}"
-mac="$(get_client_mac "$client_ip")"
+#client_ip="${REMOTE_ADDR:-}"
+mac="$(get_client_mac "${REMOTE_ADDR}")"
+#mac="$(get_request_mac)"
+
 
 # Retrieve config file name of the cluster
 CLUSTER_FILE=$(get_active_cluster_filename) || {
   ipxe_cgi_fail "No active cluster"
   exit 1
 }
-
 
 ### ───── Ensure command is present else fail fast ─────
 
@@ -28,7 +29,7 @@ fi
 
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
-  hps_log info "[$mac] Initialisation requested from DHCP"
+  hps_log info "Initialisation requested from DHCP"
   ipxe_init
   exit
 fi
@@ -38,14 +39,16 @@ fi
 
 # Condition: do we have $mac
 # Ensure $mac is set from CGI param or fallback
-if [[ -z "${mac:-}" ]]; then
-  if cgi_param exists mac; then
-    mac="$(cgi_param get mac)"
-  else
-    ipxe_cgi_fail "MAC address is required for command $cmd"
-    exit 1
-  fi
-fi
+
+# TODO: Remove this section as it is redundant, as MAC is derived from IP
+#if [[ -z "${mac:-}" ]]; then
+#  if cgi_param exists mac; then
+#    mac="$(cgi_param get mac)"
+#  else
+#    ipxe_cgi_fail "MAC address is required for command $cmd"
+#    exit 1
+#  fi
+#fi
 
 
 #if ! cgi_param exists mac; then
@@ -98,7 +101,7 @@ if [[ "$cmd" == "process_menu_item" ]]; then
     exit
   fi
   menu_item="$(cgi_param get menu_item)"
-  hps_log info "[$mac] Processing ipxe menu item: $menu_item"
+  hps_log info "Processing ipxe menu item: $menu_item"
   handle_menu_item "$menu_item" "$mac"
   exit
 fi
@@ -115,7 +118,7 @@ if [[ "$cmd" == "log_message" ]]
     cgi_header_plain
     echo "Log updated"
   fi
-  hps_log info "[$mac] $LOG_MESSAGE"
+  hps_log info "$LOG_MESSAGE"
   exit
 fi
 
@@ -126,7 +129,7 @@ if [[ "$cmd" == "kickstart" ]]; then
     ipxe_cgi_fail "Param hosttype is required for kickstart"
   fi
   hosttype="$(cgi_param get hosttype)"
-  hps_log info "[$mac] Kickstart - Configuring host $hosttype"
+  hps_log info "Kickstart - Configuring host $hosttype"
   host_network_configure "$mac" "$hosttype"
   generate_ks "$mac" "$hosttype"
   exit
@@ -134,26 +137,38 @@ fi
 
 # Command: Determine current state
 if [[ "$cmd" == "determine_state" ]]; then
-  hps_log info "[$mac] Host wants to know its state"
+  hps_log info "Host wants to know its state"
   state="$(host_config "$mac" get STATE)"
-  hps_log info "[$mac] State: $state"
+  hps_log info "State: $state"
   cgi_success "$state"
   exit
 fi
 
 
 # get the host config file
+
 if [[ "$cmd" == "host_get_config" ]]; then
-  hps_log info "[$mac] Config requested"
+  hps_log info "Config requested"
   cgi_header_plain
   host_config_show $mac
+  exit
+fi
+
+# Command: Configure this host
+
+if [[ "$cmd" == "config_host" ]]; then
+  if ! cgi_param exists hosttype; then
+    ipxe_cgi_fail "hosttype is required for config_host"
+  fi
+  hosttype="$(cgi_param get hosttype)"
+  host_config "$mac" set TYPE "$hosttype"
   exit
 fi
 
 # Command: get the distro bootsrtap script
 
 if [[ "$cmd" == "bootstrap_initialise_distro" ]]; then
-  hps_log info "[$mac] Bootstrap config requested"
+  hps_log info "Bootstrap config requested"
   cgi_header_plain
   bootstrap_initialise_distro "$mac"
   exit
@@ -163,13 +178,24 @@ fi
 # Command: get the host script library
 
 if [[ "$cmd" == "initialise_host_scripts" ]]; then
-  hps_log info "[$mac] distro script lib requested"
+  hps_log info "distro script lib requested"
   cgi_header_plain
-  initialise_host_scripts "$(cgi_param get distro)"
+  if cgi_param exists distro; then
+    initialise_host_scripts "$(cgi_param get distro)"
+  else
+    ipxe_cgi_fail "$cmd: Parameter distro not provided"
+  fi
   exit
 fi
 
 
+# Command: Generate an opensvc conf
+if [[ "$cmd" == "generate_opensvc_conf" ]]; then
+  hps_log info "Request to generate opensvc.conf"
+  cgi_header_plain
+  generate_opensvc_conf "$mac"
+  exit
+fi
 
 
 # ----------------------
@@ -177,63 +203,63 @@ fi
 # Router: Decide what to do next
 if [[ "$cmd" == "boot_action" ]]
  then
-  hps_log info "[$mac] Host wants to know what to do next"
+  hps_log info "Host wants to know what to do next"
   if host_config_exists "$mac"
    then
-    hps_log info "[$mac] Found config"
+    hps_log info "Found config"
    else
-    hps_log info "[$mac] No config found, initialising"
+    hps_log info "No config found, initialising"
     host_initialise_config "$mac"
   fi
   state="$(host_config "$mac" get STATE)"
-  hps_log info "[$mac] STATE: $state"
+  hps_log info "STATE: $state"
 
   case "$state" in
     UNCONFIGURED)
-      hps_log info "[$mac] Unconfigured — offering install options."
+      hps_log info "Unconfigured — offering install options."
       ipxe_configure_main_menu
       ;;
 
     CONFIGURED)
-      hps_log info "[$mac] Configured — offering install options."
+      hps_log info "Configured — offering install options."
       # establish type and o/s from config and cluster, then go to install that
       ipxe_host_install_menu
       ;;
 
     INSTALLED)
-      hps_log info "[$mac] Already installed. Booting from disk."
+      hps_log info "Already installed. Booting from disk."
       ipxe_boot_from_disk
       exit
       ;;
 
     INSTALLING)
-      hps_log info "[$mac] Currently installing. Continuing install."
+      hps_log info "Currently installing. Continuing install."
       HTYPE=$(host_config "$mac" get TYPE)
       hps_log debug "[$mac] Installing TYPE: $HTYPE"
       ipxe_boot_installer "$HTYPE" ""
       ;;
 
     ACTIVE)
-#      hps_log info "[$mac] Active and provisioned. Booting configured image."
+#      hps_log info "Active and provisioned. Booting configured image."
 #      ipxe_boot_provisioned
       ipxe_cgi_fail "Section not yet written for state $state"
       ;;
 
     REINSTALL)
-#      hps_log info "[$mac] Reinstall requested. Returning to install menu."
+#      hps_log info "Reinstall requested. Returning to install menu."
 #      ipxe_host_install_menu
       host_config "$mac" set STATE UNCONFIGURED
       ipxe_init
       ;;
 
     FAILED)
-      hps_log info "[$mac] Install failed"
+      hps_log info "Install failed"
       ipxe_configure_main_menu
 #      ipxe_cgi_fail "Installation marked as FAILED"
     ;;
 
     *)
-      hps_log info "[$mac] Unknown or unset state. Failing.."
+      hps_log info "Unknown or unset state. Failing.."
       ipxe_cgi_fail "State $state unknown or unhandled"
       ;;
   esac
@@ -243,17 +269,6 @@ fi
 
 
 
-### ───── Manual host configuration ─────
-
-# Command: Configure this host
-if [[ "$cmd" == "config_host" ]]; then
-  if ! cgi_param exists hosttype; then
-    ipxe_cgi_fail "hosttype is required for config_host"
-  fi
-  hosttype="$(cgi_param get hosttype)"
-  host_config "$mac" set TYPE "$hosttype"
-  exit
-fi
 
 ### ───── Unknown or unhandled command ─────
 
