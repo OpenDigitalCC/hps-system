@@ -9,7 +9,7 @@ log() {
 # Default implementation (fallback)
 build_zfs_source() {
   log "Running default build_zfs_source (not distro-specific)"
-  echo "This system must implement its own ZFS build process."
+  echo "This system must implement its own ZFS build process through the local system config file."
   return 1
 }
 

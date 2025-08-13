@@ -82,6 +82,10 @@ handle_menu_item() {
       ipxe_reboot "Menu selected - Unconfigure $mac and reboot"
       ;;
 
+    unmanage)
+      host_config "$mac" set STATE UNMANAGED
+      ipxe_reboot "Menu selected - Set to UNMANAGED and reboot"
+      ;;
   
     reboot)
       hps_log info "[$mac] $item Reboot requested"
@@ -249,6 +253,7 @@ item rescue       Enter rescue shell
 item reinstall    Reinstall current host
 item unconfigure  Unconfigure this host
 item local_boot   Boot from local disk
+item unmanage     Set this host to not be managed by HPS
 item reboot       Reboot system
 item --gap 
 item --gap Advanced

@@ -27,3 +27,20 @@ Docs are incomplete.
 | Start/stop/provision services              | \`om mysvc start                                 | stop | provision\` |
 | Distribute service configs to other nodes  | `om mysvc push` / `om mysvc sync`                |      |             |
 
+
+#### Useful commands:
+
+<svc> = the defined service name
+
+om <svc> print config
+: Prints the config for the service
+
+om <svc> config validate
+: Checks the config for the node and reports on errors
+
+om <svc> purge
+: purge, unprovision and delete are asynchoronous and do things on all node with a object instance
+
+#### References
+
+

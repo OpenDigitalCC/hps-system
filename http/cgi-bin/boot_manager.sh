@@ -232,6 +232,12 @@ if [[ "$cmd" == "boot_action" ]]
       exit
       ;;
 
+    UNMANAGED)
+      hps_log info "Device set to UNMANAGED, booting from disk"
+      ipxe_boot_from_disk
+      exit
+      ;;
+
     INSTALLING)
       hps_log info "Currently installing. Continuing install."
       HTYPE=$(host_config "$mac" get TYPE)
