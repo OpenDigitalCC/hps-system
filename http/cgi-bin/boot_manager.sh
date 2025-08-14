@@ -70,14 +70,15 @@ if [[ "$cmd" == "set_status" ]]
   else
     SET_STATUS="$(cgi_param get status)"
   fi
-  host_config "$mac" set STATE $SET_STATUS
+  host_config "$mac" set STATE "$SET_STATUS"
   cgi_success "$mac set to $SET_STATUS"
   exit
 fi
 
 
-# Command: set host_name_value
-if [[ "$cmd" == "set_host_name_value" ]]
+
+# Command: get or set host variables
+if [[ "$cmd" == "host_variable" ]]
  then
   if ! cgi_param exists name
    then
@@ -91,6 +92,42 @@ if [[ "$cmd" == "set_host_name_value" ]]
   cgi_success "$mac set $name to $value"
   exit
 fi
+
+# --- Command: get or set host variables (receiver side) ---
+# cmd=host_variable&name=<name>[&value=<value>]
+# - Requires: name
+# - If 'value' param exists (even empty) -> set name=value, return success
+# - If 'value' param missing            -> get current value, return it
+if [[ "$cmd" == "host_variable" ]]; then
+  # Require 'name'
+  if ! cgi_param exists name; then
+    ipxe_cgi_fail "Param 'name' is required for command $cmd"
+    exit
+  fi
+
+  name="$(cgi_param get name)"
+
+  if cgi_param exists value; then
+    # SET path (value may be empty; presence of param triggers set)
+    value="$(cgi_param get value)"
+    if host_config "$mac" set "$name" "$value"; then
+      cgi_success "$mac set $name to $value"
+    else
+      ipxe_cgi_fail "Failed to set $name for $mac"
+    fi
+  else
+    # GET path
+    if host_config "$mac" exists "$name"; then
+      val="$(host_config "$mac" get "$name")"
+      # Return raw value as payload (cgi_success wraps it)
+      cgi_success "$val"
+    else
+      ipxe_cgi_fail "Key '$name' not found for $mac"
+    fi
+  fi
+  exit
+fi
+
 
 
 # Command: Process ipxe menu
