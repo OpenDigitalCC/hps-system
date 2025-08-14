@@ -3,6 +3,12 @@
 
 List of requirements and ideas not yet implemented
 
+
+## ZFS
+
+- add the multi disk 
+- add clin to chose storgae config
+
 ## syslog
 
 - Add syslog daemon to hps, send all messages to syslog
