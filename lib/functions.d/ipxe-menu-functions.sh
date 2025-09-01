@@ -233,8 +233,8 @@ if [[ "$(host_config "$mac" get FORCE_INSTALL)" == "YES" ]]; then
   FI_MENU="item force_install_off Disable forced installation"
   hps_log debug "[$mac] Forced install set"
 else
-  FI_MENU="item force_install_on  Enable forced installation, wiping disks"
-  hps_log debug "[$mac] Forced install set"
+  FI_MENU="item force_install_on  Enable Forced installation, overwriting current O/S on next boot"
+  hps_log debug "[$mac] Forced install not set"
 fi
 
 
@@ -244,19 +244,20 @@ menu ${TITLE_PREFIX} Select a host option:
 
 item --gap Host options
 item host_install_menu > Host install menu
+item show_ipxe    > Show host and cluster configuration
 item --gap 
 item recover_DRH  > NOT YET IMPLEMENTED: Recover from Disaster Recovery Host (DRH) 
 item --gap 
 item --gap System options
-item show_ipxe    Show host and cluster configuration
-item rescue       Enter rescue shell
-item reinstall    Reinstall current host
-item unconfigure  Unconfigure this host
-item local_boot   Boot from local disk
-item unmanage     Set this host to not be managed by HPS
-item reboot       Reboot system
+item rescue       < Enter rescue shell
+item local_boot   < Boot from local disk
+item reboot       < Reboot host
 item --gap 
-item --gap Advanced
+
+item --gap Advanced options
+item unmanage     Set this host to not be managed by HPS
+item unconfigure  Unconfigure this host
+item reinstall    Reinstall current host
 ${FI_MENU}
 
 choose selection && goto HANDLE_MENU
@@ -380,13 +381,13 @@ esac
 
 ipxe_show_info() {
   ipxe_header
-  local category="$1"
 
+  local category="$1"
   case "$category" in
   
     show_ipxe)
       cat <<'EOF'
-menu Host iPXE Information
+menu iPXE host data
 item --gap MAC: ${mac}
 item --gap IP: ${net0/ip}
 item --gap Hostname: ${hostname}
@@ -397,14 +398,15 @@ item --gap Product: ${product}
 item --gap
 item init_menu    < Back to initialisation menu
 item --gap
+#item show_ipxe     > Show iPXE host data
 item show_cluster > Show cluster configuration
 item show_host    > Show host configuration
-item show_paths   > Show system paths
+item show_paths   > Show HPS paths
 
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=${selection}
 EOF
       ;;
 
@@ -427,28 +429,29 @@ EOF
 item --gap
 item init_menu     < Back to initialisation menu
 item --gap
-item show_ipxe     > Show iPXE system info
+item show_ipxe     > Show iPXE host data
+#item show_cluster  > Show cluster configuration
 item show_host     > Show host configuration
-item show_paths    > Show system paths
+item show_paths    > Show HPS paths
 
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=${selection}
 EOF
       ;;
 
     show_host)
       echo "menu Host Configuration"
-      if ! host_config_exists 
+      if [[ ! -f "${HPS_CONFIG}" ]]
        then
-        echo "item --gap [x] Host config not found: $config_file"
+        echo "item --gap [x] Host config not found: ${HPS_CONFIG}"
       else
         while IFS='=' read -r k v; do
           [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
           v="${v%\"}"; v="${v#\"}"
           echo "item --gap ${k}: ${v}"
-        done < "$config_file"
+        done < "${HPS_CONFIG}"
       fi
 
       cat <<'EOF'
@@ -456,19 +459,20 @@ EOF
 item --gap
 item init_menu     < Back to initialisation menu
 item --gap
-item show_ipxe     > Show iPXE system info
+item show_ipxe     > Show iPXE host data
 item show_cluster  > Show cluster configuration
-item show_paths    > Show system paths
+#item show_host     > Show host configuration
+item show_paths    > Show HPS paths
 
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=${selection}
 EOF
       ;;
 
     show_paths)
-      echo "menu System Paths"
+      echo "menu HPS Paths"
 
       if [[ ! -f "${HPS_CONFIG}" ]]; then
         echo "item --gap [x]  hps.conf not found: ${HPS_CONFIG}"
@@ -485,14 +489,15 @@ EOF
 item --gap
 item init_menu     < Back to initialisation menu
 item --gap
-item show_ipxe     > Show iPXE system info
+item show_ipxe     > Show iPXE host data
 item show_cluster  > Show cluster configuration
 item show_host     > Show host configuration
+#item show_paths    > Show HPS paths
 
 choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=${selection}
 EOF
       ;;
 
