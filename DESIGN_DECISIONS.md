@@ -1,5 +1,35 @@
 # Design Decisions
 
+## Choice of boot firmware: UEFI vs legacy BIOS for diskless servers
+
+Decision  
+: **Legacy BIOS** selected as the boot firmware mode for diskless servers.
+
+### Rationale:
+
+- Using UEFI with iSCSI-backed ZFS volumes in a RAID1 configuration was found to add **significant complexity** to the boot process, especially around firmware-level RAID support and driver requirements.
+- Legacy BIOS booting is **simpler and more predictable** in a diskless environment, particularly when boot devices are provided as iSCSI LUNs managed at the client level with MD RAID.
+- Secure Boot provides little additional value in this scenario since the root disk is remote (iSCSI) and already subject to provisioning controls in HPS, making the complexity of UEFI+Secure Boot unjustified.
+- By avoiding UEFI, the system benefits from a **cleaner, more robust boot path** with fewer moving parts, reducing risk during provisioning and recovery.
+
+### Trade-offs and compromises:
+
+- Some modern hardware platforms are increasingly UEFI-centric, and relying on BIOS boot mode may limit compatibility with certain devices in the future.
+- Secure Boot cannot be leveraged for kernel validation in this model, which may be a requirement in highly regulated environments.
+- Legacy BIOS lacks some advanced features of UEFI such as larger boot volume support and graphical configuration menus, though these are not critical for diskless servers.
+
+### Alternatives considered:
+
+- **UEFI with Secure Boot** – Provides firmware-level kernel verification but introduces bootloader and driver complexity with limited real-world benefit for iSCSI-booted, diskless nodes.
+- **UEFI without Secure Boot** – Simplifies compared to full Secure Boot but still adds no significant functional gain for this scenario, while retaining complexity.
+- **Mixed mode** – Maintaining both BIOS and UEFI boot paths was considered but rejected as it increases maintenance burden without improving robustness.
+
+### Summary:
+
+For diskless servers provisioned by HPS, **Legacy BIOS booting was chosen** as it avoids unnecessary UEFI complexity and delivers a simpler, more reliable boot process. Secure Boot does not meaningfully strengthen security in this architecture, where the root filesystem is centrally provisioned over iSCSI.  
+
+
+
 ## Choice of File System for iSCSI Export: ZFS vs. Btrfs
 
 Decision
