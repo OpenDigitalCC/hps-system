@@ -1,29 +1,47 @@
-# HPS System
+# MENDr Platform  
+
+**MENDr: because recovery is part of the lifecycle, not an afterthought.**  
 
 
-The hps-system is the Magrathea - "Magrathea was the planet whose business it was to build other planets." — Douglas Adams, The Hitchhiker's Guide to the Galaxy.
+## 🌍 Mission  
+
+MENDr is an open-source platform for managing infrastructure across its full lifecycle: **build, run, grow, and disaster recovery**.  
+
+It treats recovery as a first-class concern, ensuring that repair and restoration are built into the same workflows that create and scale systems.  
+By making resilience part of everyday operations, MENDr helps communities run infrastructure that can adapt, heal, and keep going.  
+
+> “Magrathea was the planet whose business it was to build other planets.”  
+> — Douglas Adams, *The Hitchhiker’s Guide to the Galaxy*  
+
+## 📌 Project Status  
+
+This is an **ALPHA release**.  
+
+- The overall logic is sound.  
+- Implementation details are still evolving.  
+- Expect frequent changes until the first stable release.  
+
+> The original working title was HPS (Host Provisioning System) -  it is now known as the MENDr platform.
 
 
-This package contains the **core logic and configuration** for the Host Provisioning Service (HPS). 
+## 🤝 Contributing
 
-Although functional, it is an ALPHA release. The logic is overall sound however implementation requires improving.
+Contributions are welcome!
 
-HPS is designed to be mounted inside a Debian-based container at:
+    Fork the repo and open a PR.
 
-```
+    File issues for bugs, ideas, or improvements.
+
+    See CONTRIBUTING.md (to be added) for guidelines.
+
+
+## 🏗️ Platform Structure  
+
+MENDr is designed to be mounted inside a Debian-based container at:  
+
+```bash
 /srv/hps-container
-```
 
-## HPS platform layers
-
-All the things that you need to get up and running
-
-### Platform infrastructure
-
-- Computer devices
-- Local network
-- Upstream network
-- Initial provisioning node
 
 ### Software infrastructure
 
