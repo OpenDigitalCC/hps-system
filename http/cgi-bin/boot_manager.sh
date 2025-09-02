@@ -163,7 +163,6 @@ if [[ "$cmd" == "log_message" ]]
   else
     LOG_MESSAGE="$(cgi_param get message)"
     cgi_header_plain
-    echo "Log updated"
   fi
   hps_log info "$LOG_MESSAGE"
   exit

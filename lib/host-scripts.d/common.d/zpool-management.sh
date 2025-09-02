@@ -56,7 +56,7 @@ zpool_name_generate() {
   esac
 
   local cluster secs rand
-  cluster="$(cluster_config get CLUSTER_NAME 2>/dev/null | tr -d '"')"
+  cluster="$(remote_cluster_variable CLUSTER_NAME 2>/dev/null | tr -d '"')"
   cluster="${cluster:-default}"
   cluster="$(zpool_slug "$cluster" 12)"
   secs=$(printf '%08x' "$(date +%s)")
@@ -110,80 +110,170 @@ disks_free_list_simple() {
 }
 
 
-# zpool_create_on_disk
-# --------------------
-# Create a zpool with a given name on a specific whole disk (DESTRUCTIVE),
-# then automatically apply HPS defaults.
-# Additionally, if --iscsi-root-name is provided, update host config:
-#   remote_remote_host_variable <host> ISCSI_ROOT_0 <zvol-name>
-# Usage:
-#   zpool_create_on_disk <poolname> <disk> [--mountpoint <mp>] [-f] [--no-defaults]
-#                         [--iscsi-root-name <zvol>] [--iscsi-host <host>]
-zpool_create_on_disk() {
-  local pool="$1" disk="$2"; shift 2 || true
-  local mpoint="legacy" force=0 apply_defaults=1
-  local iscsi_root_name="" iscsi_host=""
+# zfs_get_defaults
+# -----------------
+# Return recommended defaults. NOTE: properties that are immutable after
+# dataset creation (e.g., normalization, casesensitivity) are intentionally
+# omitted here to avoid post-create failures.
+zfs_get_defaults() {
+  local -n _POOL_OPTS="$1"
+  local -n _ZFS_PROPS="$2"
 
-  while (( $# )); do
-    case "$1" in
-      --mountpoint)       mpoint="$2"; shift 2 ;;
-      -f)                 force=1;     shift   ;;
-      --no-defaults)      apply_defaults=0; shift ;;
-      --iscsi-root-name)  iscsi_root_name="$2"; shift 2 ;;
-      --iscsi-host)       iscsi_host="$2";      shift 2 ;;
-      *) echo "zpool_create_on_disk: unknown arg '$1'" >&2; return 2 ;;
-    esac
-  done
-  [[ -n "$pool" && -n "$disk" ]] || {
-    echo "usage: zpool_create_on_disk <poolname> <disk> [--mountpoint <mp>] [-f] [--no-defaults] [--iscsi-root-name <zvol>] [--iscsi-host <host>]" >&2
-    return 2
+  _POOL_OPTS=(
+    -o ashift=12          # 4K-sector safe default for SSD/NVMe/HDD
+    # TODO: when zpool_create_on_disk supports extra -O props, consider:
+    # -O casesensitivity=sensitive
+    # -O normalization=formD
+  )
+
+  _ZFS_PROPS=(
+    compression=zstd
+    atime=off
+    relatime=on
+    xattr=sa
+    acltype=posixacl
+    aclinherit=passthrough
+    aclmode=passthrough
+    dnodesize=auto
+    logbias=throughput
+  )
+}
+
+
+# expects: remote_log, remote_host_variable, zpool_name_generate, zpool_create_on_disk, zfs_get_defaults
+zpool_create_on_free_disk() {
+  local strategy="first" mpoint="/srv/storage" force=0 dry_run=0 apply_defaults=1
+  local host_short; host_short="$(hostname -s)"
+
+  _log() { remote_log "[zpool_create_on_free_disk] $*"; [[ "${LOG_ECHO:-1}" -eq 1 ]] && echo "[zpool_create_on_free_disk] $*"; }
+
+  # --- single canonical getter for existing ZPOOL_NAME ---
+  _get_existing_zpool_name() {
+    local v
+    v="$(remote_host_variable ZPOOL_NAME 2>/dev/null || true)"
+    [[ -n "$v" ]] && { printf '%s\n' "$v"; return 0; }
+    return 1
   }
 
-  # must be a whole block device and not obviously in-use
-  [[ -b "$disk" ]] || { echo "not a block device: $disk" >&2; return 2; }
-  local base; base="$(basename "$(readlink -f "$disk")")"
-  [[ "$base" =~ [0-9]p?[0-9]+$ ]] && { echo "not a whole disk: $disk" >&2; return 2; }
-  lsblk -rno NAME,TYPE "$disk" | awk '$2=="part"{found=1} END{exit !found}' && { echo "disk has partitions: $disk" >&2; return 2; }
-  lsblk -rno MOUNTPOINTS "$disk" | grep -q '.' && { echo "disk is mounted: $disk" >&2; return 2; }
-  lsblk -rno FSTYPE "$disk" | grep -Eq 'LVM2_member|linux_raid_member|zfs_member' && { echo "disk in use (LVM/MD/ZFS): $disk" >&2; return 2; }
+  # ---------- args ----------
+  while (( $# )); do
+    case "$1" in
+      --strategy)    strategy="${2:?--strategy requires value: first|largest}"; shift 2 ;;
+      --mountpoint)  mpoint="${2:?--mountpoint requires value}"; shift 2 ;;
+      -f)            force=1; shift ;;
+      --dry-run)     dry_run=1; shift ;;
+      --no-defaults) apply_defaults=0; shift ;;
+      *) _log "ERROR: unknown arg '$1'"; return 2 ;;
+    esac
+  done
 
-  local -a cmd=( zpool create -o ashift=12 -m "$mpoint" )
-  (( force )) && cmd+=( -f )
-  cmd+=( "$pool" "$disk" )
+  # ---------- PREFLIGHT 1: check ZPOOL_NAME before anything else ----------
+  local configured_pool=""
+  if configured_pool="$(_get_existing_zpool_name)"; then
+    _log "ZPOOL_NAME is configured for host '${host_short}': '${configured_pool}'. Verifying state…"
 
-  printf 'Creating zpool %s on %s:\n  ' "$pool" "$disk"; printf '%q ' "${cmd[@]}"; echo
-  if ! "${cmd[@]}"; then
-    echo "zpool create failed" >&2
-    return 1
-  fi
+    if ! command -v zpool >/dev/null 2>&1; then
+      _log "ZPOOL_NAME='${configured_pool}' configured, but 'zpool' CLI not found to verify. Aborting per policy."
+      return 4
+    fi
 
-  (( apply_defaults )) && zfs_apply_hps_defaults "$pool"
-
-  # Optional: set ISCSI_ROOT_0 in host config to provided zvol name
-  if [[ -n "$iscsi_root_name" ]]; then
-    local target_host="${iscsi_host:-$(hostname -s)}"
-    if declare -F remote_remote_host_variable >/dev/null; then
-      if remote_remote_host_variable "$target_host" ISCSI_ROOT_0 "$iscsi_root_name"; then
-        echo "Updated host config: ${target_host} ISCSI_ROOT_0=${iscsi_root_name}"
-      else
-        echo "warning: failed to set ISCSI_ROOT_0 for ${target_host}" >&2
-      fi
+    local pools; pools="$(zpool list -H -o name 2>/dev/null | awk 'NF')"
+    if printf '%s\n' "${pools}" | grep -qx -- "${configured_pool}"; then
+      _log "Configured pool '${configured_pool}' is present. Nothing to do."
+      return 4
+    fi
+    if [[ -n "${pools}" ]]; then
+      _log "Configured pool '${configured_pool}' is NOT imported; other pools present: ${pools//$'\n'/, }. Aborting per policy."
+      return 4
     else
-      echo "warning: remote_remote_host_variable not found; skipping ISCSI_ROOT_0 update" >&2
+      _log "Configured pool '${configured_pool}' is NOT imported; no pools present. Aborting per policy."
+      return 4
     fi
   fi
+  # At this point, ZPOOL_NAME is NOT set — we may proceed.
+
+  # ---------- name & disk selection ----------
+  if ! declare -F zpool_name_generate >/dev/null; then _log "ERROR: missing helper 'zpool_name_generate'"; return 2; fi
+  local pool; pool="$(zpool_name_generate ssd)" || { _log "ERROR: zpool_name_generate failed"; return 1; }
+  [[ -n "$pool" ]] || { _log "ERROR: failed to generate pool name"; return 1; }
+
+  local disk=""
+  if declare -F disks_free_list_simple >/dev/null; then
+    case "$strategy" in
+      first)   disk="$(disks_free_list_simple | head -n1)";;
+      largest) disk="$(disks_free_list_simple \
+                        | xargs -r -I{} sh -c 'd="{}"; sz=$(lsblk -bndo SIZE "$d" 2>/dev/null || echo 0); echo "$sz $d"' \
+                        | sort -nrk1,1 | awk 'NR==1{print $2}')";;
+      *) _log "ERROR: invalid --strategy '${strategy}' (use: first|largest)"; return 2 ;;
+    esac
+  else
+    disk="$(
+      lsblk -dprno NAME,TYPE | awk '$2=="disk"{print $1}' \
+      | while read -r d; do
+          lsblk -rno TYPE "$d" | grep -q '^part$' && continue
+          lsblk -rno MOUNTPOINTS "$d" | grep -q '.'   && continue
+          lsblk -rno FSTYPE "$d" | grep -Eq 'LVM2_member|linux_raid_member|zfs_member' && continue
+          echo "$d"
+        done | { case "$strategy" in
+                   largest) while read -r d; do sz=$(lsblk -bndo SIZE "$d" 2>/dev/null || echo 0); echo "$sz $d"; done | sort -nrk1,1 | awk 'NR==1{print $2}' ;;
+                   *) head -n1 ;;
+                 esac; }
+    )"
+  fi
+  [[ -n "$disk" ]] || { _log "ERROR: no free whole disks detected"; return 1; }
+
+  _log "Selected free disk: ${disk}"
+  _log "Planned pool name: ${pool} (mountpoint='${mpoint}', strategy='${strategy}', force=${force}, defaults=${apply_defaults})"
+
+  # ---------- defaults ----------
+  if ! declare -F zfs_get_defaults >/dev/null; then _log "ERROR: missing helper 'zfs_get_defaults'"; return 2; fi
+  local -a POOL_OPTS ZFS_PROPS
+  zfs_get_defaults POOL_OPTS ZFS_PROPS
+
+  # ---------- dry-run ----------
+  if (( dry_run )); then
+    _log "DRY-RUN: would run -> zpool_create_on_disk '${pool}' '${disk}' --mountpoint '${mpoint}'$([[ $force -eq 1 ]] && echo ' -f')$([[ $apply_defaults -eq 0 ]] && echo ' --no-defaults')"
+    _log "DRY-RUN: pool options (create-time): ${POOL_OPTS[*]}"
+    (( apply_defaults )) && _log "DRY-RUN: zfs props to apply on '${pool}': ${ZFS_PROPS[*]}"
+    return 0
+  fi
+
+  # ---------- create ----------
+  if ! declare -F zpool_create_on_disk >/dev/null; then _log "ERROR: missing helper 'zpool_create_on_disk'"; return 2; fi
+  local -a args=( "$pool" "$disk" --mountpoint "$mpoint" )
+  (( force )) && args+=( -f )
+  (( apply_defaults == 0 )) && args+=( --no-defaults )
+
+  _log "Executing pool creation..."
+  if ! zpool_create_on_disk "${args[@]}"; then _log "ERROR: pool creation failed for ${pool} on ${disk}"; return 1; fi
+  _log "Pool created successfully: ${pool}"
+
+  if (( apply_defaults )); then
+    local kv
+    for kv in "${ZFS_PROPS[@]}"; do
+      _log "Applying zfs property on ${pool}: ${kv}"
+      zfs set "${kv}" "${pool}" || _log "WARNING: failed to apply property '${kv}' on ${pool}"
+    done
+  else
+    _log "apply_defaults disabled; skipping property tuning."
+  fi
+
+  # ---------- persist ----------
+  if remote_host_variable ZPOOL_NAME "$pool"; then
+    _log "Persisted host variable: ZPOOL_NAME=${pool}"
+  else
+    _log "ERROR: failed to persist host variable ZPOOL_NAME=${pool}"; return 1
+  fi
+
+  return 0
 }
 
 
 
-# zpool_create_on_free_disk
-# -------------------------
-# Convenience wrapper: pick the first free disk and create the pool.
-# Usage: zpool_create_on_free_disk <poolname> [--mountpoint <mp>] [-f]
-zpool_create_on_free_disk() {
-  local pool="$1"; shift || true
-  local disk; disk="$(disks_free_list_simple | head -n1)"
-  [[ -n "$disk" ]] || { echo "no free whole disks detected" >&2; return 1; }
-  zpool_create_on_disk "$pool" "$disk" "$@"
-}
+
+
+
+
+
+
 
