@@ -6,8 +6,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 #client_ip="${REMOTE_ADDR:-}"
 mac="$(get_client_mac "${REMOTE_ADDR}")"
-#mac="$(get_request_mac)"
-
 
 # Retrieve config file name of the cluster
 CLUSTER_FILE=$(get_active_cluster_filename) || {
