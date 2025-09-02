@@ -88,7 +88,8 @@ Outline:
 
 ## DNS
 
-- Add dns via dnsmasq to IPS
+- Add dns hosts via dnsmasq to IPS
+- to file ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
 
 ## create node by duplication
 
