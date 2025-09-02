@@ -80,21 +80,64 @@ fi
 # - Requires: name
 # - If 'value' param exists (even empty) -> set name=value, return success
 # - If 'value' param missing            -> get current value, return it
-
 if [[ "$cmd" == "host_variable" ]]; then
   if ! cgi_param exists name; then cgi_auto_fail "Param 'name' is required"; exit; fi
   name="$(cgi_param get name)"
+
   if cgi_param exists value; then
+    # SET path
     value="$(cgi_param get value)"
-    if host_config "$mac" set "$name" "$value"; then cgi_success "$mac set $name to $value"; else cgi_auto_fail "set failed"; fi
+    if host_config "$mac" set "$name" "$value" >/dev/null 2>&1; then
+      cgi_success "$mac set $name to $value"
+    else
+      cgi_auto_fail "set failed"
+    fi
   else
-    if host_config "$mac" exists "$name"; then cgi_success "$(host_config "$mac" get "$name")"; else cgi_auto_fail "Key '$name' not found"; fi
+    # GET path — call 'get' directly and trust its rc
+    val=""
+    if val="$(host_config "$mac" get "$name" 2>/dev/null)"; then
+      cgi_success "$val"
+    else
+      cgi_auto_fail "Key '$name' not found"
+    fi
   fi
   exit
 fi
 
+# --- Command: get or set cluster variables (receiver side) ---
+# cmd=cluster_variable&name=<name>[&value=<value>]
+# - Requires: name
+# - If 'value' param exists (even empty) -> set name=value, return success
+# - If 'value' param missing            -> get current value, return it
+if [[ "$cmd" == "cluster_variable" ]]; then
+  # Ensure dynamic paths are exported so cluster_config points at active cluster
+  type export_dynamic_paths >/dev/null 2>&1 && export_dynamic_paths
 
+  if ! cgi_param exists name; then
+    cgi_auto_fail "Param 'name' is required"
+    exit
+  fi
 
+  name="$(cgi_param get name)"
+
+  if cgi_param exists value; then
+    # SET path
+    value="$(cgi_param get value)"
+    if cluster_config set "$name" "$value" >/dev/null 2>&1; then
+      cgi_success "cluster set $name to $value"
+    else
+      cgi_auto_fail "cluster set failed"
+    fi
+  else
+    # GET path — rely on 'get' rc, no separate 'exists'
+    if val="$(cluster_config get "$name" 2>/dev/null)"; then
+      cgi_success "$val"
+    else
+      cgi_auto_fail "Cluster key '$name' not found"
+    fi
+  fi
+  exit
+fi
 
 
 # Command: Process ipxe menu

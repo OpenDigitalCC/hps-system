@@ -74,20 +74,29 @@ declare -gA HOST_CONFIG
 declare -g __HOST_CONFIG_PARSED=0
 declare -g __HOST_CONFIG_FILE=""
 
+
 host_config() {
   local mac=$1
   local cmd="$2"
   local key="$3"
   local value="${4:-}"
 
-  # Load config file into HOST_CONFIG map (once)
-  if [[ $__HOST_CONFIG_PARSED -eq 0 ]]; then
+  # Track which MAC was parsed to avoid cross-host reuse
+  if [[ "${__HOST_CONFIG_PARSED:-0}" -eq 0 || "${__HOST_CONFIG_MAC:-}" != "$mac" ]]; then
+    declare -gA HOST_CONFIG=()            # reset map
     __HOST_CONFIG_FILE="${HOST_CONFIG_FILE:-${HPS_HOST_CONFIG_DIR}/${mac}.conf}"
+    __HOST_CONFIG_MAC="$mac"
 
     if [[ -f "$__HOST_CONFIG_FILE" ]]; then
+      # Accept keys: [A-Za-z_][A-Za-z0-9_]*  (was: uppercase-only)
+      # Strip surrounding double quotes if present.
       while IFS='=' read -r k v; do
-        [[ "$k" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
-        v="${v%\"}"; v="${v#\"}"  # strip surrounding quotes
+        [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        # Trim leading/trailing spaces around value
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+        # Strip surrounding "" if present
+        [[ "$v" == \"*\" ]] && v="${v%\"}" && v="${v#\"}"
         HOST_CONFIG["$k"]="$v"
       done < "$__HOST_CONFIG_FILE"
     fi
@@ -97,6 +106,7 @@ host_config() {
 
   case "$cmd" in
     get)
+      # prints value if present; rc=0 if found, 1 if missing
       [[ ${HOST_CONFIG[$key]+_} ]] && printf '%s\n' "${HOST_CONFIG[$key]}"
       return
       ;;
@@ -115,6 +125,7 @@ host_config() {
       HOST_CONFIG["$key"]="$value"
       hps_log info "[$mac] host_config update: $key = $value"
 
+      local timestamp
       timestamp="$(make_timestamp)"
       HOST_CONFIG["UPDATED"]="$timestamp"
       hps_log info "[$mac] host_config UPDATED = $timestamp"
@@ -122,11 +133,13 @@ host_config() {
       {
         echo "# Auto-generated host config"
         echo "# MAC: $mac"
-        for k in "${!HOST_CONFIG[@]}"; do
-          printf '%s="%s"\n' "$k" "${HOST_CONFIG[$k]}"
+        # Stable output: sort keys to avoid churn in diffs
+        for k in $(printf '%s\n' "${!HOST_CONFIG[@]}" | LC_ALL=C sort); do
+          # Escape any embedded double quotes in values
+          local v="${HOST_CONFIG[$k]//\"/\\\"}"
+          printf '%s="%s"\n' "$k" "$v"
         done
       } > "$__HOST_CONFIG_FILE"
-
       return
       ;;
 
@@ -136,6 +149,7 @@ host_config() {
       ;;
   esac
 }
+
 
 
 

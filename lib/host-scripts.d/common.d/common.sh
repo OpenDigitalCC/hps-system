@@ -107,6 +107,37 @@ remote_host_variable() {
 }
 
 
+# remote_cluster_variable
+# -----------------------
+# Get or set a cluster variable on the provisioning node.
+# Uses cmd=cluster_variable&name=<name>[&value=<value>]
+#
+# Usage:
+#   remote_cluster_variable <name> <value>   # set
+#   remote_cluster_variable <name>           # get
+#
+# Outputs: server response to stdout
+# Returns: curl exit status (0 on success)
+remote_cluster_variable() {
+  local name="${1:?Usage: remote_cluster_variable <name> [<value>]}"
+  local value="${2-}"
+  local gateway
+  gateway="$(get_provisioning_node)" || return 1
+
+  local enc_name enc_value
+  enc_name="$(url_encode "$name")"
+
+  if [[ $# -ge 2 ]]; then
+    # SET: POST with value
+    enc_value="$(url_encode "$value")"
+    curl -fsS -X POST \
+      "http://${gateway}/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=${enc_name}&value=${enc_value}"
+  else
+    # GET: GET without value param
+    curl -fsS -X GET \
+      "http://${gateway}/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=${enc_name}"
+  fi
+}
 
 
 
