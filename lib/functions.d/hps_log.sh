@@ -6,7 +6,7 @@ hps_log() {
   local level="$1"; shift
   local raw_msg="$*"
   local ident="${HPS_LOG_IDENT:-hps}"
-  local logfile="${HPS_LOG_DIR:-/var/log}/hps-system.log"
+  local logfile="${HPS_LOG_DIR}/hps-system.log"
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -18,7 +18,7 @@ hps_log() {
 
   # Decode the message
   local msg
-  msg="[${mac}] ($(detect_client_type)) $(url_decode "$raw_msg")"
+  msg="[$(hps_origin_tag)] ($(detect_client_type)) $(url_decode "$raw_msg")"
 
   # Send to syslog
   logger -t "$ident" -p "user.${level,,}" "$msg"
