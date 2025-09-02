@@ -11,7 +11,7 @@ mac="$(get_client_mac "${REMOTE_ADDR}")"
 
 # Retrieve config file name of the cluster
 CLUSTER_FILE=$(get_active_cluster_filename) || {
-  ipxe_cgi_fail "No active cluster"
+  cgi_auto_fail "No active cluster"
   exit 1
 }
 
@@ -19,13 +19,12 @@ CLUSTER_FILE=$(get_active_cluster_filename) || {
 
 # Condition: do we have $cmd
 if ! cgi_param exists cmd; then
-  ipxe_cgi_fail "Command not specified"
+  cgi_auto_fail "Command not specified"
   exit
 else
   cmd="$(cgi_param get cmd)"
 fi
 
-### ───── Commands that do NOT require a MAC ─────
 
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
@@ -45,14 +44,14 @@ fi
 #  if cgi_param exists mac; then
 #    mac="$(cgi_param get mac)"
 #  else
-#    ipxe_cgi_fail "MAC address is required for command $cmd"
+#    cgi_auto_fail "MAC address is required for command $cmd"
 #    exit 1
 #  fi
 #fi
 
 
 #if ! cgi_param exists mac; then
-#  ipxe_cgi_fail "MAC address is required for command $cmd"
+#  cgi_auto_fail "MAC address is required for command $cmd"
 #  exit
 #else
 #  mac="$(cgi_param get mac)"
@@ -65,7 +64,7 @@ if [[ "$cmd" == "set_status" ]]
  then
   if ! cgi_param exists status
    then
-    ipxe_cgi_fail "Param status is required for command $cmd"
+    cgi_auto_fail "Param status is required for command $cmd"
     exit
   else
     SET_STATUS="$(cgi_param get status)"
@@ -76,57 +75,25 @@ if [[ "$cmd" == "set_status" ]]
 fi
 
 
-
-# Command: get or set host variables
-if [[ "$cmd" == "host_variable" ]]
- then
-  if ! cgi_param exists name
-   then
-    ipxe_cgi_fail "Param name is required for command $cmd"
-    exit
-  else
-    name="$(cgi_param get name)"
-    value="$(cgi_param get value)"
-  fi
-  host_config "$mac" set $name $value
-  cgi_success "$mac set $name to $value"
-  exit
-fi
-
 # --- Command: get or set host variables (receiver side) ---
 # cmd=host_variable&name=<name>[&value=<value>]
 # - Requires: name
 # - If 'value' param exists (even empty) -> set name=value, return success
 # - If 'value' param missing            -> get current value, return it
+
 if [[ "$cmd" == "host_variable" ]]; then
-  # Require 'name'
-  if ! cgi_param exists name; then
-    ipxe_cgi_fail "Param 'name' is required for command $cmd"
-    exit
-  fi
-
+  if ! cgi_param exists name; then cgi_auto_fail "Param 'name' is required"; exit; fi
   name="$(cgi_param get name)"
-
   if cgi_param exists value; then
-    # SET path (value may be empty; presence of param triggers set)
     value="$(cgi_param get value)"
-    if host_config "$mac" set "$name" "$value"; then
-      cgi_success "$mac set $name to $value"
-    else
-      ipxe_cgi_fail "Failed to set $name for $mac"
-    fi
+    if host_config "$mac" set "$name" "$value"; then cgi_success "$mac set $name to $value"; else cgi_auto_fail "set failed"; fi
   else
-    # GET path
-    if host_config "$mac" exists "$name"; then
-      val="$(host_config "$mac" get "$name")"
-      # Return raw value as payload (cgi_success wraps it)
-      cgi_success "$val"
-    else
-      ipxe_cgi_fail "Key '$name' not found for $mac"
-    fi
+    if host_config "$mac" exists "$name"; then cgi_success "$(host_config "$mac" get "$name")"; else cgi_auto_fail "Key '$name' not found"; fi
   fi
   exit
 fi
+
+
 
 
 
@@ -134,7 +101,7 @@ fi
 
 if [[ "$cmd" == "process_menu_item" ]]; then
   if ! cgi_param exists menu_item; then
-    ipxe_cgi_fail "Missing required parameter: menu_item"
+    cgi_auto_fail "Missing required parameter: menu_item"
     exit
   fi
   menu_item="$(cgi_param get menu_item)"
@@ -149,7 +116,7 @@ if [[ "$cmd" == "log_message" ]]
  then
   if ! cgi_param exists message
    then
-    ipxe_cgi_fail "Param message is required for command $cmd"
+    cgi_auto_fail "Param message is required for command $cmd"
   else
     LOG_MESSAGE="$(cgi_param get message)"
     cgi_header_plain
@@ -163,7 +130,7 @@ fi
 # Command: Network bootstrap via kickstart
 if [[ "$cmd" == "kickstart" ]]; then
   if ! cgi_param exists hosttype; then
-    ipxe_cgi_fail "Param hosttype is required for kickstart"
+    cgi_auto_fail "Param hosttype is required for kickstart"
   fi
   hosttype="$(cgi_param get hosttype)"
   hps_log info "Kickstart - Configuring host $hosttype"
@@ -195,7 +162,7 @@ fi
 
 if [[ "$cmd" == "config_host" ]]; then
   if ! cgi_param exists hosttype; then
-    ipxe_cgi_fail "hosttype is required for config_host"
+    cgi_auto_fail "hosttype is required for config_host"
   fi
   hosttype="$(cgi_param get hosttype)"
   host_config "$mac" set TYPE "$hosttype"
@@ -220,7 +187,7 @@ if [[ "$cmd" == "initialise_host_scripts" ]]; then
   if cgi_param exists distro; then
     initialise_host_scripts "$(cgi_param get distro)"
   else
-    ipxe_cgi_fail "$cmd: Parameter distro not provided"
+    cgi_auto_fail "$cmd: Parameter distro not provided"
   fi
   exit
 fi
@@ -285,7 +252,7 @@ if [[ "$cmd" == "boot_action" ]]
     ACTIVE)
 #      hps_log info "Active and provisioned. Booting configured image."
 #      ipxe_boot_provisioned
-      ipxe_cgi_fail "Section not yet written for state $state"
+      cgi_auto_fail "Section not yet written for state $state"
       ;;
 
     REINSTALL)
@@ -298,12 +265,12 @@ if [[ "$cmd" == "boot_action" ]]
     FAILED)
       hps_log info "Install failed"
       ipxe_configure_main_menu
-#      ipxe_cgi_fail "Installation marked as FAILED"
+#      cgi_auto_fail "Installation marked as FAILED"
     ;;
 
     *)
       hps_log info "Unknown or unset state. Failing.."
-      ipxe_cgi_fail "State $state unknown or unhandled"
+      cgi_auto_fail "State $state unknown or unhandled"
       ;;
   esac
 
@@ -315,7 +282,7 @@ fi
 
 ### ───── Unknown or unhandled command ─────
 
-ipxe_cgi_fail "Unknown or unsupported command: $cmd"
+cgi_auto_fail "Unknown or unsupported command: $cmd"
 
 
 

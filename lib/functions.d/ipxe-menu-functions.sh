@@ -28,7 +28,7 @@ ipxe_cgi_fail () {
   # IPXE failure message
   ipxe_header
   local cfmsg="$1"
-  hps_log error "[$(cgi_param get mac)] ${FUNCNAME[1]} $cfmsg"
+  hps_log error "$cfmsg"
   echo "#!ipxe"
   echo "echo == ERROR =="
   echo "echo"
@@ -88,12 +88,12 @@ handle_menu_item() {
       ;;
   
     reboot)
-      hps_log info "[$mac] $item Reboot requested"
+      hps_log info "$item Reboot requested"
       ipxe_reboot "Menu selected - reboot"
       ;;
 
     local_boot)
-      hps_log info "[$mac] $item Boot from local disk"
+      hps_log info "$item Boot from local disk"
       ipxe_header
       echo "echo Local boot requested"
       echo "sleep 5"
@@ -101,13 +101,13 @@ handle_menu_item() {
       ;;
 
     reinstall)
-      hps_log info "[$mac] $item Reinstall requested"
+      hps_log info "$item Reinstall requested"
       host_config "$mac" set STATE REINSTALL
       ipxe_host_install_menu
       ;;
 
     rescue)
-      hps_log info "[$mac] $item Entering rescue shell"
+      hps_log info "$item Entering rescue shell"
       ipxe_header
       echo "echo Local shell"
       echo "sleep 1"
@@ -118,7 +118,7 @@ handle_menu_item() {
       local HOST_TYPE="${item#install_}"
       local HOST_TYPE="${HOST_TYPE%_*}"
       local HOST_PROFILE="${item##*_}"
-      hps_log info "[$mac] $item Running boot installer for type: "${HOST_TYPE}" profile: "${HOST_PROFILE}""
+      hps_log info "$item Running boot installer for type: "${HOST_TYPE}" profile: "${HOST_PROFILE}""
       ipxe_boot_installer "${HOST_TYPE}" "${HOST_PROFILE}"
       ;;
 
@@ -136,7 +136,7 @@ handle_menu_item() {
       ;;
 
     *)
-      hps_log info "[$mac] Unknown menu item: $item"
+      hps_log info "Unknown menu item: $item"
       ipxe_cgi_fail "Unknown menu item: $item"
       ;;
   esac
@@ -225,16 +225,16 @@ ipxe_configure_main_menu () {
 # This menu is delivered if the cluster is configured, but the host is not
 # Main menu, if we are not configured
 
-hps_log debug "[$mac] Delivering configure menu"
+hps_log debug "Delivering configure menu"
 
 ipxe_header
 
 if [[ "$(host_config "$mac" get FORCE_INSTALL)" == "YES" ]]; then
   FI_MENU="item force_install_off Disable forced installation"
-  hps_log debug "[$mac] Forced install set"
+  hps_log debug "Forced install set"
 else
   FI_MENU="item force_install_on  Enable Forced installation, overwriting current O/S on next boot"
-  hps_log debug "[$mac] Forced install not set"
+  hps_log debug "Forced install not set"
 fi
 
 
@@ -274,7 +274,7 @@ EOF
 
 ipxe_reboot () {
   local MSG=$1
-  hps_log info "[$mac] Reboot requested $MSG"
+  hps_log info "Reboot requested $MSG"
   ipxe_header
   [[ -n $MSG ]] && echo "echo $MSG"
   echo "echo Rebooting..."
@@ -286,7 +286,7 @@ ipxe_boot_installer () {
   local host_type=$1
   local profile=$2
   
-  hps_log info "[$mac] Installing new host of type $host_type"
+  hps_log info "Installing new host of type $host_type"
   
   load_cluster_host_type_profiles
 
@@ -325,7 +325,7 @@ ipxe_boot_installer () {
       ipxe_cgi_fail "$DIST_PATH/${KERNEL_FILE} doesn't exist for type $host_type"
     fi
 
-    hps_log debug "[$mac] Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
+    hps_log debug "Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
   ipxe_header
   IPXE_BOOT_INSTALL=$(cat <<EOF
 # created at $(date)

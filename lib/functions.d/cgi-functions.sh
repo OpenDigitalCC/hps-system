@@ -1,6 +1,34 @@
 __guard_source || return
 # Define your functions below
 
+
+# cgi_auto_fail
+# -------------
+# Fail helper that auto-selects the correct fail function based on client type.
+#
+# Detects client type with detect_client_type(), then calls:
+#   - ipxe_cgi_fail <msg>   if client is ipxe
+#   - cgi_fail <msg>        otherwise (cli, browser, unknown)
+#
+# Usage:
+#   cgi_auto_fail "Missing required parameter"
+cgi_auto_fail() {
+  local msg="${1:?Usage: cgi_auto_fail <message>}"
+  local client_type
+  client_type="$(detect_client_type)"
+
+  case "$client_type" in
+    ipxe)
+      ipxe_cgi_fail "$msg"
+      ;;
+    cli|browser|unknown)
+      cgi_fail "$msg"
+      ;;
+  esac
+}
+
+
+
 cgi_log() {
   local msg="$1"
   local timestamp
@@ -18,6 +46,14 @@ cgi_header_plain() {
 cgi_success () {
   cgi_header_plain
   echo "$1"
+}
+
+
+cgi_fail () {
+  local cfmsg="$1"
+  cgi_header_plain
+  hps_log error "$cfmsg"
+  echo "$cfmsg"
 }
 
 

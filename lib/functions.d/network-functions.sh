@@ -1,6 +1,41 @@
 __guard_source || return
 
 
+# detect_client_type
+# ------------------
+# Detects the type of caller for this CGI script based on CGI environment vars.
+#
+# Returns (via stdout):
+#   ipxe    - iPXE boot client
+#   cli     - curl or wget (host scripts)
+#   browser - human browser (Mozilla/Chrome/Safari/etc)
+#   unknown - fallback
+#
+# Usage:
+#   client_type="$(detect_client_type)"
+#   echo "Client is: ${client_type}"
+detect_client_type() {
+  # Query string override first
+  case ":${QUERY_STRING}:" in
+    *":via=ipxe:"*|*":client=ipxe:"*) echo "ipxe"; return 0 ;;
+    *":via=cli:"*|*":client=cli:"*)   echo "cli"; return 0 ;;
+    *":via=browser:"*|*":client=browser:"*) echo "browser"; return 0 ;;
+  esac
+
+  # User-Agent detection
+  local ua="${HTTP_USER_AGENT:-}"
+  case "$ua" in
+    *iPXE*|*ipxe*) echo "ipxe"; return 0 ;;
+    curl/*|Wget/*) echo "cli"; return 0 ;;
+    *Mozilla*|*Chrom*|*Safari*) echo "browser"; return 0 ;;
+  esac
+
+  # Default
+  echo "unknown"
+  return 0
+}
+
+
 generate_dhcp_range_simple() {
     local network_cidr="$1"   # e.g. 192.168.50.0/24
     local gateway_ip="$2"     # e.g. 192.168.50.1
