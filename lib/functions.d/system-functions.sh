@@ -5,6 +5,55 @@ make_timestamp() {
   date -u '+%Y-%m-%d %H:%M:%S UTC'
 }
 
+# Treat as TTY if *any* of stdin/out/err is a terminal.
+_is_tty() {
+  [[ -t 0 || -t 1 || -t 2 ]]
+}
+
+# Build 'origin' (MAC for CGI, otherwise pid/user/host). Safe under `set -u`.
+hps_origin_tag() {
+  # Optional: caller may pass an explicit origin override (e.g. for tests)
+  local override="${1-}"
+
+  if [[ -n "$override" ]]; then
+    printf '%s' "$override"
+    return 0
+  fi
+
+  if _is_tty; then
+    # Interactive CLI (or at least one TTY fd): lightweight tag
+    # ${VAR-} is safe under `set -u` (yields empty if unset)
+    # nest defaults so we never reference a bare unset var
+
+local user="$(id -un 2>/dev/null || echo unknown)"
+local host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
+printf 'pid:%s user:%s host:%s' "$$" "$user" "$host"
+
+#    printf 'pid:%s user:%s host:%s' "$$" "${LOGNAME:-$USER}" "$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
+#    printf 'pid:%s' "$$"
+    return 0
+  fi
+
+  # Non-TTY path: try to use client IP/MAC if available (e.g. CGI)
+  local rip="${REMOTE_ADDR-}" mac=""
+  if [[ -n "$rip" ]]; then
+    # Only call get_client_mac if it exists
+    if declare -F get_client_mac >/dev/null 2>&1; then
+      mac="$(get_client_mac "$rip" 2>/dev/null || true)"
+    fi
+    if [[ -n "$mac" ]]; then
+      printf 'mac:%s' "$mac"
+    else
+      # Fall back to IP tag if MAC cannot be resolved
+      printf 'ip:%s' "$rip"
+    fi
+    return 0
+  fi
+
+  # Non-TTY and no REMOTE_ADDR: likely batch/cron → fall back to pid tag
+  printf 'pid:%s' "$$"
+}
+
 
 hps_services_start() {
   configure_supervisor_services
@@ -18,6 +67,7 @@ hps_services_stop() {
 
 hps_services_restart() {
   configure_supervisor_services
+  create_supervisor_services_config
   reload_supervisor_config
   supervisorctl -c "${HPS_SERVICE_CONFIG_DIR}/supervisord.conf" restart all
 }

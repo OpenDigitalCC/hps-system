@@ -17,9 +17,7 @@ cleanup() {
       write_cluster_config "${HPS_CLUSTER_CONFIG_DIR}/cluster.conf" "${CLUSTER_VARS[@]}"
       set_active_cluster "$CLUSTER_NAME"
       configure_supervisor_services
-      configure_dnsmasq
-      configure_nginx
-      configure_ipxe
+      create_supervisor_services_config
       hps_services_restart  # Restart all services
      else
       echo "[ERROR] No cluster name, not reloading"

@@ -25,9 +25,7 @@ if cluster_file=$(get_active_cluster_filename 2>/dev/null)
    then
     echo "[INFO] Active cluster found: $cluster_file, creating services"
     configure_supervisor_services
-    configure_dnsmasq
-    configure_nginx
-    configure_ipxe
+    create_supervisor_services_config
   fi
  else
   echo "[INFO] No active cluster configured — continuing without starting services"
