@@ -1,6 +1,5 @@
 __guard_source || return
 
-
 # detect_client_type
 # ------------------
 # Detects the type of caller for this CGI script based on CGI environment vars.
@@ -9,32 +8,37 @@ __guard_source || return
 #   ipxe    - iPXE boot client
 #   cli     - curl or wget (host scripts)
 #   browser - human browser (Mozilla/Chrome/Safari/etc)
+#   script  - non-interactive/scripted caller (e.g. no UA, not ipxe/cli/browser)
 #   unknown - fallback
 #
 # Usage:
 #   client_type="$(detect_client_type)"
 #   echo "Client is: ${client_type}"
 detect_client_type() {
+  # Guard against unset QUERY_STRING under `set -u`
+  local qs="${QUERY_STRING-}"
+
   # Query string override first
-  case ":${QUERY_STRING}:" in
-    *":via=ipxe:"*|*":client=ipxe:"*) echo "ipxe"; return 0 ;;
-    *":via=cli:"*|*":client=cli:"*)   echo "cli"; return 0 ;;
+  case ":${qs}:" in
+    *":via=ipxe:"*|*":client=ipxe:"*)    echo "ipxe";    return 0 ;;
+    *":via=cli:"*|*":client=cli:"*)      echo "cli";     return 0 ;;
     *":via=browser:"*|*":client=browser:"*) echo "browser"; return 0 ;;
+    *":via=script:"*|*":client=script:"*) echo "script"; return 0 ;;
   esac
 
-  # User-Agent detection
-  local ua="${HTTP_USER_AGENT:-}"
+  # User-Agent detection (safe if unset)
+  local ua="${HTTP_USER_AGENT-}"
   case "$ua" in
-    *iPXE*|*ipxe*) echo "ipxe"; return 0 ;;
-    curl/*|Wget/*) echo "cli"; return 0 ;;
+    *iPXE*|*ipxe*)         echo "ipxe";    return 0 ;;
+    curl/*|Wget/*)         echo "cli";     return 0 ;;
     *Mozilla*|*Chrom*|*Safari*) echo "browser"; return 0 ;;
+    "")                    echo "script";  return 0 ;;  # No UA → assume script
   esac
 
   # Default
   echo "unknown"
   return 0
 }
-
 
 generate_dhcp_range_simple() {
     local network_cidr="$1"   # e.g. 192.168.50.0/24
@@ -145,24 +149,6 @@ get_client_mac() {
   echo $(normalise_mac "$mac")
 }
 
-# Get MAC depending on call context.
-# - CGI: use client IP from REMOTE_ADDR and resolve via get_client_mac
-# - SCRIPT/SOURCED: return 00:00:00:00:00:00 → normalized form
-get_request_mac() {
-    local ctx raw_mac
-    ctx="$(detect_call_context)"
 
-    case "$ctx" in
-        CGI)
-          get_client_mac
-            ;;
-        SCRIPT|SOURCED|*)
-            raw_mac="00:00:00:00:00:00"
-            ;;
-    esac
-
-    # Always normalize using shared helper
-    normalise_mac "$raw_mac"
-}
 
 
