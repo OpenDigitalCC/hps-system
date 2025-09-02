@@ -106,4 +106,12 @@ Outline:
 - reject all queries from unknown MAC, with one exception
   - only allow initial config options to systems that we have dhcp booted
 
+## Function: cgi_auto_fail
+
+- if browser, send html (currently text)
+- if cli, send json (currnelty text)
+- if ipxe, send pxe (done)
+- if unknown, send text (done)
+
+
 
