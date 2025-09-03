@@ -6,7 +6,7 @@ List of requirements and ideas not yet implemented
 
 ## Refactoring of scripts and libraries
 
-### Function naming
+### General function name separation
 
 - HPS functions: available to the HPS operations
 - Node functions: available on the nodes
@@ -29,6 +29,11 @@ boot manager should be renamed to hps-api as it now provides a wide range of fun
 - if cli, send json (currnelty text)
 - if ipxe, send pxe (done)
 - if unknown, send text (done)
+
+
+### Command: bootstrap_initialise_distro
+
+- rename to node_get_functions
 
 ## Feature development
 
@@ -134,11 +139,18 @@ Outline:
 
 ## Security
 
-- only send my config to my MAC address, decline to anyone else
-- only send my cluster ifo to members of my cluster
+### hps-api 
+
+Establish who is the caller of the API. 
+
+- Is the MAC registered? 
+- Store key in host config file, the Node should have this key, without it, sensitive config cant be accessed
 - reject all queries from unknown MAC, with one exception
   - only allow initial config options to systems that we have dhcp booted
 - Don't allow sensitive config elements to be provided via the api
-
+- HPS CGI endpoint that exposes a static SHA256SUMS for functions
+- only send my cluster ifo to members of my cluster
+- only send my config to my MAC address, decline to anyone else
+- only respond to local network requests
 
 
