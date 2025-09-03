@@ -1,32 +1,35 @@
-#### `remote_log`
+### `remote_log`
 
 Contained in `lib/functions.d/kickstart-functions.sh`
 
 Function signature: 1f586056ba1b573eed69d32639c3940c1c742ba73af4aae917a1d65d36c5367c
 
-##### Function Overview
+### Function Overview
 
-The function `remote_log()` is designed to URL encode a message from the input parameter and send it as a log message to the specified gateway. The log message is sent via a HTTP POST request to a Bash script called `boot_manager.sh` on the gateway host.
+The bash function named `remote_log` is used to encode a message into URL format and then send it as a log message to a remote server using a POST request.
 
-##### Technical Description
+### Technical Description
 
-- Name: `remote_log()`
-- Description: This function takes a message as input, URL encodes the message, and sends a HTTP POST request to send the message to a gateway host.
-- Globals: [`macid`: Identifier for the machine, `HOST_GATEWAY`: Address of the gateway host]
-- Arguments: [`$1`: the message to be logged and sent, `$2`: Not used]
-- Outputs: None, this function does not produce any output.
-- Returns: It doesn't return any value.
-- Example usage:
-  ```
-  message="This is a test message"
-  remote_log "$message"
-  ```
+- **Name:** `remote_log`
+- **Description:** This function accepts a string (log message) as an input argument, encodes it into URL format, and then sends it as a POST request to a remote server using `curl`.
+- **Globals:** 
+  - `HOST_GATEWAY`: the gateway of the host machine. 
+  - `macid`: the machine identifier. 
+- **Arguments:** 
+  - `$1`: The log message to be URL-encoded and sent to the remote server. 
+- **Outputs:** Sends a URL-encoded log message using a POST request to a URL specified using `HOST_GATEWAY`, with additional parameters including `macid`.
+- **Returns:** None. It only initiates a `curl` POST request but doesn't handle the response.
+- **Example Usage:**
 
-##### Quality and Security Recommendations
+```bash
+remote_log "This is a log message"
+```
 
-1. User input should be sanitized before being passed into the function to avoid potential security vulnerabilities.
-2. Unused parameters (such as `$2`) should be removed to avoid confusion and maintain cleaner code.
-3. Any potential errors from the `curl` command should be handled gracefully. Consider adding error checking to ensure that the message has been sent successfully.
-4. Always ensure that the `macid` and `HOST_GATEWAY` variables are properly set and valid.
-5. Consider using `https` instead of `http` for the POST request to enhance the security of the function.
+### Quality and Security Recommendations
+
+1. URL-encoding should be improved to handle special characters in a more comprehensive and foolproof way.
+2. The URL target for the `curl` POST request should be validated to ensure it's well-formed and secure to connect to.
+3. Error handling should be added to ensure that the function behaves predictably when things go wrong. For example, handling the case when the message is empty or the target URL refuses connection.
+4. The use of global variables could be removed or limited for better code encapsulation and reusability. In scenarios where globals are necessary, they should be validated before use.
+5. Secure protocols such as HTTPS should be used instead of HTTP to ensure better security in data transmission.
 

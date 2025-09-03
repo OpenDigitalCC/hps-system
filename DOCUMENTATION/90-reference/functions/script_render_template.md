@@ -1,38 +1,34 @@
-#### `script_render_template`
+### `script_render_template`
 
 Contained in `lib/functions.d/kickstart-functions.sh`
 
 Function signature: 064ddcb49f3688c1b0ede8ce884eae36c9ac96f5117338bdce1f62d5c6960a67
 
-##### Function overview
+### Function Overview
 
-The `script_render_template` function remaps all placeholders in the form of `@...@` with the corresponding values derived from `${...}`. This function uses environment variables and `awk-vars` for its placeholder values: if a placeholder does not exist in `awk-vars`, the value will default to an empty string.
+The `script_render_template()` function is designed to remap all variable placeholders (`@...@`) with their corresponding values (`${...}`). The function cycles through all the variables using `compgen -v`, assigns the value of the variable to a local variable, and then adds it to an array of values for `awk`. The `awk` utility then processes the array of values, replacing each placeholder in the original string with the corresponding variable value.
 
-##### Technical description
+### Technical Description
 
-```
-script_render_template
-```
- - **Description**: This function remaps all `@...@` placeholders with their corresponding `${...}` values. If a placeholder does not exist in `awk-vars`, it uses an empty string as the default value.
- - **Globals**: None.
- - **Arguments**: None. The function processes all global variables available at runtime and uses them to replace placeholders in the script.
- - **Outputs**: This function will print a string where every placeholder `@...@` has been replaced with the corresponding `${...}` value.
- - **Returns**: This function does not explicitly return a value. However, it prints a line (or lines) with replaced placeholders, which can be used as a return in Bash.
- - **Example usage**:
-   ```bash
-   VAR1="Hello"
-   VAR2="World"
-   echo "@VAR1@, @VAR2@!" | script_render_template
-   # Output: "Hello, World!"
-   ```
+- **Name**: `script_render_template`
+- **Description**: This function is used to remap variable placeholders with their actual value. It does this using the `awk` utility and a for loop iterating over all variables in the scope.
+- **Globals**: None
+- **Arguments**: The function does not require any arguments. It acts on all variables in its scope.
+- **Outputs**: The function outputs a string with all `@var@` placeholders replaced with their corresponding `${...}` values.
+- **Returns**: The function does not have a return value.
+- **Example Usage**:
+  Assume that the following variables are already defined in the context:
+  ```bash
+  script_name='MyScript'
+  script_version='1.0'
+  ```
+  If we call `script_render_template` in a context where a template string like `'This is @script_name@ version @script_version@'` is present, the function will output the string `'This is MyScript version 1.0'`.
 
-##### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. Use descriptive variable names that accurately reflect the data they hold.
-2. Validate all data before using this function to ensure safety and accuracy.
-3. Avoid creating global variables unnecessarily, especially if they are only used in this function.
-4. Use secure methods for sourcing the variables used in this function, such as exporting only required variables.
-5. To avoid unintended script behavior, ensure all placeholders are correctly formatted as `@...@`.
-6. Document the usage of this function, as it has implicit dependencies on environment variables.
-7. Regularly audit and update the function to maintain its security and reliability.
+1. Always make sure the substitution values (`${...}`) are securely obtained and sanitized to prevent command injection attacks.
+2. Consider validating the variable names that `compgen -v` produces to ensure they adhere to expected patterns and rules.
+3. Beware of potential performance issues if the function is used in a context with a large number of variables.
+4. Handle errors and exceptions gracefully. For instance, what should happen if a placeholder variable does not exist?
+5. Ensure that the function fits well within your specific use case, as its current implementation is very general and may not be suitable for more specific tasks.
 

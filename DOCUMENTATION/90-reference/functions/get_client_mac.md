@@ -1,28 +1,33 @@
-#### `get_client_mac`
+### `get_client_mac`
 
 Contained in `lib/functions.d/network-functions.sh`
 
-Function signature: 6b28946d90a3fddf9e18f05fe426e933a15b243f01dde38c4257f73ffa1f64f3
+Function signature: 8cf7b608ec665ff47f16996d542d5d3ed0c9392116e453e8abfcc00eab616973
 
-##### Function overview
+### Function Overview
 
-The `get_client_mac` function is used to get the MAC (Media Access Control) address of a client machine through its IP address. This function makes use of ARP (Address Resolution Protocol) packets to find the MAC address assigned to an IP. If the initial method fails, it attempts to extract the MAC address using `arp` tool.
+The function `get_client_mac` is used to extract the MAC address corresponding to a given IP address in a local network. It sends a ping to trigger an ARP update, which is then parsed for the required MAC address. If the initial method does not succeed, it uses the `arp` command as a fallback and returns a normalized MAC address.
 
-##### Technical description
+### Technical Description
 
-- **Name**: `get_client_mac`
-- **Description**: The function `get_client_mac` discerns and outputs the MAC address of a client machine given its IP address. It first confirms that the IP address is valid. If not, the function returns 1. If the IP address is valid, an ARP request is triggered via a ping request, forcing the target machine to respond and update the ARP table. The function then uses an `awk`-driven regular expression search within the IP neighbour list to extract the MAC address. On unsuccessful attempts, it tries to extract the MAC address using the `arp` command.
-- **Globals**: `VAR` - No global variables used in the function.
-- **Arguments**: `$1` - This argument represents the IP address for which the MAC address is to be fetched.
-- **Outputs**: The MAC address associated with the given IP.
-- **Returns**: If the supplied IP address is empty, the function will return 1. 
-- **Example Usage**: `get_client_mac "192.168.1.1"`
+- **Name:** get_client_mac
+- **Description:** This function uses IP address to get its corresponding MAC address from the Address Resolution Protocol (ARP) cache. 
+- **Globals:** None
+- **Arguments:** 
+    - `$1`: The IP address of the client. 
+- **Outputs:** Normalized MAC address related to the IP address if found. 
+- **Returns:**
+    - `1` if the IP address is not valid or MAC address is not found.
+    - MAC address corresponding to given IP address in normalized form.
+- **Example Usage:**
+    - `get_client_mac 192.168.1.1`
+    - `MAC_ADDRESS=$(get_client_mac 192.168.1.1)`
 
-##### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. Input validation should be more robust, ensuring that only valid IP addresses are accepted for further processing to avoid possible abuse or unexpected behavior.
-2. To enhance performance, add a check for the MAC address in the local ARP cache before sending a ping request to the client machine.
-3. Using `ping` and `arp` tools might be blocked by firewall rules or network policies. Always check if these tools can reach the client machine.
-4. Include error detecting mechanisms to check if the ARP update or ping was successful.
-5. The code must carefully handle the absence of the `awk` or `arp` commands on some systems. If these commands are not available, the function won't work as expected.
+1. Ensure the user has required permissions to run the `ping`, `ip neigh` and `arp` commands to avoid permission denied errors.
+2. Include error handling for cases where ARP does not contain an entry for the given IP address, emitting appropriate error messages.
+3. Consider including a validation check for the normalized MAC address before returning it.
+4. Use secure command execution to prevent injection attacks.
+5. Consider returning a standardized error value, such as a null address or a specific error string, if the MAC cannot be found.
 

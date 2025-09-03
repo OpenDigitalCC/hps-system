@@ -1,29 +1,36 @@
-#### `ipxe_show_info`
+### `ipxe_show_info`
 
 Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
-Function signature: b455b51b9b86aa994035c826d4a4341e071bdd8322ff22c818e2e91f4e188387
+Function signature: cbd14427c29a67a77d52cb0fd250b99f45cb94110f4d4b0a3f1123ec4fe219a4
 
-##### 1. Function Overview
+### Function overview
 
-The function `ipxe_show_info()` is a bash function that shows host, iPXE system, cluster configuration and system paths information based on the category provided. Upon calling the function, it takes in a category (i.e., `show_ipxe`, `show_cluster`, `show_host`, or `show_paths`) and displays the corresponding information. If a path or necessary file is missing it will indicate this to the user.
+The `ipxe_show_info()` function is mainly used to display different configurations of a particular host. This function pulls up information such as the host's IP, hostname, platform, UUID, serial number, product, cluster configuration, and HPS (High Performance Storage) paths. 
 
-##### 2. Technical description
+The function achieves this by taking a single argument, which determines the category of information that will be displayed for the host. The categories include `show_ipxe`, `show_cluster`, `show_host`, and `show_paths`. 
 
-- **Name:** `ipxe_show_info()`
-- **Description:** This function displays information about iPXE system, host, cluster configuration and system paths based on the category provided.
-- **Globals:** [ `HPS_CLUSTER_CONFIG_DIR`: This is the directory where the cluster configuration files are stored.
-`HPS_CONFIG`: This is the configuration file for HPS.]
-- **Arguments:** [ `$1`: The category of information to be displayed. It can be `show_ipxe`, `show_cluster`, `show_host`, or `show_paths` ]
-- **Outputs:** Prints the iPXE system information, host information, cluster configuration or system paths based on the argument provided to the function.
-- **Returns:** Nothing.
-- **Example usage:** `ipxe_show_info show_cluster`
+### Technical description
 
-##### 3. Quality and security recommendations
+- **Name**: `ipxe_show_info()`
+- **Description**: This function displays specific information about a host, based on what category is passed as an argument.
+- **Globals**: 
+  - `HPS_CLUSTER_CONFIG_DIR`: The directory where the cluster configuration is stored
+  - `CGI_URL`: Link to CGI (Common Gateway Interface) script which is used to implement the command `process_menu_item`
+  - `HPS_CONFIG`: The file where the HPS (High Performance Storage) configuration is stored
+- **Arguments**: 
+  - `$1: category`: The type of information to display about the host. The options are `show_ipxe`, `show_cluster`, `show_host`, and `show_paths`.
+- **Outputs**: Information about the host in the requested category, such as IP address, hostname, platform, UUID, serial and product numbers, and more.
+- **Returns**: Does not return a value.
+- **Example usage**: `ipxe_show_info show_ipxe`
 
-1. **Input validation:** Ensure that user inputs are properly validated to avoid unexpected behavior or output from the function. For instance, validating the `category` should only take the allowed arguments (`show_ipxe`, `show_cluster`, `show_host` or `show_paths`).
-2. **Error Handling:** Provide clear and specific error messages for the end user. In case a configuration file is not found, provide guidance on next steps or tips on how to solve the issue.
-3. **Documentation:** Keep the documentation of this function up to date, as it forms a critical part of the user guide.
-4. **Security:** Be wary of command execution vulnerabilities if user input is ingested without validation or sanitization. In this function, make sure that the `category` input does not open up the potential for Command Injection. This is particularly important if additional components will be added to the system that calls this function and could open up new vulnerabilities.
-5. **Code Quality:** While not directly related to security, maintaining good code quality is a standard best practice to keep a project maintainable and error free in the long term. Code quality refers to such things as ensuring consistent syntax style, comprehensive commenting, avoiding deeply nested loops or conditional (i.e., “spaghetti code”), and dividing code into modular, single-purpose units.
+### Quality and security recommendations
+
+1. Always ensure variable sanitization before using any variable in command substitution. This removes potential harmful commands being hidden as a value for a variable.
+2. Always quote the variables. This will prevent word splitting and pathname expansion.
+3. Implement error handling for when file reading or command chain replacement fails, or when an unknown item category is passed as an argument.
+4. Implement checking for edge cases where the category argument is not passed at all.
+5. The `ipxe_show_info` function is essentially storing, processing, and displaying sensitive information about a host. It is recommended to add necessary security measures to protect this sensitive data from potential breaches.
+6. Use `printf` instead of `echo` for better string handling, especially while displaying file contents.
+7. Consider using local variables. This can help in preventing variable clashing and accidental modification of environment variables which can have impact on how the system functions.
 

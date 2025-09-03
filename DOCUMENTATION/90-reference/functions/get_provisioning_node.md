@@ -1,41 +1,43 @@
-#### `get_provisioning_node`
+### `get_provisioning_node`
 
-Contained in `lib/functions.d/configure-distro.sh`
+Contained in `lib/host-scripts.d/common.d/common.sh`
 
 Function signature: 1bbd682413f1c35f8f147b598c84f60028eea1205d56405e50b38d7d551b5b01
 
-##### Function overview
+### Function overview
 
-The function `get_provisioning_node` is responsible for grabbing and returning the default gateway IP address which corresponds to the provisioning node in a network. It uses the `ip route` command in conjunction with `awk` for parsing the output properly and retrieving the pertinent information.
+The `get_provisioning_node` function uses the built-in commands of `ip` and `awk` to retrieve the IP address of the default gateway in a Unix system. If successful, it prints the IP address of the default gateway to the standard output. This function is generally used for obtaining the IP needed for system provisioning.
 
-##### Technical description
+### Technical Description
 
-**Name**: `get_provisioning_node`
+#### Name
+- `get_provisioning_node`
 
-**Description**: This function retrieves and prints the IP address of the default gateway in the network, often called the provisioning node. It is commonly used in networking and system administration scripts for setting up or troubleshooting networks.
-
-**Globals**: None.
-
-**Arguments**: None.
-
-**Outputs**: The default gateway IP address.
-
-**Returns**: Prints to stdout the provisioning node (default gateway IP address), or nothing if the command does not find a default gateway.
-
-**Example usage**:
-
+#### Description
+- The function get_provisioning_node retrieves the IP address of the default gateway in a Unix system.
+  
+#### Globals
+- None
+  
+#### Arguments
+- None
+  
+#### Outputs
+- The IP address of the default gateway.
+  
+#### Returns
+- The default gateway IP address.
+  
+#### Example usage
 ```bash
-$ get_provisioning_node
-192.168.1.1
+gateway_ip=$(get_provisioning_node)
+echo $gateway_ip
 ```
 
-In this example, `192.168.1.1` is the IP of the provisioning node.
+### Quality and Security Recommendations
 
-##### Quality and security recommendations
-
-1. Error Handling: Add error checking to ensure `ip route` command is successful. If the command fails, the function should handle the error and not continue to parse output.
-2. Permissions: Ensure the script running this function has appropriate permissions. Command like `ip route` may require higher privileges, it's necessary to control who and how can run the script.
-3. Dependency Checks: Check if `awk` is available on the system. This command is critical for the function to work as expected.
-4. Privacy Protection: Be cautious about where you output the IP addresses as they may be sensitive information in certain contexts.
-5. Code Reusability: This function can be part of a larger library of networking functions to increase reusability and maintainability.
+1. Validation: At its current state, the function does not validate the IP address it retrieves. This could pose a problem if the command fails for some reason. Implementing basic validation checks would improve the quality of the function.
+2. Error handling: In case the command fails to obtain the IP address, the function currently offers no method of detecting and managing such failure. It is recommended to implement error handling to improve robustness.
+3. Comments: More explanatory comments should be added in the function to improve maintainability and readability of the function.
+4. Security: It's a good practice to limit the privileges of the script that uses this function to avoid potential security risks.
 

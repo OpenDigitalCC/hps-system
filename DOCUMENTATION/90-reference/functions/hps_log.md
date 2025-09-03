@@ -1,31 +1,29 @@
-#### `hps_log`
+### `hps_log`
 
 Contained in `lib/functions.d/hps_log.sh`
 
-Function signature: e07a1142dabfc3ddeb37abc77adca2f2b9ddd9913a41b1be69c52f6bf83d7303
+Function signature: 7097e5f6dbf7eb35af6d5c1fe86b7ea40ce7ed8d95259fe409cfc4e8eb117559
 
-##### Function Overview
-The `hps_log` function is designed to log events or messages in a Linux/Unix environment. This function allows for logging of multiple levels and uses a default identifier and log directory if none are provided. Events are time-stamped upon logging.
+### Function overview
 
-##### Technical Description
-- **Name**: `hps_log`
-- **Description**: A logging function in Bash programming. It can take any number of arguments, with the first one being the level of the message and the rest of them being the message. It uses the `ident` and `logdir` predefined global variables if they are set, or their default values if they are not set.
-- **Globals**: 
-   - `HPS_LOG_IDENT`: Defines the identifier for the log (default is "hps").
-   - `HPS_LOG_DIR`: Defines the directory for the log file (default is "/var/log").
-- **Arguments**: 
-   - `$1`: Logging level, e.g., error, warning etc.
-   - `$2`: Message to be logged.
-- **Outputs**: Logged messages with a timestamp, level designation, and identifier which are written to a specified log file.
-- **Returns**: This function does not return any value.
-- **Example Usage**: 
-```bash
-hps_log "error" "This is an error message"
-```
+The `hps_log` function is a custom log function that logs system events in a file named `hps-system.log` located in the directory specified by `HPS_LOG_DIR`. The function creates logs with timestamps and a log level which can be set from the command input. It also helps organize logs by supporting an identifier input. Lastly, if this function is called without the `HPS_LOG_IDENT` variable having been set, it defaults the identifier as 'hps'.
 
-##### Quality and Security Recommendations
-1. Check variable contents: Always check the contents of variables before passing them to this function to avoid any form of command injection or formatting issues.
-2. Regular cleanup: Set up a regular cleanup process or log rotation for your log files to avoid them consuming too much disk space.
-3. Secure log files: Make sure that the permissions on your log file directory and the log files themselves are set to allow only authorized users to read or modify them. This helps to prevent unauthorized access or modifications.
-4. Handle errors: Consider improving this function by including error handling features, such as what should happen if the log file cannot be written to.
+### Technical description
+
+- **name**: hps_log
+- **description**: This function logs data with the specified level, message, and identity into a file defined by environment variable `HPS_LOG_DIR`. Default identity is 'hps' when `HPS_LOG_IDENT` is not set.
+- **globals**: [ HPS_LOG_DIR: Directory to store the log files, HPS_LOG_IDENT: Identity for the logs]
+- **arguments**: [ $1: Log level, $... : Log message ]
+- **outputs**: Writes logs to `hps-system.log` file in the location specified by `HPS_LOG_DIR`.
+- **returns**: Not applicable since logging functions typically do not return a value.
+- **example usage**: `hps_log "error" "This is a sample error message"`
+
+### Quality and security recommendations
+
+1. Protect the log file by setting appropriate permissions to prevent unauthorized access or tampering.
+2. Regularly rotate and archive log files to avoid them becoming too large.
+3. Implement checks to ensure that `HPS_LOG_DIR` is set to a valid directory.
+4. Provide error handling mechanisms if the log file cannot be written to.
+5. Assign a default value to `HPS_LOG_DIR` that points to a secure and writeable directory if it has not been set.
+6. Avoid logging sensitive information to maintain user data privacy.
 

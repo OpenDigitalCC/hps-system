@@ -1,34 +1,30 @@
-#### `ip_to_int`
+### `ip_to_int`
 
-Contained in `lib/functions.d/network-functions.sh`
+Contained in `lib/functions.d/host-functions.sh`
 
-Function signature: 5857fba825712df3f4e604f317140e0bfcae4ede9a084dd6ca01ab8ec446973f
+Function signature: 7a7e2ac879b38f493155a8d7ebe4e0938b6b76af6dd4451359927f5afb697e52
 
-##### Function overview
+### Function Overview
 
-This Bash function `ip_to_int()` is capable of converting an IPv4 address into a corresponding integer. The function uses Internet standard dotted-decimal IPv4 addresses (e.g., 192.0.2.0), splits the IP at its dots, then calculates and prints out the integer representation of the IP. 
+The `ip_to_int()` is a bash function which takes a single IPv4 address as a string in its standard dotted decimal notation (for example '192.0.2.1'), and converts it into its corresponding 32-bit integer representation.
 
-##### Technical description
+### Technical Description
 
-- **Name**: `ip_to_int`
-- **Description**: This Bash function inputs an IPv4 address as an argument and converts it into its corresponding integer value using bit shifting and arithmetic expression. The result is returned to STDOUT. 
-- **Globals**: None
-- **Arguments**: [ `$1`: IP address to be converted in the format of x.x.x.x where 'x' are numeric values ranging from 0 through 255.]
-- **Outputs**: The integer value representing the inputted IP address
-- **Returns**: Null
-- **Example usage**: `ip_to_int "192.0.2.0"` will output 3221225984.
+The following is a detailed breakdown of the function and its components.
 
-##### Quality and Security Recommendations
+- **Name**: `ip_to_int()`
+- **Description**: This function parses an IPv4 address and outputs it as a 32-bit integer. It uses bitwise shift operators to move each octet to its correct position in the 32-bit number.
+- **Globals**: None used
+- **Arguments**: A single argument is expected, `$1`, which represents the IPv4 address to be converted.
+- **Outputs**: The function echoes the 32-bit integer representation of the given IP address.
+- **Returns**: The function does not specifically return any value, but its command status will be 0 if it executes successfully and a non-zero value if it fails.
+- **Example usage**: `ip_to_int '192.168.1.1'`
 
-1. For safer code, input validations could be carried out, for instance, checking if the IP address is valid before further processing.
+### Quality and Security Recommendations
 
-2. Consider checking the number of input arguments to ensure the script works with correct data. If no argument (or more than one) is given, the function should inform the user and exit with a non-zero status.
-
-3. Despite the fact that bash handles integer overflows by wrapping around, the function might be subjected to IP addresses whose integer representations are outside the bounds of what can be expressed in 32 bits. It would be safer to monitor or limit this.
-
-4. The function should handle possible interruptions and should be able to clean up or leave a comprehensible state of execution if interrupted.
-
-5. You could potentially improve readability by using more descriptive variable names rather than o1, o2 etc.
-
-6. Although not a security issue, the function could be more flexible by accepting IP addresses in formats other than one single string argument (for instance accepting 4 separate byte arguments).
+1. Error Checking: There should be validation to ensure that the IP address provided matches the expected format. If an invalid IP address is input, the function will currently output unexpected or incorrect results.
+2. Argument Count: The function should verify that exactly one argument has been provided. If multiple arguments are provided, unexpected output may be returned.
+3. Usage of Global Variables: As of now, the function does not have global variables. But if there is a need for them in the future, try to limit the use of global variables as they potentially affect all parts of a program, not just the function itself.
+4. Exit Status: The function should provide more expressive exit statuses for different types of errors, such as invalid IP format or incorrect argument number rather than using the default exit status.
+5. Command Injection: Although the function does not directly use user input in a command, it still could be vulnerable to command injection if not properly handled. Always sanitize user input.
 

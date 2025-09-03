@@ -1,36 +1,37 @@
-#### `url_decode`
+### `url_decode`
 
 Contained in `lib/functions.d/hps_log.sh`
 
-Function signature: 51fe980cad13bbd78ebda8f1e41edbe1e1354f0ad8e6c0d8a01c7f423b453f44
+Function signature: ff3afbc0000d42d9f1561eebfaa989db874faafa82b7e2cdf10838044a3f376d
 
-##### Function overview
+### Function overview
 
-The function `url_decode()` is designed to replace URL-encoded values with their original character representation. It first swaps the '+' signs with spaces, then replaces each '%xx' (where 'xx' are hexadecimal values) with their corresponding characters. This function is then used to decode a message and log it, using the logger utility. If possible, the function also writes the decoded message with associated metadata to a specified log file.
+The `url_decode()` function is a bash function which decodes a URL-encoded string. The function is part of a logging system that decodes a received message before sending it to the system's log and writing it to a file, if possible. The `url_decode()` function replaces "+" characters in the encoded string with spaces, and then replaces any remaining percent-encoded characters with the corresponding ASCII characters.
 
-##### Technical description
+### Technical description
 
 - **Name:** url_decode
-- **Description:** This function replaces URL-encoded values in a string with their original character representation. It also handles logging the decoded message via the logger utility and to a specified log file if possible. If the log file cannot be written to, it logs an error message.
-- **Globals:** None.
-- **Arguments:**
-  - $1: This is the URL-encoded data to be decoded.
-- **Outputs:** The function outputs the decoded message to stdout.
-- **Returns:** This function doesn't explicitly return a value.
-- **Example usage:**
+- **Description:** This function takes in a URL-encoded string and decodes it into a usable string format. The decoded message is then passed on to the system's log and written to a file, if possible.
+- **Globals:** 
+   - `VAR: desc`: No global variables are explicitly used within this function.
+- **Arguments:** 
+   - `$1: desc`: This is the URL-encoded string to be decoded.
+- **Outputs:** Outputs decoded version of the URL-encoded input string.
+- **Returns:** Does not return any explicit value.
+- **Example usage:** 
 
-   ```bash
-   local raw_msg="%68%65%6C%6C%6F%2B%77%6F%72%6C%64"
-   local msg
-   msg="$(url_decode "$raw_msg")"
-   echo $msg  # output: "hello world"
-   ```
+```bash
+  # Declare a URL-encoded string
+  url_encoded="Hello%20World%21%0A"
+  
+  # Decode the message
+  url_decoded=$(url_decode "$url_encoded")
+```
 
-##### Quality and security recommendations
+### Quality and security recommendations
 
-1. Always validate the inputs before operating on them. In this case, it would be wise to ensure the URL-encoded string only contains valid characters.
-2. If possible, try to avoid using global variables as they may lead to unexpected behavior due to their scope. In this case, there are no global variables used which is a good practice.
-3. Make sure to handle error scenarios gracefully. In this function, there's already handling when it cannot write to a log file though more checks could be added for other possible fails.
-4. Ensure that the permissions of the log file are set accordingly so that only those authorized can read or write to it. This could help prevent unauthorized access to potentially sensitive information being logged.
-5. Consider enhancing the function to disable logging or to log to a different location based on a config or environment variable. This enables more flexibility without changing the code.
+1. Robustness: Check if the URL-encoded string passed to the function is correctly formatted. This can help prevent unexpected behaviour or errors during the decoding process.
+2. Error Handling: Improve error handling by implementing a mechanism to inform the user when the writing to the log file fails.
+3. Redundancy: The function currently prints error messages to the console in addition to logging them to the system's log. Consider removing this duplication to make the function more efficient.
+4. Security: Avoid logging sensitive information. If the function is used in a situation where the messages to be logged include sensitive data, ensure this data is either not logged or is properly obfuscated before logging.
 

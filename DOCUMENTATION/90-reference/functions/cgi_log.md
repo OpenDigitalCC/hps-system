@@ -1,44 +1,29 @@
-#### `cgi_log`
+### `cgi_log`
 
 Contained in `lib/functions.d/cgi-functions.sh`
 
 Function signature: 9f2c2cf7c0d57e85a08611717b5d691eddf235f096bbc311bf9d58541f0c77b3
 
-##### Function Overview
+### Function overview
 
-The `cgi_log` function is a bash function designed to create logs for a cgi program in the ipxe system. This function acquires a message as an input and appends this message to a `cgi.log` file located in the `/var/log/ipxe/` directory. The function also adds a timestamp in front of every message log.
+The function `cgi_log()` is designed to output log messages with a timestamp into a file. It takes a string as an argument and appends it to the log file with a timestamp for traceability purposes. 
 
-##### Technical Description
+### Technical description
 
-**Name:** `cgi_log`
+- **name:** cgi_log
+- **description:** The function accepts a string as an input and writes it to the log file (/var/log/ipxe/cgi.log) with a timestamp. This provides a chronological record of all the logging information.
+- **globals:** None
+- **arguments:** 
+  - [$1: msg] Log message as string
+- **outputs:** Appends the log message with a timestamp to the /var/log/ipxe/cgi.log.
+- **returns:** Not applicable.
+- **example usage:** `cgi_log "This is a test message"`
 
-**Description:** The `cgi_log` function takes a message (string input), adds a timestamp to it, and appends it to the `cgi.log` file found in the `/var/log/ipxe/` directory.
+### Quality and security recommendations
 
-**Globals:** None
-
-**Arguments:** `$1: msg` (The message string that is to be logged)
-
-**Outputs:** Appends the timestamped message to a file (`cgi.log`).
-
-**Returns:** Nothing.
-
-**Example Usage:**
-```
-cgi_log "This is a log message."
-```
-
-Last command will append the following log to the `/var/log/ipxe/cgi.log` file:
-
-```
-[date in "%F %T" format] This is a log message.
-```
-
-##### Quality and Security Recommendations
-
-1. Before appending a message to the `cgi.log` file, ensure that the file exists and has the correct permissions to avoid potential file not found exceptions.
-2. Validate the input message to prevent logging of potentially harmful scripts or commands.
-3. In order to prevent potential log file overflow, implement log rotation strategies.
-4. Always make sure to redirect both `stdout` and `stderr` to capture any kind of execution message for full logging.
-5. For better security considerations, avoid disclosing sensitive information in the log. Details such as user credentials or personal details should be anonymized or completely left out.
-6. It's recommended to wrap this function in a `try-catch` or similar error handling method to handle any possible errors effectively and maintain the stability of your running script.
+1. **Input Validation**: Always validate the input (msg) before using it. This will prevent log injection attacks.
+2. **Log Rotation**: To manage the size of the logs properly, implement some type of log rotation either via a Bash script or a system utility.
+3. **Permissions**: Ensure appropriate permissions are set on the log file to prevent unauthorised access or alteration of the logs.
+4. **Sensitive Information**: Be cautious while logging messages as it should not include any sensitive data like passwords which can be exposed through logs.
+5. **Error Handling**: Consider adding error handling to log any potential errors when trying to write to the log file.
 

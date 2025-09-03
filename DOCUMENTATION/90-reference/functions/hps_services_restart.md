@@ -1,29 +1,39 @@
-#### `hps_services_restart`
+### `hps_services_restart`
 
 Contained in `lib/functions.d/system-functions.sh`
 
-Function signature: df81ff0c0a6321687bffa9f72094b354899875b4a86b70f93f1a5eaa47f47642
+Function signature: c09926a993a6d161495b474383d7d4499d1f392527cb63a9bc4fbff3a73c0eba
 
-##### 1. Function overview
+### Function Overview
 
-The `hps_services_restart()` function is designed to restart all services under supervision. This function achieves this by first configuring supervisor services using the `configure_supervisor_services` function. Then, it reloads the supervisor configuration by way of the `reload_supervisor_config` function. Finally, it uses the `supervisorctl` command to restart all services, passing the path to the supervisord.conf configuration file via the `HPS_SERVICE_CONFIG_DIR` environment variable.
+This function, `hps_services_restart`, is responsible for restarting all services under the supervision of the Supervisor program. The process involves four steps:
 
-##### 2. Technical description
+1. Configuring the services which require supervision.
+2. Creating the necessary configuration file for those services.
+3. Reloading current Supervisor configurations to apply any changes.
+4. Using `supervisorctl`, a control tool for Supervisor, with a configuration file located at `HPS_SERVICE_CONFIG_DIR/supervisord.conf` to restart all services.
 
-- **name**: `hps_services_restart`
-- **description**: This function is used for restarting all services managed by supervisor. It first sets up supervisor services, reloads the configuration, and then restarts all services.
-- **globals**: [ `HPS_SERVICE_CONFIG_DIR`: It is a global variable that points to the directory holding the Supervisor services configuration file ]
-- **arguments**: None.
-- **outputs**: Initializes and restarts all supervisor services. Any output (such as error messages) would come from the internals of these commands, sent either to stdout or stderr.
-- **returns**: Return status is dependent on the underlying commands within the function which do not have any specific return value checks or handling mechanism.
-- **example usage**: The function can be called directly in the script where it's defined as `hps_services_restart`
+This function is particularly useful when you have made changes to your services or updated them and need to restart them for those changes to take effect.
 
-##### 3. Quality and security recommendations
+### Technical Description
 
-1. This function directly restarts all services without performing any checks. It would be better to implement a mechanism to first check the status of the services and then restart only those which are not running properly.
-2. Handle possible errors or exceptions from the `configure_supervisor_services`, `reload_supervisor_config`, and `supervisorctl` commands to improve reliability.
-3. Avoid use of globals where possible as it might introduce side effects. Prefer to use specific, function-scoped variables.
-4. Ensure appropriate permissions and user-level privileges when working with system services. This includes ensuring the right user context when calling `supervisorctl` or other service management commands.
-5. Include proper logging mechanisms to track the function execution process for better troubleshooting.
-6. Implement return checks or handling mechanisms to manage the function's return status accordingly.
+- **Name:** hps_services_restart
+- **Description:** This function configures, creates the config, reloads the config, and restarts all Supervisor services.
+- **Globals:** [ HPS_SERVICE_CONFIG_DIR: The directory where the supervisord configuration file is located ]
+- **Arguments:** No arguments are expected.
+- **Outputs:** This function does not produce any notable output beyond potential standard output and errors from Supervisor.
+- **Returns:** By default, if successful, this function will not return anything. However, if an error occurs during execution, it will return the error message.
+- **Example Usage:** `hps_services_restart`
+  
+### Quality and Security Recommendations
+
+1. Consider improving error handling to allow for easy debugging. Address every potential point of failure within the function, such as failing to configure services, not being able to create or reload the configuration, and not being able to restart a service.
+
+2. Environment variables like `HPS_SERVICE_CONFIG_DIR` should be properly isolated and validated to prevent injection attacks.
+
+3. The function does not currently validate the configuration file (`supervisord.conf`). A corrupted or improperly formatted file could lead to undefined behavior or interrupt running services.
+
+4. Document more thoroughly about the dependencies ("configure_supervisor_services", "create_supervisor_services_config", "reload_supervisor_config", and "supervisorctl"). Ensure they are securely coded and follow best practices.
+
+5. Ensure that the user running this function has the necessary permissions to restart these services. Accidentally running this function as an unauthorized user can cause the services to stop working.
 

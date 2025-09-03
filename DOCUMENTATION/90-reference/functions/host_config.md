@@ -1,40 +1,52 @@
-#### `host_config`
+### `host_config`
 
 Contained in `lib/functions.d/host-functions.sh`
 
-Function signature: a3f0f5a97e6c9b8ed42cd66bea9ba663ff8f3a40bc906925763eb0926ef1c253
+Function signature: 389b01155f4ed6b074bab989a189c3e33a5dfb44e6ade66966a2b1966e95960d
 
-##### Function overview
+### Function Overview
 
-The `host_config` function is a bash function specifically designed to read, write, update, or query entries on a local configuration file identified by a MAC address. It systematically reads a configuration file and stores its key-value pairings in an associative array. After reading the file, the function is able to execute a number of commands ("get", "exists", "equals", "set") based on the arguments provided, on the associative array to manage the configuration entries. Should the command be unknown or absent, the function will return an error. 
+The function `host_config()` is an imperative program in bash scripting language. This function accepts four arguments, namely `mac`, `cmd`, `key`, and `value`. Using these parameters, a configuration file is processed for the host machine identified by the MAC address. The function can execute commands (get, exists, equals, set) on the HOST configuration map, utilizing the `key` and `value` parameters. If the configuration file doesn’t exist or if configuration has not been parsed for the current MAC address, the configuration file is first parsed and the `HOST_CONFIG` associative array is updated with key-value pairs from this file.
 
-##### Technical description
+### Technical Description
 
-- **Name**: `host_config`
-- **Description**: A shell function for managing the configuration of a host identified by its MAC address. It interactively reads, checks, compares, and updates configuration data stored on a local configuration file.
-- **Globals**: [VAR: __HOST_CONFIG_PARSED: (boolean) Flag indicating if the Host Configuration File has been parsed, HOST_CONFIG_FILE: the location of the host configuration file, HPS_HOST_CONFIG_DIR: the directory containing the host configuration file, HOST_CONFIG: (assoc array) Variables parsed from the Host Configuration File. ]
-- **Arguments**: 
-  * $1: `mac` — the MAC address associated with the host configuration file.
-  * $2: `cmd` — the command to execute on the host configuration ("get", "exists", "equals", "set").
-  * $3: `key` — the key from the configuration to operate on.
-  * $4: `value` — the value to compare or set for the provided key.
-- **Outputs**: Depending on the `cmd` argument, it can either:
-  * print the value corresponding to the given `key`
-  * print a bool indicating if the `key` exists or if the `key` equals the `value` 
-  * print logs indicating performed updates
-  * print an error message in case of invalid `cmd`
-- **Returns**: It could return nothing, or return error code `2` in case of invalid `cmd`
-- **Example usage**:
-  ```bash
-  host_config 00:0a:95:9d:68:16 set VAR Test
-  ```
+**Name**: host_config()
 
-##### Quality and security recommendations
+**Description**: Mainly, this function is for configuring host configuration files which store settings for the host machine identified by the MAC address. Commands to process settings include get, exists, equals, and set. An associative array `HOST_CONFIG` is used for this purpose.
 
-1. Always validate inputs: To ensure the function handles only intended input, add checks to validate the format of the MAC address, and that the `cmd`, `key`, and `value` inputs are not malicious or invalid.
-2. Incorporate error handling for file operations: Implement necessary checks regarding file availability, read and write permissions for the config file, and handle errors that might occur during file operations.
-3. Add a function documentation: Include a comment block at the beginning of the function to explain its purpose, parameters, return values, and sample usage.
-4. Implement detailed logging: Integrate with a logging system to trace every operation performed by this function in a systematic manner. This could greatly simplify debugging and auditing.
-5. Check for command success: Add checks to ensure that commands completed successfully and handle any errors that may occur.
-6. Use more secure methods for sensitive data: If the configuration data is sensitive, consider using more secure methods to store and handle it, such as encryption and secure file permissions.
+**Globals**: [ HOST_CONFIG: An associative array storing key-value pairs from the host configuration file, HPS_HOST_CONFIG_DIR: Directory where host configuration files are stored ]
+
+**Arguments**: 
+- $1: MAC address identifier for host machine
+- $2: Command to process host settings. Valid commands are get, exists, equals, set.
+- $3: Key of setting to process.
+- $4: (Optional) Value to update the setting with if the 'set' command is used.
+
+**Outputs**: Based on the command:
+- get: Prints the value of the setting identified by the key
+- exists: Checks if the key exists. No visual output.
+- equals: Checks if the setting identified by the key matches the value.
+- set: Logs info about the new setting and update.
+- A warning if an invalid command is used.
+
+**Returns**: 
+- No specific integer return values. For 'get', 'exists', 'equals' commands the function effectively returns 0 (true) if successful and 1 (false) if unsuccessful. 
+- For 'set' command no explicit return values are declared.
+- Returns 2 if invalid command is supplied.
+
+**Example Usage**:
+```bash
+mac_addr="00:11:22:33:44:55"
+setting_key="Test_key"
+
+# Returns the value of Test_key
+host_config $mac_addr get $setting_key
+```
+
+### Quality and Security Recommendations
+
+1. Strong input validation: Although the function performs some input validation, it could be improved. For example, MAC address format could be validated.
+2. Error handling: Currently, if an invalid command is given, the function simply outputs a message and returns 2. Comprehensive error handling here would improve the robustness of the function.
+3. Unknown globals: Globals like `HPS_HOST_CONFIG_DIR` are used in the function without prior validation. It's good practice to check if these are set before usage.
+4. Logging: Use a proper logging utility instead of using command-line echo for important operations. Monitoring could also be implemented for security-sensitive operations.
 

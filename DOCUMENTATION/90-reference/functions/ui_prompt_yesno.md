@@ -1,40 +1,44 @@
-#### `ui_prompt_yesno`
+### `ui_prompt_yesno`
 
 Contained in `lib/functions.d/cli-ui.sh`
 
 Function signature: 5b56e1af7169ad6721f24f1f595cee61d779f0b22963936d53073e284b177e9c
 
-##### Function Overview
+### Function Overview
 
-The `ui_prompt_yesno` function offers a simple prompt interaction to the user. It accepts a specified question and an optional default answer. If the user does not type in a response, the function will proceed with the default answer. The function uses a while loop to keep prompting the user for input until it gets a valid response. If the user enters "y" or "n", the function will stop prompting and return with 0 for "y" and 1 for "n".
+The `ui_prompt_yesno` function in Bash is a user interface function that prompts the user with a yes/no question. It loops until the user provides a valid response. The first argument is the prompt text and the second optional argument sets the default answer.
 
-##### Technical Description
+### Technical Description
 
-**Name**: `ui_prompt_yesno`
+- **Name:** `ui_prompt_yesno`
+- **Description:** This function prompts the user with a question and loops till it gets a valid "yes" or "no" answer from the user. It ensures the users interaction in a script where a binary input is necessary for further execution.
+- **Globals:** No global variables are used.
+- **Arguments:** 
+  - `$1`: This is the prompt text that is to be displayed to the user.
+  - `$2`: This optional argument specifies the default answer.
+- **Outputs:** Outputs the prompt question with an optional default value and user response.
+- **Returns:** 
+  - Returns 0 if the response is "yes".
+  - Returns 1 if the response is "no".
+- **Example Usage:** If we need user's confirmation for proceeding further, we can use the function as follows: 
+  ```
+  ui_prompt_yesno "Do you want to continue?" "n"
+  if [ $? == 0 ]
+  then
+      echo "User wants to continue"
+  else
+      echo "User doesn't want to continue"
+  fi
+  ```
 
-**Description**: Function to query user response in a Y/N prompt fashion with an optional default answer.
+### Quality and Security Recommendations
 
-**Globals**: None
-
-**Arguments**:
- - `$1`: The prompt to display to the user. It should be a String.
- - `$2`: (Optional) The default answer if a user does not provide any response. Default is 'y'.
-
-**Outputs**: The prompt asking for user input, with the optional default value.
-
-**Returns**:
- - `0` if the user inputs 'y' or 'Y'
- - `1` if the user inputs 'n' or 'N'
-
-**Example Usage**:
-```bash
-ui_prompt_yesno "Do you want to quit?" n
-```
-
-##### Quality and Security Recommendations
-
-1. To avoid possible code injection, ensure that the input to `$1` and `$2` are not externally specified without proper validation or sanitizing.
-2. Provide thorough comments and maintain readability to help future developers understand the code. In Bash, it's easy to write very complex one-liners, but it can be very challenging to read back and understand.
-3. Error-checking methods should be adopted to handle invalid user inputs outside the bounds of 'y' or 'n'
-4. Use the `-i` flag with `read` command. This makes it easier for the user to see what the default value is and perhaps only slightly modify it.
+1. Validate that $1 (the prompt text) exists and is non-empty before proceeding.
+2. Regularly audit and update third-party dependencies to keep them up to date with the latest security updates.
+3. Avoid using raw user inputs without validation. In this case though, the input is controlled to "y" or "n" only.
+4. Use case-insensitive matching to allow inputs as 'Y', 'n', etc.
+5. Provide more detailed information about valid inputs for prompt. Do not assume users know they need to enter 'y' or 'n'.
+6. Test the function rigorously with a variety of different inputs and edge cases to ensure it handles those correctly.
+7. Consider implementing a limit on the number of invalid attempts before automatically selecting the default option.
+8. Follow secure code practices and maintain a regular schedule for reviewing/updating the function.
 

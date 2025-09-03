@@ -1,35 +1,32 @@
-#### `initialise_host_scripts`
+### `initialise_host_scripts`
 
-Contained in `lib/functions.d/configure-distro.sh`
+Contained in `lib/functions.d/configure-remote-host.sh`
 
-Function signature: 77a8633d9660b15df9cec14573030ab29237d1a0215a723d9e4bd1c13bb45d38
+Function signature: f3a19023175709bb6341f62f9bd565ec7430df7cae722dcd18cf2a20800ee478
 
-##### Function Overview
+### Function Overview 
 
-The `initialise_host_scripts()` function in Bash scripting performs a series of operations. It starts by declaring and initializing two local variables, `gateway` and `distro`, which are used to acquire respective information from the `get_provisioning_node` and `initialise_distro_string` functions. A URL is then constructed utilizing the said variables along with the pre-defined URL structure and stored in `url`. The script then retrieves the script from the URL and places it in a specified destination (`dest`). If the script is successfully fetched, it is sourced; otherwise, it echoes an error message and returns 1.
+The `initialise_host_scripts()` function in Bash is used to initialize host scripts. It leverages the `get_provisioning_node` function to define the gateway, gathers the distro string through the `initialise_distro_string` function and then forms a URL to fetch a function bundle. The function bundle fetched is downloaded and stored under "/tmp/host-functions.sh". On successful download, the file is then sourced. In case of a failure in fetching the function bundle, the function returns an error.
 
-##### Technical Description
+### Technical Description
 
-- **Name:** `initialise_host_scripts`
-- **Description:** Retrieves a bundle of functions from a specified URL and sources it.
-- **Globals:** None
-- **Arguments:** No arguments are required.
-- **Outputs:** 
-    - Script fetching status
-    - Error message in case the fetching fails
-- **Returns:** 
-    - Does not return anything in a successful run.
-    - Returns `1` when the script fails to fetch the host functions.
-- **Example usage:** 
-`initialise_host_scripts`
-No arguments necessary to call this function.
+- **Name**: `initialise_host_scripts()`
+- **Description**: This function is used to initialize host scripts. It fetches the function bundle from a certain URL and downloads it locally. In case of failure in fetching the function, an error is returned.
+- **Globals**: [None]
+- **Arguments**: [None]
+- **Outputs**: This function outputs the status of the operation including the URL from which the function bundle is being fetched, successful or unsuccessful fetching and sourcing of the function bundle.
+- **Returns**: This function returns 1 in case of failure in fetching the function bundle.
+- **Example usage**:
+    ```bash
+    initialise_host_scripts
+    ```
 
-##### Quality and Security Recommendations
+### Quality and Security Recommendations 
 
-1. Incorporate input and output validation: This is a critical practice that assists in mitigating security risks associated with tainted or illegitimate data.
-2. Use HTTPS protocol for URL: Using HTTP can expose the script to potential man-in-the-middle attacks. HTTPS should be the default to ensure secure transmission.
-3. Add more error checks: Perform checks on the status of the gateway and distro variables and factor in additional handling for potential errors.
-4. Enhance logging: To further provide detailed context-specific error and status messages for better debugging, increase logging verbosity.
-5. Define a timeout for the `curl` operation: This will prevent the script from hanging indefinitely in cases where the specified URL is facing issues.
-6. Avoid global variables: The function does not presently use any, and this should continue to prevent potential conflicts and bugs.
+1. Implement a validation check to ensure that the URL is correctly formed and can be accessed. This reduces the risk of script failure due to incorrect URL.
+2. Before sourcing the downloaded script, introduce a step to verify its contents. This would protect against downloading and executing malicious content.
+3. Consider adding more error handlers in case the functions `get_provisioning_node` and `initialise_distro_string` fail.
+4. The destination file path is currently hard-coded which makes the function less flexible. Consider passing the destination file path as an argument.
+5. Provide more detailed error messages to improve debugging and user experience.
+6. Uses comments for clearer understanding of complexities within the script.
 

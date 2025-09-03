@@ -1,35 +1,32 @@
-#### `ui_prompt_text`
+### `ui_prompt_text`
 
 Contained in `lib/functions.d/cli-ui.sh`
 
 Function signature: 698fb0f6a52fc5fb7d346cb2755ab85d4e44cef66d1ac20f8f40870457b2970a
 
-##### Function Overview
+### Function Overview
 
-The function `ui_prompt_text()` is a Bash function designed to provide a user-friendly text prompt in command-line interfaces. It accepts two arguments: a string to display as a prompt and a default value. If the user inputs a response, the function will return this response; otherwise, it will default to the provided second argument.
+The `ui_prompt_text` function in Bash is designed for presenting an interactive prompt to users. This function receives two arguments - a prompt message and a default value. The function first displays the prompt, afterwards if the default value is nonempty, it is also displayed in brackets. A colon and a space character are appended to prepare the text for an expected user input. The user's input is read and stored in a variable, `result`. In case of no user input, the default value is returned, otherwise the user's input is returned.
 
-##### Technical Description
+### Technical Description
 
-- **Name**: `ui_prompt_text()`
-- **Description**: This function in Bash produces a text-based user prompt in a command-line interface.
-- **Globals**: No global variables.
-- **Arguments**: 
-  - `$1`: `prompt` - The text that will be displayed as the user prompt.
-  - `$2`: `default` - The default value that the function will return if the user inputs no response.
-- **Outputs**: Echoes the user's input back to the standard output; if no input is received, the function will output the default value.
-- **Returns**: The function returns the user's input or the default value if no input is given.
-- **Example Usage**:
+| Feature | Details |
+| --- | --- |
+| Name | ui_prompt_text |
+| Description | A Bash function to prompt users for input with the option of a default response. |
+| Globals | None |
+| Arguments | $1 (prompt): The message prompt to present to the user. <br> $2 (default): The default value that will be used in case of absence of user input. |
+| Outputs | Prompts the user with a message and optional default value. |
+| Returns | The user's input if provided, otherwise the default value. |
+| Example Usage | `ui_prompt_text "Please enter your name" "John Doe"` |
 
-```bash
-response=$(ui_prompt_text "Enter your name" "Anonymous")
-echo "Hello, $response!"
-```
+### Quality and Security Recommendations
 
-##### Quality and Security Recommendations
-
-1. Add validation for the input parameters: Currently, the function does not validate the input parameters. It's recommended that checks be added to ensure the `prompt` and `default` arguments are provided and are strings.
-2. Sanitize user input: Before processing the user input, it should be sanitized to prevent command injection or other types of attacks.
-3. Error handling: The function does not handle errors, which makes it vulnerable to various types of exceptions. Incorporating error handling would enhance its stability.
-4. Consider data privacy: Be aware that the user's responses could contain sensitive information, and handle and store the output with care.
-5. Add documentation and comments in the code: Adding comments in the function will make the functionality clear to any other person reading or using your code.
+1. Always use `read -r` to prevent interpreting backslashes as escape characters.
+2. Beware of potential security risks of command injection if the result is used in further commands without sanitization.
+3. You should always quote your variable substitutions like so: `"$var"`. This is to prevent issues with multi-word strings.
+4. Remember to initialize local Bash variables. This can help avoid problems if there's a global variable with the same name.
+5. Provide clear and user-friendly prompts to facilitate the operation for end users.
+6. Default values should be carefully chosen to prevent problems in case of user misuse or misunderstanding.
+7. When handling sensitive data, ensure that input is hidden or obscured to protect it from unauthorized access or exposure.
 

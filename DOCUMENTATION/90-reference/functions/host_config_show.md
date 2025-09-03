@@ -1,32 +1,32 @@
-#### `host_config_show`
+### `host_config_show`
 
 Contained in `lib/functions.d/host-functions.sh`
 
 Function signature: 6105ece190686264b3985f4c2de384ff48edc977456deeb1f70f8a863bb065a8
 
-##### Function Overview
+### Function Overview
 
-The function `host_config_show()` is designed to read and display a configuration file for a host in a network. Accepting a MAC address as a parameter, it looks for the corresponding configuration file in the `HPS_HOST_CONFIG_DIR` directory, which is defined elsewhere in the script. If the configuration file exists, the function reads it through line by line. For each line it extracts a key and a value separated by `=`. If any value exists for the key, then it's presented in a specific format. Also, the function logs an informational message if no configuration file exists for the given MAC address.
+The `host_config_show` function in Bash is used to read a host configuration file that corresponds to a certain MAC address. If a configuration file doesn't exist for a given MAC address, an informational log message is displayed. If found, the function reads through the file, trims any leading or trailing quotes from each value, escapes any embedded quotes and backslashes, and then echoes each key-value pair.
 
-##### Technical Description
+### Technical Description
 
-- **Name:** `host_config_show()`
-- **Description:** Reads and displays a host's configuration file based on its MAC address.
-- **Globals:** `[ HPS_HOST_CONFIG_DIR: Directory where host configuration files are stored.]`
-- **Arguments:** `[ $1: The MAC address of a host in the network. ]`
-- **Outputs:** Outputs each key-value pair from the config file, with special characters such as quotes and backslashes in values properly escaped. If no configuration file exists for the provided MAC address, it logs an informational message.
-- **Returns:** Returns `0` if no configuration file exists, signaling that the function ran successfully with this outcome.
-- **Example Usage:**
+- **Name:** `host_config_show`
+- **Description:** Reads a host configuration file that matches a given MAC address. The function will output key-value pairs from the file, with necessary characters escaped for safety. If no such file exists, it logs an informative message.
+- **Globals:** 
+  - `HPS_HOST_CONFIG_DIR`: This global points to the directory where host configuration files are stored. 
+  - `hps_log`: This global logs messages based on the application's events.
+- **Arguments:** 
+  - `$1`: This is the MAC address of the device. It's supposed to match with a configuration file within the directory specified by `HPS_HOST_CONFIG_DIR`. 
+  - `$2`: This argument is not used by the function.
+- **Outputs:** Key-value pairs from the configuration file, if it exists. Otherwise, an information log message is output.
+- **Returns:** Returns 0- indicating successful execution of the function.
+- **Example Usage:** `host_config_show "04:0E:3F:A1:B2:C3"`
 
-    ```bash
-    host_config_show "00:0a:95:9d:68:16"
-    ```
+### Quality and Security Recommendations
 
-##### Quality and Security Recommendations 
-
-1. Sanitize the input to ensure that the MAC address is in a valid format. This can help to prevent potential command injection attacks or unintended behavior.
-2. Check if the `HPS_HOST_CONFIG_DIR` global is set before attempting to use it. If it's not set, the function should return an error.
-3. For a more resilient design, handle unexpected errors such as reading from a corrupt config file or issues with file permissions.
-4. Avoid disclosing too much information in log files to prevent potential information leakage.
-5. Log not only the absence of a configuration file, but also when a file is found and successfully processed.
+1. Implement argument validation: `host_config_show` could fail unexpectedly (or silently) if it receives unexpected data. Implement checks for the MAC address format and whether `HPS_HOST_CONFIG_DIR` is set.
+2. Use clearer env var names: `HPS_HOST_CONFIG_DIR` and `hps_log` could be renamed to more descriptive names for better readability of the code.
+3. Handle failure condition: Does the user need to know when `host_config_show` can't find a particular MAC address? If so, consider changing the return code from 0 in case a corresponding configuration file doesn't exist for the mac address passed.
+4. Sanitize file reading: The `read` command used in the while loop might encounter issues dealing with special character sequences. Use `-r` option to prevent this.
+5. Protect against variable shadowing: By using `local` for `mac` and `config_file`, this function avoids shadowing variables in the parent scope. Make sure to follow this good practice in the rest of your code as well.
 

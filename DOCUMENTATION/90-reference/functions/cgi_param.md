@@ -1,43 +1,40 @@
-#### `cgi_param`
+### `cgi_param`
 
 Contained in `lib/functions.d/cgi-functions.sh`
 
 Function signature: 5007f95c313c04a01df7ba39bff0241f44511cd570d795bc11a890edf032f323
 
-##### Function overview
-The `cgi_param` function parses the `QUERY_STRING` once and then performs some action based on the provided command (`$cmd`). The possible commands are `get`, `exists`, and `equals`. The `get` command prints the value of the parameter with the provided key (`$key`). The `exists` command checks if the given key exists. The `equals` command verifies if the value of the given key is equal to the provided value (`$value`). If the command is not recognized, the function prints an error message and returns `2`.
+### Function overview
 
-##### Technical description
-**Function**: `cgi_param`
+The bash function `cgi_param` is designed to decode and retrieve parameters from the `QUERY_STRING` in a CGI context. The function uses a query-string from the CGI context and processes it to detect commands and key-value pairs. The function is triggered to process the query string only once, with subsequent calls to commands (get, exist, equals) retrieving or comparing the saved values. If an unknown command is passed, an error message is returned.
 
-**Description**: The function parses the `QUERY_STRING` to obtain CGI parameters only once, and perform actions (`get`, `exists`, `equals`) on these parameters depending on the command provided.
+### Technical description
 
-**Globals**: [ `__CGI_PARAMS_PARSED`: A flag used to ensure that the `QUERY_STRING` is parsed only once, `CGI_PARAMS`: An associative array that holds the parsed CGI parameters]
+- __Name__: `cgi_param`
+- __Description__: This function parses a query string into parameters, then provides a way to retrieve a parameter value, check if a parameter exists, or see if a parameter's value matches a provided value by using the 'get', 'exists' or 'equals' commands respectively.
+- __Globals__: 
+    - `QUERY_STRING`: The string to extract parameters and their values from.
+    - `__CGI_PARAMS_PARSED`: Global flag to detect if the query string has been parsed.
+    - `CGI_PARAMS`: An array to save decoded keys and their values.
+- __Arguments__: 
+    - `$1`: The command to run: 'get', 'exists', 'equals'.
+    - `$2`: The name of the parameter.
+    - `$3`: Optional. The value to compare against when the command is 'equals'.
+- __Outputs__: If the 'get' command is called, the value of the named parameter. If not, a success status or an error message in case of an invalid command.
+- __Returns__: The function can return different values depending on the command given. If 'get' command, will print value to stdout. If 'exists', 0 is returned if parameter exists, 1 if not. If 'equals', returns 0 if parameter equals given value, 1 if not. Returns 2 if command is invalid.
+- __Example usage__: 
 
-**Arguments**: 
-- `$1(cmd)`: The command to be executed on the CGI parameters. It can be `get`, `exists`, or `equals`.
-- `$2(key)`: The key of the CGI parameter to be processed.
-- `$3(value)`: The value that is supposed to be compared with the value of the CGI parameter specified by `$key` in case of `equals` command.
-
-**Outputs**: Depending on the `cmd` argument, the function might:
-- print the value of the `$key` parameter (`get` command),
-- print an error message when an unrecognized command is provided.
-
-**Returns**: 
-- Nothing, in scenarios where the function checks whether a certain parameter exists.
-- `2` when an invalid command is provided.
-
-**Example Usage**:
-
-```
+```bash
 cgi_param get username
-cgi_param exists userpassword
-cgi_param equals sessionId 12345
+cgi_param exists page_count
+cgi_param equals user_role admin
 ```
 
-##### Quality and security recommendations
-1. Consider using more strict error handling: Currently, the function only handles unrecognized commands but does not cover cases where other arguments might be missing or provided in an incorrect format.
-2. Sanitize all input: Before passing the `QUERY_STRING` to the `read` command, ensure it doesn't contain any malicious data that can lead to command injection or other vulnerabilities.
-3. Validate parsed parameters: Besides checking the parameters' format before storing them in the `CGI_PARAMS` array, it would be beneficial to also check their content (e.g., make sure the values are within expected boundaries/standards for specific keys).
-4. Document expected format and restrictions for `QUERY_STRING`, `$cmd`, `$key`, and `$value`: Having a clear explanation on how the function expects its input, and how it handles unexpected input, can help prevent misuse and make debugging easier.
+### Quality and security recommendations
+1. Use stricter validation on parameter keys while parsing. Right now, only alphanumeric characters plus underscores are allowed. However, consider more restrictive set.
+2. Be sure to escape all variable expansions to prevent code injection.
+3. Consider ways of handling or communicating parse failures more explicitly - it may prove difficult to debug if the `QUERY_STRING` is not formatted as expected.
+4. Implement a more robust error handling mechanism. For example, when the user provides an invalid command, an exception should be handled that doesn't allow further execution of the script.
+5. Add more guard clauses for blank, null, or unexpected inputs to avoid unexpected behaviour.
+6. Always try to keep your function's behavior predictable and documented.
 

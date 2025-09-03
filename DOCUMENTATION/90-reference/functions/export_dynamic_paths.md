@@ -1,38 +1,28 @@
-#### `export_dynamic_paths`
+### `export_dynamic_paths`
 
 Contained in `lib/functions.d/system-functions.sh`
 
 Function signature: a6b2a47e08ed460524c491151fd944d515572f0fe9d26a1a2d5d310ad72b99b5
 
-##### Function Overview
+### Function Overview
 
-The function `export_dynamic_paths` is a Bash function used to export different environment paths for a specific cluster. It takes at least one argument - `cluster_name`. If no cluster name is given, it would utilize the name of the currently active cluster. 
+This Bash function, `export_dynamic_paths`, is designed to set and export paths dynamically within a cluster server environment. It makes use of local cluster names to base its operation while providing an alternative default directory path. This function is significant for managing multiple active clusters and ensuring that the active cluster is properly recognized. The function also sets and exports environment variables representing various paths in the cluster's configuration.
 
-The base directory defaults to `/srv/hps-config/clusters` unless the environment variable `HPS_CLUSTER_CONFIG_BASE_DIR` is present with a different directory. This function then exports differing paths including `CLUSTER_NAME`, `HPS_CLUSTER_CONFIG_DIR`, and `HPS_HOST_CONFIG_DIR`.
+### Technical Description
 
-##### Technical Description
-
-- **name**: `export_dynamic_paths`
-- **description**: A Bash function which exports environment paths for a specific cluster.
-- **globals**: [ `HPS_CLUSTER_CONFIG_BASE_DIR`: A global variable specifying base directory. Defaults to `/srv/hps-config/clusters` if not provided ]
-- **arguments**: [ `$1`: `cluster_name`, The name of the cluster for which specific paths are exported ]
-- **outputs**: Sets the environment variables `CLUSTER_NAME`, `HPS_CLUSTER_CONFIG_DIR`, and `HPS_HOST_CONFIG_DIR`.
-- **returns**: The function returns `1` when there is no active cluster and none is specified. In normal operation, it returns `0`.
-- **example usage**:
-```
-export_dynamic_paths "cluster_1"
-echo $CLUSTER_NAME
-echo $HPS_CLUSTER_CONFIG_DIR
-echo $HPS_HOST_CONFIG_DIR
-```
-This would export the cluster paths for the cluster named "cluster_1".
-
-##### Quality and Security Recommendations
-
-1. This function should validate the input for `cluster_name`, possibly for null, special characters or invalid cluster names.
-2. Use stricter condition checking. For example, in the `if` condition that checks whether `cluster_name` is empty, consider checking for a null string or whitespace.
-3. Ensure that the directory being referred to in variables exist and has the correct permissions, ensure correct error handling for this.
-4. Ensure correct permissions are set on the exported paths to avoid unnecessary access from unauthorized users.
-5. Use echo statements or a logging function for more verbose output to aid in debugging.
-6. Add more error checking, like checking if changing of the environmental variables succeeded.
+- **Name**: `export_dynamic_paths`
+- **Description**: A Bash function designed to set and export cluster configuration paths dynamically using the provided cluster name as a reference. This includes the active cluster, the cluster's configuration directory, and the hosts configuration directory. The function also considers the case where an active cluster has not been specified.
+- **Globals**: [ `HPS_CLUSTER_CONFIG_BASE_DIR`: This global variable provides the root directory for storing cluster configs. By default, its value is set to /srv/hps-config/clusters]
+- **Arguments**: 
+    - `$1`: This argument is the string value that represents the cluster name. If it is not provided, the function will use the currently active cluster (default to empty string).
+- **Outputs**: Outputs a warning message "[x] No active cluster and none specified." to stderr if no active cluster exists and none is specified by user.
+- **Returns**: Returns 1 if there is no active cluster and none has been specified by the user, or 0 if execution was successful.
+- **Example usage**: `export_dynamic_paths 'cluster_name'`
+ 
+### Quality and Security Recommendations
+1. Validate inputs at the start of the function. Be sure that the supplied cluster name does not contain unsafe characters (e.g., slashes, backticks, etc.) that could potentially lead to command or path injection attacks.
+2. Handle all error or exceptional scenarios. Improve error handling so that more specific messages are returned based on the failure's nature.
+3. Make sure that proper permissions are set for the directories and files involved, especially when the function is handling paths and using these to access potentially sensitive data or system configurations.
+4. Incorporate a logging mechanism to trace the function's behavior when debugging is required to aid in future troubleshooting.
+5. Use more descriptive variable names for readability and maintenance. Ensure the variable and function names accurately describe their purposes or behavior.
 

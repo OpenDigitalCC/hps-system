@@ -1,43 +1,33 @@
-#### `initialise_distro_string`
+### `initialise_distro_string`
 
-Contained in `lib/functions.d/configure-distro.sh`
+Contained in `lib/functions.d/configure-remote-host.sh`
 
 Function signature: c440af9a86acddde30570b73ae6d52c7bddf38d765f513ea26ebf15ee4805200
 
-##### Function Overview
-The function `initialise_distro_string` uses local variables and information taken directly from the operating system to populate a string in a specific format. This string includes the architecture of the machine, the manufacturer, the name of the operating system and its version. 
+### Function overview
 
-##### Technical Description
-**Name:**  
-`initialise_distro_string`
+The `initialise_distro_string` function is a Bash function that creates a string giving a basic description of the system's distribution. It works by checking for the system's architecture, manufacturer, operating system, and version. If it can't find the OS name and OS version, it will list them as "unknown."
 
-**Description:**  
-This Bash function is used to identify specific details about the host machine's operating system, including architecture (via `uname -m`), manufacturer (defaulted to 'linux') and, if available, the operating system's name and version (via `/etc/os-release`). If the OS name and version cannot be determined, they are set to 'unknown'. The function returns a string comprising these elements, formatted as: `cpu-mfr-osname-osver`.
+### Technical description
 
-**Globals:**  
-No global variables used.
+- **Name:** initialise_distro_string
+- **Description:** This function generates a string containing a description of the system's distribution. It takes no arguments and will list "unknown" if it cannot find the OS name and version.
+- **Globals:** [ None ]
+- **Arguments:** [ None ]
+- **Outputs:** The function outputs a string in the format "[cpu]-[mfr]-[osname]-[osver]".
+- **Returns:** Doesn't return.
+- **Example usage:**
 
-**Arguments:**  
-No arguments are required.
-
-**Outputs:**  
-Produces a string formatted as follows: `cpu-mfr-osname-osver`
-
-**Returns:**  
-The final string combining the cpu, manufacturer, OS name and version.
-
-**Example Usage:**  
-```Bash
-distro_string=$(initialise_distro_string)
-echo $distro_string
+```bash
+distro_string = $(initialise_distro_string)
+echo ${distro_string} 
 ```
 
-##### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. It is advised to add validation of the inputs before using them. 
-2. Handle the case when the `/etc/os-release` file does not exist or is inaccessible. Right now, the function defaults to 'unknown' in such a case, but perhaps a warning message, error code or a fallback mechanism could be implemented.
-3. A division of the function into smaller, more specific functions could be considered to enhance readability and maintainability.
-4. The function relies on default variables set by external systems like OS. This could be secured by sanitizing these variables before using them in case these external systems get compromised.
-5. Test this function across different operating systems or variations of Linux to ensure it works reliably across all.
-6. Error handling should be added to ensure the function behaves as expected even in unforeseen situations.
+1. Include error handling: If the `/etc/os-release` file doesn't exist or can't be accessed, it would be prudent to add error handling logic to the function and notify the user.
+2. Validate variables before usage: To ensure only expected values are used, add sanity checks for the variables.
+3. Use more strict condition checks: The function currently considers any existing `/etc/os-release` file as valid. Not just its presence, but also the correctness of its format should be checked.
+4. Document the function: The function would benefit from inline comments explaining the logic, and a block comment giving a brief overview of the function and its usage.
+5. Use underscore in function name: Using underscore (`_`) between words instead of camel case (`camelCase`) make function names more readable in bash script.
 

@@ -1,44 +1,38 @@
-#### `host_config_exists`
+### `host_config_exists`
 
 Contained in `lib/functions.d/host-functions.sh`
 
 Function signature: 93698d3265775cdeb0581fb007522cdb74832e2c705812027e67b512cd33964b
 
-##### Function overview
+### Function Overview
 
-The `host_config_exists` function in Bash is used to check if a host configuration file for a specific MAC address exists. It does this by constructing the file path using a globally defined configuration directory and the MAC address (passed as an argument), and then checking if a file at that path exists.
+The `host_config_exists` function is a Bash function in that checks for the existence of a specific configuration file based on a provided *mac* address. It takes a *mac* address as an argument, and constructs a file path to the configuration file using the *mac* address as the file name and a pre-defined directory as its path. It then uses a conditional statement to check if the file exists, returning a boolean indicating the result.
 
-##### Technical description
+### Technical Description
 
+- **Name:** `host_config_exists`
+- **Description:** The function checks for the existence of a specific configuration file that correlates to the provided *mac* address.
+- **Globals:** 
+    - `HPS_HOST_CONFIG_DIR`: This global variable defines the directory where the configuration files are stored.
+- **Arguments:** 
+    - `$1: mac`: This argument is the *mac* address which will be used as the base for configuration file name.
+- **Outputs:** This function does not directly output any value.
+- **Returns:** The function returns a boolean value which indicates whether the sought configuration file exists.
+- **Example Usage:**
 ```bash
-- Name:   host_config_exists
-
-- Description:  This function checks for the existence of a host configuration file for a certain MAC address within a predetermined host configuration directory.
-
-- Globals: 
-    - HPS_HOST_CONFIG_DIR: The directory where host configuration files are stored.
-
-- Arguments: 
-    - $1: The MAC address of the host whose config file is being searched for.
-
-- Outputs:  Outputs nothing to stdout or stderr, though Bash will naturally output an error message to stderr if there's an unexpected problem (e.g. insufficient permissions to access the directory).
-
-- Returns:  Returns with 0 status if the host config file for the provided MAC address exists, otherwise returns with 1 status.
-
-- Example Usage:   
-```
-host_config_exists "00:11:22:33:44:55"
-```
-If there's a config file "00:11:22:33:44:55.conf" in the directory specified by `${HPS_HOST_CONFIG_DIR}`, this will return with 0 status. Otherwise, it will return with 1 status.
+if host_config_exists "00:11:22:33:44:55"
+then
+    echo "Configuration file exists."
+else
+    echo "Configuration file does not exist."
+fi
 ```
 
-##### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. Make sure that the `HPS_HOST_CONFIG_DIR` variable is set to a secure directory that only trusted users have read and write access to. This is to prevent any unauthorized access or changes to configuration files.
-
-2. Validate the MAC address input in the function. This could be done by checking the format of the input to ensure that it follows the MAC format 6 groups of two hexadecimal digits.
-
-3. Check that the discerned config file path is within the expected bounds to avoid any potential for directory traversal. 
-
-4. Avoid using relative paths for the `HPS_HOST_CONFIG_DIR` to ensure that the function's output is always consistent regardless of the current working directory.
+1. Make sure the `HPS_HOST_CONFIG_DIR` is always defined and set to a valid directory to prevent the function from searching in the incorrect location, leading to incorrect results.
+2. Consider validating the *mac* argument to ensure that it is a valid *mac* address. This could prevent potential errors down the line or potential security vulnerabilities if malicious or incorrectly formatted *mac* addresses are provided.
+3. The function should handle or communicate any errors it encounters during execution in a secure manner. Currently, it does not communicate any issues outwardly.
+4. To better adhere to Unix philosophy, consider making the function output informative messages or codes to standard error when it encounters problems (e.g. when the directory does not exist).
+5. Always remember to mark your variables as local where possible to prevent them from leaking into the global script environment, which can be a security risk and a source of bugs. This function does a good job of this by declaring `mac` and `config_file` as local variables.
 

@@ -1,36 +1,29 @@
-#### `prepare_custom_repo_for_distro`
+### `prepare_custom_repo_for_distro`
 
 Contained in `lib/functions.d/repo-functions.sh`
+
 Function signature: f41fadc94c0ebb53ebb87776324ccfcc73903f665dfe9bfd0a9d3f4c9cbb827c
 
-##### Function overview
+### Function Overview
+The function `prepare_custom_repo_for_distro` serves to prepare a custom software repository for a given linux distribution represented by the input `dist_string`. It also takes an array of URLs or local files to download and add to the custom repository. The function segregates URLs and local file paths from the other entries stamped as required packages in an iterative manner. Further, it initiates repository creation, downloads the package from each URL or copies from local files, and builds the YUM repository. It verifies that the required packages are available in the repository and logs an error if a package is missing.
 
-The function `prepare_custom_repo_for_distro` is designed to prepare a custom repository for a specified Linux distribution. The function takes in a distribution string and any number of package sources or names. It identifies file sources and package names, creates a repository directory, and then either downloads or copies packages as necessary to the created directory. Finally, it builds the repository and verifies the necessary packages are included. 
+### Technical Description
 
-##### Technical description
-
-- **Name**: `prepare_custom_repo_for_distro`
-- **Description**: This Bash function prepares a custom repository for a specific Linux distribution. It identifies package sources and names, creates the repository directory, downloads or copies package files to the directory, builds the repository, and verifies the required packages.
-- **Globals**: There’s one global variable used, namely `HPS_PACKAGES_DIR`. This is the base directory where the custom distribution-specific repository directory will be created.
+- **Name**: prepare_custom_repo_for_distro
+- **Description**: This function prepares a custom software repository for a given distribution by segregating source links (URLs or local file paths) from required package listings, creating repositories, building YUM repository, and ensuring presence of required packages.
+- **Globals**: *HPS_PACKAGES_DIR*: The root directory where repositories are created.
 - **Arguments**: 
-	- `$1`: The distribution string that will be used to create a distribution-specific directory within the base repository directory.
-	- `$@`: An array of package sources and/or names.
-- **Outputs**: Text information about the ongoing process is logged using `hps_log` function and error messages are logged if something goes wrong creating the directory, downloading or copying packages, building the repository, or verifying the required packages. 
-- **Returns**: The function has different return codes based on the kind of error it encounters. They are as follows:
-    - 1 if there is a failure in creating the repository directory.
-    - 2 if there's a failure in downloading a package.
-    - 3 if there's a failure in copying a local file.
-    - 4 if there's an invalid package source.
-    - 5 if the building of yum repo metadata fails.
-    - 6 if there is a missing required package in the repository. If the function executes successfully, it returns 0.
+   - `$1`: `dist_string`, the string representation of a Linux distribution.
+   - `$@`: An array of URLs, local file paths to the required packages or names of the required packages.
+- **Outputs**: Logs various informational and error messages during repository preparation. Copies or downloads package files to the repository.
+- **Returns**: The function uses return values varying from 0-6 to indicate success or various types of failures (such as, failure to create repository directory, download or copy a package, etc.).
+- **Example usage**: `prepare_custom_repo_for_distro "ubuntu" "https://example.com/package1.deb" "package2" "/path/to/package3.deb"`
 
-- **Example usage**: `prepare_custom_repo_for_distro ubuntu16 hhtps://package1.com package2`
-
-##### Quality and security recommendations
-
-1. Input Validation: You should validate the inputs to the function to ensure they are not null, and that they meet any other necessary criteria (e.g., distribution string is from a known set).
-2. Error Handling: Add error handling for more return conditions to ensure the function doesn’t execute unnecessary steps or gives a clear and exact error message when it fails.
-3. System Commands: Carefully review your use of system commands such as `mkdir` and `cp`. Consider adding checks to confirm whether files and directories exist before you try to create or copy them. Also, consider the possible security implications of using these commands, as injecting malicious input could lead to unintended behavior.
-4. Logging: Add more logging at each critical points of the function execution to better understand the behaviour. This can be especially useful in understanding unexpected failures in the future.
-5. Global Variables: The usage of global variables could lead to unexpected behavior if they are modified elsewhere in the script. Consider passing `HPS_PACKAGES_DIR` as an argument to the function if possible.
+### Quality and Security Recommendations
+1. **Error Handling**: At present, the function returns error messages in various places but a more rigorous error handling system should be implemented for each step.
+2. **Input Validation**: Currently, the repository name and the package sources are not validated. They should be confirmed to avoid unpredictable behavior.
+3. **User Permissions**: Permissions required to create directories or copy files need careful considerations. 
+4. **Logging & Auditing**: It would be good to maintain consistent logging throughout the function to account for all actions taken.
+5. **Dependency Handling**: The function should manage potential dependencies of the required packages.
+6. **Use Secure Communication**: If possible, use secure protocols (like HTTPS) for downloading packages from URLs.
 

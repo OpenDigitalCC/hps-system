@@ -1,31 +1,33 @@
-#### `bootstrap_initialise_distro`
+### `bootstrap_initialise_distro`
 
-Contained in `lib/functions.d/configure-distro.sh`
+Contained in `lib/functions.d/configure-remote-host.sh`
 
 Function signature: 1664d8a7eb2277600c48a3bc6974c34ea586df3fb5c9bfb5b7b8268285d91c63
 
-##### Function Overview
+### Function overview
 
-`bootstrap_initialise_distro` is a Bash function used to bootstrap initialization for a particular Linux distribution. This process involves setting up the baseline environment for the chosen OS. The function processes the commands from the provisioning server offline, avoiding networking issues and increasing the stability of the overall process.
+This function, `bootstrap_initialise_distro()`, is utilised for initializing the process of bootstrapping on a specific distribution. It primarily utilizes a local variable `mac` which is passed as an argument. The function then runs a bash script, the output of which is printed out using the `cat` command.
 
-##### Technical Description
+### Technical description
 
-- **Name:** `bootstrap_initialise_distro`
-- **Description:** This function takes a MAC address as an input and initializes the desired Linux distribution operating system for the device associated with that MAC address. The initialization process is done offline by transmitting commands from a provisioning server.
-- **Globals:** None
-- **Arguments:** [`$1`: The MAC address of the target device]
-- **Outputs:** The function outputs a Bash script that is sent to standard output. This output can be saved and executed on the target device for initializing the distribution.
-- **Returns:** This function doesn't have a return value.
-- **Example usage:** 
-     ```bash
-     bootstrap_initialise_distro "00:1B:44:11:3A:B7"
-     ```
+- **name**: `bootstrap_initialise_distro()`
+- **description**: This function's main use is to initialize the bootstrapping process in a specific Linux distribution. The function takes MAC address as input which specifies the target machine for bootstrapping. The body of the function is a bash script that is implying an offline bootstrapping process from a provisioning server.
+- **globals**: None
+- **arguments**: 
+  - `$1: mac` - This argument represents the MAC address of the target machine. 
+- **outputs**: The output of the function is a printed bash script meant to conduct an offline bootstrap process from a provisioning server.
+- **returns**: The function does not have a explicit return value since it's mainly a bash script output. The function's job is to print out a bash script.
+- **example usage**:
+```Bash
+bootstrap_initialise_distro "00:0a:95:9d:68:16"
+```
 
-##### Quality and Security Recommendations
 
-1. **Input Validation:** Validate the MAC address input to ensure it's in the correct format and not a potential injection attack.
-2. **Use of the Local Keyword:** Ensure that variables used within the function are declared with the local keyword to prevent shadowing of variables from the outer scope.
-3. **Error Handling:** Implement error handling mechanism to capture any failures during the offline loading of the Bash script from the provisioning server.
-4. **Secure Transmission:** Although the initialization process is done offline, ensure the Bash script transmission from the provisioning server is secure to prevent any potential script tampering.
-5. **Logging:** Include logging within the function to ensure any errors or issues can be traced post-execution.
+### Quality and security recommendations
+
+1. Security can be improved by validating the MAC address input to ensure it's formatted correctly and exists in the network.
+2. Validate the user's privilege level before running the script to safeguard against unauthorized access.
+3. Better error handling could be implemented to account for any issues during the script's operation.
+4. Avoid storing sensitive information such as passwords in the script to enhance security.
+5. Include a logging functionality that keeps a record of changes made by the script for auditing and debugging purposes.
 
