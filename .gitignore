@@ -2,3 +2,5 @@
 # Matches .swp, .swo, .swn, etc.
 *.sw?
 log/
+local-commands.txt
+
