@@ -88,3 +88,43 @@ While acknowledging the speed advantages of image-based deployment, **fresh inst
  
 We will explore the feasibility of adding a controlled image duplication process to complement the standard fresh-install workflow for cases where rapid redeployment on identical hardware is beneficial.  
 
+
+
+## Choice of iSCSI IQN naming format: RFC-compliant reverse DNS vs HPS local scheme
+
+Decision  
+: **Local HPS-specific IQN format** selected for iSCSI target naming.
+
+### Rationale:
+
+- The official IQN naming convention (RFC 3720/3721) requires a reverse DNS domain in the naming authority field (e.g. `iqn.yyyy-mm.com.example:unique-name`).  
+- HPS clusters are not associated with a domain name, and therefore generating compliant reverse DNS names would require either fabricating or registering a domain, which is unnecessary overhead for this use case.  
+- The chosen format is simple, unambiguous, and unique within the scope of HPS deployments:  
+
+`iqn.<yyyy-mm>.<cluster-name>:<host-name>.<volume-name>`
+
+- For example:  
+
+`iqn.2025-09.test-1:sch-001.vda`
+
+- Exports are used only within the HPS-managed network, not exposed on public or federated iSCSI fabrics, so strict RFC compliance is not required.
+
+### Trade-offs and compromises:
+
+- Targets created by HPS will not be strictly RFC-compliant, which may generate warnings or incompatibilities with tools that validate IQN format strictly.  
+- In environments where integration with external iSCSI fabrics is required, the HPS format may need to be adapted to use a fully compliant reverse DNS naming scheme.  
+- There is a small risk of name collisions if multiple clusters are merged or interconnected without namespace coordination.
+
+### Alternatives considered:
+
+- **Fully RFC-compliant reverse DNS IQNs** – Would require each HPS deployment to be tied to a DNS domain name and maintain uniqueness across that namespace. Adds administrative complexity without benefit in closed HPS environments.  
+- **Arbitrary string identifiers** – Possible but less structured, offering no clear mapping between IQN and cluster/host/volume identity.  
+- **UUID-based IQNs** – Guarantee uniqueness but are harder for administrators to read and trace back to specific hosts or volumes.
+
+### Summary:
+
+While not fully RFC-compliant, the **HPS-specific IQN format** (`iqn.<yyyy-mm>.<cluster-name>:<host-name>.<volume-name>`) provides a practical, human-readable, and unique naming scheme for iSCSI targets within HPS-managed clusters.  
+The trade-off in standards compliance is acceptable given the closed scope of usage, and external integration scenarios can adopt alternate schemes if required.
+
+
+
