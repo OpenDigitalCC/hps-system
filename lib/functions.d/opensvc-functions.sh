@@ -1,5 +1,8 @@
 __guard_source || return
 
+## HPS Functions
+
+
 #:name: _ini_get_agent_nodename
 #:group: opensvc
 #:synopsis: Extract [agent] nodename from an opensvc.conf

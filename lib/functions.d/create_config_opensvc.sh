@@ -1,6 +1,8 @@
 __guard_source || return
 # Define your functions below
 
+## HPS Functions
+
 #:name: create_config_opensvc
 #:group: opensvc
 #:synopsis: Write /etc/opensvc/opensvc.conf and enforce a single cluster OPENSVC_AGENT_KEY (no silent overwrite).
