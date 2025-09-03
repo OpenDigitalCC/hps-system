@@ -4,30 +4,29 @@ Contained in `lib/functions.d/host-functions.sh`
 
 Function signature: 1acb712577aa9213ca920a051e80825c73d7775714d43d10ccad322458fc5946
 
-### Function Overview
+### Function overview
 
-The function, `int_to_ip()`, translates an integer into its corresponding IP address. Given an IP address represented as an integer, this function will return the dotted-decimal representation of the IP address. Additionally, this function checks from a pool of unused IP addresses and generates a unique IP address not yet assigned to any hosts. Similarly, a unique hostname will also be created. Once an IP and hostname are generated, they will be assigned to the host configuration.
+The function `int_to_ip()` is used to convert an integer into an IP address. The function performs bitwise shifting and masking operations on the integer input to generate the corresponding IP address. This function is further utilized within a looping structure to generate IP addresses within a range and attempts to assign an IP address, which is not already found within a configuration directory. The function also generates hostnames in a specific format and assigns these IP addresses and hostnames to a host configuration based on a specified "macid".
 
-### Technical Description
+### Technical description
 
-- **Name**: `int_to_ip()`
-- **Description**: Translates an IP represented as an integer into its corresponding dotted-decimal format. Also, it assigns IP and hostname to the host configuration after generating unused ones.
-- **Globals**: 
-  - `HPS_HOST_CONFIG_DIR`: Directory of host configuration.
-- **Arguments**: `$network_base`: Base integer of entire network.
-- **Outputs**: The function outputs the translated IP address from integer to a dotted decimal format.
-- **Returns**: It could return 1 if there is no available IP in range or fails to generate a unique hostname.
-- **Example usage**: 
-
-```Bash
-$ int_to_ip 668154256
-```
+- **Name:** `int_to_ip()`
+- **Description:** This function converts an integer into an IP address (IPv4).
+- **Globals:** 
+  - `HPS_HOST_CONFIG_DIR`: Configuration directory for host systems.
+  - `max`: Maximum number of IPs to look up. Default is 254.
+  - `network base`: Base IP for a network on which the computation starts.
+- **Arguments:** 
+  - `$1`: This is the integer value to be converted to an IP address.
+- **Outputs:** This function outputs an IP address that corresponds to the input integer.
+- **Returns:** The function does not explicitly return a value, but assigns an IP and hostnames to a host based on a specified "macid".
+- **Example Usage:** `int_to_ip $((base_int + i))`
 
 ### Quality and Security Recommendations
 
-1. Implement proper error-handling to cater scenarios where input passed could not be translated to valid IP address.
-2. It is crucial to validate the input integers for their validity in terms of being translatable to IP addresses.
-3. Validation check to ensure that the input is indeed an integer and within the expected range.
-4. It is recommended to add log entries whenever a new valid IP or hostname is found or whenever an IP or hostname assignment fails.
-5. There should be checks to ensure that the created hostnames do not collide with any existing system hostnames.
+1. Improve error handling: More robust checks should be instituted to manage potential issues related to failed IP or hostname generation.
+2. Consider adding checks to ensure the provided integer for `int_to_ip()` function in a valid range corresponding to possible IP addresses.
+3. Security consideration: Avoid storing MAC addresses and IPs in plaintext configurations. Consider using a secure method or encryption while storing or transmitting these details.
+4. Make use of more descriptive variable names to enhance the function's readability and maintainability.
+5. Consider implementing limit checks on the sequential generation of IP addresses and host names to prevent potentially infinitely running loops.
 

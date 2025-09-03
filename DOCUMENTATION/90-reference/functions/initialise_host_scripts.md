@@ -4,29 +4,28 @@ Contained in `lib/functions.d/configure-remote-host.sh`
 
 Function signature: f3a19023175709bb6341f62f9bd565ec7430df7cae722dcd18cf2a20800ee478
 
-### Function Overview 
+### Function Overview
 
-The `initialise_host_scripts()` function in Bash is used to initialize host scripts. It leverages the `get_provisioning_node` function to define the gateway, gathers the distro string through the `initialise_distro_string` function and then forms a URL to fetch a function bundle. The function bundle fetched is downloaded and stored under "/tmp/host-functions.sh". On successful download, the file is then sourced. In case of a failure in fetching the function bundle, the function returns an error.
+The function `initialise_host_scripts` is a Linux bash script function that primarily fetches and sources a host functions script from a URL. It asks an external system (referred to as the provisioning node) for the proper distro string and fetches the appropriate host function script bundle, which it then sources for use in the current shell process. If this fetch and source operation fails, it raises an error and returns a non-zero exit status.
 
 ### Technical Description
 
-- **Name**: `initialise_host_scripts()`
-- **Description**: This function is used to initialize host scripts. It fetches the function bundle from a certain URL and downloads it locally. In case of failure in fetching the function, an error is returned.
-- **Globals**: [None]
-- **Arguments**: [None]
-- **Outputs**: This function outputs the status of the operation including the URL from which the function bundle is being fetched, successful or unsuccessful fetching and sourcing of the function bundle.
-- **Returns**: This function returns 1 in case of failure in fetching the function bundle.
-- **Example usage**:
-    ```bash
-    initialise_host_scripts
-    ```
+- **name**: initialise_host_scripts
+- **description**: A bash script function which fetches and sources a script for host functions from a given URL.
+- **globals**: None
+- **arguments**: None
+- **outputs**: This function outputs various status messages to indicate progress of the operation. It also modifies the ongoing shell environment by sourcing the fetched host functions scripts.
+- **returns**: When successful, the function completes silently with a zero exit status. If the fetch and source operation failure occurs, it gives an error message and returns a non-zero exit status.
+- **example usage**:  
+```
+initialise_host_scripts
+```
 
-### Quality and Security Recommendations 
+### Quality and Security Recommendations
 
-1. Implement a validation check to ensure that the URL is correctly formed and can be accessed. This reduces the risk of script failure due to incorrect URL.
-2. Before sourcing the downloaded script, introduce a step to verify its contents. This would protect against downloading and executing malicious content.
-3. Consider adding more error handlers in case the functions `get_provisioning_node` and `initialise_distro_string` fail.
-4. The destination file path is currently hard-coded which makes the function less flexible. Consider passing the destination file path as an argument.
-5. Provide more detailed error messages to improve debugging and user experience.
-6. Uses comments for clearer understanding of complexities within the script.
+1. The function should validate the fetched script before sourcing it. The validity check could include size and content checks or even a signature check if the script is provided with a reliable signature.
+2. The curl statement doesn't set any timeouts or retry strategies, leaving this function susceptible to hanging indefinitely. Appropriate timeouts and retry intervals need to be set.
+3. It's a good practice to enclose the entire function logic within a try/catch block to ensure that the function fails gracefully in case of any unexpected issues.
+4. For enhanced security, we recommend using HTTPS instead of HTTP while fetching any scripts or code.
+5. It's advisable to standardize log messages and provide verbose and quiet command-line options to control stdout outputs. Generating logs can help in better tracking and debugging of code.
 
