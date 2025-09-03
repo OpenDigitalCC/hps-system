@@ -2,7 +2,7 @@
 __guard_source || return
 # Define your functions below
 
-configure_nginx () {
+create_config_nginx () {
 
 source $(get_active_cluster_filename 2>/dev/null)
 
@@ -94,6 +94,6 @@ http {
 }
 EOF
 
-echo "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP_CONFIG_DIR}"
+hps_log info "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP_CONFIG_DIR}"
 
 }

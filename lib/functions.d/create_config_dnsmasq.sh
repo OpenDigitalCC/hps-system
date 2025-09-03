@@ -3,8 +3,7 @@ __guard_source || return
 
 
 
-
-configure_dnsmasq () {
+create_config_dnsmasq () {
 source $(get_active_cluster_filename 2>/dev/null)
 
 local DNSMASQ_CONF="${HPS_SERVICE_CONFIG_DIR}/dnsmasq.conf"
@@ -55,14 +54,8 @@ dhcp-boot=tag:ipxe,http://${DHCP_IP}/cgi-bin/boot_manager.sh?cmd=init  # For iPX
 
 EOF
 
-# TODO: I am sure this isn't needed now, delete
-#mkdir -p ${HPS_TFTP_DIR}
-#cp /usr/lib/ipxe/undionly.kpxe "${HPS_TFTP_DIR}"
-#cp /usr/lib/ipxe/snponly.efi "${HPS_TFTP_DIR}"
-#cp /usr/lib/ipxe/ipxe.efi "${HPS_TFTP_DIR}"
+  touch ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
 
-touch ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
-
-echo "[OK] dnsmasq config generated at: ${DNSMASQ_CONF}"
+  hps_log info "[OK] dnsmasq config generated at: ${DNSMASQ_CONF}"
 
 }
