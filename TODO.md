@@ -3,7 +3,36 @@
 
 List of requirements and ideas not yet implemented
 
-## Storage nodes - O/S Installation (A/B method)
+
+## Refactoring of scripts and libraries
+
+### Function naming
+
+- HPS functions: available to the HPS operations
+- Node functions: available on the nodes
+
+Node functions can use the http api to access the HPS, and call HPS functions. 
+HPS functions have full access to all parts of HPS
+
+### Script renaming: boot_manager
+
+boot manager should be renamed to hps-api as it now provides a wide range of functions available via ipxe and Node functions.
+
+### hps-api
+
+- output formatted as json, text, html, pxe etc depending on how it is called
+- Add json api in addition to query string for better structure
+
+### Function: cgi_auto_fail
+
+- if browser, send html (currently text)
+- if cli, send json (currnelty text)
+- if ipxe, send pxe (done)
+- if unknown, send text (done)
+
+## Feature development
+
+### Storage nodes - O/S Installation (A/B method)
 
 - Create built image, then deploy to host, ready for A/B updates
 - Deployed via PXE
@@ -33,7 +62,7 @@ Outline:
       - Update bootloader.
       - Reboot with rollback safety.
 
-## Storage nodes - O/S updates (A/B method)
+### Storage nodes - O/S updates (A/B method)
 
 - Instead of kickstart, create images and deploy to new hardware
 - manage incremental updates through package manager
@@ -68,12 +97,14 @@ Outline:
 
 
 
-## ZFS
+### ZFS
 
 - add the multi disk 
 - add cli to chose storage config
 
-## syslog
+## New functions
+
+### syslog
 
 - Add syslog daemon to hps, send all messages to syslog
 - add buffering on sending hosts
@@ -82,16 +113,16 @@ Outline:
 - don't store local logs on machines
 - add dhcp option to set syslog server
 
-## time
+### time
 
 - add time service to IPS
 
-## DNS
+### DNS
 
 - Add dns hosts via dnsmasq to IPS
 - to file ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
 
-## create node by duplication
+### create node by duplication
 
 - zvol image duplication
 - duplicate config file
@@ -100,19 +131,14 @@ Outline:
 - for thin compute nodes
 - Implement function, available in ipxe and cli
 
+
 ## Security
 
 - only send my config to my MAC address, decline to anyone else
 - only send my cluster ifo to members of my cluster
 - reject all queries from unknown MAC, with one exception
   - only allow initial config options to systems that we have dhcp booted
-
-## Function: cgi_auto_fail
-
-- if browser, send html (currently text)
-- if cli, send json (currnelty text)
-- if ipxe, send pxe (done)
-- if unknown, send text (done)
+- Don't allow sensitive config elements to be provided via the api
 
 
 
