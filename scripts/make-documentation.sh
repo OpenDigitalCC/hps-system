@@ -31,51 +31,35 @@ if [[ "$MODE" == "gendoc" ]]; then
   [[ -z "${OPENAI_API_KEY:-}" ]] && { echo "Missing OPENAI_API_KEY" >&2; exit 1; }
 fi
 
-# -- sanitize function name for safe filename
-sanitize_filename() {
-  local input="$1"
-  # Remove leading/trailing whitespace
-  input="${input#"${input%%[![:space:]]*}"}"
-  input="${input%"${input##*[![:space:]]}"}"
-  # Replace any non-alphanumeric/underscore/dash with underscore
-  echo "$input" | tr -c '[:alnum:]_-' '_'
-}
-
 # -- openai caller
 call_openai() {
   local func="$1" name="$2" file="$3"
   local function_hash
-  local safe_name
-  local out_file
-  
-  # Sanitize the function name for filename
-  safe_name=$(sanitize_filename "$name")
-  out_file="$DST_DIR/${safe_name}.md"
-  
-  # Compute hash from trimmed function body
+  local out_file="$DST_DIR/${name}.md"
   function_hash=$(printf "%s" "$func" | sed 's/[[:space:]]\+$//' | sha256sum | awk '{print $1}')
 
-  if [[ -f "$out_file" ]]; then
-    echo "Existing file: $out_file"
-    echo "Current hash: $function_hash"
 
-    if grep -q -i '^[[:space:]]*Function signature:' "$out_file"; then
-      echo "↪ Found signature line"
-      existing_sig=$(grep -i -m1 '^[[:space:]]*Function signature:' "$out_file" | awk -F': *' '{print $2}')
-    else
-      echo "⚠️ No signature line found"
-      existing_sig=""
-    fi
+if [[ -f "$out_file" ]]; then
+  echo "Existing file: $out_file"
+  echo "Current hash: $function_hash"
 
-    echo "Extracted signature: ${existing_sig:-<none>}"
-
-    if [[ -n "$existing_sig" && "$existing_sig" == "$function_hash" ]]; then
-      echo "⏩ Skipping $name — unchanged (signature $function_hash)"
-      return
-    fi
+  if grep -q -i '^[[:space:]]*Function signature:' "$out_file"; then
+    echo "↪ Found signature line"
+    existing_sig=$(grep -i -m1 '^[[:space:]]*Function signature:' "$out_file" | awk -F': *' '{print $2}')
+  else
+    echo "⚠️ No signature line found"
+    existing_sig=""
   fi
 
-  echo "Calling OpenAI to document the function: $name"
+  echo "Extracted signature: ${existing_sig:-<none>}"
+
+  if [[ -n "$existing_sig" && "$existing_sig" == "$function_hash" ]]; then
+    echo "⏩ Skipping $name — unchanged (signature $function_hash)"
+    return
+  fi
+fi
+
+echo "Calling OpenAI to document the function"
   
   local prompt="You're a Bash documentation assistant. For the function below, generate three sections with titles at markdown h3. Ensure output is safe for Pandoc to process.
 
@@ -119,9 +103,6 @@ $func"
     return 1
   fi
 
-  # Add a small delay between successful API calls to avoid rate limiting
-  sleep 1
-
   mkdir -p "$DST_DIR"
   {
     echo "### \`$name\`" 
@@ -136,80 +117,45 @@ $func"
   echo "✅ Documented to: ${out_file}"
 }
 
-# -- function extractor (handles both function syntaxes and nesting)
+# -- function extractor (no doc block, just parse)
 extract_functions() {
   local file="$1"
   awk -v FILE="$file" '
-    BEGIN { 
-      in_func = 0
-      func_name = ""
-      func_body = ""
-      brace_count = 0
-      func_start_line = 0
-    }
+    BEGIN { in_func = 0; func_name = ""; func_body = "" }
 
-    # Match both function syntaxes:
-    # 1. name() {
-    # 2. function name {
-    /^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*(\(\))?[[:space:]]*\{/ {
-      # Only capture top-level functions (not nested)
-      if (in_func == 0) {
-        line = $0
-        sub(/^[[:space:]]*/, "", line)
-        
-        # Extract function name from either syntax
-        if (match(line, /^function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)/, arr)) {
-          func_name = arr[1]
-        } else if (match(line, /^([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\)/, arr)) {
-          func_name = arr[1]
-        }
-        
-        func_body = $0 "\n"
-        in_func = 1
-        brace_count = 1
-        func_start_line = NR
-        next
-      } else {
-        # We are already in a function, this is a nested function
-        brace_count++
-        func_body = func_body $0 "\n"
-        next
+    /^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(\)[[:space:]]*\{/ {
+      if (in_func && func_name != "") {
+        print "###FUNCSTART###"
+        print FILE
+        print func_name
+        print func_body
+        print "###FUNCEND###"
       }
-    }
-
-    # Track opening braces inside function
-    in_func && /\{/ {
-      # Count all braces on this line
-      count = gsub(/\{/, "&")
-      brace_count += count
-      func_body = func_body $0 "\n"
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      split(line, parts, "(")
+      func_name = parts[1]
+      func_body = $0 "\n"
+      in_func = 1
       next
     }
 
-    # Track closing braces
-    in_func && /\}/ {
-      func_body = func_body $0 "\n"
-      # Count all closing braces on this line
-      count = gsub(/\}/, "&")
-      brace_count -= count
-      
-      # When brace_count reaches 0, we have closed the top-level function
-      if (brace_count == 0) {
+    /^}/ {
+      if (in_func) {
+        func_body = func_body $0 "\n"
         print "###FUNCSTART###"
         print FILE
         print func_name
         print func_body
         print "###FUNCEND###"
         in_func = 0
-        func_name = ""
-        func_body = ""
+        func_name = ""; func_body = ""
       }
       next
     }
 
-    # Collect function body lines
-    in_func {
-      func_body = func_body $0 "\n"
+    {
+      if (in_func) func_body = func_body $0 "\n"
     }
   ' "$file"
 }
@@ -237,3 +183,4 @@ done | {
     fi
   done
 }
+
