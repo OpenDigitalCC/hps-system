@@ -21,9 +21,13 @@ cgi_auto_fail() {
     ipxe)
       ipxe_cgi_fail "$msg"
       ;;
-    cli|browser|unknown)
+    cli|browser|script|unknown)
       cgi_fail "$msg"
       ;;
+    *)
+      hps_log error "$msg"
+      echo "$msg"
+      ;;    
   esac
 }
 

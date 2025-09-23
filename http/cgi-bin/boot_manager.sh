@@ -5,7 +5,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 #client_ip="${REMOTE_ADDR:-}"
-mac="$(get_client_mac "${REMOTE_ADDR}")"
+#mac="$(get_client_mac "${REMOTE_ADDR}")"
+mac="$(hps_origin_tag)"
 
 # Retrieve config file name of the cluster
 CLUSTER_FILE=$(get_active_cluster_filename) || {
@@ -26,34 +27,10 @@ fi
 
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
-  hps_log info "Initialisation requested from DHCP"
+  hps_log info "iPXE Initialisation requested from DHCP"
   ipxe_init
   exit
 fi
-
-### ───── Get the MAC or fail ─────
-
-
-# Condition: do we have $mac
-# Ensure $mac is set from CGI param or fallback
-
-# TODO: Remove this section as it is redundant, as MAC is derived from IP
-#if [[ -z "${mac:-}" ]]; then
-#  if cgi_param exists mac; then
-#    mac="$(cgi_param get mac)"
-#  else
-#    cgi_auto_fail "MAC address is required for command $cmd"
-#    exit 1
-#  fi
-#fi
-
-
-#if ! cgi_param exists mac; then
-#  cgi_auto_fail "MAC address is required for command $cmd"
-#  exit
-#else
-#  mac="$(cgi_param get mac)"
-#fi
 
 ### ───── Commands that require a MAC ─────
 
@@ -155,14 +132,19 @@ fi
 # Command: write log entry
 if [[ "$cmd" == "log_message" ]]
  then
+  REMOTE_FUNCT=""
   if ! cgi_param exists message
    then
     cgi_auto_fail "Param message is required for command $cmd"
   else
+    if cgi_param exists function
+     then
+    REMOTE_FUNCT="[$(cgi_param get function)] "
+    fi
     LOG_MESSAGE="$(cgi_param get message)"
     cgi_header_plain
   fi
-  hps_log info "$LOG_MESSAGE"
+  hps_log info "${REMOTE_FUNCT}${LOG_MESSAGE}"
   exit
 fi
 
@@ -209,29 +191,27 @@ if [[ "$cmd" == "config_host" ]]; then
   exit
 fi
 
-# Command: get the distro bootsrtap script
 
-if [[ "$cmd" == "bootstrap_initialise_distro" ]]; then
-  hps_log info "Bootstrap config requested"
+# Command: get the distro bootstrap script - renaming it to node_load_functions and supporting both for now
+if [[ "$cmd" == "bootstrap_initialise_distro" || "$cmd" == "node_bootstrap_functions" ]]; then
+  hps_log info "Node requests to bootstrap node functions"
   cgi_header_plain
-  bootstrap_initialise_distro "$mac"
+  bootstrap_initialise_functions "$mac"
   exit
 fi
 
-
-# Command: get the host script library
-
-if [[ "$cmd" == "initialise_host_scripts" ]]; then
-  hps_log info "distro script lib requested"
+# Command: get the node function library appropriate for this distro
+if [[ "$cmd" == "node_get_functions" ]]; then
   cgi_header_plain
-  if cgi_param exists distro; then
-    initialise_host_scripts "$(cgi_param get distro)"
+    if cgi_param exists distro; then
+      DISTRO="$(cgi_param get distro)"
+      hps_log info "Node requests function lib for $DISTRO"
+      node_get_functions "${DISTRO}"
   else
     cgi_auto_fail "$cmd: Parameter distro not provided"
   fi
   exit
 fi
-
 
 # Command: Generate an opensvc conf
 if [[ "$cmd" == "generate_opensvc_conf" ]]; then

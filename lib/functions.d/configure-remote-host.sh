@@ -1,6 +1,6 @@
 __guard_source || return
 
-# initialise_host_scripts
+# node_get_functions
 # -----------------------
 # Concatenate host-side functions for a distro string and emit to stdout.
 # Looks in ${LIB_DIR}/host-scripts.d (or /srv/hps-system/lib/host-scripts.d).
@@ -12,7 +12,7 @@ __guard_source || return
 #   <osname>-<osver>.d/*.sh then <osname>-<osver>.sh
 #
 # Usage: initialise_host_scripts "x86_64-linux-rockylinux-10.0" [func_dir]
-initialise_host_scripts() {
+node_get_functions() {
   local distro="${1:?Usage: initialise_host_scripts <cpu-mfr-osname-osver> [func_dir]}"
   local base="${2:-${LIB_DIR:+${LIB_DIR%/}/host-scripts.d}}"
   base="${base:-/srv/hps-system/lib/host-scripts.d}"
@@ -58,16 +58,16 @@ initialise_host_scripts() {
 
 
 
-
-bootstrap_initialise_distro() {
-  local mac="$1"
+# function to create a local script, that will detect what O/S we are, and then collect the functions
+bootstrap_initialise_functions() {
 
 # The following is sent literally
+# the functions are only used in this script in order to ascertain the correct functions, this is distro agnostic.
   cat <<'EOF'
 #!/bin/bash
 # Offline bootstrap initialiser from provisioning server
 
-initialise_distro_string() {
+bootstrap_initialise_distro_string() {
   local cpu osname osver mfr
 
   cpu="$(uname -m)"
@@ -85,32 +85,29 @@ initialise_distro_string() {
   echo "${cpu}-${mfr}-${osname}-${osver}"
 }
 
-
-
-get_provisioning_node() {
+bootstrap_get_provisioning_node() {
   # Returns the default gateway IP (provisioning node)
   ip route | awk '/^default/ { print $3; exit }'
 }
 
-initialise_host_scripts() {
+bootstrap_get_functions () {
   local gateway
-  gateway="$(get_provisioning_node)"
+  gateway="$(bootstrap_get_provisioning_node)"
 
   local distro
-  distro="$(initialise_distro_string)"
+  distro="$(bootstrap_initialise_distro_string)"
 
   # Quote the URL to prevent shell or curl from misinterpreting '&'
-  local url="http://${gateway}/cgi-bin/boot_manager.sh?cmd=initialise_host_scripts&distro=$(urlencode "$distro")"
-  local dest="/tmp/host-functions.sh"
+  local url="http://${gateway}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=$(urlencode "$distro")"
 
-  echo "[+] Fetching function bundle from: $url"
-  if curl -fsSL "$url" -o "$dest"; then
-    echo "[=] Sourced: $dest"
-    source "$dest"
+  # Fetch and source
+  if ! curl -fsSL "$url" | source /dev/stdin; then
+    echo "[-] Failed to fetch or source functions from $url"
+    return 2
   else
-    echo "[!] Failed to fetch host functions from $url" >&2
-    return 1
+    echo "[+] Loaded bootstrap functions from $url"
   fi
+
 }
 EOF
 
@@ -118,7 +115,7 @@ EOF
   declare -f urlencode
 
 # Start the bootstrapping
-  echo "initialise_host_scripts"
+  echo "bootstrap_get_functions"
 
 }
 
