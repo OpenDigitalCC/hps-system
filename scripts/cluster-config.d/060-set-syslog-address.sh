@@ -9,6 +9,6 @@ if [[ -z "${HPS_CLUSTER_CONFIG_DIR:-}" ]]; then
 fi
 
 
-echo "Setting syslog address to ${DHCP_IP}"
-CLUSTER_VARS+=("SYSLOG_SERVER=${DHCP_IP}")
+echo "Setting syslog address to $ipaddr"
+CLUSTER_VARS+=("SYSLOG_SERVER=$ipaddr")
 
