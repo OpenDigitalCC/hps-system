@@ -3,6 +3,235 @@ __guard_source || return
 ## HPS Functions
 
 
+
+#===============================================================================
+# hps_configure_opensvc_cluster
+# ------------------------------
+# Configure OpenSVC cluster identity after services have started.
+#
+# Behaviour:
+#   - Waits for OpenSVC daemon socket to be ready
+#   - Calls osvc_configure_cluster_identity if daemon is responsive
+#   - Logs warning if configuration fails (non-fatal)
+#
+# Returns:
+#   0 always (failures are logged but don't block service startup)
+#===============================================================================
+hps_configure_opensvc_cluster() {
+  # Wait for daemon socket (more reliable than process check)
+  local i
+  for i in {1..15}; do
+    if [[ -S /var/lib/opensvc/lsnr/http.sock ]] && om cluster status >/dev/null 2>&1; then
+      hps_log info "OpenSVC daemon responsive, configuring cluster identity"
+      osvc_configure_cluster_identity || {
+        hps_log warn "OpenSVC cluster identity configuration failed"
+      }
+      return 0
+    fi
+    sleep 1
+  done
+  
+  hps_log info "OpenSVC daemon not ready after 15s, skipping cluster configuration"
+  return 0
+}
+
+
+#===============================================================================
+# osvc_configure_cluster_identity
+# --------------------------------
+# Configure cluster identity after OpenSVC daemon is running.
+# Called by hps_services_restart after supervisord starts opensvc service.
+#
+# Behaviour:
+#   - Waits for daemon socket to be ready
+#   - Sets cluster.name from CLUSTER_NAME
+#   - Sets node.name=ips
+#   - Configures heartbeat type
+#   - Generates and sets cluster.secret
+#   - Stores cluster.secret to cluster_config
+#
+# Returns:
+#   0 on success
+#   1 if configuration fails
+#===============================================================================
+osvc_configure_cluster_identity() {
+  hps_log info "Configuring OpenSVC cluster identity"
+  
+  # Wait for socket to be ready (already done by caller, but belt-and-suspenders)
+  local i
+  for i in {1..10}; do
+    if [[ -S /var/lib/opensvc/lsnr/http.sock ]]; then
+      break
+    fi
+    sleep 1
+  done
+  
+  # Verify daemon is responsive (use om command, not pgrep)
+  if ! om cluster status >/dev/null 2>&1; then
+    hps_log error "Daemon not responsive"
+    return 1
+  fi
+  
+  # Get cluster name
+  local cluster_name
+  cluster_name="$(cluster_config get CLUSTER_NAME 2>/dev/null)"
+  
+  if [[ -z "${cluster_name}" ]]; then
+    hps_log error "CLUSTER_NAME not set in cluster_config"
+    return 1
+  fi
+  
+  # Set cluster name
+  om cluster set --kw "cluster.name=${cluster_name}" || {
+    hps_log error "Failed to set cluster.name"
+    return 1
+  }
+  
+  # Set node name (IPS-specific)
+  om node set --kw "node.name=ips" || {
+    hps_log error "Failed to set node.name"
+    return 1
+  }
+  
+  # Configure heartbeat
+  local hb_type
+  hb_type="$(cluster_config get OSVC_HB_TYPE 2>/dev/null || echo multicast)"
+  
+  om cluster set --kw "hb#1.type=${hb_type}" || {
+    hps_log error "Failed to set hb type"
+    return 1
+  }
+  
+  # Get or generate cluster secret
+  local cluster_secret
+  cluster_secret="$(cluster_config get OPENSVC_CLUSTER_SECRET 2>/dev/null || true)"
+  
+  if [[ -z "${cluster_secret}" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      cluster_secret="$(openssl rand -hex 16)"
+    else
+      cluster_secret="$(tr -dc 'a-f0-9' </dev/urandom | head -c 32)"
+    fi
+    
+    cluster_config set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
+    hps_log info "Generated and stored OPENSVC_CLUSTER_SECRET"
+  fi
+  
+  # Set cluster secret
+  om cluster set --kw "cluster.secret=${cluster_secret}" || {
+    hps_log error "Failed to set cluster.secret"
+    return 1
+  }
+  
+  hps_log info "Cluster identity configured: name=${cluster_name}, node=ips, hb=${hb_type}"
+  return 0
+}
+
+
+
+
+#===============================================================================
+# osvc_bootstrap_cluster_on_ips
+# ------------------------------
+# Initialize OpenSVC cluster on IPS provisioning node (cluster founder).
+#
+# Behaviour:
+#   - Calls create_config_opensvc to generate opensvc.conf and enforce agent.key
+#   - Starts OpenSVC daemon via supervisord
+#   - Creates initial cluster configuration:
+#     * Sets cluster.name from CLUSTER_NAME
+#     * Sets node.name=ips
+#     * Configures heartbeat (multicast by default)
+#     * Sets cluster.secret for node authentication
+#   - Stores cluster.secret to cluster_config as OPENSVC_CLUSTER_SECRET
+#
+# Returns:
+#   0 on success
+#   1 if configuration fails
+#   2 if daemon not running after setup
+#===============================================================================
+osvc_bootstrap_cluster_on_ips() {
+  hps_log info "[opensvc] Bootstrapping cluster on IPS"
+  
+  # 1. Generate config and enforce key
+  local ips_role
+  ips_role="$(cluster_config get OSVC_IPS_ROLE 2>/dev/null || echo provisioning)"
+  
+  if ! create_config_opensvc "${ips_role}"; then
+    hps_log error "[opensvc] create_config_opensvc failed"
+    return 1
+  fi
+  
+  # 2. Start daemon via supervisord
+  supervisorctl -c /srv/hps-config/services/supervisord.conf start opensvc
+  sleep 3
+  
+  if ! pgrep -f "om daemon run" >/dev/null 2>&1; then
+    hps_log error "[opensvc] Daemon failed to start"
+    return 2
+  fi
+  
+  # 3. Configure cluster settings
+  local cluster_name
+  cluster_name="$(cluster_config get CLUSTER_NAME 2>/dev/null)"
+  
+  if [[ -z "${cluster_name}" ]]; then
+    hps_log error "[opensvc] CLUSTER_NAME not set in cluster_config"
+    return 1
+  fi
+  
+  # Set cluster name
+  om cluster set --kw "cluster.name=${cluster_name}" || {
+    hps_log error "[opensvc] Failed to set cluster.name"
+    return 1
+  }
+  
+  # Set node name (IPS-specific)
+  om node set --kw "node.name=ips" || {
+    hps_log error "[opensvc] Failed to set node.name"
+    return 1
+  }
+  
+  # Configure heartbeat
+  local hb_type
+  hb_type="$(cluster_config get OSVC_HB_TYPE 2>/dev/null || echo multicast)"
+  
+  om cluster set --kw "hb#1.type=${hb_type}" || {
+    hps_log error "[opensvc] Failed to set hb type"
+    return 1
+  }
+  
+  # Get or generate cluster secret
+  local cluster_secret
+  cluster_secret="$(cluster_config get OPENSVC_CLUSTER_SECRET 2>/dev/null || true)"
+  
+  if [[ -z "${cluster_secret}" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      cluster_secret="$(openssl rand -hex 16)"
+    else
+      cluster_secret="$(tr -dc 'a-f0-9' </dev/urandom | head -c 32)"
+    fi
+    
+    cluster_config set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
+    hps_log info "[opensvc] Generated and stored OPENSVC_CLUSTER_SECRET"
+  fi
+  
+  # Set cluster secret
+  om cluster set --kw "cluster.secret=${cluster_secret}" || {
+    hps_log error "[opensvc] Failed to set cluster.secret"
+    return 1
+  }
+  
+  # Verify daemon is responsive
+  if ! om cluster status >/dev/null 2>&1; then
+    hps_log error "[opensvc] Daemon not responsive after bootstrap"
+    return 2
+  fi
+  
+  hps_log info "[opensvc] Cluster bootstrapped: name=${cluster_name}, node=ips"
+  return 0
+}
+
 #:name: _ini_get_agent_nodename
 #:group: opensvc
 #:synopsis: Extract [agent] nodename from an opensvc.conf
@@ -127,33 +356,47 @@ install_opensvc_foreground_wrapper
 
 
 
-#:name: osvc_apply_identity_from_hps
-#:group: opensvc
-#:synopsis: Enforce IPS node.name and set cluster.name from HPS CLUSTER_NAME (OpenSVC v3).
-#:usage: osvc_apply_identity_from_hps
-#:description:
-#  - If /etc/opensvc/opensvc.conf nodename == "ips", set node.name=ips in v3 KV.
-#  - Always set cluster.name=<CLUSTER_NAME> from HPS cluster_config.
+#===============================================================================
+# osvc_apply_identity_from_hps
+# -----------------------------
+# Enforce IPS node.name and set cluster.name from HPS CLUSTER_NAME (OpenSVC v3).
+#
+# Behaviour:
+#   - If /etc/opensvc/opensvc.conf nodename == "ips", set node.name=ips in v3 KV.
+#   - Always set cluster.name=<CLUSTER_NAME> from HPS cluster_config.
+#   - Skips silently if daemon is not running (will be configured post-start)
+#
+# Returns:
+#   0 on success or if daemon not running
+#   1 on error
+#===============================================================================
 osvc_apply_identity_from_hps() {
   local conf="/etc/opensvc/opensvc.conf"
-  [[ -r "$conf" ]] || { hps_log error "[opensvc] missing $conf"; return 1; }
+  [[ -r "$conf" ]] || { hps_log error "missing $conf"; return 1; }
 
   local nn; nn="$(_ini_get_agent_nodename "$conf")"
   if [[ -z "$nn" ]]; then
-    hps_log error "[opensvc] nodename not found in $conf [agent]"; return 1
+    hps_log error "nodename not found in $conf [agent]"; return 1
+  fi
+
+  # Only try to set if daemon is running
+  if ! om cluster status >/dev/null 2>&1; then
+    hps_log debug "Daemon not running, identity will be configured post-start"
+    return 0
   fi
 
   if [[ "$nn" == "ips" ]]; then
-    _osvc_kv_set "node.name" "$nn" || hps_log warn "[opensvc] failed to set node.name=${nn}"
+    _osvc_kv_set "node.name" "$nn" || hps_log warn "failed to set node.name=${nn}"
   fi
 
   local cn; cn="$(cluster_config get CLUSTER_NAME 2>/dev/null || true)"
   if [[ -n "$cn" ]]; then
-    _osvc_kv_set "cluster.name" "$cn" || hps_log warn "[opensvc] failed to set cluster.name=${cn}"
+    _osvc_kv_set "cluster.name" "$cn" || hps_log warn "failed to set cluster.name=${cn}"
   else
-    hps_log warn "[opensvc] CLUSTER_NAME not found; cluster.name not set"
+    hps_log warn "CLUSTER_NAME not found; cluster.name not set"
   fi
 }
+
 
 
 

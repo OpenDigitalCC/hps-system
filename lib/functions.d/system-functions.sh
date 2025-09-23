@@ -59,6 +59,7 @@ hps_services_start() {
   configure_supervisor_services
   reload_supervisor_config
   supervisorctl -c "${HPS_SERVICE_CONFIG_DIR}/supervisord.conf" start all
+  hps_services_post_start
 }
 
 hps_services_stop() {
@@ -70,7 +71,14 @@ hps_services_restart() {
   create_supervisor_services_config
   reload_supervisor_config
   supervisorctl -c "${HPS_SERVICE_CONFIG_DIR}/supervisord.conf" restart all
+  hps_services_post_start
 }
+
+hps_services_post_start () {
+  # Configure OpenSVC cluster if applicable
+  hps_configure_opensvc_cluster
+}
+
 
 
 export_dynamic_paths() {
