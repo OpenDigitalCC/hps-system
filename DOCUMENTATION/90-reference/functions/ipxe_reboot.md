@@ -4,30 +4,36 @@ Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
 Function signature: c2e2fb28eaa8f9898d8b5cb181b2b278c884005d1a98813c38797c3225f12b52
 
-### Function Overview
+### Function overview
 
-The function `ipxe_reboot()` is used to implement a reboot process for an iPXE server. It takes an optional message as argument, logs the reboot request with that message, prints an iPXE header, displays the provided message if it is defined, waits for 5 seconds, and finally issues a reboot command.
+The function `ipxe_reboot` is designed to print a log message indicating a reboot request, followed by the actual reboot request. Initially, it defines a local variable `MSG` and assigns it the value of `$1`, the first argument passed to the function. If the `MSG` is not null, it is printed, and regardless, a standard rebooting message is printed. Finally, it waits for 5 seconds and then triggers the reboot.
 
-### Technical Description
+### Technical description
 
-- **name**: `ipxe_reboot`
-- **description**: This function allows the iPXE server to reboot. It can display a message, pause for a moment for users to read the message, and then force a system restart.
-- **globals**: None.
-- **arguments**:
-  - `$1: MSG`: An optional argument that holds the message which is momentarily displayed before the system restart.
-- **outputs**: If a message is provided, that message will be displayed on the screen. Regardless, "Rebooting..." text will be displayed for 5 seconds right before the reboot.
-- **returns**: No return.
-- **example usage**:
-  
+- **Name:** `ipxe_reboot`
+- **Description:** This function is used to log a reboot request and then reboot the system. This includes constructing a header using `ipxe_header`, printing a custom reboot message if provided, and echoing a standard "Rebooting..." message. It then instructs the system to sleep for 5 seconds before rebooting.
+- **Globals:** No globals are used explicitly in this function.
+- **Arguments:** 
+   - `$1: MSG`: An optional message to be displayed during the reboot process.
+- **Outputs:** 
+  - If a message is provided as an argument (`MSG` is not null), it is printed.
+  - A standard "Rebooting" message is always printed.
+- **Returns:** The function doesn't return a value.
+- **Example usage:** 
+
 ```bash
-ipxe_reboot "Scheduled maintenance. Machine is going down for reboot."
+ipxe_reboot "Scheduled system reboot"
 ```
 
-### Quality and Security Recommendations
+This will log a message "Reboot requested Scheduled system reboot", output the provided message, and then the system will reboot after a pause of 5 seconds.
 
-1. Make sure that the output log files have appropriate file permissions to prevent unauthorized access.
-2. Validate the type and format of input `MSG` before accepting it as a valid argument.
-3. Although the echo command is not likely to fall victim to command injection, be cautious of using unfiltered input in other contexts or more complex implementations.
-4. Documentation could be included within the function to encourage best practices.
-5. Consider adding error handling for the "reboot" command in case it fails to execute for some reason.
+### Quality and security recommendations
+
+1. Buffer Overflow Protection: To avoid any risk of buffer overflow, the function should previously validate the length of the `$1` input argument before assigning it to the `MSG` variable. 
+
+2. Error Handling: If the reboot command fails to execute, this function doesn't handle it. This can be improved by adding error handling routines or exit codes checking for each command in the function. 
+
+3. Secure Logging: The function simply logs the message, "Reboot requested $MSG". To ensure secure logging, it should also log the identity of the user or process that initiated the reboot, and timestamp each log entry.
+
+4. Documentation: Each step and the overall purpose of the function should be properly documented in the code.
 

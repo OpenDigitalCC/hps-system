@@ -6,27 +6,25 @@ Function signature: 1ad96e9487bac5b94d7eca312662f18392454507c7cddfac5de26d924e92
 
 ### Function overview
 
-The `reload_supervisor_config` function is designed to allow for the reloading of Supervisor configuration in a Bash environment. This function takes no arguments. It operates by re-reading the configuration contained in a directory defined by `HPS_SERVICE_CONFIG_DIR` and updating the system Supervisor accordingly. Should there be changes in the Supervisor configuration, this function will allow Supervisor to adopt the new configurations in real-time without the necessity of a full system restart.
+The `reload_supervisor_config` function is a bash function created to reload the configuration of supervisord. It first specifies the path to the supervisord configuration file, then uses the `supervisorctl` command with the `-c` option to read this configuration file, before using the same command to update the supervisord system with the new configuration.
 
 ### Technical description
 
-- Name: `reload_supervisor_config`
-- Description: A bash function to reload the configuration for Supervisor by re-reading the configuration file from a specified location and then updating Supervisor. It allows for changes in configuration to take effect in real-time without requiring a full reboot or restart.
-- Globals: [`HPS_SERVICE_CONFIG_DIR`: The directory containing the configuration file for Supervisor.]
-- Arguments: The function does not accept any arguments.
-- Outputs: Does not output any value. However, it re-reads and updates the Supervisor configuration file.
-- Returns: N/A
-- Example Usage:
+- **Name**: `reload_supervisor_config`
+- **Description**: This function is responsible for reloading the supervisord configuration. It utilizes `supervisorctl`, a command line utility provided by supervisord, to reread and update based on the given configuration file.
+- **Globals**: 
+   - `HPS_SERVICE_CONFIG_DIR`: This is the directory that contains the supervisord configuration file.
+   - `SUPERVISORD_CONF`: This is the path to the supervisord configuration file, assembled by concatenating `HPS_SERVICE_CONFIG_DIR` with `/supervisord.conf`.
+- **Arguments**: No arguments required.
+- **Outputs**: No explicit outputs. Function performs operations and sends tasks to supervisord.
+- **Returns**: Nothing explicitly but based on the tasks it sends to supervisord it determines whether supervisord configuration has been successfully reloaded or not.
+- **Example usage**: `reload_supervisor_config`
 
-  ```bash
-  HPS_SERVICE_CONFIG_DIR="/path/to/config_dir"
-  reload_supervisor_config
-  ```
+### Quality and security recommendations
 
-### Quality and Security recommendations
-
-1. Implement error handling: To improve the function's robustness, introduce error handling to deal with potential issues like non-existent configuration directories or issues with supervisorctl.
-2. Ensure correct permissions: Only trusted users should have access to run this function and ensure that the `HPS_SERVICE_CONFIG_DIR` directory has the correct permissions to prevent an unauthorized user from tampering with the configurations.
-3. Validate the configuration file: While loading the configuration file, ensure that the file is not corrupt and is in the correct format to prevent potential issues during its use.
-4. Implement logging: To effectively troubleshoot issues that may arise when reloading the configuration, make sure to log both successful operations and errors. This way, any errors that occur while reloading the configuration can be easily traced and resolved.
+1. Before running the `supervisorctl` commands, the function should check if the `SUPERVISORD_CONF` file actually exists to avoid errors.
+2. The function should also check that `HPS_SERVICE_CONFIG_DIR` is set and not empty before proceeding.
+3. Use the `-c` option for `supervisorctl` carefully, as it allows overriding the main configuration file (`supervisord.conf`), which in the wrong hands can lead to potential misconfigurations or disruptions.
+4. Implement error handling. For example, catch errors from `supervisorctl` and handle them appropriately, such as logging the error and exiting the function with an error status.
+5. As a general rule, avoid storing passwords or other sensitive information in environment variables like `HPS_SERVICE_CONFIG_DIR`. Use a secure method to handle these credentials, such as a secret manager.
 

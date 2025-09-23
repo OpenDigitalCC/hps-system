@@ -6,27 +6,27 @@ Function signature: 2b1359b9639780889fba67b113809b966b3326fe6600551c16100c71c64f
 
 ### Function Overview
 
-The `find_hps_config` function finds and returns the location of the HPS (High Performance Storage) configuration file from an array of possible locations. If it finds a valid location, the function prints out the location and ends successfully with a zero-status. If the function fails to find a valid location, it ends with a non-zero status.
+This function, `find_hps_config()`, is a simple Bash script function that iterates over an array `HPS_CONFIG_LOCATIONS`. It checks for existing files in the specified locations. Once it comes across the first existing file, it assigns the location to a local variable `found` and breaks the loop. The function then outputs the value of `found` and returns a success status code `0`. If no files are found in any of the locations in the array, the function returns a failure status code `1`.
 
 ### Technical Description
 
-- **Name:** `find_hps_config`
-- **Description:** The function iterates over the `HPS_CONFIG_LOCATIONS` array and assigns the first non-empty and existent file location to the `found` variable. The function prints out the `found` location, and if it is non-empty, the function is successful and returns 0; otherwise, it ends with a return of 1.
-- **Globals:** [`HPS_CONFIG_LOCATIONS`]: An array of possible configuration file locations.
-- **Arguments:** _Not applicable in this context_
-- **Outputs:** Prints the configuration file’s location if available.
-- **Returns:** 0 if the function is successful in finding a configuration. Otherwise, it returns 1.
-- **Example usage:**
-```
-HPS_CONFIG_LOCATIONS=("/etc/hps/config" "/usr/local/etc/hps/config")
-find_hps_config
-```
+- **Name:** `{find_hps_config()}`
+- **Description:** This function iterates over an array `HPS_CONFIG_LOCATIONS`, checking each location for existing files. The first existing file found is assigned to the local variable `found`, which is then echoed out. The function returns `0` when a file is found and `1` when not.
+- **Globals:** `[HPS_CONFIG_LOCATIONS: An array of file paths where the function will look for existing files]`
+- **Arguments:** `[None]`
+- **Outputs:** The filepath of the first existing file found in the array `HPS_CONFIG_LOCATIONS`. If no file is found, it does not produce any output.
+- **Returns:** `0` if an existing file location is found, `1` if not.
+- **Example Usage:**
+    ```bash
+    HPS_CONFIG_LOCATIONS=("/path/to/file1" "/path/to/file2" "/path/to/file3")
+    find_hps_config
+    ```
 
 ### Quality and Security Recommendations
 
-1. The function might silently fail if the `HPS_CONFIG_LOCATIONS` array is not set with valid locations. Guardrails could be put in place to check if the array is set and non-empty before proceeding.
-2. The `HPS_CONFIG_LOCATIONS` array should contain carefully considered locations only. Including directories where a malicious user can create files could lead to security vulnerabilities.
-3. When a valid file is found, the function stops looking for further files. A more robust function might also check if the located configuration file contains expected data.
-4. Surrounding the function argument "$candidate" with double quotes avoids problems with file names that contain spaces or other special characters.
-5. Use `set -e` and `set -u` options at the start of the script for a safer script. The `-e` ensures that the script ends if any command, pipeline, or sub-shell exits with a non-zero status. The `-u` option ensures the script exits if an undefined variable is used.
+1. Ensure the array `HPS_CONFIG_LOCATIONS` only contains paths to trusted, secure locations to prevent any unintended access to malicious files.
+2. Check whether files found at any of the locations are not just existing but also readable before assigning to the variable `found`.
+3. Document this function on usage and expected inputs and outputs, especially since it does not have any named input arguments. This will help avoid any potential misuse of the function.
+4. Implement error handling to capture scenarios where the `HPS_CONFIG_LOCATIONS` is either not an array or is an empty array. This will improve the function reliability.
+5. Validate and sanitize the file paths to ensure they are not misused to access unintended parts of the file system, adding an extra layer of security.
 

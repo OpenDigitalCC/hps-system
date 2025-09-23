@@ -5,31 +5,22 @@ Contained in `lib/functions.d/ipxe-menu-functions.sh`
 Function signature: b99f8e1adfe13d429e91c39da6aeab71b263f99c8d73aa5f35dd7351988760e2
 
 ### Function Overview
-
-This function, `ipxe_init`, is designed primarily to initialize the iPXE environment during boot, particularly in clusters where identification of specific hosts might not yet be complete due to unascertained MAC addresses. The function sets a configuration URL, fetches and loads the associated configuration file. The ability to handle exceptions where there is no available host configuration is also integrated into the function.
+The `ipxe_init` function is primarily used during the network booting process. Its function is to load the iPXE configuration for a client machine or host within a network. If the cluster is configured and it cannot identify the host yet (since it does not have the host's MAC address), this function gets utilized. The function requests the boot configuration from a specific URL, fetches, loads, and executes the configuration. The function also takes care of scenarios where the host configuration could not be found.
 
 ### Technical Description
-
 - **Name:** `ipxe_init`
-- **Description:** The function calls header file and requests IPXE configuration from a specific URL, fetches the config, loads it, and executes. It has a commented segment of codes for handling situations where there is no configuration file found.
-- **Globals:** [CGI_URL: The URL of the server from which the IPXE configuration file will be fetched]
-- **Arguments:** There are no arguments.
-- **Outputs:** The function doesn't have a return output as it mainly performs operations of fetching, loading, and executing configurations.
-- **Returns:** Does not return a value.
-- **Example Usage:**
-  ```bash
-  ipxe_init
-  ```
+- **Description:** The function is used to initialize ipxe, which includes fetching, loading, and executing the iPXE configuration for a host within a network.
+- **Globals:** `[CGI_URL : URL from where the iPXE configuration for hosts is fetched]`
+- **Arguments:** `None`
+- **Outputs:** Initiate a request for fetching the configuration, fetch, load, and execute the config or an error message if no host config found.
+- **Returns:** None, as the function does not return a value but executes certain operations.
+- **Example usage:** `ipxe_init`
 
 ### Quality and Security Recommendations
-
-1. Error Handling: Uncomment and adapt the code section dealing with the absence of a host configuration. It is essential that your system handles errors or exceptions properly to resist crashes or inaccuracies.
-     
-2. Input Validation: While the current function does not have any direct user input, if modifications are made in the future to incorporate any, rigorous input validation should be conducted to reduce potential security risks.
-
-3. Code Comments: There are good code comments in the functions, which increases the readability and maintainability of your code. However, ensure that any changes or updates to the code are reflected in the comments as well.
-
-4. Secure Fetch: When fetching files or configurations over a network, ensure that secure protocols are used to prevent man-in-the-middle attacks.
-
-5. Testing: Conduct rigorous testing to ensure the function operates as expected under a variety of conditions.
+1. Proper error handling should be implemented. In the current structure, there are lines that have been commented out which are supposed to handle cases where no host configuration is found. These lines should be uncommented and ensure they are working correctly.
+2. There should be validation and sanitization of the `CGI_URL` global variable given that it introduces potential security risks.
+3. Consider cases where the `imgfetch`, `imgload`, or `imgexec` commands might fail. Ensuring these commands are successful before proceeding will increase the robustness of the script.
+4. Better management and usage of global variables. Use of them can result in side effects, if they are modified in other parts of the scripts unknowingly. Consider passing `CGI_URL` as a parameter to the function.
+5. Input validation should be included for safer and more reliable script execution. This becomes crucial especially if this script is expected to run in different environments with different inputs. This will prevent potential code injection and other related security risks.
+6. Ensure the use of the script in a secure and encrypted communications environment. Since the fetching of the iPXE configuration happens over the web, using a secure HTTP protocol (HTTPS) is recommended. This helps to safeguard against potential man-in-the-middle attacks.
 

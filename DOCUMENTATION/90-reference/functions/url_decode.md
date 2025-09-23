@@ -2,36 +2,40 @@
 
 Contained in `lib/functions.d/hps_log.sh`
 
-Function signature: ff3afbc0000d42d9f1561eebfaa989db874faafa82b7e2cdf10838044a3f376d
+Function signature: 5975a81b62dcd9f26bb0618375a64252646f6ad04c8687e2bce4da8abea4dae4
 
 ### Function overview
 
-The `url_decode()` function is a bash function which decodes a URL-encoded string. The function is part of a logging system that decodes a received message before sending it to the system's log and writing it to a file, if possible. The `url_decode()` function replaces "+" characters in the encoded string with spaces, and then replaces any remaining percent-encoded characters with the corresponding ASCII characters.
+The `url_decode` function is a bash function that decodes URL-encoded strings. The function operates by first replacing any '+' characters with spaces, then replaces any '%' characters with their corresponding ASCII values. This decoded string is then printed out.
+
+Function's primary usage is to work with decoded URL data. It's mostly used to handle and interpret data gotten from URLs or to make such data more humanly readable.
+
+The other part of the code is not part of the url_decode function, but provides example usage. This code decodes a message, sends it to syslog, and writes it to a file if possible.
 
 ### Technical description
 
 - **Name:** url_decode
-- **Description:** This function takes in a URL-encoded string and decodes it into a usable string format. The decoded message is then passed on to the system's log and written to a file, if possible.
-- **Globals:** 
-   - `VAR: desc`: No global variables are explicitly used within this function.
-- **Arguments:** 
-   - `$1: desc`: This is the URL-encoded string to be decoded.
-- **Outputs:** Outputs decoded version of the URL-encoded input string.
-- **Returns:** Does not return any explicit value.
-- **Example usage:** 
+- **Description:** This function decodes a URL-encoded string.
+- **Globals:** None
+- **Arguments:** [ $1: String to be decoded ]
+- **Outputs:** Decoded string
+- **Returns:** None. The function directly prints to stdout.
+- **Example Usage:**
 
-```bash
-  # Declare a URL-encoded string
-  url_encoded="Hello%20World%21%0A"
-  
-  # Decode the message
-  url_decoded=$(url_decode "$url_encoded")
-```
+  ```bash
+  msg="[$(hps_origin_tag)] ($(detect_client_type)) $(url_decode "$raw_msg")"
+  logger -t "$ident" -p "user.${level,,}" "[${FUNCNAME[1]}] $msg"
+  ```
 
 ### Quality and security recommendations
 
-1. Robustness: Check if the URL-encoded string passed to the function is correctly formatted. This can help prevent unexpected behaviour or errors during the decoding process.
-2. Error Handling: Improve error handling by implementing a mechanism to inform the user when the writing to the log file fails.
-3. Redundancy: The function currently prints error messages to the console in addition to logging them to the system's log. Consider removing this duplication to make the function more efficient.
-4. Security: Avoid logging sensitive information. If the function is used in a situation where the messages to be logged include sensitive data, ensure this data is either not logged or is properly obfuscated before logging.
+1. Escape User Inputs: Always escape user-supplied inputs in the logging systems as failure to do so can lead to injection attacks or the printing of sensitive information.
+
+2. Secure the Log Files: If sensitive information is being logged, make sure the log files are secure and are not readable by unauthorized users.
+
+3. Error Handling: When the function fails to write to `$logfile`, it should handle such a failure more gracefully than just logging the failure message.
+
+4. Avoid Globals: While no global variables are used here, always minimize the use of them in bash scripts.
+
+5. Return Values: Even though this function is printing to the stdout, it could also return the decoded string for more flexibility.
 

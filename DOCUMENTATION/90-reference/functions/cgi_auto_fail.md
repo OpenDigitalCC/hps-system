@@ -2,29 +2,28 @@
 
 Contained in `lib/functions.d/cgi-functions.sh`
 
-Function signature: dc511ce0952b232a2422ca3ae6f4600d46e70a01062014017e66599f7fc2dc95
+Function signature: 6b67dd57145386562143b5a27ad4c4f0a1e5170fc073f8d4e91738ade5779a4d
 
-### Function Overview
+### Function overview
 
-The `cgi_auto_fail()` function is used to automatically fail a Common Gateway Interface (CGI) application. The function uses a local message or uses a default message if none is provided. It detects the client type and fails based on that detection. If the client is `ipxe`, it calls the `ipxe_cgi_fail` function. If the client is `cli`, `browser`, or `unknown`, it calls the `cgi_fail` function.
+The `cgi_auto_fail` function is primarily used to detect the client type and based on the detection, it uses different failure methods. Messages are passed as arguments to the function, and based on the client type, these messages are processed differently. If the client type is `ipxe`, the function `ipxe_cgi_fail` is called; for client types `cli`, `browser`, `script`, `unknown`, the function `cgi_fail` is called; and for all other scenarios, the function simply logs the error and echoes the message.
 
-### Technical Description
+### Technical description
 
-- Name: `cgi_auto_fail`
-- Description: A function for automated failure of CGI applications. It detects the client type and fails accordingly, using the `ipxe_cgi_fail` for `ipxe` clients and `cgi_fail` for `cli`, `browser`, or `unknown` clients.
-- Globals: None
-- Arguments: 
-  - `$1`: An optional argument. This represents a custom fail message to be used. If no message is provided, a default error message is used.
-- Outputs: The function outputs an error message to the shell.
-- Returns: Nothing.
-- Example Usage: `cgi_auto_fail "Failed to load the webpage.` This will output an error, "Failed to load the webpage," and detect the client type to fail accordingly.
+- **Name**: `cgi_auto_fail`
+- **Description**: This function is made to detect the client type and handle failure messages differently based on the client type. The client type is first detected by the function `detect_client_type`, and then care branches deal with the different cases accordingly.
+- **Globals**: None
+- **Arguments**: 
+    - `$1: msg` The failure message to be processed.
+- **Outputs**: Depending on the client type and the corresponding branch the execution enters, the output could be the execution of the `ipxe_cgi_fail` function, the `cgi_fail` function, or simply echoing the error message and logging it.
+- **Returns**: No specific return value.
+- **Example usage**: `cgi_auto_fail "Failure message"`
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. Ensure that input validation is done before calling the function to avoid unexpected results or error messages.
-2. Maintain the mappings for failure functions for each client type in one place for easy updates and adjustments.
-3. Make sure the function handles all possible client types to ensure robustness.
-4. Improve the default error message to provide more context or guidance to the user.
-5. When handling errors in web applications, it’s critical to manage the information that you expose to the user. Therefore, ensure that the error information does not expose any sensitive information like system details or user data.
-6. Make sure you always update your systems and monitor for any security vulnerabilities or attacks.
+1. Always sanitize user inputs, especially if these inputs are incorporated into messages or logs.
+2. Add comprehensive error handling and logging to help with problem detection and troubleshooting.
+3. Regularly update your logging methods to take advantage of whatever logging resources are currently available on the system.
+4. Separate the logic of error detection from the error messaging to provide a cleaner and more maintainable code.
+5. Consider employing a standard and internationalized method for handling error messages.
 

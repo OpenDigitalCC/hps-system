@@ -6,32 +6,26 @@ Function signature: 1f7c5adf70ab3b0d8ce1dc04122eff4ae6c8141a95956ef26ee00221876e
 
 ### Function overview
 
-The `ipxe_configure_main_menu` function presents a main menu to the user for the configuration of the host. It is important when a host is deployed in a cluster but not yet configured. The menu generated includes options for host installation, recovery, system configuration, advanced settings, etc. The function also checks whether forced installation is activated or not and sets up the menu accordingly.
+The bash function `ipxe_configure_main_menu` is used to generate a main menu structure for a firmware-level preboot eXecution Environment (iPXE), which gives computers the capability to load other software over network. This menu is shown when the cluster is configured but the host is not yet configured.
 
 ### Technical description
 
-**Name:** `ipxe_configure_main_menu`
+#### Function Detail:
 
-**Description:** This function generates a main configuration menu to be presented in the context of a host system within a cluster. It offers several host and system options, ranging from installation settings to advanced configurations. Forced installation status is also checked and appropriate menu options are set based on the status.
+- **Name:** `ipxe_configure_main_menu`
+- **Description:** This function is used to generate a menu structure for a preboot eXecution Environment. If the cluster is configured but the host is not, this menu is delivered. Based on various conditions like whether forced installation is enabled or not, it provides different options in the menu.
+- **Globals:** None
+- **Arguments:** None
+- **Outputs:** Prints a menu structure for configuring a host. This menu contains various options such as enabling forced installation, entering rescue shell, booting from local disk, or rebooting the host, among several others.
+- **Returns:** It doesn't return an explicit value, but generates output to stdout.
+- **Example usage:** `ipxe_configure_main_menu`
 
-**Globals:** [ `mac` : The MAC address of the host. `FI_MENU` : A string which stores the menu item related to forced installation status. `FUNCNAME` : An array variable containing the function names in the call stack, with the function at the bottom of the stack in the first position. `CGI_URL` : The URL to send CGI requests ]
+### Quality and Security Recommendations
 
-**Arguments:**
-- None
-
-**Outputs:** Delivers main configuration menu
-
-**Returns:** No return from the function as it is not supposed to yield any particular value
-
-**Example usage**: ipxe_configure_main_menu
-
-### Quality and security recommendations
-
-1. Implement rigorous input validation and sanitization to enhance security and avoid potential command injection attacks.
-2. Implement and enhance error handling to cover potential failures or anomalies during the process.
-3. Document any other potential global variables being used within this function.
-4. Implement disaster recovery host (DRH) recovery functionality as the menu item is yet to be implemented.
-5. Encrypt sensitive data such as MAC addresses, URLs, and so on to improve security.
-6. Ensure the correct generation and interpretation of the `funcname[1]` array variable to avoid potential errors.
-7. Use clear and explanatory log messages to aid in debugging and maintaining the script.
+1. To avoid shell injection, never pass untrusted input to eval, the system, or others unless you've properly sanitized it.
+2. Use `"$@"` instead of `"$*"` to correctly handle parameters with spaces or special characters.
+3. You should ensure that any local variables that should not be exported to global scope are not inadvertently exported.
+4. Check for the existence and the type of commands before invoking them.
+5. Include error checking for every command that can feasibly fail.
+6. Use a consistent style in your code to ensure better readability and maintainability.
 

@@ -4,28 +4,25 @@ Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
 Function signature: f724cbc120f1a1eae5cf985238d6bc44a932f4521832fa8959c47118c5068ed5
 
-### Function overview
+### Function Overview
+The function `ipxe_header()` is a Bash script function that is primarily used to generate a dynamic iPXE script. This function initially sends a PXE (Preboot eXecution Environment) header via a function 'cgi_header_plain', followed by setting some variables such as 'CGI_URL' and 'TITLE_PREFIX' for later use within the iPXE scripts. The main task of this function involves the construction and execution of an embedded 'heredoc' (EOF) shell script. The script is defined to set a log message, fetch an image, and echo relevant cluster and client information.
 
-The function `ipxe_header` is meant for initial preboot execution environment setup. This includes setting up a CGI header via the `cgi_header_plain` function, defining several variables to be used in IPXE scripts and outputting an embedded IPXE script.
-
-### Technical description
-
-- **Name:** ipxe_header
-- **Description:** This function is responsible for creating a Preboot eXecution Environment (PXE) header via a standard CGI header. This ensures there is no boot failure. It also sets up several variables for use in IPXE scripts and outputs an embedded IPXE script.
-- **Globals:** [ CGI_URL: URL of the boot manager script, TITLE_PREFIX: concatenated string containing cluster name, mac address and network IP ]
-- **Arguments:** None
-- **Outputs:** Outputs an embedded IPXE script which sets the log message, fetches an image for logging, and displays connection and client information to the cluster.
-- **Returns:** None 
-- **Example usage:** 
-  ```bash
+### Technical Description
+- **name**: `ipxe_header()`
+- **description**: This function sends a PXE header, sets the vital variables for later use in iPXE scripts, and concatenates an embedded here document which primarily aims to set a log message, fetch an image and echo important information involving the cluster and client.
+- **globals**: [ CGI_URL: URL sequence to be used in iPXE scripts, TITLE_PREFIX: Prefix string appended before {mac:hexraw} {net0/ip} ]
+- **arguments**: No arguments required
+- **outputs**: The function will output a dynamically generated iPXE script
+- **returns**: Function does not return any particular value
+- **example usage**: 
+  ```
   ipxe_header
   ```
 
-### Quality and security recommendations
-
-1. All global variables should be properly sanitized and their contents validated to avoid potential code injections or manipulation of expected values.
-2. Generally avoid crafting URLs manually, when possible, as it opens up potential for URL manipulation and injection attacks.
-3. Place detailed and pertinent comments on critical sections of the code to ensure maintainability and understandability.
-4. Parameters passed to the function could be validated - by checking type, format or range - before using them inside the function to make sure they are in expected form.
-5. Implement error handling mechanism for the cases when "imgfetch" fails or has an error.
+### Quality and Security Recommendations
+1. Sanitize Input and Output: Ensure that all the variables used in the function are properly sanitized to prevent injection attacks.
+2. Error Handlers: Add error handlers to catch failures and ensure that the function behaves as expected in all cases, particularly when fetching the image via 'imgfetch'.
+3. Keep URLs and Ports Secure: The function's 'CGI_URL' that is obtained from 'next-server' must be kept secure, as any lapses could potentially open doors to malicious attacks.
+4. Be Cautious of Command Injection: Since shell scripts are vulnerable to command injection attacks, it is advisable to use built-in language features that ensure variable expansion does not permit arbitrary command execution.
+5. Code Maintainability: Comment the code in a structured manner for increased readability and ease of future maintenance.
 

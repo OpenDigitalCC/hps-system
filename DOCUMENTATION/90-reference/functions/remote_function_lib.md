@@ -4,24 +4,29 @@ Contained in `lib/functions.d/kickstart-functions.sh`
 
 Function signature: b6d9cd335e4f61b186f614aa07279b2f8bdd77298bf573a231ffd21869c18118
 
-### Function Overview
+### 1. Function Overview
 
-`remote_function_lib` can be described as a "meta" or higher-order function that essentially creates and exports a library of Bash functions. This code block is designed to synthesize a set of functions that can be injected into the pre and post sections of a remote script, affording a greater degree of modularity and reusability in a Bash-based program. Given the comment, this function is apparently a single point of reference for these functions, but there is a suggestion to move it to its own separate file for more organize project structure.
+The `remote_function_lib` function in Bash is a method to output a collection of functions that are supposed to be introduced into the pre and post sections of a script or command sequence. This function can be extremely useful in scenarios where repeated sections of code are needed across various parts of a script, allowing the user to maintain the DRY (Do not Repeat Yourself) principle. While the function currently outputs a predefined set of functions directly into the pre and post sections, future enhancements might permit the functions to be defined within an independent file and imported when needed.
 
-### Technical Description
+### 2. Technical Description
 
-- **Name:** `remote_function_lib`
-- **Description:** This function generates functions that are intended to be injected into pre and post sections of a remote script.
-- **Globals:** None
-- **Arguments:** None. 
-- **Outputs:** It outputs the injection functions in a here-document format.
-- **Returns:** No values are returned directly from the function.
-- **Example usage:** `remote_function_lib`
+- **Name**: `remote_function_lib`
+- **Description**: A Bash function that outputs multiple functions to be used in pre and post script/command sequences.
+- **Globals**: None.
+- **Arguments**: No explicit arguments.
+- **Outputs**: A collection of functions that can be injected into the pre and post sections of a script or command sequence.
+- **Returns**: The function does not explicitly return any value; it instead outputs multiple functions to be used elsewhere.
+- **Example Usage**:
+```bash
+remote_function_lib
+```
 
-### Quality and Security Recommendations
+### 3. Quality and Security Recommendations
 
-1. The commenter recommends considering moving this library into its own separate file. This is indeed a good practice, especially in larger codebases, because it can help to modularize the code and improve the overall maintainability of the codebase.
-2. The function does not currently accept any arguments. Depending on how flexible the library of functions needs to be, it may be beneficial to add parameters that can customize its creation.
-3. While here-documents are a valid and efficient way to create multi-line outputs in Bash, injecting functions in this way could potentially open up security concerns, such as code injection vulnerabilities, depending on how the output is used. It is recommended to carefully sanitize and validate any input that could end up being executed as code.
-4. As a general security practice, it may be helpful to add error checking within the function, or even return meaningful error messages if something in function library creation process goes wrong. This could prove to be beneficial in troubleshooting potential issues.
+1. To enhance code readability, consider moving the return functions into an independent file. This independent file can then be called within this function.
+2. It would be better to include proper namings of the functions as comments to enhance readability.
+3. For security purposes, consider adding input validations when the function starts handling command-line arguments.
+4. Avoid exporting unnecessary global variables. They can conflict with variables from other parts of the scripts or be manipulated by unauthorized users.
+5. Always use the latest version of Bash to get higher security and better new features from the latest updates.
+6. Regularly run your code through static code analyzers (like ShellCheck) to catch potential bugs and security issues.
 

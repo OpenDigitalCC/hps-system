@@ -5,27 +5,21 @@ Contained in `lib/host-scripts.d/rocky.sh`
 Function signature: c64e26c5e886b1a0aded061414c66873630e97cae41cf2c7a37f800fd6866674
 
 ### Function overview
-
-The `build_zfs_source` function in Bash initiates the building and installation process for the source files of the ZFS file system utility. The function operates by fetching the source files and related indexes from a specified online source, performing the setup and extraction, and subsequently installing the components using system-level package managers and the make utility. It also takes care of all dependencies and carries out error checking at every critical step.
+The `build_zfs_source()` function is a part of a shell script that fetches ZFS (Z File System) source packages, builds them, and installs them in a predefined build directory on a machine that is provisioned via a remote gateway. This function is specific to systems running Rocky Linux. ZFS is a combined file system and logical volume manager that is scalable and includes extensive protection against data corruption.
 
 ### Technical description
-
-- **Name**: build_zfs_source
-- **Description**: A Bash function used to build and install the ZFS file system utility from source files gotten from a specified source.
-- **Globals**: None.
-- **Arguments**: None.
-- **Outputs**: Logs indicating the progress and any errors occurred during the build and installation process.
-- **Returns**: 0 if operation is successful and ZFS is installed properly. Otherwise, returns 1.
+- **Name**: `build_zfs_source()`
+- **Description**: This function fetches source packages for ZFS from a specified source URL through a remote gateway, builds them, and installs them in a build directory. It first establishes a connection with the remote gateway and fetches the index file of the source packages. After verifying the index file, it fetches the specific source package for ZFS, downloads it, and begins the process of setting up the build environment by installing the necessary build dependencies. It then extracts the source archive and initiates the build process. Finally, it checks for successful installation by querying the installed ZFS module information.
+- **Globals**: None directly within function
+- **Arguments**: None
+- **Outputs**: Various log messages about the progress and/or success or failure of each step. The function logs this output using the `remote_log` command.
+- **Returns**: `0` if the function successfully downloads, builds, and installs the ZFS packages, otherwise `1`.
 - **Example usage**: `build_zfs_source`
- 
-### Quality and security recommendations
 
-1. Enhance curl command with the appropriate security flags to ensure secure transmission of data and handle redirects appropriately.
-2. Add error handling to the `curl` and `wget` commands to make debugging less cumbersome.
-3. Implement some user level access control mechanisms.
-4. Consider encrypting the sensitive data such as URLs.
-5. Code DEP (Data Execution Prevention) should be enabled to minimize exposure to exploits.
-6. Improve error messages for better clarity and debugging.
-7. Check and handle any potential failing points in the code.
-8. Validate and sanitize inputs and outputs.
+### Quality and security recommendations
+1. **Error handling**: Improve error handling by providing more specific messages about what went wrong when a step fails, and by thoroughly cleaning up (e.g., deleting temporary files and directories) when an error occurs.
+2. **Dependency checks**: Before proceeding with the download, build, and installation steps, explicitly check for the presence of required tools like `curl`, `wget`, `dnf`, `tar`, etc., and give an appropriate error message if any is missing.
+3. **Gatekeeping**: Check the integrity of downloaded files before proceeding to use them. This can help prevent potential security issues.
+4. **Code comments**: Although the code's structure and logic are generally clear, adding more comments to explain what each significant step does would make it easier for others to understand and maintain the code.
+5. **Quoting**: Always quote your variable expansions. For example, use `"$var"` instead of `$var` to prevent word splitting and pathname expansion. Already properly implemented in this code.
 
