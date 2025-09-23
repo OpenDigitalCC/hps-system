@@ -31,7 +31,7 @@ Several library functions are provided to initialise and manage storage nodes:
 - **ZFS install and configure functions**  
   Automate installation of ZFS, creation of zpools, and export of zvols for use as iSCSI devices.
 
-Additional functions can be added over time. These are distributed to remote nodes (e.g. TCNs and SCNs) and sourced locally so they can operate with the same provisioning logic as the HPS controller.
+Additional functions can be added over time. These are distributed to remote nodes (e.g. TCNs and SCHs) and sourced locally so they can operate with the same provisioning logic as the HPS controller.
 
 ---
 
@@ -52,17 +52,17 @@ Future expansions will allow additional variables such as **ISCSI_DATA_N** to de
 
 ### Provisioning workflow
 
-1. **SCN setup**  
+1. **SCH setup**  
    Storage cluster hosts are provisioned with ZFS and OpenSVC. ZFS zpools and zvols are created as needed for iSCSI targets.
 
 2. **TCN request**  
    When a thin compute node is being installed, the provisioning system determines its storage requirements and allocates ISCSI_ROOT variables.
 
 3. **OpenSVC orchestration**  
-   OpenSVC is instructed to create the relevant iSCSI targets on one or more SCNs. These zvol-backed targets are exported over the storage network.
+   OpenSVC is instructed to create the relevant iSCSI targets on one or more SCHs. These zvol-backed targets are exported over the storage network.
 
 4. **Client RAID**  
-   The TCN combines the iSCSI devices into a RAID set (e.g. RAID1 using `mdadm`) to provide redundancy. This allows failover if one SCN becomes unavailable.
+   The TCN combines the iSCSI devices into a RAID set (e.g. RAID1 using `mdadm`) to provide redundancy. This allows failover if one SCH becomes unavailable.
 
 5. **Installation**  
    The TCN OS is installed directly onto the iSCSI-backed RAID devices, making it fully diskless and resilient to back-end failures.
@@ -77,13 +77,13 @@ Future expansions will allow additional variables such as **ISCSI_DATA_N** to de
 - Automated provisioning of **ISCSI_DATA** targets for application and workload storage.  
 - Enhanced ZFS tuning (e.g. `volblocksize`, `compression`, `logbias`) to optimise for specific workloads.  
 - Integration of monitoring hooks so that OpenSVC and HPS can track zpool health and iSCSI target performance.  
-- Support for flexible RAID scenarios where high-value services use multiple SCNs while low-cost services may only rely on a single disk.
+- Support for flexible RAID scenarios where high-value services use multiple SCHs while low-cost services may only rely on a single disk.
 
 ---
 
 ### Acronyms
 
-- **SCN** – Storage cluster node (storage host).  
+- **SCH** – Storage cluster node (storage host).  
 - **TCN** – Thin compute node (diskless compute host).  
 - **ZFS** – Advanced file system and volume manager used for iSCSI backing.  
 - **iSCSI** – Protocol that exports block storage devices over a TCP/IP network.  
