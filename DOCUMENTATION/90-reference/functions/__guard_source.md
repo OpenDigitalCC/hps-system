@@ -5,26 +5,29 @@ Contained in `lib/functions.sh`
 Function signature: e8beb9b32cabb9e73dba64f7b102ad5f1112590b455a914144bd65e5d3001168
 
 ### Function overview
-The function `__guard_source()` is a utility within Bash scripting that helps in preventing a source file from being included and executed more than once. When calling a script source file that has already been loaded, the function immediately returns to prevent duplicated execution.
+
+The function `__guard_source()` is a bash script guard, designed to prevent sourcing a script more than once. This function takes the name of a previously-sourced script and stores it in a guard variable. The function returns '1' if the script has already been sourced (indicating an error and preventing further sourcing) and '0' if not.
 
 ### Technical description
-- **Name:** __guard_source()
-- **Description:** This function prevents a source file from being executed multiple times in a Bash script. It achieves this by creating a unique variable based on the filename of the source file being called, checking if it already exists, and returning if it does.
-- **Globals:** None
-- **Arguments:** None
-- **Outputs:** None
-- **Returns:** 1 if the source file has already been included, 0 if it is the first time.
-- **Example usage:**
 
-  ```bash
-  source ./myscript.sh
-  __guard_source
-  ```
+- **name:** `__guard_source()`
+- **description:** This function is used to avoid multiple sourcing of the same bash script for the prevention of redundant operations, potential recursion and unexpected behavior. It generates a guard variable for the sourced script and checks if the script has been previously executed or sourced, and if so, the function will return 1 preventing the script from re-executing.
+- **globals:** [ `_guard_var: Guard variable created for each sourced script to mark its execution. It uses the script name with nonalphanumeric replaced with '_'` ]
+- **arguments:** [ `$1: Unused in this function.`, `$2: Also unused in this function.` ]
+- **outputs:** No output is returned to stdout/stderr.
+- **returns:**  `0 if the script or source has not been run before, and 1 if it has and encoutered an error`
+- **example usage:**
+```bash
+if ! __guard_source; then
+    echo "Script already sourced once"
+fi
+source script.sh
+```
 
 ### Quality and security recommendations
-1. **Input validation:** The function should validate if the value of `${BASH_SOURCE[1]}` exists and is a valid source file before attempting to process it.
-2. **Error handling:** The function should have clear error handling and messaging when the source file does not exist or is not accessible.
-3. **Security:** Use of the `declare` keyword can lead to code injections if not properly handled. Make sure the input source file name can't be arbitrarily set by the user.
-4. **Documentation:** Make sure to properly comment the code to provide a better understanding of what the function does and how it works.
-5. **Testing:** Unit test cases should be written to test the function's behavior under different conditions and with a variety of source file names. This will ensure that the function behaves as expected and will catch any errors or issues that might arise in the future.
+
+1. Clear documentation: Each function, global variable and return value should be clearly documented for future developers.
+2. Error handling: The function should handle possible errors gracefully and clear, meaningful messages should be returned.
+3. Input Validation: Currently, the function does not take any arguments, but for future enhancement if it does, it should validate the input before processing it.
+4. Use Strict Mode: To catch errors and undefined variables sooner, consider enabling a 'strict mode' in your scripts with `set -euo pipefail`.
 
