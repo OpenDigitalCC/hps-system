@@ -1,259 +1,362 @@
 
 ## NODE Functions
 
-enable_iscsi_target_reload_on_boot() {
-  # Check for required files and services
-  if [[ ! -f /etc/target/saveconfig.json ]]; then
-    echo "⚠️ No saved iSCSI configuration found at /etc/target/saveconfig.json"
+
+#===============================================================================
+# node_lio_manage
+# ---------------
+# Manage LIO iSCSI target operations (create, delete, start, stop, status).
+#
+# Behaviour:
+#   - Dispatches LIO operations to specific handlers
+#   - Validates required parameters for each action
+#   - Uses remote_log for progress and error reporting
+#   - Supports iSCSI target lifecycle operations
+#
+# Arguments:
+#   $1 - action (create|delete|start|stop|status|list)
+#   $@ - additional arguments (varies by action)
+#
+# Action-specific arguments:
+#   create: --iqn <iqn> --device <device> [--acl <initiator-iqn>]
+#   delete: --iqn <iqn>
+#   start:  (starts targetcli service)
+#   stop:   (stops targetcli service)
+#   status: (shows target status)
+#   list:   (lists all targets)
+#
+# Examples:
+#   node_lio_manage start
+#   node_lio_manage create --iqn iqn.2025-09.local:vm-a --device /dev/zvol/pool/vol1
+#   node_lio_manage delete --iqn iqn.2025-09.local:vm-a
+#
+# Returns:
+#   0 on success
+#   1 on error (invalid action or operation failure)
+#===============================================================================
+node_lio_manage() {
+  local action="$1"
+  shift
+  
+  # Validate action
+  if [ -z "$action" ]; then
+    remote_log "Usage: node_lio_manage <action> [options]"
     return 1
   fi
-
-  if ! systemctl list-unit-files | grep -q '^target.service'; then
-    echo "❌ 'target.service' not found. Is 'rtslib-fb-target' installed?"
-    return 1
-  fi
-
-  echo "🔧 Enabling iSCSI target config reload at boot..."
-
-  systemctl enable target && systemctl restart target
-
-  if systemctl is-enabled target &>/dev/null; then
-    echo "✅ iSCSI target.service enabled and started."
-  else
-    echo "❌ Failed to enable target.service."
-    return 1
-  fi
+  
+  # Dispatch to action handler
+  case "$action" in
+    create)
+      node_lio_create "$@"
+      ;;
+    delete)
+      node_lio_delete "$@"
+      ;;
+    start)
+      node_lio_start "$@"
+      ;;
+    stop)
+      node_lio_stop "$@"
+      ;;
+    status)
+      node_lio_status "$@"
+      ;;
+    list)
+      node_lio_list "$@"
+      ;;
+    *)
+      remote_log "Unknown LIO action '${action}'. Valid: create, delete, start, stop, status, list"
+      return 1
+      ;;
+  esac
+  
+  return $?
 }
 
-
-check_iscsi_export_available() {
-  # Check for targetcli
-  if ! command -v targetcli >/dev/null 2>&1; then
-    echo "❌ 'targetcli' not found. Please install the targetcli package."
+#===============================================================================
+# node_lio_create
+# ---------------
+# Create iSCSI target with backstore and optional ACL.
+#
+# Behaviour:
+#   - Validates required parameters (iqn, device)
+#   - Creates block backstore from device
+#   - Creates iSCSI target with specified IQN
+#   - Creates LUN mapping
+#   - Optionally configures initiator ACL
+#   - Uses remote_log for progress reporting
+#
+# Arguments:
+#   --iqn <iqn>              - iSCSI Qualified Name
+#   --device <device>        - Block device path (e.g., /dev/zvol/pool/vol1)
+#   [--acl <initiator-iqn>]  - Optional: initiator IQN for ACL
+#
+# Returns:
+#   0 on success
+#   1 on error (missing parameters or targetcli failure)
+#===============================================================================
+node_lio_create() {
+  local iqn="" device="" acl=""
+  
+  # Parse arguments
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --iqn) iqn="$2"; shift 2 ;;
+      --device) device="$2"; shift 2 ;;
+      --acl) acl="$2"; shift 2 ;;
+      *) remote_log "Unknown parameter: $1"; return 1 ;;
+    esac
+  done
+  
+  # Validate required parameters
+  if [ -z "$iqn" ] || [ -z "$device" ]; then
+    remote_log "Missing required parameters. Usage: --iqn <iqn> --device <device> [--acl <initiator-iqn>]"
     return 1
   fi
-
-  # Check for configfs mount (used by LIO)
-  if ! mountpoint -q /sys/kernel/config; then
-    echo "⚠️ configfs not mounted. Attempting to mount..."
-    if ! mount -t configfs configfs /sys/kernel/config 2>/dev/null; then
-      echo "❌ Failed to mount configfs. iSCSI export via LIO not available."
+  
+  # Check if device exists
+  if [ ! -e "$device" ]; then
+    remote_log "Device ${device} does not exist"
+    return 1
+  fi
+  
+  # Extract backstore name from IQN (use last part after colon)
+  local backstore_name="${iqn##*:}"
+  
+  # Create backstore
+  remote_log "Creating backstore ${backstore_name} for device ${device}"
+  if ! targetcli /backstores/block create name="${backstore_name}" dev="${device}"; then
+    remote_log "Failed to create backstore ${backstore_name}"
+    return 1
+  fi
+  
+  # Create iSCSI target
+  remote_log "Creating iSCSI target ${iqn}"
+  if ! targetcli /iscsi create "${iqn}"; then
+    remote_log "Failed to create iSCSI target ${iqn}"
+    targetcli /backstores/block delete "${backstore_name}"
+    return 1
+  fi
+  
+  # Create LUN (using default TPG1)
+  remote_log "Creating LUN for ${iqn}"
+  if ! targetcli "/iscsi/${iqn}/tpg1/luns" create "/backstores/block/${backstore_name}"; then
+    remote_log "Failed to create LUN"
+    targetcli /iscsi delete "${iqn}"
+    targetcli /backstores/block delete "${backstore_name}"
+    return 1
+  fi
+  
+  # Configure ACL if provided
+  if [ -n "$acl" ]; then
+    remote_log "Configuring ACL for initiator ${acl}"
+    if ! targetcli "/iscsi/${iqn}/tpg1/acls" create "${acl}"; then
+      remote_log "Failed to create ACL"
+      targetcli /iscsi delete "${iqn}"
+      targetcli /backstores/block delete "${backstore_name}"
       return 1
     fi
+  else
+    # Disable authentication for demo/testing (enable write access for any initiator)
+    remote_log "Disabling authentication (demo mode)"
+    targetcli "/iscsi/${iqn}/tpg1" set attribute authentication=0 demo_mode_write_protect=0 generate_node_acls=1
   fi
-
-  # Check if LIO kernel modules are available (needed for /sys/kernel/config/target)
-  if [[ ! -d /sys/kernel/config/target ]]; then
-    echo "❌ LIO kernel target modules are not loaded or supported."
-    return 1
-  fi
-
-  echo "✅ iSCSI export environment is ready (targetcli + LIO)"
+  
+  # Save configuration
+  targetcli saveconfig
+  
+  remote_log "Successfully created iSCSI target ${iqn} with device ${device}"
   return 0
 }
 
 
 
-iscsi_targetcli_export() {
-  local iqn="$1"
-  local zvol_path="$2"
-  local backstore_name="$3"
-  local bind_ip="$4"
-  local port="$5"
-  local new_target="$6"  # 1 if new target, 0 if existing
-
-  targetcli <<EOF
-/backstores/block create ${backstore_name} ${zvol_path}
-$( [[ "$new_target" == 1 ]] && echo "/iscsi create ${iqn}" )
-/iscsi/${iqn}/tpg1/luns create /backstores/block/${backstore_name}
-$( [[ "$new_target" == 1 ]] && echo "/iscsi/${iqn}/tpg1/portals create ${bind_ip} ${port}" )
-$( [[ "$new_target" == 1 ]] && cat <<EOT
-/iscsi/${iqn}/tpg1 set attribute authentication=0
-/iscsi/${iqn}/tpg1 set attribute generate_node_acls=1
-/iscsi/${iqn}/tpg1 set attribute demo_mode_write_protect=0
-EOT
-)
-EOF
-rtslib_save_config
-}
-
-
-create_iscsi_target() {
-  local remote_host="$1"
-  local ip="${2:-0.0.0.0}"
-  local port="${3:-3260}"
-
-  if [[ -z "$remote_host" ]]; then
-    echo "Usage: create_iscsi_target <remote_host> [ip] [port]"
+#===============================================================================
+# node_lio_delete
+# ---------------
+# Delete iSCSI target and associated backstore.
+#
+# Behaviour:
+#   - Validates required parameter (iqn)
+#   - Checks if target exists before deletion
+#   - Deletes iSCSI target
+#   - Deletes associated backstore if it exists
+#   - Uses remote_log for progress reporting
+#
+# Arguments:
+#   --iqn <iqn>  - iSCSI Qualified Name
+#
+# Returns:
+#   0 on success
+#   1 on error (missing parameters or targetcli failure)
+#===============================================================================
+node_lio_delete() {
+  local iqn=""
+  
+  # Parse arguments
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --iqn) iqn="$2"; shift 2 ;;
+      *) remote_log "Unknown parameter: $1"; return 1 ;;
+    esac
+  done
+  
+  # Validate required parameters
+  if [ -z "$iqn" ]; then
+    remote_log "Missing required parameter. Usage: --iqn <iqn>"
     return 1
   fi
-
-  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
-
-  if ! check_iscsi_export_available; then
-    echo "❌ iSCSI target prerequisites not met"
+  
+  # Extract backstore name from IQN
+  local backstore_name="${iqn##*:}"
+  
+  # Check if target exists
+  if ! targetcli /iscsi ls 2>/dev/null | grep -q "${iqn}"; then
+    remote_log "iSCSI target ${iqn} does not exist"
     return 1
   fi
-
-  targetcli <<EOF
-/iscsi create ${iqn}
-/iscsi/${iqn}/tpg1/portals create ${ip} ${port}
-/iscsi/${iqn}/tpg1 set attribute authentication=0
-/iscsi/${iqn}/tpg1 set attribute generate_node_acls=1
-/iscsi/${iqn}/tpg1 set attribute demo_mode_write_protect=0
-EOF
-  rtslib_save_config
-  echo "✅ Created iSCSI target '${iqn}' on ${ip}:${port}"
-}
-
-
-
-
-
-# Check if rtslib is usable
-rtslib_check_available() {
-  python3 -c 'import rtslib_fb' 2>/dev/null || {
-    echo "❌ python3-rtslib_fb is not available"
+  
+  # Delete iSCSI target
+  remote_log "Deleting iSCSI target ${iqn}"
+  if targetcli /iscsi delete "${iqn}" 2>&1; then
+    remote_log "Successfully deleted iSCSI target ${iqn}"
+  else
+    remote_log "Failed to delete iSCSI target ${iqn}"
     return 1
-  }
+  fi
+  
+  # Check if backstore exists before trying to delete
+  if targetcli /backstores/block ls 2>/dev/null | grep -q "${backstore_name}"; then
+    remote_log "Deleting backstore ${backstore_name}"
+    if targetcli /backstores/block delete "${backstore_name}" 2>&1; then
+      remote_log "Successfully deleted backstore ${backstore_name}"
+    else
+      remote_log "Warning: Failed to delete backstore ${backstore_name}"
+    fi
+  else
+    remote_log "Backstore ${backstore_name} does not exist, skipping"
+  fi
+  
+  # Save configuration
+  targetcli saveconfig
+  
   return 0
 }
 
 
-# ---- Bash Python wrappers
 
 
-
-
-# Check if rtslib is usable
-rtslib_check_available() {
-  python3 -c 'import rtslib_fb' 2>/dev/null || {
-    echo "❌ python3-rtslib_fb is not available"
+#===============================================================================
+# node_lio_start
+# --------------
+# Start the target service.
+#
+# Behaviour:
+#   - Starts and enables the target service
+#   - Uses remote_log for progress reporting
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on error
+#===============================================================================
+node_lio_start() {
+  remote_log "Starting target service"
+  
+  if systemctl start target && systemctl enable target; then
+    remote_log "Successfully started target service"
+    return 0
+  else
+    remote_log "Failed to start target service"
     return 1
-  }
+  fi
+}
+
+#===============================================================================
+# node_lio_stop
+# -------------
+# Stop the target service.
+#
+# Behaviour:
+#   - Stops the target service
+#   - Uses remote_log for progress reporting
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on error
+#===============================================================================
+node_lio_stop() {
+  remote_log "Stopping target service"
+  
+  if systemctl stop target; then
+    remote_log "Successfully stopped target service"
+    return 0
+  else
+    remote_log "Failed to stop target service"
+    return 1
+  fi
+}
+
+#===============================================================================
+# node_lio_status
+# ---------------
+# Show target service status and configuration.
+#
+# Behaviour:
+#   - Displays systemd service status
+#   - Shows current target configuration
+#   - Uses remote_log for error reporting
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on error
+#===============================================================================
+node_lio_status() {
+  echo "=== Target Service Status ==="
+  systemctl status target --no-pager
+  
+  echo ""
+  echo "=== LIO Configuration ==="
+  targetcli ls
+  
   return 0
 }
 
-# Save config persistently
-rtslib_save_config() {
-  python3 - <<'EOF'
-from rtslib_fb import RTSRoot
-RTSRoot().save_to_file()
-EOF
+#===============================================================================
+# node_lio_list
+# -------------
+# List all configured iSCSI targets.
+#
+# Behaviour:
+#   - Lists all iSCSI targets and their LUNs
+#   - Uses remote_log for error reporting
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 on error
+#===============================================================================
+node_lio_list() {
+  echo "=== iSCSI Targets ==="
+  targetcli /iscsi ls
+  
+  echo ""
+  echo "=== Block Backstores ==="
+  targetcli /backstores/block ls
+  
+  return 0
 }
 
-# Create iSCSI target for remote host
-rtslib_create_target() {
-  local remote_host="$1"
-  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
 
-  python3 - <<EOF
-from rtslib_fb import RTSRoot, Target, TPG, FabricModule
 
-name = "$iqn"
-fm = FabricModule("iscsi")
-try:
-    target = Target(fm, wwn=name)
-    tpg = TPG(target, mode="create")
-    tpg.set_attribute("generate_node_acls", True)
-    tpg.set_attribute("authentication", False)
-    tpg.set_attribute("demo_mode_write_protect", False)
-    tpg.enable = True
-    RTSRoot().save_to_file()
-except Exception as e:
-    print(f"❌ Failed to create target: {e}")
-    exit(1)
-EOF
-}
-
-# Add LUN (zvol) to target
-rtslib_add_lun() {
-  local remote_host="$1"
-  local zvol_path="$2"
-  local zvol_name
-  zvol_name=$(basename "$zvol_path")
-  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
-
-  python3 - <<EOF
-from rtslib_fb import RTSRoot, BlockStorageObject
-
-iqn = "$iqn"
-zvol_path = "$zvol_path"
-zvol_name = "$zvol_name"
-found = False
-
-for target in RTSRoot().targets:
-    if target.wwn == iqn:
-        found = True
-        tpg = target.tpgs[0]
-        bs = BlockStorageObject(name=zvol_name, dev=zvol_path)
-        tpg.luns.append(bs)
-        break
-
-if not found:
-    print("❌ Target not found")
-    exit(1)
-
-RTSRoot().save_to_file()
-EOF
-}
-
-# List all iSCSI targets
-rtslib_list_targets() {
-  python3 - <<EOF
-from rtslib_fb import RTSRoot
-
-for t in RTSRoot().targets:
-    if t.fabric_module.name == "iscsi":
-        print(t.wwn)
-EOF
-}
-
-# List LUNs for a given target
-rtslib_list_luns_for_target() {
-  local remote_host="$1"
-  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
-
-  echo "📦 LUNs for iSCSI target '${iqn}':"
-
-  python3 - <<EOF
-from rtslib_fb import RTSRoot
-
-iqn = "$iqn"
-found = False
-for t in RTSRoot().targets:
-    if t.wwn == iqn:
-        found = True
-        for tpg in t.tpgs:
-            for i, lun in enumerate(tpg.luns):
-                try:
-                    obj = lun.storage_object
-                    print(f"   {i} → {obj.name} ({obj.udev_path})")
-                except Exception as e:
-                    print(f"   {i} → <error: {e}>")
-        break
-if not found:
-    print("   ❌ Target not found")
-EOF
-}
-
-# Delete a target by hostname
-rtslib_delete_target() {
-  local remote_host="$1"
-  local iqn="iqn.$(date +%Y-%m).local.hps:${remote_host}"
-
-  python3 - <<EOF
-from rtslib_fb import RTSRoot
-
-iqn = "$iqn"
-for t in list(RTSRoot().targets):
-    if t.wwn == iqn:
-        t.delete()
-        RTSRoot().save_to_file()
-        print("✅ Target deleted")
-        break
-else:
-    print("❌ Target not found")
-EOF
-}
 

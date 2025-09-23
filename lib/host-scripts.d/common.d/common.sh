@@ -1,13 +1,106 @@
 # /srv/hps/functions.d/common.sh
 
+
+#===============================================================================
+# node_storage_manager
+# --------------------
+# Wrapper function to manage zvol and iSCSI operations on storage nodes.
+#
+# Behaviour:
+#   - Validates component and action arguments
+#   - Dispatches to component-specific management functions
+#   - Uses remote_log for all progress and error reporting
+#   - Returns appropriate exit codes for orchestration
+#
+# Arguments:
+#   $1 - component (lio|zvol)
+#   $2 - action (start|stop|create|delete|etc)
+#   $@ - additional arguments passed to component function
+#
+# Examples:
+#   node_storage_manager lio start
+#   node_storage_manager zvol create --pool ztest --name vm-a --size 40G
+#
+# Returns:
+#   0 on success
+#   1 on error (invalid component or operation failure)
+#===============================================================================
+node_storage_manager() {
+  local component="$1"
+  local action="$2"
+  shift 2
+  
+  # Validate arguments
+  if [ -z "$component" ] || [ -z "$action" ]; then
+    remote_log "Usage: node_storage_manager <component> <action> [options]"
+    return 1
+  fi
+  
+  # Dispatch to appropriate function
+  case "$component" in
+    lio)
+      remote_log "Executing LIO ${action}"
+      node_lio_manage "$action" "$@"
+      ;;
+    zvol)
+      remote_log "Executing zvol ${action}"
+      node_zvol_manage "$action" "$@"
+      ;;
+    *)
+      remote_log "Unknown component '${component}'. Valid: lio, zvol"
+      return 1
+      ;;
+  esac
+  
+  local result=$?
+  if [ $result -eq 0 ]; then
+    remote_log "${component} ${action} completed successfully"
+  else
+    remote_log "${component} ${action} failed with code ${result}"
+  fi
+  
+  return $result
+}
+
+
 ## NODE Functions
 
-
-# Logging helpers
-log() {
-  echo "[HPS:$(date +%H:%M:%S)] $*"
-  remote_log "$*"
+refresh_node_functions() {
+  local provisioning_node
+  local functions_url
+  
+  # Get the provisioning node IP
+  provisioning_node=$(get_provisioning_node)
+  
+  if [ -z "$provisioning_node" ]; then
+    echo "ERROR: Could not determine provisioning node" >&2
+    return 1
+  fi
+  
+  # Construct the URL
+  functions_url="http://${provisioning_node}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=x86_64-linux-rocky-10.0"
+  
+  # Ensure directory exists
+  mkdir -p /srv/hps/lib
+  
+  # Download the functions
+  if curl -fsSL "$functions_url" > /srv/hps/lib/node_functions.sh; then
+    echo "Successfully refreshed node functions from ${provisioning_node}"
+    
+    # Reload functions in current shell if being sourced
+    if [ -n "$BASH_VERSION" ]; then
+      . /srv/hps/lib/node_functions.sh
+    fi
+    
+    return 0
+  else
+    echo "ERROR: Failed to download functions from ${provisioning_node}" >&2
+    return 1
+  fi
 }
+
+
+
 
 
 
@@ -147,11 +240,14 @@ remote_cluster_variable() {
 # remote_log (refactor to reuse url_encode) — optional
 remote_log() {
   local message="${1:?Usage: remote_log <message>}"
+  local function="${FUNCNAME[1]}"
   local gateway
   gateway="$(get_provisioning_node)" || return 1
-  local enc_msg
-  enc_msg="$(url_encode "$message")"
-  curl -fsS -X POST "http://${gateway}/cgi-bin/boot_manager.sh?cmd=log_message&message=${enc_msg}"
+  local enc_message
+  enc_message="$(url_encode "$message")"
+  local enc_funct
+  enc_function="$(url_encode "$function")"
+  curl -fsS -X POST "http://${gateway}/cgi-bin/boot_manager.sh?cmd=log_message&message=${enc_message}&function=${enc_function}"
 }
 
 

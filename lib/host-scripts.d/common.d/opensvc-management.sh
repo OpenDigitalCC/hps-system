@@ -5,26 +5,26 @@
 initialise_opensvc_cluster() {
   local cluster_name node_tags rc unit
 
-  remote_log "Initialising OpenSVC cluster (server-side MAC resolution in effect)"
+  remote_log "Initialising OpenSVC cluster"
 
   # --- 1) Read desired values from HPS configs ---
-  cluster_name="$(cluster_config get CLUSTER_NAME 2>/dev/null || true)"
+  cluster_name="$(remote_cluster_variable CLUSTER_NAME 2>/dev/null || true)"
   if [[ -z "$cluster_name" ]]; then
     remote_log "CLUSTER_NAME not found in cluster_config; aborting."
     return 1
   fi
   # TYPE -> tags (leave as-is if you already store proper tags)
-  node_tags="$(host_config get TYPE 2>/dev/null || true)"
+  node_tags="$(remote_host_variable TYPE 2>/dev/null || true)"
   [[ -n "$node_tags" ]] && node_tags="$(echo "$node_tags" | tr '[:upper:]' '[:lower:]')"
 
   # --- 2) Apply cluster name (idempotent-friendly: just set; agent handles no-op) ---
   _osvc_run "set cluster.name=${cluster_name}" \
-    om cluster config update --kw "cluster.name=${cluster_name}" || return 1
+    om cluster set --kw "cluster.name=${cluster_name}" || return 1
 
   # --- 3) Apply node tags (optional) ---
   if [[ -n "$node_tags" ]]; then
     _osvc_run "set node tags=${node_tags}" \
-      om node config update --kw "tags=${node_tags}" || return 1
+      om node set --kw "tags=${node_tags}" || return 1
   else
     remote_log "No TYPE in host_config; skipping node tags"
   fi
