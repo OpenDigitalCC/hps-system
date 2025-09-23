@@ -42,10 +42,10 @@ printf 'pid:%s user:%s host:%s' "$$" "$user" "$host"
       mac="$(get_client_mac "$rip" 2>/dev/null || true)"
     fi
     if [[ -n "$mac" ]]; then
-      printf 'mac:%s' "$mac"
+      printf '%s' "$mac"
     else
       # Fall back to IP tag if MAC cannot be resolved
-      printf 'ip:%s' "$rip"
+      printf '%s' "$rip"
     fi
     return 0
   fi
