@@ -3,6 +3,112 @@
 
 List of requirements and ideas not yet implemented
 
+## Provision iSCSI on SCH for thin servers
+
+
+Thin Node - boot disk deploy: order of events
+
+At SCH creation time:
+
+- ✅ HPS Node functions loaded
+- HPS Node function wrapper created
+- ✅ zpool created automatically and name stored in SCH host config
+- 🔄 SCH runs functions to create these scripts so om can run them later:
+  - node_create_zvol taking in the zpool name and 
+  - node_create_lio_script to create local lio script, and puts in /srv/scripts
+- Hand to om
+
+om apps / local scripts to create:
+
+- update_scripts
+- node_storage_manager
+
+
+
+At diskless server creation time
+
+- ❌ If no disks defined in host config ISCSI_ROOT_0 or ISCSI_ROOT_1, HPS sends message via om to all of class storage node requesting disk provision offers.
+  - SCH will respond if it can service the request 
+    - script required
+    - If no responses, config aborts with warning
+  - IQN is then built based on SCH response iscsi target address/port, zpool (IQN_HOST), plus client name and volume name (IQN_VOL).
+  - request sent to SCH with IQN_HOST IQN_VOL to do the provision and make ready (via lio script)
+    - either create a new empty volume
+    - or this may be a clone of an existing volume
+  - when confirmed, IQN_HOST:IQN_VOL written to the host config ISCSI_ROOT_0 or ISCSI_ROOT_1 on the client
+  - Then volumes mounted to md raid for booting / instralling, or possibly to send a pre-built image
+- At install time
+  - HPS Node functions loaded
+  - Configure as TCN, CCN, DR node etc
+  - configure additional disks with md if required, then add LVM, provision by sending request to HPS, getting back commands to configure storage
+  
+At diskless runtime
+
+- Expanding storage - automated
+  - HPS Node functions loaded
+  - From Diskless, Send om message to expand the zvol for each disk in a mirror
+  - get commands to rescan the md PV with pvresize, then lvextend --resizefs for the volume
+
+
+
+### OpenSVC / om
+
+#### instead of scripts, call functions:
+
+oot@dev2n1:~/dev/om3# om restarts config show --section task#envfunc
+[task#envfunc]
+command = . /tmp/functions.sh && envfunc
+
+root@dev2n1:~/dev/om3# cat /tmp/functions.sh
+envfunc() {
+    /usr/bin/env
+}
+root@dev2n1:~/dev/om3# om restarts run --rid task#envfunc
+
+#### Create a task with om to report on free disk i stead of app
+
+Call with:  om restarts run --rid task#env --node=\*
+will respond with:
+OBJECT    NODE    SID                                   
+restarts  dev2n1  847b0b13-0e1b-4237-bc0b-90330ccf0dd5  
+restarts  dev2n3  a878ea67-3636-488e-aec6-15177fd9fbc0  
+restarts  dev2n2  8eb2f65b-752b-4e61-a1e2-a7f31c7f9879  
+
+and also can catch stdout etc matching on the SID
+
+root@dev2n1:~/dev/om3# om restarts config show --section task#env
+[task#env]
+command = /usr/bin/env
+
+Create function to make the opensvc app that runs lio:
+
+om svc create -s iscsi-manager --wait
+om svc set -s iscsi-manager \
+  --kw app#iscsi_manager.type=forking \
+  --kw app#iscsi_manager.start="/srv/scripts/lio start" \
+  --kw app#iscsi_manager.stop="/srv/scripts/lio stop" \
+  --kw app#iscsi_manager.check="/srv/scripts/lio check"
+
+
+om svc provision -s iscsi-manager --wait
+
+Automate SCH joining the HPS OpenSVC cluster
+
+
+
+Implementation of IQN is not fully compliant with the RFC 3720/3721 IQN naming standard (iqn.yyyy-mm.naming-authority:unique-nameiqn.yyyy-mm.naming-authority:unique-name) as a reverse domain name is not used (unless the cluster happens to be a reverse domain name).
+
+The main compliance issue is that the naming authority part must be a reversed DNS name, not just a cluster or arbitrary name. The unique name section after the colon can contain host and volume names as in the example.
+
+This is because it is unlikely that the cluster relates to any particular domain name.
+
+The chosen structure will be unique within the HPS and these exports are not intended to be used on the public network.
+
+The format chosen is:
+iqn.<yyyy-mm>.<cluster-name>:<host-name>.<volume-name>
+
+For example: iqn.2025-09.test-1:sch-001.vda
+
 
 ## Refactoring of scripts and libraries
 
