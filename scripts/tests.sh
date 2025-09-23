@@ -5,9 +5,12 @@
 
 #env QUERY_STRING="cmd=get_config&mac=525400123456" bash -x /srv/hps-system/http/cgi-bin/boot_manager.sh
 
-env QUERY_STRING="mac=52540061c8c9&cmd=determine_state" bash -x /srv/hps-system/http/cgi-bin/boot_manager.sh
+#env QUERY_STRING="mac=52540061c8c9&cmd=determine_state" bash -x /srv/hps-system/http/cgi-bin/boot_manager.sh
 
-env QUERY_STRING="cmd=generate_opensvc_conf" bash -x /srv/hps-system/http/cgi-bin/boot_manager.sh
+#env QUERY_STRING="cmd=generate_opensvc_conf" bash -x /srv/hps-system/http/cgi-bin/boot_manager.sh
+
+
+env QUERY_STRING="cmd=log_message&message=test&function=none" bash -x /srv/hps-system/http/cgi-bin/boot_manager.sh
 
 
 # then run test suite from here
