@@ -49,6 +49,7 @@ strip_ansi=false
 EOF
 
   hps_log info "[OK] Supervisor core config generated at: ${SUPERVISORD_CONF}"
+  echo "${SUPERVISORD_CONF}"
 }
 
 
@@ -140,7 +141,7 @@ EOF
 create_supervisor_services_config () {
   create_config_nginx
   create_config_dnsmasq
-  create_config_opensvc
+  create_config_opensvc IPS
 
 }
 
