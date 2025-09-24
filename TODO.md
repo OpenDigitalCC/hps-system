@@ -138,6 +138,14 @@ boot manager should be renamed to hps-api as it now provides a wide range of fun
 
 ## Feature development
 
+### host config
+
+add host_config unset
+
+### clustter  config
+
+add cluster_config unset
+
 ### Storage nodes - O/S Installation (A/B method)
 
 - Create built image, then deploy to host, ready for A/B updates
