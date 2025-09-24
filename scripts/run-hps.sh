@@ -12,10 +12,9 @@ done
 
 echo "[✓] File '$HPS_CONFIG' is available. Continuing..."
 
-
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 
-configure_supervisor_core
+SUPERVISORD_CONF=$(configure_supervisor_core)
 
 echo "[✓] hps started and initialised."
 
