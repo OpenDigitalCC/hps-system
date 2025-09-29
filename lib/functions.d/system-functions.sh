@@ -10,6 +10,90 @@ _is_tty() {
   [[ -t 0 || -t 1 || -t 2 ]]
 }
 
+#===============================================================================
+# download_file
+# -------------
+# Generic file download function with resume capability and verification
+#
+# Usage: download_file <url> <destination_path> [expected_sha256]
+# Example: download_file "https://example.com/file.iso" "/path/to/file.iso" "abc123..."
+#
+# Behaviour:
+#   - Downloads file using curl or wget (with resume support)
+#   - Creates destination directory if needed
+#   - Verifies SHA256 checksum if provided
+#   - Logs download progress and completion
+#
+# Returns:
+#   0 on success
+#   1 if parameters missing or tools unavailable
+#   2 if download fails
+#   3 if checksum verification fails
+#===============================================================================
+download_file() {
+    local url="$1"
+    local dest_path="$2"
+    local expected_sha256="$3"
+    
+    if [[ -z "$url" || -z "$dest_path" ]]; then
+        hps_log "ERROR" "download_file: url and destination_path required"
+        return 1
+    fi
+    
+    # Check for download tools
+    local download_cmd=""
+    if command -v curl >/dev/null 2>&1; then
+        download_cmd="curl"
+    elif command -v wget >/dev/null 2>&1; then
+        download_cmd="wget"
+    else
+        hps_log "ERROR" "download_file: Neither curl nor wget available"
+        return 1
+    fi
+    
+    # Create destination directory
+    local dest_dir
+    dest_dir=$(dirname "$dest_path")
+    if ! mkdir -p "$dest_dir"; then
+        hps_log "ERROR" "download_file: Failed to create directory: $dest_dir"
+        return 2
+    fi
+    
+    hps_log "INFO" "Downloading: $url -> $dest_path"
+    
+    # Download file with resume support
+    if [[ "$download_cmd" == "curl" ]]; then
+        if ! curl -s -L -C - -o "$dest_path" "$url"; then
+            hps_log "ERROR" "download_file: curl download failed"
+            return 2
+        fi
+    else
+        if ! wget -q -c -O "$dest_path" "$url"; then
+            hps_log "ERROR" "download_file: wget download failed"
+            return 2
+        fi
+    fi
+    
+    # Verify checksum if provided
+    if [[ -n "$expected_sha256" ]]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            local actual_sha256
+            actual_sha256=$(sha256sum "$dest_path" | cut -d' ' -f1)
+            if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+                hps_log "ERROR" "download_file: Checksum mismatch. Expected: $expected_sha256, Got: $actual_sha256"
+                return 3
+            fi
+            hps_log "INFO" "download_file: Checksum verified successfully"
+        else
+            hps_log "WARN" "download_file: sha256sum not available, skipping checksum verification"
+        fi
+    fi
+    
+    hps_log "INFO" "Download completed: $dest_path"
+    return 0
+}
+
+
 # Build 'origin' (MAC for CGI, otherwise pid/user/host). Safe under `set -u`.
 hps_origin_tag() {
   # Optional: caller may pass an explicit origin override (e.g. for tests)
@@ -70,7 +154,7 @@ hps_services_restart() {
   configure_supervisor_services
   create_supervisor_services_config
   reload_supervisor_config
-  supervisorctl -c "${HPS_SERVICE_CONFIG_DIR}/supervisord.conf" restart all
+  hps_log info "$(supervisorctl -c "${HPS_SERVICE_CONFIG_DIR}/supervisord.conf" restart all)"
   hps_services_post_start
 }
 
