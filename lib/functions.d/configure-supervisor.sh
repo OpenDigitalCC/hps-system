@@ -63,7 +63,9 @@ EOF
 #  fcgiwrap, and OpenSVC agent programs. Logs are written to ${HPS_LOG_DIR}.
 #  The function is idempotent: each program block is only added once.
 configure_supervisor_services () {
-  local SUPERVISORD_CONF="${HPS_SERVICE_CONFIG_DIR}/supervisord.conf"
+  # Ensure the core header and defaults exist
+  local SUPERVISORD_CONF="$(configure_supervisor_core)"
+#  local SUPERVISORD_CONF="${HPS_SERVICE_CONFIG_DIR}/supervisord.conf"
 
   # -- helper: append a block once, keyed by program stanza name
   _supervisor_append_once() {
@@ -74,11 +76,8 @@ configure_supervisor_services () {
     fi
   }
 
-  echo "[*] Creating Supervisor services config ${SUPERVISORD_CONF}"
+  hps_log info "[*] Creating Supervisor services config ${SUPERVISORD_CONF}"
   mkdir -p "$(dirname "${SUPERVISORD_CONF}")" "${HPS_LOG_DIR}"
-
-  # Ensure the core header and defaults exist
-  configure_supervisor_core
 
   # --- dnsmasq ---
   _supervisor_append_once "program:dnsmasq" "$(cat <<EOF
@@ -133,7 +132,6 @@ EOF
 )"
 
 
-
   hps_log info "Supervisor services config generated at: ${SUPERVISORD_CONF}"
 }
 
@@ -141,15 +139,15 @@ EOF
 create_supervisor_services_config () {
   create_config_nginx
   create_config_dnsmasq
-  create_config_opensvc IPS
+  create_config_opensvc IPS # specify that this is an IPS node
 
 }
 
 
 reload_supervisor_config () {
   SUPERVISORD_CONF="${HPS_SERVICE_CONFIG_DIR}/supervisord.conf"
-  supervisorctl -c "$SUPERVISORD_CONF" reread
-  supervisorctl -c "$SUPERVISORD_CONF" update
+  hps_log info "Reread: $(supervisorctl -c "$SUPERVISORD_CONF" reread)"
+  hps_log info "Update: $(supervisorctl -c "$SUPERVISORD_CONF" update)"
 }
 
 
