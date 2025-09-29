@@ -10,6 +10,8 @@ source $(get_active_cluster_filename 2>/dev/null)
 
 local NGINX_CONF="${HPS_SERVICE_CONFIG_DIR}/nginx.conf"
 
+hps_log info "Configuring nginx"
+
 cat > "${NGINX_CONF}" <<EOF
 
 worker_processes auto;
@@ -94,6 +96,6 @@ http {
 }
 EOF
 
-hps_log info "[OK] NGINX config generated at: ${NGINX_CONF} with root ${HPS_HTTP_CONFIG_DIR}"
+hps_log info "[OK] NGINX config generated at: ${NGINX_CONF}"
 
 }
