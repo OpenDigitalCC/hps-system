@@ -136,7 +136,16 @@ boot manager should be renamed to hps-api as it now provides a wide range of fun
 - if ipxe, send pxe (done)
 - if unknown, send text (done)
 
+
+
 ## Feature development
+
+
+### Generic file reader / writer
+
+- use lock files
+- check r/w capability
+- standardise warnings through hps_log
 
 ### host config
 
