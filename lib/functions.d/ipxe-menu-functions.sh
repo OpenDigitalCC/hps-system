@@ -546,13 +546,22 @@ ipxe_boot_alpine_tch() {
   local netmask=$(cidr_to_netmask "$prefix_len")
   
   hps_log debug "Booting Alpine TCH version $alpine_version with static IP: $client_ip"
+
+  local kernel_args="initrd=initramfs-lts"
+  kernel_args="${kernel_args} console=ttyS0,115200n8"
+  kernel_args="${kernel_args} alpine_repo=http://${gateway}/distros/alpine-${alpine_version}/apks"
+  kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
+  kernel_args="${kernel_args} ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:off"
+#  kernel_args="${kernel_args} apkovl=http://${gateway}/distros/alpine-${alpine_version}/${apkvol_filename}"
+  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol"
   
   ipxe_header
   cat <<EOF
 # Alpine TCH Boot - created at $(date)
 set kernel_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/vmlinuz-lts
 set initrd_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/initramfs-lts
-set kernel_args initrd=initramfs-lts console=ttyS0,115200n8 alpine_repo=http://${gateway}/distros/alpine-${alpine_version}/apks modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:none usbdelay=30
+#set kernel_args initrd=initramfs-lts console=ttyS0,115200n8 alpine_repo=http://${gateway}/distros/alpine-${alpine_version}/apks modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:none usbdelay=30
+set kernel_args ${kernel_args}
 imgfree
 kernel \${kernel_url} \${kernel_args}
 initrd \${initrd_url}
