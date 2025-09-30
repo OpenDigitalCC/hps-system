@@ -5,6 +5,132 @@ __guard_source || return
 
 
 
+#===============================================================================
+# tch_apkovol_create
+# ------------------
+# Generate and stream Alpine apkovl tarball for TCH bootstrap.
+#
+# Behaviour:
+#   - Retrieves IPS gateway IP from cluster configuration
+#   - Creates temporary directory structure matching Alpine root filesystem
+#   - Generates bootstrap script in /etc/local.d/hps-bootstrap.start
+#   - Substitutes gateway IP into bootstrap script
+#   - Creates tar.gz archive and streams to stdout
+#   - Cleans up temporary files
+#   - Logs all operations via hps_log
+#
+# CGI Output:
+#   - HTTP headers (Content-Type, Content-Disposition)
+#   - Binary tar.gz stream to stdout
+#
+# Returns:
+#   Exits via cgi_fail on any error
+#   Streams tar.gz on success
+#===============================================================================
+tch_apkovol_create() {
+  hps_log info "CGI request: tch_apkovol_create"
+  
+  local gateway_ip=$(cluster_config get DHCP_IP)
+  if [[ -z "$gateway_ip" ]]; then
+    hps_log error "Failed to get gateway IP from cluster config"
+    cgi_fail "Unable to determine IPS gateway IP"
+  fi
+  
+  hps_log debug "Using gateway IP: $gateway_ip"
+  
+  # Create temp structure
+  local tmp_dir=$(mktemp -d)
+  if [[ ! -d "$tmp_dir" ]]; then
+    hps_log error "Failed to create temporary directory"
+    cgi_fail "Internal error: cannot create temp directory"
+  fi
+  
+  hps_log debug "Created temp directory: $tmp_dir"
+  
+  if ! mkdir -p "$tmp_dir/etc/local.d"; then
+    hps_log error "Failed to create directory structure in $tmp_dir"
+    rm -rf "$tmp_dir"
+    cgi_fail "Internal error: cannot create directory structure"
+  fi
+  
+  # Write bootstrap script with gateway IP substituted
+  cat > "$tmp_dir/etc/local.d/hps-bootstrap.start" <<'EOF'
+#!/bin/sh
+echo "[HPS] TCH Bootstrap starting..."
+
+# Required packages for HPS bootstrap
+PACKAGES="bash curl"
+
+echo "[HPS] Installing required packages: ${PACKAGES}..."
+if ! apk add --no-cache ${PACKAGES} 2>&1; then
+    echo "[HPS] ERROR: Failed to install packages"
+    echo "[HPS] Rebooting in 30 seconds..."
+    sleep 30
+    reboot
+fi
+
+echo "[HPS] Sourcing functions from IPS at GATEWAY_IP..."
+
+# Execute in bash context (HPS functions require bash)
+/bin/bash <<'BASH_BLOCK'
+if ! curl -fsSL "http://GATEWAY_IP/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions" | bash; then
+    echo "[HPS] ERROR: Failed to source functions from IPS"
+    echo "[HPS] Rebooting in 30 seconds..."
+    sleep 30
+    reboot
+fi
+
+echo "[HPS] Functions loaded successfully"
+echo "[HPS] Starting TCH configuration..."
+if ! tch_configure_alpine; then
+    echo "[HPS] ERROR: TCH configuration failed"
+    echo "[HPS] Rebooting in 30 seconds..."
+    sleep 30
+    reboot
+fi
+echo "[HPS] TCH Bootstrap complete"
+BASH_BLOCK
+EOF
+  
+  # Substitute gateway IP
+  sed -i "s|GATEWAY_IP|${gateway_ip}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
+  
+  if [[ $? -ne 0 ]]; then
+    hps_log error "Failed to write bootstrap script"
+    rm -rf "$tmp_dir"
+    cgi_fail "Internal error: cannot write bootstrap script"
+  fi
+  
+  if ! chmod +x "$tmp_dir/etc/local.d/hps-bootstrap.start"; then
+    hps_log error "Failed to set execute permission on bootstrap script"
+    rm -rf "$tmp_dir"
+    cgi_fail "Internal error: cannot set permissions"
+  fi
+  
+  hps_log debug "Bootstrap script created successfully"
+  
+  # HTTP headers
+  echo "Content-Type: application/octet-stream"
+  echo "Content-Disposition: attachment; filename=\"tch-bootstrap.apkovl.tar.gz\""
+  echo ""
+  
+  # Stream tar to stdout
+  if ! tar czf - -C "$tmp_dir" . 2>/dev/null; then
+    hps_log error "Failed to create tar archive"
+    rm -rf "$tmp_dir"
+    # Can't use cgi_fail here - headers already sent
+    exit 1
+  fi
+  
+  hps_log info "Successfully generated and streamed apkovl tarball"
+  
+  # Cleanup
+  rm -rf "$tmp_dir"
+  hps_log debug "Cleaned up temp directory: $tmp_dir"
+}
+
+
+
 
 #===============================================================================
 # extract_alpine_iso
