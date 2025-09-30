@@ -1,5 +1,4 @@
 __guard_source || return
-# Define your functions below
 
 
 #:name: configure_supervisor_core

@@ -3,14 +3,17 @@ __guard_source || return
 
 
 create_config_dnsmasq () {
-source $(get_active_cluster_filename 2>/dev/null)
 
-local DNSMASQ_CONF="${HPS_SERVICE_CONFIG_DIR}/dnsmasq.conf"
+local DNSMASQ_CONF="${CLUSTER_SERVICES_DIR}/dnsmasq.conf"
+# these are cluster specific so should be in cluster/services
+local DNS_HOSTS="${CLUSTER_SERVICES_DIR}/dns_hosts"
+local DHCP_ADDRESSES="${CLUSTER_SERVICES_DIR}/dhcp_addresses"
 
 if [[ -z "${DHCP_IP}" ]]; then
   echo "[ERROR] No DHCP IP, can't configure dnsmasq"
     exit 0
 fi
+
 
 hps_log info "Configuring dnsmasq on $DHCP_IP..." 
 
@@ -33,12 +36,14 @@ interface="${DHCP_IFACE}"
 # DHCP configuration
 # ---------------------------
 
-
 # Enable DHCP
-dhcp-range=$(generate_dhcp_range_simple "$NETWORK_CIDR" "$DHCP_IP" 20)
+dhcp-range=$(generate_dhcp_range_simple "$NETWORK_CIDR" "$DHCP_IP" "$DHCP_RANGESIZE")
 
 # Optional: Log DHCP requests
 log-dhcp
+# DHCP reservations file
+dhcp-hostsfile="${DHCP_ADDRESSES}"
+dhcp-authoritative
 
 # ---------------------------
 # DNS configuration
@@ -47,10 +52,8 @@ log-dhcp
 port=53
 domain="${DNS_DOMAIN}"
 dhcp-option=option:domain-search,"${DNS_DOMAIN}"
-#addn-hosts="${HPS_SERVICE_CONFIG_DIR}/dns_hosts"
-# DHCP reservations file
-dhcp-hostsfile="${HPS_SERVICE_CONFIG_DIR}/dns_hosts"
-dhcp-authoritative
+# Additional host names
+addn-hosts="${DNS_HOSTS}"
 # Do not use /etc/hosts or /etc/resolv.conf
 no-hosts
 no-resolv
@@ -77,7 +80,9 @@ dhcp-boot=tag:ipxe,http://${DHCP_IP}/cgi-bin/boot_manager.sh?cmd=init  # For iPX
 
 EOF
 
-  touch ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
+  # ensure these files exist
+  touch ${DHCP_ADDRESSES}
+  touch ${DNS_HOSTS}
 
   hps_log info "[OK] dnsmasq config generated at: ${DNSMASQ_CONF}"
 

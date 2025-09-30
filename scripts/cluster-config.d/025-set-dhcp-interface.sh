@@ -54,6 +54,7 @@ select label in "${labels[@]}" "None (do not enable dnsmasq)"; do
       CLUSTER_VARS+=("DHCP_IP=$ipaddr")
       CLUSTER_VARS+=("DHCP_CIDR=$ipaddr/$cidr")
       CLUSTER_VARS+=("NETWORK_CIDR=$network")
+      CLUSTER_VARS+=("DHCP_RANGESIZE=100")
       break
     else
       echo "Interface $iface has no IPv4 address."
