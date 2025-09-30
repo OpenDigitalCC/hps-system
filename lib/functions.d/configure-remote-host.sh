@@ -64,8 +64,10 @@ bootstrap_initialise_functions() {
 # The following is sent literally
 # the functions are only used in this script in order to ascertain the correct functions, this is distro agnostic.
   cat <<'EOF'
-#!/bin/bash
+#!/bin/sh
 # Offline bootstrap initialiser from provisioning server
+
+# NOTE: Keep this 'sh' / 'ash' friendly as not evrythig will have bash at this point
 
 bootstrap_initialise_distro_string() {
   local cpu osname osver mfr
