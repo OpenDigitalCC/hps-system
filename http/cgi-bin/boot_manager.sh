@@ -43,6 +43,17 @@ fi
 
 ### ───── Commands that require a MAC ─────
 
+# Command: Get TCH apkovol
+if [[ "$cmd" == "get_tch_apkovol" ]]; then
+  hps_log info "Generating TCH apkovol for MAC: $mac"
+  if ! tch_apkovol_create; then
+    hps_log error "tch_apkovol_create failed for MAC: $mac"
+    cgi_fail "Failed to generate TCH apkovol"
+  fi
+  exit
+fi
+
+
 # Command: set status
 if [[ "$cmd" == "set_status" ]]
  then
