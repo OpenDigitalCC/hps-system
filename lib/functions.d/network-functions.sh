@@ -1,5 +1,42 @@
 __guard_source || return
 
+#===============================================================================
+# cidr_to_netmask
+# ---------------
+# Convert CIDR prefix length to netmask
+#
+# Usage: cidr_to_netmask <prefix_length>
+# Example: cidr_to_netmask 24  # Returns 255.255.255.0
+#
+# Returns:
+#   Netmask string
+#===============================================================================
+cidr_to_netmask() {
+  local prefix=$1
+  local mask=""
+  local full_octets=$((prefix / 8))
+  local partial_octet=$((prefix % 8))
+
+  # Full octets (255)
+  for ((i=0; i<full_octets; i++)); do
+    mask+="${mask:+.}255"
+  done
+
+  # Partial octet (if any)
+  if (( partial_octet > 0 )); then
+    mask+="${mask:+.}$((256 - 2**(8-partial_octet)))"
+  fi
+
+  # Fill remaining octets with 0
+  while (( $(echo "$mask" | tr -cd '.' | wc -c) < 3 )); do
+    mask+="${mask:+.}0"
+  done
+
+  echo "$mask"
+}
+
+
+
 # detect_client_type
 # ------------------
 # Detects the type of caller for this CGI script based on CGI environment vars.

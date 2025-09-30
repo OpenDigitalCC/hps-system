@@ -122,6 +122,7 @@ handle_menu_item() {
       ipxe_boot_installer "${HOST_TYPE}" "${HOST_PROFILE}"
       ;;
 
+
     force_install_*)
       if [[ "${item}" == "force_install_on" ]] 
        then
@@ -288,6 +289,16 @@ ipxe_boot_installer () {
   
   hps_log info "Installing new host of type $host_type"
   
+  if [[ "${host_type}" == "TCH" ]]; then
+    # TCH: Set state and reboot for network boot preparation
+    host_network_configure "$mac" "${host_type}"
+    hps_log info "Setting up TCH for network boot"
+    host_config "$mac" set STATE NETWORK_BOOT
+    ipxe_reboot "TCH configured for network boot - rebooting to apply"
+    exit
+  fi
+
+
   load_cluster_host_type_profiles
 
   local CPU="$(get_host_type_param ${host_type} CPU)"
@@ -508,6 +519,50 @@ EOF
       ;;
   esac
 }
+
+
+ipxe_network_boot() {
+  local host_type=$(host_config "$mac" get TYPE)
+  hps_log debug "Booting host of type ${host_type}"
+  case "$host_type" in
+    TCH)
+      ipxe_boot_alpine_tch
+      ;;
+    *)
+      ipxe_cgi_fail "Network boot not supported for host type: $host_type"
+      ;;
+  esac
+}
+
+ipxe_boot_alpine_tch() {
+  local alpine_version=$(get_latest_alpine_version)
+  local client_ip=$(host_config "$mac" get IP)
+  local gateway=$(cluster_config get DHCP_IP)
+  local network_cidr=$(cluster_config get NETWORK_CIDR)
+  local hostname=$(host_config "$mac" get HOSTNAME)
+  
+  # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
+  local prefix_len="${network_cidr##*/}"
+  local netmask=$(cidr_to_netmask "$prefix_len")
+  
+  hps_log debug "Booting Alpine TCH version $alpine_version with static IP: $client_ip"
+  
+  ipxe_header
+  cat <<EOF
+# Alpine TCH Boot - created at $(date)
+set kernel_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/vmlinuz-lts
+set initrd_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/initramfs-lts
+set kernel_args initrd=initramfs-lts console=ttyS0,115200n8 alpine_repo=http://${gateway}/distros/alpine-${alpine_version}/apks modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:none usbdelay=30
+imgfree
+kernel \${kernel_url} \${kernel_args}
+initrd \${initrd_url}
+boot
+EOF
+}
+
+
+
+
 
 
 

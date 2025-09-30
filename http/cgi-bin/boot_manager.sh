@@ -28,6 +28,15 @@ fi
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
   hps_log info "iPXE Initialisation requested from DHCP"
+  
+  # Check if this is a network boot host
+  state=$(host_config "$mac" get STATE)
+  if [[ "$state" == "NETWORK_BOOT" ]]; then
+    hps_log info "Network boot requested for $mac"
+    ipxe_network_boot "$mac"
+    exit
+  fi
+
   ipxe_init
   exit
 fi
