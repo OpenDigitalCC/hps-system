@@ -9,6 +9,7 @@ HPS_CONFIG_LOCATIONS=(
   "/srv/hps-config/hps.conf"          # Inside-container default
 )
 
+
 find_hps_config() {
   local found=""
   for candidate in "${HPS_CONFIG_LOCATIONS[@]}"; do
@@ -124,4 +125,11 @@ if declare -f export_dynamic_paths >/dev/null; then
     export_dynamic_paths >/dev/null 2>&1 || true
   fi
 fi
+
+
+
+# Load up cluster variables
+eval $(get_active_cluster_file)
+
+
 
