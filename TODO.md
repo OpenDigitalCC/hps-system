@@ -225,7 +225,54 @@ Outline:
 - add the multi disk 
 - add cli to chose storage config
 
+
+
+
 ## New functions
+
+### IPS Replicate
+
+- Replicate to each storage node
+- Replicate to DRH
+- Must exist 2 times plus DRH
+- Auto sync data (resoirces, config)
+- Config relayed to replicants?
+- OpenSVC to stop/start container when required with IPS address
+
+### Cluster network config
+
+- Set the following - default to IPS:
+  - DNS_LOCAL_SERVER
+  - SMTP_LOCAL_SERVER
+  - NTP_LOCAL_SERVER
+  - SYSLOG_LOCAL_SERVER
+- And set options for upstreams
+  - DNS_UPSTREAM_SERVER
+  - SMTP_UPSTREAM_SERVER
+  - NTP_UPSTREAM_SERVER
+  - SYSLOG_UPSTREAM_SERVER
+
+- DEFAULT_ROUTE
+
+### Cluster isolation
+
+Enable ability to write to external location, yet limit what comes in
+
+Firewall - part of the cluster? Containerised? On IPS?
+
+- ALLOW_CLUSTER_EXTERNAL_DNS
+- ALLOW_CLUSTER_EXTERNAL_SMTP
+- ALLOW_CLUSTER_EXTERNAL_ROUTING
+
+
+### Network visualisation
+
+- Visualise the network config via web page and pdf print
+
+### Monitoring
+
+- Implement platform monitoring at IPS
+- Availability, performance
 
 ### syslog
 
@@ -245,7 +292,11 @@ Outline:
 - Add dns hosts via dnsmasq to IPS
 - to file ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
 
-### create node by duplication
+### SMTP relay
+
+- exim on IPS
+
+### create node by duplication/clone
 
 - zvol image duplication
 - duplicate config file
@@ -253,6 +304,7 @@ Outline:
 - Create new host by duplicating zvol
 - for thin compute nodes
 - Implement function, available in ipxe and cli
+
 
 
 ## Security
