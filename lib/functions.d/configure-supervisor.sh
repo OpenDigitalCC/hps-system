@@ -1,5 +1,143 @@
 __guard_source || return
 
+
+#:name: configure_supervisor_services
+#:group: supervisor
+#:synopsis: Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, and OpenSVC agent.
+#:usage: configure_supervisor_services
+#:description:
+#  Writes ${CLUSTER_SERVICES_DIR}/supervisord.conf with dnsmasq, nginx,
+#  fcgiwrap, and OpenSVC agent programs. Logs are written to ${HPS_LOG_DIR}.
+#  The function is idempotent: each program block is only added once.
+#  Validates that the configuration file and required directories are created successfully.
+#:returns:
+#  0 on success
+#  1 if core configuration creation fails
+#  2 if directory creation fails
+#  3 if configuration file write fails
+configure_supervisor_services() {
+  # Ensure the core header and defaults exist
+  local SUPERVISORD_CONF
+  SUPERVISORD_CONF="$(configure_supervisor_core)" || {
+    hps_log error "Failed to create supervisor core configuration"
+    return 1
+  }
+
+  # Verify core config file was actually created
+  if [[ ! -f "${SUPERVISORD_CONF}" ]]; then
+    hps_log error "Supervisor core configuration file not found: ${SUPERVISORD_CONF}"
+    return 1
+  fi
+
+  
+  hps_log info "Creating Supervisor services config ${SUPERVISORD_CONF}"
+
+  # Ensure required directories exist
+  local config_dir log_dir
+  config_dir="$(dirname "${SUPERVISORD_CONF}")"
+  log_dir="${HPS_LOG_DIR}"
+
+  for dir in "${config_dir}" "${log_dir}"; do
+    if [[ ! -d "${dir}" ]]; then
+      mkdir -p "${dir}" || {
+        hps_log error "Failed to create directory: ${dir}"
+        return 2
+      }
+      hps_log debug "Created directory: ${dir}"
+    fi
+  done
+
+  # Helper: append a block once, keyed by program stanza name
+  *supervisor*append_once() {
+    local stanza="$1"    # e.g. program:nginx
+    local block="$2"
+    
+    # Check if stanza already exists
+    if ! grep -qE "^\[${stanza}\]\s*$" "${SUPERVISORD_CONF}" 2>/dev/null; then
+      # Attempt to append the block
+      if printf '\n%s\n\n' "${block}" >> "${SUPERVISORD_CONF}" 2>/dev/null; then
+        hps_log debug "Added supervisor service: ${stanza}"
+      else
+        hps_log error "Failed to write service block: ${stanza}"
+        return 3
+      fi
+    else
+      hps_log debug "Supervisor service already exists: ${stanza}"
+    fi
+  }
+
+  # --- dnsmasq ---
+
+
+  local DNSMASQ_CONF="${CLUSTER_SERVICES_DIR}/dnsmasq.conf"
+  local DNSMASQ_LOG_STDERR="${HPS_LOG_DIR}/dnsmasq.err.log"
+  local DNSMASQ_LOG_STDOUT="${HPS_LOG_DIR}/dnsmasq.out.log"
+  
+  touch ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
+  chown nobody:nogroup ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
+
+  *supervisor*append_once "program:dnsmasq" "$(cat <<EOF
+[program:dnsmasq]
+command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF} --log-facility=${DNSMASQ_LOG_STDOUT}
+autostart=true
+autorestart=true
+stderr_logfile=${DNSMASQ_LOG_STDERR}
+stdout_logfile=${DNSMASQ_LOG_STDOUT}
+EOF
+)" || return 3
+
+  # --- nginx ---
+  *supervisor*append_once "program:nginx" "$(cat <<EOF
+[program:nginx]
+command=/usr/sbin/nginx -g 'daemon off;' -c "${HPS_SERVICE_CONFIG_DIR}/nginx.conf"
+autostart=true
+autorestart=true
+stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
+stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
+EOF
+)" || return 3
+
+  # --- fcgiwrap ---
+  *supervisor*append_once "program:fcgiwrap" "$(cat <<EOF
+[program:fcgiwrap]
+command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
+umask=002
+autostart=true
+autorestart=true
+stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
+stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
+EOF
+)" || return 3
+
+  # --- OpenSVC agent ---
+  *supervisor*append_once "program:opensvc" "$(cat <<EOF
+[program:opensvc]
+command=/usr/local/sbin/opensvc-foreground
+autostart=true
+autorestart=true
+startsecs=2
+startretries=3
+stopsignal=TERM
+user=root
+environment=HOME="/root"
+directory=/
+stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
+stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
+EOF
+)" || return 3
+
+  # Final validation: verify the file exists and is readable
+  if [[ ! -f "${SUPERVISORD_CONF}" ]] || [[ ! -r "${SUPERVISORD_CONF}" ]]; then
+    hps_log error "Supervisor configuration file validation failed: ${SUPERVISORD_CONF}"
+    return 3
+  fi
+
+  hps_log info "Supervisor services config generated successfully at: ${SUPERVISORD_CONF}"
+  return 0
+}
+
+
+
 #:name: configure_supervisor_core
 #:group: supervisor
 #:synopsis: Write the base supervisord.conf using ${HPS_LOG_DIR} for all logs.
@@ -126,153 +264,6 @@ EOF
 }
 
 
-#:name: configure_supervisor_services
-#:group: supervisor
-#:synopsis: Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, and OpenSVC agent.
-#:usage: configure_supervisor_services
-#:description:
-#  Writes ${CLUSTER_SERVICES_DIR}/supervisord.conf with dnsmasq, nginx,
-#  fcgiwrap, and OpenSVC agent programs. Logs are written to ${HPS_LOG_DIR}.
-#  The function is idempotent: each program block is only added once.
-#  Validates that the configuration file and required directories are created successfully.
-#:returns:
-#  0 on success
-#  1 if core configuration creation fails
-#  2 if directory creation fails
-#  3 if configuration file write fails
-configure_supervisor_services() {
-  # Ensure the core header and defaults exist
-  local SUPERVISORD_CONF
-  SUPERVISORD_CONF="$(configure_supervisor_core)" || {
-    hps_log error "Failed to create supervisor core configuration"
-    return 1
-  }
-
-  # Verify core config file was actually created
-  if [[ ! -f "${SUPERVISORD_CONF}" ]]; then
-    hps_log error "Supervisor core configuration file not found: ${SUPERVISORD_CONF}"
-    return 1
-  fi
-
-  local DNSMASQ_CONF="${CLUSTER_SERVICES_DIR}/dnsmasq.conf"
-  local DNSMASQ_LOG_STDERR="${HPS_LOG_DIR}/dnsmasq.err.log"
-  local DNSMASQ_LOG_STDOUT="${HPS_LOG_DIR}/dnsmasq.out.log"
-  
-  touch ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
-  chown nobody:nogroup ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
-  
-  hps_log info "Creating Supervisor services config ${SUPERVISORD_CONF}"
-
-  # Ensure required directories exist
-  local config_dir log_dir
-  config_dir="$(dirname "${SUPERVISORD_CONF}")"
-  log_dir="${HPS_LOG_DIR}"
-
-  for dir in "${config_dir}" "${log_dir}"; do
-    if [[ ! -d "${dir}" ]]; then
-      mkdir -p "${dir}" || {
-        hps_log error "Failed to create directory: ${dir}"
-        return 2
-      }
-      hps_log debug "Created directory: ${dir}"
-    fi
-  done
-
-  # Helper: append a block once, keyed by program stanza name
-  *supervisor*append_once() {
-    local stanza="$1"    # e.g. program:nginx
-    local block="$2"
-    
-    # Check if stanza already exists
-    if ! grep -qE "^\[${stanza}\]\s*$" "${SUPERVISORD_CONF}" 2>/dev/null; then
-      # Attempt to append the block
-      if printf '\n%s\n\n' "${block}" >> "${SUPERVISORD_CONF}" 2>/dev/null; then
-        hps_log debug "Added supervisor service: ${stanza}"
-      else
-        hps_log error "Failed to write service block: ${stanza}"
-        return 3
-      fi
-    else
-      hps_log debug "Supervisor service already exists: ${stanza}"
-    fi
-  }
-
-  # --- dnsmasq ---
-  *supervisor*append_once "program:dnsmasq" "$(cat <<EOF
-[program:dnsmasq]
-command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF} --log-facility=-
-autostart=true
-autorestart=true
-stderr_logfile=${DNSMASQ_LOG_STDERR}
-stdout_logfile=${DNSMASQ_LOG_STDOUT}
-EOF
-)" || return 3
-
-  # --- nginx ---
-  *supervisor*append_once "program:nginx" "$(cat <<EOF
-[program:nginx]
-command=/usr/sbin/nginx -g 'daemon off;' -c "${HPS_SERVICE_CONFIG_DIR}/nginx.conf"
-autostart=true
-autorestart=true
-stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
-stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
-EOF
-)" || return 3
-
-  # --- fcgiwrap ---
-  *supervisor*append_once "program:fcgiwrap" "$(cat <<EOF
-[program:fcgiwrap]
-command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
-umask=002
-autostart=true
-autorestart=true
-stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
-stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
-EOF
-)" || return 3
-
-  # --- OpenSVC agent ---
-  *supervisor*append_once "program:opensvc" "$(cat <<EOF
-[program:opensvc]
-command=/usr/local/sbin/opensvc-foreground
-autostart=true
-autorestart=true
-startsecs=2
-startretries=3
-stopsignal=TERM
-user=root
-environment=HOME="/root"
-directory=/
-stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
-stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
-EOF
-)" || return 3
-
-  # Final validation: verify the file exists and is readable
-  if [[ ! -f "${SUPERVISORD_CONF}" ]] || [[ ! -r "${SUPERVISORD_CONF}" ]]; then
-    hps_log error "Supervisor configuration file validation failed: ${SUPERVISORD_CONF}"
-    return 3
-  fi
-
-  hps_log info "Supervisor services config generated successfully at: ${SUPERVISORD_CONF}"
-  return 0
-}
-
-
-
-create_supervisor_services_config () {
-  create_config_nginx
-  create_config_dnsmasq
-  create_config_opensvc IPS # specify that this is an IPS node
-
-}
-
-
-reload_supervisor_config () {
-  SUPERVISORD_CONF="${CLUSTER_SERVICES_DIR}/supervisord.conf"
-  hps_log info "Reread: $(supervisorctl -c "$SUPERVISORD_CONF" reread)"
-  hps_log info "Update: $(supervisorctl -c "$SUPERVISORD_CONF" update)"
-}
 
 
 

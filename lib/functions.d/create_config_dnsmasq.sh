@@ -29,7 +29,6 @@ cat > "${DNSMASQ_CONF}" <<EOF
 listen-address=${DHCP_IP}
 
 # Interface to bind to within the container
-#interface=eth0 # Should this be ${DHCP_IFACE}?
 interface="${DHCP_IFACE}"
 
 # ---------------------------
@@ -59,6 +58,11 @@ no-hosts
 no-resolv
 # for debugging
 log-queries
+# Option 1: Completely disable IPv6 DNS
+filter-AAAA
+expand-hosts 
+local=/${DNS_DOMAIN}/
+
 
 # ---------------------------
 # TFTP
@@ -87,5 +91,5 @@ EOF
   touch ${DNS_HOSTS}
 
   hps_log info "[OK] dnsmasq config generated at: ${DNSMASQ_CONF}"
-
+  
 }

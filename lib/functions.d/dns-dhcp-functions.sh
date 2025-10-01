@@ -62,9 +62,6 @@ list_cluster_hosts() {
   return 0
 }
 
-
-
-
 #===============================================================================
 # build_dhcp_addresses_file
 # -------------------------
@@ -74,6 +71,7 @@ list_cluster_hosts() {
 #   - Iterates through all cluster hosts using list_cluster_hosts
 #   - Extracts hostname and IP from each host config
 #   - Formats MAC addresses with colons
+#   - Detects and prevents duplicate MAC addresses and IP addresses
 #   - Writes dhcp-hostsfile format: MAC,IP,hostname
 #   - Creates parent directory if needed
 #   - Validates data before writing
@@ -120,6 +118,10 @@ build_dhcp_addresses_file() {
   local mac_formatted
   local entry_count=0
   
+  # Arrays to track seen MACs and IPs for duplicate detection
+  declare -A seen_macs
+  declare -A seen_ips
+  
   # Process each host
   for mac in $hosts; do
     # Get hostname
@@ -155,8 +157,25 @@ build_dhcp_addresses_file() {
       continue
     fi
     
+    # Check for duplicate MAC address
+    if [[ -n "${seen_macs[$mac_formatted]}" ]]; then
+      hps_log "WARN" "Skipping host $mac: duplicate MAC address $mac_formatted (already assigned to ${seen_macs[$mac_formatted]})"
+      continue
+    fi
+    
+    # Check for duplicate IP address
+    if [[ -n "${seen_ips[$ip]}" ]]; then
+      hps_log "WARN" "Skipping host $mac: duplicate IP address $ip (already assigned to ${seen_ips[$ip]})"
+      continue
+    fi
+    
     # Write entry to temp file
     echo "${mac_formatted},${ip},${hostname}" >> "$DHCP_ADDRESSES_TMP"
+    
+    # Track this MAC and IP
+    seen_macs[$mac_formatted]="$hostname"
+    seen_ips[$ip]="$hostname"
+    
     entry_count=$((entry_count + 1))
   done
   
@@ -170,10 +189,6 @@ build_dhcp_addresses_file() {
   hps_log "INFO" "DHCP addresses file created with $entry_count entries"
   return 0
 }
-
-
-
-
 
 #===============================================================================
 # build_dns_hosts_file
@@ -192,9 +207,11 @@ build_dhcp_addresses_file() {
 #   ${HPS_CLUSTER_CONFIG_DIR}/services/dns_hosts
 #
 # Format:
-#   10.99.1.1 ips.test1.home ips ntp syslog dhcp dns
+#   10.99.1.1 ips ntp syslog dhcp dns
 #
 # Note:
+#   Uses short hostnames only. The expand-hosts directive in dnsmasq.conf
+#   will automatically append the domain to create FQDNs.
 #   Cluster hosts are NOT included in this file to avoid duplication with
 #   DHCP-assigned hostnames. Only the IPS provisioning node is included.
 #
@@ -252,10 +269,11 @@ build_dns_hosts_file() {
   local entry_count=0
   
   # Add IPS entry with service aliases
-  # Format: IP FQDN hostname [aliases...]
-  echo "${ips_ip} ips.${dns_domain} ips ${aliases_string}" >> "$DNS_HOSTS_TMP"
+  # Format: IP hostname [aliases...]
+  # Note: expand-hosts in dnsmasq will automatically add domain to create FQDN
+  echo "${ips_ip} ips ${aliases_string}" >> "$DNS_HOSTS_TMP"
   entry_count=$((entry_count + 1))
-  hps_log "DEBUG" "Added IPS entry: ${ips_ip} ips.${dns_domain} ips ${aliases_string}"
+  hps_log "DEBUG" "Added IPS entry: ${ips_ip} ips ${aliases_string}"
   
   # Move temp file to final location
   if ! mv "$DNS_HOSTS_TMP" "$DNS_HOSTS"; then
@@ -310,6 +328,9 @@ update_dns_dhcp_files() {
     hps_log "ERROR" "DNS/DHCP file update completed with errors"
     return 1
   fi
+  
+  # Reload dnsmasq to pick up new configuration
+  reload_supervisor_services dnsmasq
   
   hps_log "INFO" "DNS/DHCP file update completed successfully"
   return 0
