@@ -155,6 +155,11 @@ configure_supervisor_services() {
   fi
 
   local DNSMASQ_CONF="${CLUSTER_SERVICES_DIR}/dnsmasq.conf"
+  local DNSMASQ_LOG_STDERR="${HPS_LOG_DIR}/dnsmasq.err.log"
+  local DNSMASQ_LOG_STDOUT="${HPS_LOG_DIR}/dnsmasq.out.log"
+  
+  touch ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
+  chown nobody:nogroup ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
   
   hps_log info "Creating Supervisor services config ${SUPERVISORD_CONF}"
 
@@ -195,11 +200,11 @@ configure_supervisor_services() {
   # --- dnsmasq ---
   *supervisor*append_once "program:dnsmasq" "$(cat <<EOF
 [program:dnsmasq]
-command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF}
+command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF} --log-facility=-
 autostart=true
 autorestart=true
-stderr_logfile=${HPS_LOG_DIR}/dnsmasq.err.log
-stdout_logfile=${HPS_LOG_DIR}/dnsmasq.out.log
+stderr_logfile=${DNSMASQ_LOG_STDERR}
+stdout_logfile=${DNSMASQ_LOG_STDOUT}
 EOF
 )" || return 3
 

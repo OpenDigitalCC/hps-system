@@ -57,6 +57,8 @@ addn-hosts="${DNS_HOSTS}"
 # Do not use /etc/hosts or /etc/resolv.conf
 no-hosts
 no-resolv
+# for debugging
+log-queries
 
 # ---------------------------
 # TFTP
