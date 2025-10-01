@@ -1,33 +1,53 @@
 __guard_source || return
 
+
+#===============================================================================
 # node_get_functions
-# -----------------------
-# Concatenate host-side functions for a distro string and emit to stdout.
-# Looks in ${LIB_DIR}/host-scripts.d (or /srv/hps-system/lib/host-scripts.d).
-# Search order:
+# ------------------
+# Concatenate host-side functions for a distro string and emit to stdout
+#
+# Arguments:
+#   $1 - distro : Distro string format: cpu-mfr-osname-osver
+#   $2 - base   : Base directory (optional, defaults to ${LIB_DIR}/host-scripts.d)
+#
+# Search Order:
 #   common.d/*.sh
 #   <cpu>.d/*.sh        then <cpu>.sh
 #   <mfr>.d/*.sh        then <mfr>.sh
 #   <osname>.d/*.sh     then <osname>.sh
 #   <osname>-<osver>.d/*.sh then <osname>-<osver>.sh
 #
-# Usage: initialise_host_scripts "x86_64-linux-rockylinux-10.0" [func_dir]
+# Behaviour:
+#   - Parses distro string into components
+#   - Searches for function files in priority order
+#   - Logs which files are found and included
+#   - Concatenates all matching files to stdout
+#   - Adds comments showing which files were included
+#
+# Returns:
+#   0 on success
+#   1 if distro parameter missing
+#===============================================================================
 node_get_functions() {
-  local distro="${1:?Usage: initialise_host_scripts <cpu-mfr-osname-osver> [func_dir]}"
+  local distro="${1:?Usage: node_get_functions <cpu-mfr-osname-osver> [func_dir]}"
   local base="${2:-${LIB_DIR:+${LIB_DIR%/}/host-scripts.d}}"
   base="${base:-/srv/hps-system/lib/host-scripts.d}"
-
+  
   local cpu mfr osname osver
   IFS='-' read -r cpu mfr osname osver <<<"$distro"
-
-  # Enable nullglob so unmatched globs expand to empty, not literal strings.
+  
+  hps_log info "Building function bundle for distro: $distro"
+  hps_log debug "Components: cpu=$cpu mfr=$mfr osname=$osname osver=$osver"
+  hps_log debug "Searching in: $base"
+  
+  # Enable nullglob so unmatched globs expand to empty, not literal strings
   local had_nullglob=0
   if shopt -q nullglob; then had_nullglob=1; else shopt -s nullglob; fi
-
+  
   echo "# Host function bundle for: $distro"
   echo "# Source directory: $base"
   echo
-
+  
   local patterns=(
     "$base/common.d/"*.sh
     "$base/${cpu}.d/"*.sh     "$base/${cpu}.sh"
@@ -35,24 +55,34 @@ node_get_functions() {
     "$base/${osname}.d/"*.sh  "$base/${osname}.sh"
     "$base/${osname}-${osver}.d/"*.sh "$base/${osname}-${osver}.sh"
   )
-
+  
+  local file_count=0
   local p files f
+  
   for p in "${patterns[@]}"; do
     files=( $p )
     if ((${#files[@]} == 0)); then
+      hps_log debug "Pattern not found: $p"
       echo "# === $(basename "${p%/*}")/$(basename "${p##*/}") not found ==="
       continue
     fi
+    
     for f in "${files[@]}"; do
       [[ -f $f ]] || continue
+      
+      hps_log info "Including function file: $f"
+      file_count=$((file_count + 1))
+      
       echo "# === $(basename "$f") included ==="
       cat "$f"
       echo
     done
   done
-
+  
   # Restore nullglob to previous state
   ((had_nullglob==1)) || shopt -u nullglob
+  
+  hps_log info "Function bundle complete: $file_count files included"
 }
 
 
@@ -103,7 +133,7 @@ bootstrap_get_functions () {
   local url="http://${gateway}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=$(urlencode "$distro")"
 
   # Fetch and source
-  if ! curl -fsSL "$url" | source /dev/stdin; then
+  if ! eval "$(curl -fsSL "$url")"; then
     echo "[-] Failed to fetch or source functions from $url"
     return 2
   else

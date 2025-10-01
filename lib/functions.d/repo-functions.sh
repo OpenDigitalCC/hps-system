@@ -5,6 +5,93 @@ __guard_source || return
 # Alpine Repository Management Functions
 #===============================================================================
 
+
+#===============================================================================
+# validate_alpine_repository
+# --------------------------
+# Check if Alpine repository is complete and ready for TCH boot
+#
+# Arguments:
+#   $1 - alpine_version : Alpine version (optional, auto-detects if not provided)
+#   $2 - repo_name      : "main" or "community" (optional, defaults to "main")
+#
+# Behaviour:
+#   - Auto-detects Alpine version from distros directory if not provided
+#   - Checks if repository directory exists
+#   - Validates APKINDEX.tar.gz exists and is readable
+#   - Counts .apk packages in repository
+#   - Compares package count against expected minimum
+#   - Logs validation results
+#
+# Returns:
+#   0 if repository is valid and complete
+#   1 if repository missing or incomplete
+#===============================================================================
+validate_alpine_repository() {
+  local alpine_version="${1:-}"
+  local repo_name="${2:-main}"
+  
+  if [[ -z "$HPS_DISTROS_DIR" ]]; then
+    hps_log error "validate_alpine_repository: HPS_DISTROS_DIR not set"
+    return 1
+  fi
+  
+  # Auto-detect Alpine version if not provided
+  if [[ -z "$alpine_version" ]]; then
+    alpine_version=$(get_latest_alpine_version)
+    if [[ -z "$alpine_version" ]]; then
+      hps_log error "Could not determine Alpine version"
+      return 1
+    fi
+    hps_log debug "Auto-detected Alpine version: ${alpine_version}"
+  fi
+  
+  local repo_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
+  
+  hps_log debug "Validating Alpine repository: ${repo_dir}"
+  
+  # Check directory exists
+  if [[ ! -d "$repo_dir" ]]; then
+    hps_log error "Repository directory does not exist: ${repo_dir}"
+    return 1
+  fi
+  
+  # Check APKINDEX exists and is valid
+  if ! validate_apkindex "$repo_dir"; then
+    hps_log error "Repository APKINDEX validation failed: ${repo_dir}"
+    return 1
+  fi
+  
+  # Count packages
+  local pkg_count=$(ls -1 "${repo_dir}"/*.apk 2>/dev/null | wc -l)
+  
+  # Expected minimum package counts
+  local min_main=2000
+  local min_community=3000
+  local expected_min
+  
+  case "$repo_name" in
+    main)
+      expected_min=$min_main
+      ;;
+    community)
+      expected_min=$min_community
+      ;;
+    *)
+      expected_min=1
+      ;;
+  esac
+  
+  if (( pkg_count < expected_min )); then
+    hps_log error "Repository incomplete: found ${pkg_count} packages, expected at least ${expected_min}"
+    return 1
+  fi
+  
+  hps_log info "Repository validated: ${repo_name} has ${pkg_count} packages"
+  return 0
+}
+
+
 #===============================================================================
 # sync_alpine_repository
 # ----------------------
@@ -153,8 +240,7 @@ sync_alpine_repo_arch() {
   local repo_name="$3"
   
   local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
-  local mirror_base="rsync://dl-cdn.alpinelinux.org/alpine"
-  local mirror_path="${mirror_base}/${mirror_version}/${repo_name}/x86_64/"
+  local http_mirror="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/x86_64/"
   
   hps_log info "Syncing ${repo_name} repository to ${dest_dir}"
   
@@ -164,36 +250,49 @@ sync_alpine_repo_arch() {
     return 2
   fi
   
-  # Try rsync first
-  if command -v rsync >/dev/null 2>&1; then
-    hps_log debug "Using rsync for ${repo_name} repository sync"
-    
-    if rsync -avz --progress --no-motd \
-              --include='*.apk' \
-              --include='APKINDEX.tar.gz' \
-              --exclude='*' \
-              "$mirror_path" "$dest_dir/"; then
-      hps_log info "Successfully synced ${repo_name} repository via rsync"
-      validate_apkindex "$dest_dir"
-      return $?
-    else
-      hps_log warn "Rsync failed for ${repo_name}, trying wget fallback"
+  # Create temporary file list
+  local temp_list=$(mktemp)
+  
+  # Download with wget, capturing downloaded files
+  hps_log debug "Downloading repository files from ${http_mirror}"
+  
+  # First, get the directory listing
+  local temp_list=$(mktemp)
+  local file_list=$(mktemp)
+  
+  # Get list of files from the mirror
+  wget -q -O - "${http_mirror}" | \
+    grep -o 'href="[^"]*\.apk"' | \
+    cut -d'"' -f2 > "$file_list"
+  
+  # Also download APKINDEX.tar.gz
+  echo "APKINDEX.tar.gz" >> "$file_list"
+  
+  local download_count=0
+  local total_files=$(wc -l < "$file_list")
+  
+  hps_log info "Found ${total_files} files in repository"
+  
+  # Download each file with timestamping
+  while IFS= read -r filename; do
+    if wget -N -nv -P "$dest_dir" "${http_mirror}${filename}" 2>&1 | grep -q "saved"; then
+      download_count=$((download_count + 1))
+      echo "$filename" >> "$temp_list"
+      
+      # Log every 20 downloads
+      if (( download_count % 20 == 0 )); then
+        hps_log info "Downloaded ${download_count}/${total_files} files..."
+      fi
     fi
-  fi
+  done < "$file_list"
   
-  # Fallback to wget
-  hps_log debug "Using wget for ${repo_name} repository sync"
-  local http_mirror="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/x86_64/"
+  rm -f "$file_list"
+  local total_downloaded=$(wc -l < "$temp_list" 2>/dev/null || echo 0)
+  rm -f "$temp_list"
   
-  if wget -r -np -nH --cut-dirs=5 -R "index.html*" \
-          -P "$dest_dir" "$http_mirror"; then
-    hps_log info "Successfully synced ${repo_name} repository via wget"
-    validate_apkindex "$dest_dir"
-    return $?
-  else
-    hps_log error "Failed to sync ${repo_name} repository"
-    return 2
-  fi
+  hps_log info "Successfully synced ${repo_name} repository (${total_downloaded} new/updated, ${total_files} total)"
+  validate_apkindex "$dest_dir"
+  return $?
 }
 
 #===============================================================================
@@ -468,6 +567,10 @@ validate_apkindex() {
   hps_log debug "APKINDEX validated: $index_file"
   return 0
 }
+
+
+
+
 
 
 

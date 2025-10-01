@@ -4,20 +4,20 @@
 __guard_source || return
 
 
-#!/usr/bin/env bash
+
+
 #===============================================================================
 # tch_apkovol_create
 # ------------------
-# Generate and stream Alpine apkovl tarball for TCH bootstrap.
+# Generate Alpine apkovl tarball containing TCH bootstrap script
 #
 # Behaviour:
 #   - Retrieves IPS gateway IP from cluster configuration
-#   - Creates temporary directory structure matching Alpine root filesystem
-#   - Generates bootstrap script in /etc/local.d/hps-bootstrap.start
-#   - Substitutes gateway IP into bootstrap script
-#   - Creates tar.gz archive and streams to stdout
+#   - Creates temporary directory structure
+#   - Generates bootstrap script in etc/local.d/hps-bootstrap.start
+#   - Creates tar.gz archive
+#   - Streams tarball to stdout with HTTP headers
 #   - Cleans up temporary files
-#   - Logs all operations via hps_log
 #
 # CGI Output:
 #   - HTTP headers (Content-Type, Content-Disposition)
@@ -36,7 +36,7 @@ tch_apkovol_create() {
     cgi_fail "Unable to determine IPS gateway IP"
   fi
   
-  hps_log debug "Using gateway IP: $gateway_ip"
+  hps_log debug "Creating apkovl with gateway IP: $gateway_ip"
   
   # Create temp structure
   local tmp_dir=$(mktemp -d)
@@ -47,73 +47,68 @@ tch_apkovol_create() {
   
   hps_log debug "Created temp directory: $tmp_dir"
   
-  if ! mkdir -p "$tmp_dir/etc/local.d"; then
+  if ! mkdir -p "$tmp_dir/etc/local.d" "$tmp_dir/etc/runlevels/default"; then
     hps_log error "Failed to create directory structure in $tmp_dir"
     rm -rf "$tmp_dir"
     cgi_fail "Internal error: cannot create directory structure"
   fi
   
-  # Write bootstrap script with gateway IP substituted
-  cat > "$tmp_dir/etc/local.d/hps-bootstrap.start" <<'EOF'
+  # Create symlink to enable local service at boot
+  ln -s /etc/init.d/local "$tmp_dir/etc/runlevels/default/local"
+  
+  # Write bootstrap script
+  if ! cat > "$tmp_dir/etc/local.d/hps-bootstrap.start" <<'EOF'
+#!/bin/sh
 echo "[HPS] TCH Bootstrap starting..."
 
-# Required packages for HPS bootstrap
-PACKAGES="bash curl"
-
-# Configure repositories: local main repo + CDN community for bootstrap packages
+# Configure Alpine repositories
 echo "[HPS] Configuring package repositories..."
 cat > /etc/apk/repositories <<REPOS
 http://GATEWAY_IP/distros/alpine-3.20.2/apks/main
-http://dl-cdn.alpinelinux.org/alpine/v3.20/community
 REPOS
 
+# Update package index
 echo "[HPS] Updating package index..."
-if ! apk update 2>&1; then
-    echo "[HPS] ERROR: Failed to update package index"
-    echo "[HPS] Rebooting in 30 seconds..."
-    sleep 30
-    reboot
-fi
+for attempt in 1 2 3; do
+    if apk update; then
+        break
+    fi
+    if [ $attempt -lt 3 ]; then
+        echo "[HPS] Retry $attempt/3..."
+        sleep 2
+    else
+        echo "[HPS] ERROR: Failed to update package index after 3 attempts"
+        exit 1
+    fi
+done
 
-echo "[HPS] Installing required packages: ${PACKAGES}..."
-if ! apk add --no-cache ${PACKAGES} 2>&1; then
+# Install required packages
+echo "[HPS] Installing bash and curl..."
+if ! apk add --no-cache bash curl; then
     echo "[HPS] ERROR: Failed to install packages"
-    echo "[HPS] Rebooting in 30 seconds..."
-    sleep 30
-    reboot
+    exit 1
 fi
 
-echo "[HPS] Sourcing functions from IPS at GATEWAY_IP..."
-
-# Execute in bash context (HPS functions require bash)
-/bin/bash <<'BASH_BLOCK'
-if ! curl -fsSL "http://GATEWAY_IP/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions" | bash; then
-    echo "[HPS] ERROR: Failed to source functions from IPS"
-    echo "[HPS] Rebooting in 30 seconds..."
-    sleep 30
-    reboot
-fi
-
-echo "[HPS] Functions loaded successfully"
-echo "[HPS] Starting TCH configuration..."
-if ! tch_configure_alpine; then
+# Source HPS functions and configure TCH
+echo "[HPS] Sourcing HPS functions from IPS..."
+if ! /bin/bash -c 'eval "$(curl -fsSL http://GATEWAY_IP/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)" && tch_configure_alpine'; then
     echo "[HPS] ERROR: TCH configuration failed"
-    echo "[HPS] Rebooting in 30 seconds..."
-    sleep 30
-    reboot
+    exit 1
 fi
+
 echo "[HPS] TCH Bootstrap complete"
-BASH_BLOCK
+
+# Don't remove the script - it needs to run every boot
+# rm -f /etc/local.d/hps-bootstrap.start
 EOF
-  
-  # Substitute gateway IP
-  sed -i "s|GATEWAY_IP|${gateway_ip}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
-  
-  if [[ $? -ne 0 ]]; then
+  then
     hps_log error "Failed to write bootstrap script"
     rm -rf "$tmp_dir"
     cgi_fail "Internal error: cannot write bootstrap script"
   fi
+  
+  # Substitute gateway IP
+  sed -i "s|GATEWAY_IP|${gateway_ip}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
   
   if ! chmod +x "$tmp_dir/etc/local.d/hps-bootstrap.start"; then
     hps_log error "Failed to set execute permission on bootstrap script"
@@ -123,16 +118,14 @@ EOF
   
   hps_log debug "Bootstrap script created successfully"
   
-  # HTTP headers
-  echo "Content-Type: application/octet-stream"
-  echo "Content-Disposition: attachment; filename=\"tch-bootstrap.apkovl.tar.gz\""
+  # HTTP headers - required for CGI
+  echo "Content-Type: application/gzip"
   echo ""
   
   # Stream tar to stdout
   if ! tar czf - -C "$tmp_dir" . 2>/dev/null; then
     hps_log error "Failed to create tar archive"
     rm -rf "$tmp_dir"
-    # Can't use cgi_fail here - headers already sent
     exit 1
   fi
   
@@ -145,99 +138,70 @@ EOF
 
 
 
-#===============================================================================
-# extract_alpine_iso
-# ------------------
-# Extract Alpine ISO contents to distros directory
-#
-# Usage: extract_alpine_iso <iso_path> [alpine_version]
-# Example: extract_alpine_iso "/srv/hps-resources/distros/iso/alpine-standard-3.20.2-x86_64.iso" "3.20.2"
-#          extract_alpine_iso "/path/to/iso"  # Auto-detects version from filename
-#
-# Behaviour:
-#   - Mounts ISO as loop device
-#   - Extracts all contents to ${HPS_RESOURCES}/distros/alpine-{version}/
-#   - Creates extraction directory if needed
-#   - Preserves file permissions and timestamps
-#   - Unmounts ISO when complete
-#
-# Returns:
-#   0 on success, prints extraction path to stdout
-#   1 if parameters missing or ISO file not found
-#   2 if mount/extraction fails
-#===============================================================================
-extract_alpine_iso() {
-    local iso_path="$1"
-    local alpine_version="$2"
-    
-    if [[ -z "$iso_path" ]]; then
-        hps_log "ERROR" "extract_alpine_iso: iso_path required"
-        return 1
-    fi
-    
-    if [[ ! -f "$iso_path" ]]; then
-        hps_log "ERROR" "extract_alpine_iso: ISO file not found: $iso_path"
-        return 1
-    fi
-    
-    if [[ -z "$HPS_RESOURCES" ]]; then
-        hps_log "ERROR" "extract_alpine_iso: HPS_RESOURCES not set"
-        return 1
-    fi
-    
-    # Auto-detect version from filename if not provided
-    if [[ -z "$alpine_version" ]]; then
-        alpine_version=$(basename "$iso_path" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-        if [[ -z "$alpine_version" ]]; then
-            hps_log "ERROR" "extract_alpine_iso: Could not detect Alpine version from filename"
-            return 1
-        fi
-        hps_log "INFO" "Auto-detected Alpine version: $alpine_version"
-    fi
-    
-    local extract_dir="${HPS_RESOURCES%/}/distros/alpine-${alpine_version}"
-    local mount_point="/tmp/alpine_iso_mount_$$"
-    
-    # Check if already extracted
-    if [[ -d "$extract_dir" && -n "$(ls -A "$extract_dir" 2>/dev/null)" ]]; then
-        hps_log "INFO" "Alpine ${alpine_version} already extracted: $extract_dir"
-        echo "$extract_dir"
-        return 0
-    fi
-    
-    hps_log "INFO" "Extracting Alpine ISO: $iso_path -> $extract_dir"
-    
-    # Create mount point and extraction directory
-    if ! mkdir -p "$mount_point" "$extract_dir"; then
-        hps_log "ERROR" "extract_alpine_iso: Failed to create directories"
-        return 2
-    fi
-    
-    # Mount ISO as loop device
-    if ! mount -o loop,ro "$iso_path" "$mount_point"; then
-        hps_log "ERROR" "extract_alpine_iso: Failed to mount ISO"
-        rmdir "$mount_point" 2>/dev/null
-        return 2
-    fi
-    
-    # Copy all contents preserving permissions and timestamps
-    if ! cp -a "$mount_point"/* "$extract_dir"/; then
-        hps_log "ERROR" "extract_alpine_iso: Failed to copy ISO contents"
-        umount "$mount_point" 2>/dev/null
-        rmdir "$mount_point" 2>/dev/null
-        return 2
-    fi
-    
-    # Unmount and cleanup
-    if ! umount "$mount_point"; then
-        hps_log "WARN" "extract_alpine_iso: Failed to unmount $mount_point"
-    fi
-    rmdir "$mount_point" 2>/dev/null
-    
-    hps_log "INFO" "Alpine ISO extracted successfully: $extract_dir"
-    echo "$extract_dir"
-    return 0
+get_alpine_bootstrap() {
+  local stage="${1:-initramfs}"
+  
+  local gateway_ip=$(cluster_config get DHCP_IP)
+  if [[ -z "$gateway_ip" ]]; then
+    hps_log error "Failed to get gateway IP from cluster config"
+    cgi_fail "Unable to determine IPS gateway IP"
+  fi
+  
+  hps_log debug "Generating bootstrap script for stage: ${stage}, gateway IP: ${gateway_ip}"
+  
+  if [[ "$stage" != "initramfs" && "$stage" != "rc" ]]; then
+    hps_log error "Invalid bootstrap stage: ${stage}"
+    cgi_fail "Invalid stage parameter: ${stage}"
+    return 1
+  fi
+  
+  if [[ "$stage" == "initramfs" ]]; then
+    generate_initramfs_script "$gateway_ip"
+  else
+    generate_rc_script "$gateway_ip"
+  fi
 }
+
+generate_initramfs_script() {
+  local gateway_ip="$1"
+  cat <<'EOF'
+#!/bin/sh
+echo "[HPS] Installing post-boot bootstrap script..."
+if [ ! -d /sysroot ]; then
+    echo "[HPS] ERROR: /sysroot not available"
+    exit 1
+fi
+mkdir -p /sysroot/etc/local.d
+EOF
+  
+  # Write the RC script content dynamically
+  echo "cat > /sysroot/etc/local.d/hps-bootstrap.start <<'RCSCRIPT'"
+  generate_rc_script "$gateway_ip"
+  echo "RCSCRIPT"
+  
+  cat <<'EOF'
+chmod +x /sysroot/etc/local.d/hps-bootstrap.start
+echo "[HPS] Bootstrap script installed to /sysroot/etc/local.d/"
+EOF
+}
+
+generate_rc_script() {
+  local gateway_ip="$1"
+  cat <<EOF
+#!/bin/sh
+echo "[HPS] TCH Bootstrap starting..."
+cat > /etc/apk/repositories <<REPOS
+http://${gateway_ip}/distros/alpine-3.20.2/apks/main
+REPOS
+apk update
+apk add --no-cache bash curl
+/bin/sh -c 'eval "\$(curl -fsSL http://${gateway_ip}/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)" && tch_configure_alpine'
+rm -f /etc/local.d/hps-bootstrap.start
+EOF
+}
+
+
+
 
 
 #===============================================================================

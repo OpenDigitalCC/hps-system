@@ -520,12 +520,19 @@ EOF
   esac
 }
 
-
 ipxe_network_boot() {
   local host_type=$(host_config "$mac" get TYPE)
   hps_log debug "Booting host of type ${host_type}"
+  
   case "$host_type" in
     TCH)
+      # Validate Alpine repository before attempting boot
+      if ! validate_alpine_repository; then
+        local alpine_version=$(get_latest_alpine_version)
+        hps_log error "Alpine repository validation failed for TCH boot"
+        ipxe_cgi_fail "Alpine ${alpine_version} repository not ready. Run: sync_alpine_repository \"${alpine_version}\" \"main\""
+        return 1
+      fi
       ipxe_boot_alpine_tch
       ;;
     *)
@@ -533,6 +540,7 @@ ipxe_network_boot() {
       ;;
   esac
 }
+
 
 ipxe_boot_alpine_tch() {
   local alpine_version=$(get_latest_alpine_version)
@@ -549,13 +557,12 @@ ipxe_boot_alpine_tch() {
 
   local kernel_args="initrd=initramfs-lts"
   kernel_args="${kernel_args} console=ttyS0,115200n8"
-  kernel_args="${kernel_args} alpine_repo=http://10.99.1.1/distros/alpine-3.20.2/apks"
+  kernel_args="${kernel_args} alpine_repo=http://10.99.1.1/distros/alpine-3.20.2/apks/main"
   kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
   kernel_args="${kernel_args} ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:off"
-#  kernel_args="${kernel_args} apkovl=http://${gateway}/distros/alpine-${alpine_version}/${apkvol_filename}"
-  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol"
+#  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol&filename=bootstrap.apkovl.tar.gz"
+  kernel_args="${kernel_args} apkovl=http://${gateway}/distros/alpine-3.20.2/tch-bootstrap.apkovl.tar.gz"
 
-  
   ipxe_header
   cat <<EOF
 # Alpine TCH Boot - created at $(date)

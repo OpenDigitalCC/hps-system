@@ -41,16 +41,28 @@ if [[ "$cmd" == "init" ]]; then
   exit
 fi
 
-### ───── Commands that require a MAC ─────
-
 # Command: Get TCH apkovol
 if [[ "$cmd" == "get_tch_apkovol" ]]; then
-  hps_log info "Generating TCH apkovol for MAC: $mac"
-  if ! tch_apkovol_create; then
-    hps_log error "tch_apkovol_create failed for MAC: $mac"
-    cgi_fail "Failed to generate TCH apkovol"
+  hps_log info "Generating Alpine apkovol"
+  tch_apkovol_create
+  exit 0
+fi
+
+
+# Command: Get alpine bootstrap 
+if [[ "$cmd" == "get_alpine_bootstrap" ]]; then
+  cgi_header_plain
+  hps_log info "Generating Alpine bootstrap"
+  
+  stage="initramfs"
+  if cgi_param exists stage; then
+    stage="$(cgi_param get stage)"
   fi
-  exit
+  
+  if ! get_alpine_bootstrap "$stage" ; then
+    cgi_fail "Failed to generate bootstrap: get_alpine_bootstrap exited nonzero"
+  fi
+  exit 0
 fi
 
 
