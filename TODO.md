@@ -287,11 +287,6 @@ Firewall - part of the cluster? Containerised? On IPS?
 
 - add time service to IPS
 
-### DNS
-
-- Add dns hosts via dnsmasq to IPS
-- to file ${HPS_SERVICE_CONFIG_DIR}/dns_hosts
-
 ### SMTP relay
 
 - exim on IPS
