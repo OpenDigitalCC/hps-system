@@ -4,7 +4,7 @@
 __guard_source || return
 
 
-
+#!/usr/bin/env bash
 #===============================================================================
 # tch_apkovol_create
 # ------------------
@@ -55,11 +55,25 @@ tch_apkovol_create() {
   
   # Write bootstrap script with gateway IP substituted
   cat > "$tmp_dir/etc/local.d/hps-bootstrap.start" <<'EOF'
-#!/bin/sh
 echo "[HPS] TCH Bootstrap starting..."
 
 # Required packages for HPS bootstrap
 PACKAGES="bash curl"
+
+# Configure repositories: local main repo + CDN community for bootstrap packages
+echo "[HPS] Configuring package repositories..."
+cat > /etc/apk/repositories <<REPOS
+http://GATEWAY_IP/distros/alpine-3.20.2/apks/main
+http://dl-cdn.alpinelinux.org/alpine/v3.20/community
+REPOS
+
+echo "[HPS] Updating package index..."
+if ! apk update 2>&1; then
+    echo "[HPS] ERROR: Failed to update package index"
+    echo "[HPS] Rebooting in 30 seconds..."
+    sleep 30
+    reboot
+fi
 
 echo "[HPS] Installing required packages: ${PACKAGES}..."
 if ! apk add --no-cache ${PACKAGES} 2>&1; then
@@ -128,7 +142,6 @@ EOF
   rm -rf "$tmp_dir"
   hps_log debug "Cleaned up temp directory: $tmp_dir"
 }
-
 
 
 

@@ -1,5 +1,481 @@
 __guard_source || return
 
+
+#===============================================================================
+# Alpine Repository Management Functions
+#===============================================================================
+
+#===============================================================================
+# sync_alpine_repository
+# ----------------------
+# Sync Alpine Linux package repositories from upstream mirror to local storage
+#
+# Arguments:
+#   $1 - alpine_version : Alpine version (e.g., "3.20.2")
+#   $2 - sync_mode      : "all" | "main" | "community" | "minimal" | "packages"
+#   $3 - package_list   : (optional) Space-separated package names for "packages" mode
+#
+# Sync Modes:
+#   all       - Sync both main and community repositories (parallel)
+#   main      - Sync only main repository
+#   community - Sync only community repository
+#   minimal   - Sync only bootstrap essential packages
+#   packages  - Sync specific packages and their dependencies
+#
+# Behaviour:
+#   - Converts version to mirror path format (3.20.2 -> v3.20)
+#   - Creates repository directory structure
+#   - Uses rsync with fallback to wget
+#   - For minimal/packages modes: parses APKINDEX and resolves dependencies
+#   - Parallel download for "all" mode
+#   - Keeps all downloaded packages (no deletion)
+#   - Validates APKINDEX.tar.gz after sync
+#
+# Returns:
+#   0 on success
+#   1 on invalid parameters
+#   2 on sync failure
+#===============================================================================
+sync_alpine_repository() {
+  local alpine_version="$1"
+  local sync_mode="$2"
+  local package_list="$3"
+  
+  # Minimal packages for TCH bootstrap with their repositories
+  declare -A MINIMAL_PACKAGES_REPO=(
+    [bash]="main"
+    [curl]="main"
+  )
+  
+  if [[ -z "$alpine_version" || -z "$sync_mode" ]]; then
+    hps_log error "sync_alpine_repository: alpine_version and sync_mode required"
+    return 1
+  fi
+  
+  if [[ -z "$HPS_DISTROS_DIR" ]]; then
+    hps_log error "sync_alpine_repository: HPS_DISTROS_DIR not set"
+    return 1
+  fi
+  
+  # Validate sync_mode
+  case "$sync_mode" in
+    all|main|community|minimal|packages) ;;
+    *)
+      hps_log error "sync_alpine_repository: Invalid sync_mode: $sync_mode"
+      return 1
+      ;;
+  esac
+  
+  # Convert version to mirror format (3.20.2 -> v3.20)
+  local major_minor_version
+  major_minor_version=$(echo "$alpine_version" | grep -oE '^[0-9]+\.[0-9]+')
+  local mirror_version="v${major_minor_version}"
+  
+  hps_log info "Syncing Alpine ${alpine_version} repository: mode=${sync_mode}"
+  
+  # Execute based on sync mode
+  case "$sync_mode" in
+    all)
+      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "main" &
+      local pid_main=$!
+      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "community" &
+      local pid_community=$!
+      
+      wait $pid_main
+      local result_main=$?
+      wait $pid_community
+      local result_community=$?
+      
+      if [[ $result_main -eq 0 && $result_community -eq 0 ]]; then
+        hps_log info "Successfully synced all repositories"
+        return 0
+      else
+        hps_log error "Failed to sync one or more repositories"
+        return 2
+      fi
+      ;;
+      
+    main|community)
+      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "$sync_mode"
+      return $?
+      ;;
+      
+    minimal)
+      # Sync packages from their respective repositories
+      local result=0
+      for pkg in "${!MINIMAL_PACKAGES_REPO[@]}"; do
+        local repo="${MINIMAL_PACKAGES_REPO[$pkg]}"
+        hps_log info "Syncing $pkg from $repo repository"
+        if ! sync_alpine_packages "$alpine_version" "$mirror_version" "$repo" "$pkg"; then
+          hps_log error "Failed to sync package: $pkg"
+          result=2
+        fi
+      done
+      return $result
+      ;;
+      
+    packages)
+      if [[ -z "$package_list" ]]; then
+        hps_log error "sync_alpine_repository: package_list required for packages mode"
+        return 1
+      fi
+      sync_alpine_packages "$alpine_version" "$mirror_version" "community" $package_list
+      return $?
+      ;;
+  esac
+}
+
+#===============================================================================
+# sync_alpine_repo_arch
+# ---------------------
+# Sync a single Alpine repository (main or community) for x86_64 architecture
+#
+# Arguments:
+#   $1 - alpine_version  : Alpine version (e.g., "3.20.2")
+#   $2 - mirror_version  : Mirror path version (e.g., "v3.20")
+#   $3 - repo_name       : "main" or "community"
+#
+# Behaviour:
+#   - Creates destination directory structure
+#   - Uses rsync from Alpine mirror with appropriate filters
+#   - Falls back to wget if rsync unavailable or fails
+#   - Syncs only x86_64 architecture
+#   - Includes APKINDEX.tar.gz and all .apk files
+#   - Validates APKINDEX exists after sync
+#
+# Returns:
+#   0 on success
+#   2 on failure
+#===============================================================================
+sync_alpine_repo_arch() {
+  local alpine_version="$1"
+  local mirror_version="$2"
+  local repo_name="$3"
+  
+  local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
+  local mirror_base="rsync://dl-cdn.alpinelinux.org/alpine"
+  local mirror_path="${mirror_base}/${mirror_version}/${repo_name}/x86_64/"
+  
+  hps_log info "Syncing ${repo_name} repository to ${dest_dir}"
+  
+  # Create destination directory
+  if ! mkdir -p "$dest_dir"; then
+    hps_log error "Failed to create directory: $dest_dir"
+    return 2
+  fi
+  
+  # Try rsync first
+  if command -v rsync >/dev/null 2>&1; then
+    hps_log debug "Using rsync for ${repo_name} repository sync"
+    
+    if rsync -avz --progress --no-motd \
+              --include='*.apk' \
+              --include='APKINDEX.tar.gz' \
+              --exclude='*' \
+              "$mirror_path" "$dest_dir/"; then
+      hps_log info "Successfully synced ${repo_name} repository via rsync"
+      validate_apkindex "$dest_dir"
+      return $?
+    else
+      hps_log warn "Rsync failed for ${repo_name}, trying wget fallback"
+    fi
+  fi
+  
+  # Fallback to wget
+  hps_log debug "Using wget for ${repo_name} repository sync"
+  local http_mirror="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/x86_64/"
+  
+  if wget -r -np -nH --cut-dirs=5 -R "index.html*" \
+          -P "$dest_dir" "$http_mirror"; then
+    hps_log info "Successfully synced ${repo_name} repository via wget"
+    validate_apkindex "$dest_dir"
+    return $?
+  else
+    hps_log error "Failed to sync ${repo_name} repository"
+    return 2
+  fi
+}
+
+#===============================================================================
+# sync_alpine_packages
+# --------------------
+# Sync specific Alpine packages and their dependencies
+#
+# Arguments:
+#   $1 - alpine_version  : Alpine version (e.g., "3.20.2")
+#   $2 - mirror_version  : Mirror path version (e.g., "v3.20")
+#   $3 - repo_name       : "main" or "community"
+#   $@ - package_names   : Space-separated package names
+#
+# Behaviour:
+#   - Downloads APKINDEX.tar.gz from repository
+#   - Parses APKINDEX to find requested packages
+#   - Resolves all dependencies recursively
+#   - Downloads only required .apk files
+#   - Creates destination directory structure
+#
+# Returns:
+#   0 on success
+#   2 on failure
+#===============================================================================
+sync_alpine_packages() {
+  local alpine_version="$1"
+  local mirror_version="$2"
+  local repo_name="$3"
+  shift 3
+  local package_names=("$@")
+  
+  local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
+  local temp_dir=$(mktemp -d)
+  
+  hps_log info "Syncing packages: ${package_names[*]}"
+  
+  # Create destination directory
+  if ! mkdir -p "$dest_dir"; then
+    hps_log error "Failed to create directory: $dest_dir"
+    rm -rf "$temp_dir"
+    return 2
+  fi
+  
+  # Download APKINDEX
+  local index_url="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/x86_64/APKINDEX.tar.gz"
+  
+  if ! wget -q -O "${temp_dir}/APKINDEX.tar.gz" "$index_url"; then
+    hps_log error "Failed to download APKINDEX from ${index_url}"
+    rm -rf "$temp_dir"
+    return 2
+  fi
+  
+  # Extract APKINDEX
+  if ! tar -xzf "${temp_dir}/APKINDEX.tar.gz" -C "$temp_dir"; then
+    hps_log error "Failed to extract APKINDEX"
+    rm -rf "$temp_dir"
+    return 2
+  fi
+  
+  # Parse and resolve dependencies
+  local all_packages=()
+  for pkg in "${package_names[@]}"; do
+    local deps
+    deps=$(resolve_alpine_dependencies "${temp_dir}/APKINDEX" "$pkg")
+    if [[ $? -ne 0 ]]; then
+      hps_log error "Failed to resolve dependencies for: $pkg"
+      rm -rf "$temp_dir"
+      return 2
+    fi
+    all_packages+=($deps)
+  done
+  
+  # Remove duplicates
+  local unique_packages=($(printf '%s\n' "${all_packages[@]}" | sort -u))
+  
+  hps_log info "Total packages to download (including dependencies): ${#unique_packages[@]}"
+  
+  # Download each package
+  local mirror_base="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/x86_64"
+  for pkg_file in "${unique_packages[@]}"; do
+    hps_log debug "Downloading: $pkg_file"
+    if ! wget -q -P "$dest_dir" "${mirror_base}/${pkg_file}"; then
+      hps_log warn "Failed to download: $pkg_file"
+    fi
+  done
+  
+  # Copy APKINDEX to destination
+  cp "${temp_dir}/APKINDEX.tar.gz" "$dest_dir/"
+  
+  rm -rf "$temp_dir"
+  
+  hps_log info "Successfully synced packages and dependencies"
+  return 0
+}
+
+#===============================================================================
+# resolve_alpine_dependencies
+# ---------------------------
+# Recursively resolve package dependencies from APKINDEX
+#
+# Arguments:
+#   $1 - apkindex_file : Path to extracted APKINDEX file
+#   $2 - package_name  : Package name to resolve
+#
+# Behaviour:
+#   - Parses APKINDEX file format (newline-separated key:value stanzas)
+#   - Finds package entry by name
+#   - Extracts dependencies (D: field)
+#   - Recursively resolves all dependency packages
+#   - Returns list of .apk filenames to download
+#
+# Output:
+#   Space-separated list of .apk filenames (stdout)
+#
+# Returns:
+#   0 on success
+#   1 if package not found
+#===============================================================================
+resolve_alpine_dependencies() {
+  local apkindex_file="$1"
+  local package_name="$2"
+  
+  if [[ ! -f "$apkindex_file" ]]; then
+    hps_log error "APKINDEX file not found: $apkindex_file"
+    return 1
+  fi
+  
+  # Parse package info
+  local pkg_info
+  pkg_info=$(parse_apkindex_package "$apkindex_file" "$package_name")
+  
+  if [[ -z "$pkg_info" ]]; then
+    hps_log error "Package not found in APKINDEX: $package_name"
+    return 1
+  fi
+  
+  # Extract filename and dependencies from APKINDEX format
+  # Format: "P:pkgname V:version A:arch ... D:deps ... p:provides"
+  
+  local pkg_name ver
+  
+  # Extract P: field value
+  pkg_name=$(echo "$pkg_info" | grep -o 'P:[^ ]*' | cut -d: -f2)
+  
+  # Extract V: field value
+  ver=$(echo "$pkg_info" | grep -o 'V:[^ ]*' | cut -d: -f2)
+  
+  if [[ -z "$pkg_name" || -z "$ver" ]]; then
+    hps_log error "Failed to extract package name or version from APKINDEX entry"
+    return 1
+  fi
+  
+  local filename="${pkg_name}-${ver}.apk"
+  
+  # Extract dependencies between D: and p: (or end of line)
+  local deps=""
+  if echo "$pkg_info" | grep -q ' D:'; then
+    deps=$(echo "$pkg_info" | sed -n 's/.* D:\(.*\) p:.*/\1/p' | tr ' ' '\n')
+  fi
+  
+  echo "$filename"
+  
+  # Recursively resolve dependencies (only actual packages, skip so: and / entries)
+  if [[ -n "$deps" ]]; then
+    for dep in $deps; do
+      # Skip shared library dependencies (so:...) and file dependencies (/...)
+      if [[ "$dep" =~ ^so: ]] || [[ "$dep" =~ ^/ ]]; then
+        continue
+      fi
+      
+      # Strip version constraints (bash>=5.0 -> bash)
+      local dep_name=$(echo "$dep" | sed 's/[<>=].*$//')
+      
+      # Only recurse if it's an actual package name
+      if [[ -n "$dep_name" ]]; then
+        resolve_alpine_dependencies "$apkindex_file" "$dep_name" 2>/dev/null || true
+      fi
+    done
+  fi
+}
+
+#===============================================================================
+# parse_apkindex_package
+# ----------------------
+# Extract package stanza from APKINDEX file
+#
+# Arguments:
+#   $1 - apkindex_file : Path to extracted APKINDEX file
+#   $2 - package_name  : Package name to find
+#
+# Behaviour:
+#   - APKINDEX format: package stanzas separated by blank lines
+#   - Each stanza contains key:value pairs
+#   - P: field contains package name
+#   - Returns complete stanza for matching package as space-separated string
+#
+# Output:
+#   Package stanza (stdout)
+#
+# Returns:
+#   0 on success (package found)
+#   1 if package not found
+#===============================================================================
+parse_apkindex_package() {
+  local apkindex_file="$1"
+  local package_name="$2"
+  
+  # Read APKINDEX paragraph by paragraph (blank line separated)
+  local in_record=0
+  local record=""
+  
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -z "$line" ]]; then
+      # Blank line - end of record
+      if [[ $in_record -eq 1 ]]; then
+        echo "$record"
+        return 0
+      fi
+      record=""
+      in_record=0
+    else
+      # Check if this record contains our package
+      if [[ "$line" =~ ^P:${package_name}$ ]]; then
+        in_record=1
+      fi
+      if [[ $in_record -eq 1 ]]; then
+        record="${record}${line} "
+      fi
+    fi
+  done < "$apkindex_file"
+  
+  # Check last record if file doesn't end with blank line
+  if [[ $in_record -eq 1 ]]; then
+    echo "$record"
+    return 0
+  fi
+  
+  return 1
+}
+
+#===============================================================================
+# validate_apkindex
+# -----------------
+# Validate APKINDEX.tar.gz exists in repository directory
+#
+# Arguments:
+#   $1 - repo_dir : Repository directory path
+#
+# Behaviour:
+#   - Checks for APKINDEX.tar.gz file
+#   - Validates it can be extracted
+#   - Logs validation results
+#
+# Returns:
+#   0 if valid
+#   2 if invalid or missing
+#===============================================================================
+validate_apkindex() {
+  local repo_dir="$1"
+  local index_file="${repo_dir}/APKINDEX.tar.gz"
+  
+  if [[ ! -f "$index_file" ]]; then
+    hps_log error "APKINDEX.tar.gz not found in: $repo_dir"
+    return 2
+  fi
+  
+  if ! tar -tzf "$index_file" >/dev/null 2>&1; then
+    hps_log error "APKINDEX.tar.gz is corrupted: $index_file"
+    return 2
+  fi
+  
+  hps_log debug "APKINDEX validated: $index_file"
+  return 0
+}
+
+
+
+
+
+
+## Rocky / RPM
+
 # prepare_custom_repo_for_distro "x86_64-linux-rockylinux-10.0" "https://zfsonlinux.org/epel/zfs-release.el8.noarch.rpm" "/tmp/opensvc-2.2.3.rpm"
 
 prepare_custom_repo_for_distro() {
