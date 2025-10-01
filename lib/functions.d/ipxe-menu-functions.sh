@@ -561,7 +561,6 @@ ipxe_boot_alpine_tch() {
 # Alpine TCH Boot - created at $(date)
 set kernel_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/vmlinuz-lts
 set initrd_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/initramfs-lts
-#set kernel_args initrd=initramfs-lts console=ttyS0,115200n8 alpine_repo=http://${gateway}/distros/alpine-${alpine_version}/apks modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:none usbdelay=30
 set kernel_args ${kernel_args}
 imgfree
 kernel \${kernel_url} \${kernel_args}
