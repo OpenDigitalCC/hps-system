@@ -3,6 +3,8 @@ __guard_source || return
 ## HPS Functions
 
 
+#TODO: Move config to CLUSTER_SERVICES_DIR
+
 
 #===============================================================================
 # hps_configure_opensvc_cluster
@@ -37,27 +39,121 @@ hps_configure_opensvc_cluster() {
 
 
 #===============================================================================
+# osvc_wait_for_socket
+# --------------------
+# Wait for OpenSVC daemon socket to be ready.
+# Helper function for osvc_configure_cluster_identity.
+#
+# Behaviour:
+#   - Checks for socket file existence up to 10 times
+#   - Sleeps 1 second between checks
+#   - Exits with code 1 on timeout
+#
+# Returns:
+#   Does not return on failure (exits 1)
+#   Returns 0 when socket is ready
+#===============================================================================
+osvc_wait_for_socket() {
+  hps_log debug "Waiting for OpenSVC daemon socket"
+  
+  local i
+  for i in {1..10}; do
+    if [[ -S /var/lib/opensvc/lsnr/http.sock ]]; then
+      hps_log debug "OpenSVC daemon socket ready"
+      return 0
+    fi
+    sleep 1
+  done
+  
+  hps_log error "OpenSVC daemon socket not ready after 10 seconds"
+  exit 1
+}
+
+#===============================================================================
+# osvc_verify_daemon_responsive
+# -----------------------------
+# Verify OpenSVC daemon is responsive to commands.
+# Helper function for osvc_configure_cluster_identity.
+#
+# Behaviour:
+#   - Tests daemon responsiveness using om cluster status
+#   - Exits with code 1 if daemon is not responsive
+#
+# Returns:
+#   Does not return on failure (exits 1)
+#   Returns 0 if daemon is responsive
+#===============================================================================
+osvc_verify_daemon_responsive() {
+  hps_log debug "Verifying OpenSVC daemon responsiveness"
+  
+  if om cluster status >/dev/null 2>&1; then
+    hps_log debug "OpenSVC daemon is responsive"
+    return 0
+  else
+    hps_log error "OpenSVC daemon not responsive"
+    exit 1
+  fi
+}
+
+#===============================================================================
+# osvc_config_update
+# ------------------
+# Set OpenSVC configuration using the correct v3 API (om cluster config update).
+# Helper function that handles return value checking and logging internally.
+#
+# Behaviour:
+#   - Executes om cluster config update with provided key-value pairs
+#   - Logs the operation and any errors
+#   - Handles return value checking internally
+#   - Returns error code on failure (does not exit)
+#
+# Arguments:
+#   $@ - key=value pairs (e.g., cluster.name=test-1 hb#1.type=multicast)
+#
+# Returns:
+#   0 on success, non-zero on failure
+#===============================================================================
+osvc_config_update() {
+  if [[ $# -eq 0 ]]; then
+    hps_log error "osvc_config_update: at least one key=value pair required"
+    return 1
+  fi
+  
+  local set_args=()
+  for kv in "$@"; do
+    set_args+=(--set "$kv")
+  done
+  
+  hps_log debug "Setting OpenSVC cluster config: $*"
+  
+  if om cluster config update "${set_args[@]}"; then
+    hps_log debug "Successfully updated cluster config: $*"
+    return 0
+  else
+    hps_log error "Failed to update cluster config: $*"
+    return 1
+  fi
+}
+
+#===============================================================================
 # osvc_configure_cluster_identity
 # --------------------------------
-# Configure cluster identity after OpenSVC daemon is running.
+# Configure cluster identity using proper OpenSVC v3 bootstrap procedure.
 # Called by hps_services_restart after supervisord starts opensvc service.
 #
 # Behaviour:
 #   - Waits for daemon socket to be ready
-#   - Sets cluster.name from CLUSTER_NAME
-#   - Sets node.name=ips
-#   - Configures heartbeat type
-#   - Generates and sets cluster.secret
-#   - Stores cluster.secret to cluster_config
+#   - Uses om cluster config update (correct v3 API)
+#   - Sets cluster.name and hb#1.type only
+#   - Does NOT manually set cluster.secret (let OpenSVC auto-manage)
 #
 # Returns:
-#   0 on success
-#   1 if configuration fails
+#   0 on success, 1 if configuration fails
 #===============================================================================
 osvc_configure_cluster_identity() {
   hps_log info "Configuring OpenSVC cluster identity"
   
-  # Wait for socket to be ready (already done by caller, but belt-and-suspenders)
+  # Wait for socket to be ready
   local i
   for i in {1..10}; do
     if [[ -S /var/lib/opensvc/lsnr/http.sock ]]; then
@@ -66,7 +162,7 @@ osvc_configure_cluster_identity() {
     sleep 1
   done
   
-  # Verify daemon is responsive (use om command, not pgrep)
+  # Verify daemon is responsive
   if ! om cluster status >/dev/null 2>&1; then
     hps_log error "Daemon not responsive"
     return 1
@@ -81,53 +177,20 @@ osvc_configure_cluster_identity() {
     return 1
   fi
   
-  # Set cluster name
-  om cluster set --kw "cluster.name=${cluster_name}" || {
-    hps_log error "Failed to set cluster.name"
-    return 1
-  }
-  
-  # Set node name (IPS-specific)
-  om node set --kw "node.name=ips" || {
-    hps_log error "Failed to set node.name"
-    return 1
-  }
-  
-  # Configure heartbeat
+  # Configure heartbeat type
   local hb_type
   hb_type="$(cluster_config get OSVC_HB_TYPE 2>/dev/null || echo multicast)"
   
-  om cluster set --kw "hb#1.type=${hb_type}" || {
-    hps_log error "Failed to set hb type"
+  # Use correct v3 API - om cluster config update
+  osvc_config_update "cluster.name=${cluster_name}" "hb#1.type=${hb_type}" || {
+    hps_log error "Failed to configure cluster identity"
     return 1
   }
   
-  # Get or generate cluster secret
-  local cluster_secret
-  cluster_secret="$(cluster_config get OPENSVC_CLUSTER_SECRET 2>/dev/null || true)"
-  
-  if [[ -z "${cluster_secret}" ]]; then
-    if command -v openssl >/dev/null 2>&1; then
-      cluster_secret="$(openssl rand -hex 16)"
-    else
-      cluster_secret="$(tr -dc 'a-f0-9' </dev/urandom | head -c 32)"
-    fi
-    
-    cluster_config set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
-    hps_log info "Generated and stored OPENSVC_CLUSTER_SECRET"
-  fi
-  
-  # Set cluster secret
-  om cluster set --kw "cluster.secret=${cluster_secret}" || {
-    hps_log error "Failed to set cluster.secret"
-    return 1
-  }
-  
-  hps_log info "Cluster identity configured: name=${cluster_name}, node=ips, hb=${hb_type}"
+  hps_log info "Cluster identity configured: name=${cluster_name}, hb=${hb_type}"
+  hps_log info "OpenSVC will auto-manage cluster.secret - no manual setting required"
   return 0
 }
-
-
 
 
 #===============================================================================
@@ -163,7 +226,7 @@ osvc_bootstrap_cluster_on_ips() {
   fi
   
   # 2. Start daemon via supervisord
-  supervisorctl -c /srv/hps-config/services/supervisord.conf start opensvc
+  supervisorctl -c ${CLUSTER_SERVICES_DIR}/supervisord.conf start opensvc
   sleep 3
   
   if ! pgrep -f "om daemon run" >/dev/null 2>&1; then
@@ -283,17 +346,19 @@ generate_opensvc_conf() {
 
   local origin; origin="$(hps_origin_tag)"
 
-  # Host-scoped
-  local osvc_nodename osvc_type osvc_tags
-  osvc_type="$(host_config "$origin" get TYPE 2>/dev/null || true)"
+# Host-scoped
+local osvc_nodename osvc_type osvc_tags
+osvc_type="$(host_config "$origin" get TYPE 2>/dev/null || true)"
 
-  if [[ "${osvc_type^^}" == "IPS" || -z "$osvc_type" && "${origin,,}" == "ips" ]]; then
-    osvc_type="IPS"
-    osvc_nodename="ips"   # stable in-container name
-  else
-    osvc_nodename="$(host_config "$origin" get HOSTNAME 2>/dev/null || true)"
-    [[ -z "$osvc_nodename" ]] && osvc_nodename="$(echo "$origin" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
-  fi
+# Fixed IPS detection: if running locally (TTY context), it's IPS
+if [[ "${osvc_type^^}" == "IPS" ]] || _is_tty; then
+  osvc_type="IPS"
+  osvc_nodename="ips"   # stable in-container name
+else
+  osvc_nodename="$(host_config "$origin" get HOSTNAME 2>/dev/null || true)"
+  [[ -z "$osvc_nodename" ]] && osvc_nodename="$(echo "$origin" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+fi
+
 
   # IPS role: CLI > host_config > cluster_config > default
   [[ -z "$ips_role" ]] && ips_role="$(host_config "$origin" get IPS_ROLE 2>/dev/null || true)"
@@ -312,9 +377,9 @@ generate_opensvc_conf() {
   local osvc_log_level osvc_listener_port osvc_web_ui osvc_web_port osvc_hb_interval osvc_hb_timeout
   local osvc_templates_url osvc_packages_url
   osvc_log_level="$(cluster_config get OSVC_LOG_LEVEL 2>/dev/null || echo info)"
-  osvc_listener_port="$(cluster_config get OSVC_LISTENER_PORT 2>/dev/null || echo 7024)"
+  osvc_listener_port="$(cluster_config get OSVC_LISTENER_PORT 2>/dev/null || echo 1215)"
   osvc_web_ui="$(cluster_config get OSVC_WEB_UI 2>/dev/null || echo yes)"
-  osvc_web_port="$(cluster_config get OSVC_WEB_PORT 2>/dev/null || echo 7023)"
+  osvc_web_port="$(cluster_config get OSVC_WEB_PORT 2>/dev/null || echo 1214)"
   osvc_hb_interval="$(cluster_config get OSVC_HB_INTERVAL 2>/dev/null || echo 5)"
   osvc_hb_timeout="$(cluster_config get OSVC_HB_TIMEOUT 2>/dev/null || echo 15)"
   osvc_templates_url="$(cluster_config get OSVC_TEMPLATES_URL 2>/dev/null || echo)"

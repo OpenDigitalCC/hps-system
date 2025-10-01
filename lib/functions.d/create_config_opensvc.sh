@@ -1,6 +1,10 @@
 __guard_source || return
 # Define your functions below
 
+
+#TODO: Move config to CLUSTER_SERVICES_DIR
+
+
 ## HPS Functions
 
 #:name: create_config_opensvc
@@ -97,7 +101,7 @@ create_config_opensvc() {
   # Apply node/cluster identity (v3)
   osvc_apply_identity_from_hps || true
 
-  hps_log info "wrote ${conf_file}; key policy enforced"
+  hps_log info "wrote ${conf_file} for role: ${ips_role} - key policy enforced"
 }
 
 
