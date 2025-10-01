@@ -163,18 +163,21 @@ build_dhcp_addresses_file() {
       continue
     fi
     
-    # Check for duplicate IP address
+    # Check for duplicate IP address - this is a fatal error
     if [[ -n "${seen_ips[$ip]}" ]]; then
-      hps_log "WARN" "Skipping host $mac: duplicate IP address $ip (already assigned to ${seen_ips[$ip]})"
-      continue
+      local previous_mac="${seen_ips[$ip]}"
+      hps_log "ERROR" "Duplicate IP address detected: $ip is assigned to both MAC $mac ($hostname) and MAC $previous_mac"
+      hps_log "ERROR" "Cannot build DHCP addresses file with duplicate IP addresses"
+      rm -f "$DHCP_ADDRESSES_TMP"
+      return 1
     fi
     
     # Write entry to temp file
     echo "${mac_formatted},${ip},${hostname}" >> "$DHCP_ADDRESSES_TMP"
     
-    # Track this MAC and IP
+    # Track this MAC and IP (store MAC for IP tracking)
     seen_macs[$mac_formatted]="$hostname"
-    seen_ips[$ip]="$hostname"
+    seen_ips[$ip]="$mac"
     
     entry_count=$((entry_count + 1))
   done
