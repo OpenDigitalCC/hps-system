@@ -2,29 +2,58 @@ __guard_source || return
 # Define your functions below
 
 
+#:name: host_initialise_config
+#:group: host-management
+#:synopsis: Initialize a new host configuration file.
+#:usage: host_initialise_config <mac>
+#:description:
+#  Creates a new configuration file for a host identified by MAC address.
+#  Sets the initial STATE to UNCONFIGURED. Creates the hosts directory if needed.
+#  Uses get_active_cluster_hosts_dir to determine the correct location.
+#:parameters:
+#  mac - MAC address of the host
+#:returns:
+#  0 on success
+#  1 if MAC not provided or initialization fails
 host_initialise_config() {
   local mac="$1"
-  local config_file="${HPS_HOST_CONFIG_DIR}/${mac}.conf"
-
-  mkdir -p "${HPS_HOST_CONFIG_DIR}"
-
-  host_config "$mac" set STATE "UNCONFIGURED"
-
-#  local created_ts
-#  created_ts=$(make_timestamp)
-
-#  cat > "$config_file" <<EOF
-## Host config generated automatically
-## MAC: $mac
-#STATE=UNCONFIGURED
-#CREATED="$created_ts"
-#EOF
-
-  hps_log info "[$mac] Initialised host config: $config_file"
-# commented out as this creates error on first boot when called from boot manager which needs no output 
-#  echo "$config_file"
-
+  
+  # Validate MAC address is provided
+  if [[ -z "$mac" ]]; then
+    hps_log error "host_initialise_config: MAC address not provided"
+    return 1
+  fi
+  
+  # Get the hosts directory for the active cluster
+  local hosts_dir
+  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
+  
+  if [[ -z "$hosts_dir" ]]; then
+    hps_log error "host_initialise_config: Cannot determine active cluster hosts directory"
+    return 1
+  fi
+  
+  # Ensure the hosts directory exists
+  if [[ ! -d "$hosts_dir" ]]; then
+    if ! mkdir -p "$hosts_dir" 2>/dev/null; then
+      hps_log error "host_initialise_config: Failed to create hosts directory: $hosts_dir"
+      return 1
+    fi
+    hps_log debug "host_initialise_config: Created hosts directory: $hosts_dir"
+  fi
+  
+  # Set initial state using host_config (which will create the file)
+  if ! host_config "$mac" set STATE "UNCONFIGURED"; then
+    hps_log error "host_initialise_config: Failed to set initial state for MAC: $mac"
+    return 1
+  fi
+  
+  local config_file="${hosts_dir}/${mac}.conf"
+  hps_log info "Initialised host config: $config_file"
+  
+  return 0
 }
+
 
 get_active_cluster_hosts_dir () {
   echo "$(get_active_cluster_link_path)/hosts"
@@ -594,21 +623,29 @@ host_config() {
 }
 
 
-
+#:name: has_sch_host
+#:group: cluster
+#:synopsis: Check if the active cluster has any SCH (Storage/Compute Host) hosts.
+#:usage: has_sch_host
+#:description:
+#  Checks if at least one host in the active cluster is configured with TYPE=SCH.
+#  Uses get_cluster_host_hostnames to check for SCH type hosts.
+#:returns:
+#  0 if at least one SCH host exists
+#  1 if no SCH hosts found or cluster cannot be determined
 has_sch_host() {
-  local host_dir="${HPS_HOST_CONFIG_DIR}"
-
-  [[ ! -d "$host_dir" ]] && {
-    echo "[x] Host config directory not found: $host_dir" >&2
-    return 1
-  }
-
-  if grep -q '^TYPE=SCH' "$host_dir"/*.conf 2>/dev/null; then
-    return 0  # Found at least one
+  # Get all SCH hosts using the cluster helper with type filter
+  local sch_hosts
+  sch_hosts=$(get_cluster_host_hostnames "" "sch" 2>/dev/null)
+  
+  # If we got any output, at least one SCH host exists
+  if [[ -n "$sch_hosts" ]]; then
+    return 0
   else
-    return 1  # None found
+    return 1
   fi
 }
+
 
 
 
