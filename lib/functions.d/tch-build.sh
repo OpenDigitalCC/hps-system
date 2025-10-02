@@ -175,8 +175,8 @@ echo "[HPS] TCH Bootstrap starting..."
 # Configure Alpine repositories
 echo "[HPS] Configuring package repositories..."
 cat > /etc/apk/repositories <<REPOS
-http://GATEWAY_IP/distros/alpine-ALPINE_VERSION/apks/main
-http://GATEWAY_IP/distros/alpine-ALPINE_VERSION/apks/community
+http://ips/distros/alpine-ALPINE_VERSION/apks/main
+http://ips/distros/alpine-ALPINE_VERSION/apks/community
 REPOS
 
 # Update package index with retry logic
