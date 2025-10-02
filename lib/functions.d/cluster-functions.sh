@@ -521,37 +521,6 @@ get_host_type_param() {
 }
 
 
-load_cluster_host_type_profiles() {
-  
-  local config_file="$(get_active_cluster_filename)"
-  [[ -f "$config_file" ]] || return 1
-
-  # Set of declared host types
-  declare -gA __declared_types=()
-
-  while IFS='=' read -r k v; do
-    [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
-    k="${k%% }"
-    v="${v%\"}"; v="${v#\"}"
-
-    if [[ "$k" =~ ^([A-Z]+)_([A-Z0-9_]+)$ ]]; then
-      local host="${BASH_REMATCH[1]}"
-      local key="${BASH_REMATCH[2]}"
-
-      # Declare the associative array once
-      if [[ -z "${__declared_types[$host]+_}" ]]; then
-        declare -g -A "$host"
-        __declared_types[$host]=1
-      fi
-
-      # Now bind and populate
-      declare -n arr="$host"
-      arr["$key"]="$v"
-    fi
-  done < "$config_file"
-}
-
-
 cluster_has_installed_sch() {
   local config_dir="${HPS_HOST_CONFIG_DIR}"
   local config_file
