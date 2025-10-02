@@ -7,6 +7,66 @@ __guard_source || return
 
 
 #===============================================================================
+# check_available_space
+# ---------------------
+# Check available disk space for a given path
+#
+# Arguments:
+#   $1 - path        : Directory path to check
+#   $2 - required_mb : Minimum required space in MB (default 500)
+#
+# Behaviour:
+#   - Follows the path up to find the actual mounted filesystem
+#   - Uses df to determine available space
+#   - Outputs available space in MB to stdout
+#   - Returns success/failure based on space threshold
+#
+# Output:
+#   Available space in MB (stdout)
+#
+# Returns:
+#   0 if sufficient space available (>= required_mb)
+#   1 if insufficient space (< required_mb)
+#===============================================================================
+check_available_space() {
+  local path="$1"
+  local required_mb="${2:-500}"
+  
+  if [[ -z "$path" ]]; then
+    hps_log error "check_available_space: path required"
+    echo "0"
+    return 1
+  fi
+  
+  # Find the actual mount point by walking up the directory tree
+  local check_path="$path"
+  while [[ ! -d "$check_path" ]] && [[ "$check_path" != "/" ]]; do
+    check_path=$(dirname "$check_path")
+  done
+  
+  # Get available space in MB using df
+  local available_mb
+  available_mb=$(df -BM "$check_path" | awk 'NR==2 {print $4}' | sed 's/M$//')
+  
+  if [[ -z "$available_mb" ]] || [[ ! "$available_mb" =~ ^[0-9]+$ ]]; then
+    hps_log error "check_available_space: failed to determine available space for $path"
+    echo "0"
+    return 1
+  fi
+  
+  echo "$available_mb"
+  
+  if (( available_mb < required_mb )); then
+    return 1
+  fi
+  
+  return 0
+}
+
+
+
+
+#===============================================================================
 # validate_alpine_repository
 # --------------------------
 # Check if Alpine repository is complete and ready for TCH boot
@@ -91,7 +151,6 @@ validate_alpine_repository() {
   return 0
 }
 
-
 #===============================================================================
 # sync_alpine_repository
 # ----------------------
@@ -101,6 +160,7 @@ validate_alpine_repository() {
 #   $1 - alpine_version : Alpine version (e.g., "3.20.2")
 #   $2 - sync_mode      : "all" | "main" | "community" | "minimal" | "packages"
 #   $3 - package_list   : (optional) Space-separated package names for "packages" mode
+#   $4 - arch           : Architecture (default: "x86_64")
 #
 # Sync Modes:
 #   all       - Sync both main and community repositories (parallel)
@@ -127,6 +187,7 @@ sync_alpine_repository() {
   local alpine_version="$1"
   local sync_mode="$2"
   local package_list="$3"
+  local arch="${4:-x86_64}"
   
   # Minimal packages for TCH bootstrap with their repositories
   declare -A MINIMAL_PACKAGES_REPO=(
@@ -158,14 +219,14 @@ sync_alpine_repository() {
   major_minor_version=$(echo "$alpine_version" | grep -oE '^[0-9]+\.[0-9]+')
   local mirror_version="v${major_minor_version}"
   
-  hps_log info "Syncing Alpine ${alpine_version} repository: mode=${sync_mode}"
+  hps_log info "Syncing Alpine ${alpine_version} repository: mode=${sync_mode}, arch=${arch}"
   
   # Execute based on sync mode
   case "$sync_mode" in
     all)
-      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "main" &
+      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "main" "$arch" &
       local pid_main=$!
-      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "community" &
+      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "community" "$arch" &
       local pid_community=$!
       
       wait $pid_main
@@ -183,7 +244,7 @@ sync_alpine_repository() {
       ;;
       
     main|community)
-      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "$sync_mode"
+      sync_alpine_repo_arch "$alpine_version" "$mirror_version" "$sync_mode" "$arch"
       return $?
       ;;
       
@@ -221,34 +282,37 @@ sync_alpine_repository() {
 #===============================================================================
 # sync_alpine_repo_arch
 # ---------------------
-# Sync a single Alpine repository (main or community) for x86_64 architecture
+# Sync a single Alpine repository (main or community) for specified architecture
 #
 # Arguments:
 #   $1 - alpine_version  : Alpine version (e.g., "3.20.2")
 #   $2 - mirror_version  : Mirror path version (e.g., "v3.20")
 #   $3 - repo_name       : "main" or "community"
+#   $4 - arch            : Architecture (default: "x86_64")
 #
 # Behaviour:
 #   - Creates destination directory structure
-#   - Uses rsync from Alpine mirror with appropriate filters
-#   - Falls back to wget if rsync unavailable or fails
-#   - Syncs only x86_64 architecture
+#   - Checks available disk space before each file download (requires 500MB minimum)
+#   - Uses wget with timestamping to download files
+#   - Syncs specified architecture
 #   - Includes APKINDEX.tar.gz and all .apk files
 #   - Validates APKINDEX exists after sync
+#   - Deletes partially downloaded files if space exhausted
 #
 # Returns:
 #   0 on success
-#   2 on failure
+#   2 on failure (including insufficient disk space)
 #===============================================================================
 sync_alpine_repo_arch() {
   local alpine_version="$1"
   local mirror_version="$2"
   local repo_name="$3"
+  local arch="${4:-x86_64}"
   
-  local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
-  local http_mirror="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/x86_64/"
+  local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/${arch}"
+  local http_mirror="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/${arch}/"
   
-  hps_log info "Syncing ${repo_name} repository to ${dest_dir}"
+  hps_log info "Syncing ${repo_name} repository (${arch}) to ${dest_dir}"
   
   # Create destination directory
   if ! mkdir -p "$dest_dir"; then
@@ -263,7 +327,6 @@ sync_alpine_repo_arch() {
   hps_log debug "Downloading repository files from ${http_mirror}"
   
   # First, get the directory listing
-  local temp_list=$(mktemp)
   local file_list=$(mktemp)
   
   # Get list of files from the mirror
@@ -281,13 +344,34 @@ sync_alpine_repo_arch() {
   
   # Download each file with timestamping
   while IFS= read -r filename; do
+    # Check available space before downloading
+    local available_mb
+    available_mb=$(check_available_space "$dest_dir" 500)
+    local space_check=$?
+    
+    if [[ $space_check -ne 0 ]]; then
+      hps_log error "Insufficient disk space: ${available_mb}MB available, 500MB required"
+      hps_log error "Aborting download and cleaning up partial file: ${filename}"
+      
+      # Delete partial download if it exists
+      local partial_file="${dest_dir}/${filename}"
+      if [[ -f "$partial_file" ]]; then
+        hps_log info "Deleting partial file: ${partial_file}"
+        rm -f "$partial_file"
+      fi
+      
+      rm -f "$file_list"
+      rm -f "$temp_list"
+      return 2
+    fi
+    
     if wget -N -nv -P "$dest_dir" "${http_mirror}${filename}" 2>&1 | grep -q "saved"; then
       download_count=$((download_count + 1))
       echo "$filename" >> "$temp_list"
       
       # Log every 20 downloads
       if (( download_count % 20 == 0 )); then
-        hps_log info "Downloaded ${download_count}/${total_files} files..."
+        hps_log info "Downloaded ${download_count}/${total_files} files... (${available_mb}MB available)"
       fi
     fi
   done < "$file_list"
@@ -300,6 +384,8 @@ sync_alpine_repo_arch() {
   validate_apkindex "$dest_dir"
   return $?
 }
+
+
 
 #===============================================================================
 # sync_alpine_packages

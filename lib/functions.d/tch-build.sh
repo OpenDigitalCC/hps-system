@@ -8,14 +8,19 @@ __guard_source || return
 # ------------------
 # Generate Alpine apkovl tarball containing TCH bootstrap script
 #
+# WARNING: Known cosmetic issue - Alpine netboot modprobe warnings
+# "can't change directory to '6.6.41-0-lts'"
+# Cause: modloop loads modules from HTTP, /lib/modules irrelevant
+# Impact: None - modules load successfully from modloop
+# Status: Accepted as Alpine netboot standard behavior
+#
 # Arguments:
 #   $1 - output_file : Path where tarball should be written
 #
 # Behaviour:
-#   - Retrieves IPS gateway IP from cluster configuration
+#   - Retrieves configuration from cluster config
 #   - Creates temporary directory structure
-#   - Generates bootstrap script in etc/local.d/hps-bootstrap.start
-#   - Configures OpenRC to enable local service
+#   - Generates resolv.conf, bootstrap script, runlevel config
 #   - Creates tar.gz archive at specified output path
 #   - Cleans up temporary files
 #
@@ -28,36 +33,141 @@ tch_apkovol_create() {
   
   hps_log info "Creating Alpine apkovl: $output_file"
   
+  # Get configuration
   local gateway_ip=$(cluster_config get DHCP_IP)
   if [[ -z "$gateway_ip" ]]; then
     hps_log error "Failed to get gateway IP from cluster config"
-    cgi_fail "Unable to determine IPS gateway IP"
+    return 1
   fi
   
-  hps_log debug "Creating apkovl with gateway IP: $gateway_ip"
+  local alpine_version=$(get_latest_alpine_version)
+  if [[ -z "$alpine_version" ]]; then
+    hps_log error "Failed to determine Alpine version"
+    return 1
+  fi
   
-  # Create temp structure
+  local nameserver=$(cluster_config get NAME_SERVER)
+  if [[ -z "$nameserver" ]]; then
+    hps_log warn "NAME_SERVER not configured, using gateway IP for DNS"
+    nameserver="$gateway_ip"
+  fi
+  
+  hps_log debug "Apkovl config: Alpine=${alpine_version}, Gateway=${gateway_ip}, DNS=${nameserver}"
+  
+  # Create temporary workspace
   local tmp_dir=$(mktemp -d)
   if [[ ! -d "$tmp_dir" ]]; then
     hps_log error "Failed to create temporary directory"
-    cgi_fail "Internal error: cannot create temp directory"
+    return 1
   fi
   
-  hps_log debug "Created temp directory: $tmp_dir"
-  
-  # Get kernel version from Alpine distro
-  local kernel_ver="6.6.41-0-lts"  # Could be detected from modloop filename
-  
-  if ! mkdir -p "$tmp_dir/etc/local.d" "$tmp_dir/etc/runlevels/default" "$tmp_dir/lib/modules/$kernel_ver"; then
-    hps_log error "Failed to create directory structure in $tmp_dir"
+  # Build apkovl components
+  if ! _apkovl_create_structure "$tmp_dir"; then
     rm -rf "$tmp_dir"
     return 1
   fi
   
-  # Create symlink to enable local service at boot
-  ln -s /etc/init.d/local "$tmp_dir/etc/runlevels/default/local"
+  if ! _apkovl_create_resolv_conf "$tmp_dir" "$nameserver"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
   
-  # Write bootstrap script
+  if ! _apkovol_create_bootstrap_script "$tmp_dir" "$gateway_ip" "$alpine_version"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  
+  # Create tarball
+  if ! tar czf "$output_file" -C "$tmp_dir" . 2>/dev/null; then
+    hps_log error "Failed to create tar archive"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  
+  # Cleanup
+  rm -rf "$tmp_dir"
+  hps_log info "Successfully created apkovl: $output_file"
+  
+  return 0
+}
+
+#===============================================================================
+# _apkovl_create_structure
+# -------------------------
+# Create directory structure for apkovl
+#
+# Arguments:
+#   $1 - tmp_dir : Temporary directory path
+#
+# Returns:
+#   0 on success, 1 on failure
+#===============================================================================
+_apkovl_create_structure() {
+  local tmp_dir="$1"
+  
+  hps_log debug "Creating apkovl directory structure"
+  
+  if ! mkdir -p "$tmp_dir/etc/local.d" "$tmp_dir/etc/runlevels/default"; then
+    hps_log error "Failed to create directory structure"
+    return 1
+  fi
+  
+  # Enable local service at boot
+  if ! ln -s /etc/init.d/local "$tmp_dir/etc/runlevels/default/local"; then
+    hps_log error "Failed to create local service symlink"
+    return 1
+  fi
+  
+  return 0
+}
+
+#===============================================================================
+# _apkovl_create_resolv_conf
+# ---------------------------
+# Create resolv.conf for DNS resolution
+#
+# Arguments:
+#   $1 - tmp_dir    : Temporary directory path
+#   $2 - nameserver : DNS nameserver IP address
+#
+# Returns:
+#   0 on success, 1 on failure
+#===============================================================================
+_apkovl_create_resolv_conf() {
+  local tmp_dir="$1"
+  local nameserver="$2"
+  
+  hps_log debug "Creating resolv.conf with nameserver: $nameserver"
+  
+  if ! echo "nameserver $nameserver" > "$tmp_dir/etc/resolv.conf"; then
+    hps_log error "Failed to create resolv.conf"
+    return 1
+  fi
+  
+  return 0
+}
+
+#===============================================================================
+# _apkovol_create_bootstrap_script
+# ---------------------------------
+# Create TCH bootstrap script in etc/local.d/
+#
+# Arguments:
+#   $1 - tmp_dir        : Temporary directory path
+#   $2 - gateway_ip     : IPS gateway IP address
+#   $3 - alpine_version : Alpine Linux version
+#
+# Returns:
+#   0 on success, 1 on failure
+#===============================================================================
+_apkovol_create_bootstrap_script() {
+  local tmp_dir="$1"
+  local gateway_ip="$2"
+  local alpine_version="$3"
+  
+  hps_log debug "Creating bootstrap script"
+  
+  # Create bootstrap script with placeholders
   if ! cat > "$tmp_dir/etc/local.d/hps-bootstrap.start" <<'EOF'
 #!/bin/sh
 echo "[HPS] TCH Bootstrap starting..."
@@ -65,10 +175,11 @@ echo "[HPS] TCH Bootstrap starting..."
 # Configure Alpine repositories
 echo "[HPS] Configuring package repositories..."
 cat > /etc/apk/repositories <<REPOS
-http://GATEWAY_IP/distros/alpine-3.20.2/apks/main
+http://GATEWAY_IP/distros/alpine-ALPINE_VERSION/apks/main
+http://GATEWAY_IP/distros/alpine-ALPINE_VERSION/apks/community
 REPOS
 
-# Update package index
+# Update package index with retry logic
 echo "[HPS] Updating package index..."
 for attempt in 1 2 3; do
     if apk update; then
@@ -104,36 +215,24 @@ echo "[HPS] TCH Bootstrap complete"
 EOF
   then
     hps_log error "Failed to write bootstrap script"
-    rm -rf "$tmp_dir"
     return 1
   fi
   
-  # Substitute gateway IP
+  # Substitute placeholders
   sed -i "s|GATEWAY_IP|${gateway_ip}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
+  sed -i "s|ALPINE_VERSION|${alpine_version}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
   
+  # Make executable
   if ! chmod +x "$tmp_dir/etc/local.d/hps-bootstrap.start"; then
     hps_log error "Failed to set execute permission on bootstrap script"
-    rm -rf "$tmp_dir"
     return 1
   fi
   
   hps_log debug "Bootstrap script created successfully"
-  
-  # Create tarball at specified location
-  if ! tar czf "$output_file" -C "$tmp_dir" . 2>/dev/null; then
-    hps_log error "Failed to create tar archive"
-    rm -rf "$tmp_dir"
-    return 1
-  fi
-  
-  hps_log info "Successfully created apkovl: $output_file"
-  
-  # Cleanup
-  rm -rf "$tmp_dir"
-  hps_log debug "Cleaned up temp directory: $tmp_dir"
-  
   return 0
 }
+
+
 
 
 
