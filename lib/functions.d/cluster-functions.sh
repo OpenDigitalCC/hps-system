@@ -357,6 +357,179 @@ list_clusters() {
   done
 }
 
+#:name: list_cluster_hosts
+#:group: cluster
+#:synopsis: List all host MAC addresses in a cluster.
+#:usage: list_cluster_hosts [cluster_name]
+#:description:
+#  Lists all host MAC addresses configured in the specified cluster.
+#  If no cluster_name is provided, uses the active cluster.
+#  Outputs one MAC address per line by examining host config files.
+#  Uses get_active_cluster_hosts_dir or get_cluster_dir to locate hosts.
+#:parameters:
+#  cluster_name - (optional) Name of the cluster. If empty, uses active cluster.
+#:returns:
+#  0 on success (outputs MAC addresses to stdout, one per line)
+#  1 if cluster directory doesn't exist or cannot be determined
+list_cluster_hosts() {
+  local cluster_name="${1:-}"
+  local hosts_dir
+  
+  # Determine hosts directory
+  if [[ -z "$cluster_name" ]]; then
+    # Use active cluster hosts directory
+    hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
+    if [[ -z "$hosts_dir" ]]; then
+      hps_log error "list_cluster_hosts: Cannot determine active cluster hosts directory"
+      return 1
+    fi
+  else
+    # Get specific cluster directory and append /hosts
+    local cluster_dir
+    cluster_dir=$(get_cluster_dir "$cluster_name" 2>/dev/null)
+    if [[ -z "$cluster_dir" ]]; then
+      hps_log error "list_cluster_hosts: Cannot get directory for cluster: $cluster_name"
+      return 1
+    fi
+    hosts_dir="${cluster_dir}/hosts"
+  fi
+  
+  # Validate hosts directory exists
+  if [[ ! -d "$hosts_dir" ]]; then
+    hps_log debug "list_cluster_hosts: No hosts directory: $hosts_dir"
+    return 0
+  fi
+  
+  # List all .conf files and extract MAC addresses from filenames
+  if compgen -G "${hosts_dir}/*.conf" > /dev/null 2>&1; then
+    for conf_file in "${hosts_dir}"/*.conf; do
+      [[ ! -f "$conf_file" ]] && continue
+      
+      # Extract MAC address from filename
+      local mac
+      mac=$(get_mac_from_conffile "$conf_file" 2>/dev/null)
+      
+      if [[ -n "$mac" ]]; then
+        echo "$mac"
+      fi
+    done
+  fi
+  
+  return 0
+}
+
+#:name: get_cluster_host_ips
+#:group: cluster
+#:synopsis: Get IP addresses of all hosts in a cluster.
+#:usage: get_cluster_host_ips [cluster_name]
+#:description:
+#  Returns IP addresses for all configured hosts in the specified cluster.
+#  If no cluster_name is provided, uses the active cluster.
+#  Outputs one IP address per line.
+#:parameters:
+#  cluster_name - (optional) Name of the cluster. If empty, uses active cluster.
+#:returns:
+#  0 on success (outputs IP addresses to stdout, one per line)
+#  1 if cluster cannot be determined
+get_cluster_host_ips() {
+  local cluster_name="${1:-}"
+  local mac ip
+  local hosts_dir
+  
+  # Determine hosts directory
+  if [[ -z "$cluster_name" ]]; then
+    hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
+  else
+    local cluster_dir
+    cluster_dir=$(get_cluster_dir "$cluster_name" 2>/dev/null)
+    hosts_dir="${cluster_dir}/hosts"
+  fi
+  
+  if [[ -z "$hosts_dir" ]] || [[ ! -d "$hosts_dir" ]]; then
+    hps_log error "get_cluster_host_ips: Cannot determine hosts directory"
+    return 1
+  fi
+  
+  # Get list of all MACs in cluster
+  while IFS= read -r mac; do
+    [[ -z "$mac" ]] && continue
+    
+    # Get IP directly from the config file
+    local conf_file="${hosts_dir}/${mac}.conf"
+    if [[ -f "$conf_file" ]]; then
+      ip=$(grep -E "^IP=" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d '"')
+      if [[ -n "$ip" ]]; then
+        echo "$ip"
+      fi
+    fi
+  done < <(list_cluster_hosts "$cluster_name")
+  
+  return 0
+}
+
+#:name: get_cluster_host_hostnames
+#:group: cluster
+#:synopsis: Get hostnames of all hosts in a cluster.
+#:usage: get_cluster_host_hostnames [cluster_name] [hosttype_filter]
+#:description:
+#  Returns hostnames for all configured hosts in the specified cluster.
+#  If no cluster_name is provided, uses the active cluster.
+#  Optionally filter by host type (case-insensitive).
+#  Outputs one hostname per line.
+#:parameters:
+#  cluster_name     - (optional) Name of the cluster. If empty, uses active cluster.
+#  hosttype_filter  - (optional) Filter by host type (e.g., TCH, ROCKY)
+#:returns:
+#  0 on success (outputs hostnames to stdout, one per line)
+#  1 if cluster cannot be determined
+get_cluster_host_hostnames() {
+  local cluster_name="${1:-}"
+  local hosttype_filter="${2:-}"
+  local mac hostname hosttype
+  local hosts_dir
+  
+  # Convert filter to lowercase for comparison
+  if [[ -n "$hosttype_filter" ]]; then
+    hosttype_filter=$(echo "$hosttype_filter" | tr '[:upper:]' '[:lower:]')
+  fi
+  
+  # Determine hosts directory
+  if [[ -z "$cluster_name" ]]; then
+    hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
+  else
+    local cluster_dir
+    cluster_dir=$(get_cluster_dir "$cluster_name" 2>/dev/null)
+    hosts_dir="${cluster_dir}/hosts"
+  fi
+  
+  if [[ -z "$hosts_dir" ]] || [[ ! -d "$hosts_dir" ]]; then
+    hps_log error "get_cluster_host_hostnames: Cannot determine hosts directory"
+    return 1
+  fi
+  
+  # Get list of all MACs in cluster
+  while IFS= read -r mac; do
+    [[ -z "$mac" ]] && continue
+    
+    local conf_file="${hosts_dir}/${mac}.conf"
+    [[ ! -f "$conf_file" ]] && continue
+    
+    # Apply type filter if specified
+    if [[ -n "$hosttype_filter" ]]; then
+      hosttype=$(grep -E "^TYPE=" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
+      [[ "$hosttype" != "$hosttype_filter" ]] && continue
+    fi
+    
+    # Get hostname
+    hostname=$(grep -E "^HOSTNAME=" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d '"')
+    
+    if [[ -n "$hostname" ]]; then
+      echo "$hostname"
+    fi
+  done < <(list_cluster_hosts "$cluster_name")
+  
+  return 0
+}
 
 #===============================================================================
 # set_active_cluster

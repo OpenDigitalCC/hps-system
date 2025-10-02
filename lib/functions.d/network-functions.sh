@@ -1,40 +1,130 @@
 __guard_source || return
 
+
+
+#:name: ip_to_int
+#:group: network
+#:synopsis: Convert IP address to integer representation.
+#:usage: ip_to_int <ip_address>
+#:description:
+#  Converts a dotted-quad IP address to its integer representation.
+#  Used for IP address arithmetic and range calculations.
+#:parameters:
+#  ip_address - IP address in dotted-quad format (e.g., 192.168.1.1)
+#:returns:
+#  0 on success (outputs integer to stdout)
+#  1 if IP address format is invalid
+ip_to_int() {
+  local ip="$1"
+  
+  # Validate IP address format
+  if ! validate_ip_address "$ip"; then
+    hps_log error "Invalid IP address format: $ip"
+    return 1
+  fi
+  
+  IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+  echo $(( (o1 << 24) + (o2 << 16) + (o3 << 8) + o4 ))
+  return 0
+}
+
+#:name: int_to_ip
+#:group: network
+#:synopsis: Convert integer to IP address representation.
+#:usage: int_to_ip <integer>
+#:description:
+#  Converts an integer to its dotted-quad IP address representation.
+#  Used for IP address arithmetic and range calculations.
+#:parameters:
+#  integer - Integer representation of an IP address
+#:returns:
+#  0 on success (outputs IP address to stdout)
+int_to_ip() {
+  local ip_int="$1"
+  echo "$(( (ip_int >> 24) & 255 )).$(( (ip_int >> 16) & 255 )).$(( (ip_int >> 8) & 255 )).$(( ip_int & 255 ))"
+  return 0
+}
+
+
 #===============================================================================
 # cidr_to_netmask
 # ---------------
-# Convert CIDR prefix length to netmask
+# Convert CIDR prefix length to netmask, accepting either prefix or full CIDR notation.
 #
-# Usage: cidr_to_netmask <prefix_length>
-# Example: cidr_to_netmask 24  # Returns 255.255.255.0
+# Usage: 
+#   cidr_to_netmask <prefix_length>
+#   cidr_to_netmask <ip_address/prefix_length>
+#
+# Examples: 
+#   cidr_to_netmask 24              # Returns 255.255.255.0
+#   cidr_to_netmask 10.99.1.0/24    # Returns 255.255.255.0
+#
+# Parameters:
+#   cidr - Either a prefix length (0-32) or IP address with CIDR notation
 #
 # Returns:
-#   Netmask string
+#   0 on success (outputs netmask to stdout)
+#   1 on invalid input (outputs empty string)
 #===============================================================================
 cidr_to_netmask() {
-  local prefix=$1
+  local input="$1"
+  local prefix=""
+  
+  # Validate input is provided
+  if [[ -z "$input" ]]; then
+    hps_log warning "cidr_to_netmask: No input provided"
+    return 1
+  fi
+  
+  # Check if input contains a slash (CIDR notation with IP)
+  if [[ "$input" =~ ^[0-9.]+/([0-9]+)$ ]]; then
+    # Extract prefix from IP/CIDR format (e.g., 10.99.1.0/24 -> 24)
+    prefix="${BASH_REMATCH[1]}"
+  elif [[ "$input" =~ ^[0-9]+$ ]]; then
+    # Input is just a number (prefix length)
+    prefix="$input"
+  else
+    hps_log warning "cidr_to_netmask: Invalid CIDR format: $input"
+    return 1
+  fi
+  
+  # Validate prefix is in valid range (0-32)
+  if [[ ! "$prefix" =~ ^[0-9]+$ ]] || (( prefix < 0 || prefix > 32 )); then
+    hps_log warning "cidr_to_netmask: Invalid prefix length: $prefix (must be 0-32)"
+    return 1
+  fi
+  
   local mask=""
   local full_octets=$((prefix / 8))
   local partial_octet=$((prefix % 8))
-
+  
   # Full octets (255)
   for ((i=0; i<full_octets; i++)); do
     mask+="${mask:+.}255"
   done
-
+  
   # Partial octet (if any)
   if (( partial_octet > 0 )); then
-    mask+="${mask:+.}$((256 - 2**(8-partial_octet)))"
+    local partial_value=$((256 - 2**(8-partial_octet)))
+    mask+="${mask:+.}${partial_value}"
   fi
-
+  
   # Fill remaining octets with 0
-  while (( $(echo "$mask" | tr -cd '.' | wc -c) < 3 )); do
+  local dot_count=$(echo "$mask" | tr -cd '.' | wc -c)
+  while (( dot_count < 3 )); do
     mask+="${mask:+.}0"
+    dot_count=$((dot_count + 1))
   done
-
+  
+  # Validate output has correct format
+  if [[ ! "$mask" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    hps_log warning "cidr_to_netmask: Generated invalid netmask format: $mask"
+    return 1
+  fi
+  
   echo "$mask"
+  return 0
 }
-
 
 
 # detect_client_type
@@ -90,17 +180,6 @@ generate_dhcp_range_simple() {
             Broadcast:) broadcast="$value" ;;
         esac
     done < <(ipcalc -n -b "$network_cidr")
-
-    # Convert IPs to ints
-    ip_to_int() {
-        IFS=. read -r o1 o2 o3 o4 <<< "$1"
-        echo $(( (o1 << 24) + (o2 << 16) + (o3 << 8) + o4 ))
-    }
-
-    int_to_ip() {
-        local ip=$1
-        echo "$(( (ip >> 24) & 255 )).$(( (ip >> 16) & 255 )).$(( (ip >> 8) & 255 )).$(( ip & 255 ))"
-    }
 
     local net_int=$(ip_to_int "$network")
     local bc_int=$(ip_to_int "$broadcast")
@@ -165,6 +244,40 @@ get_client_mac() {
   fi
   echo $(normalise_mac "$mac")
 }
+
+
+#:name: get_mac_from_conffile
+#:group: host-management
+#:synopsis: Extract MAC address from a host configuration filename.
+#:usage: get_mac_from_conffile <conf_file_path>
+#:description:
+#  Extracts the MAC address from a host configuration file path.
+#  The MAC is the basename of the file without the .conf extension.
+#:parameters:
+#  conf_file_path - Full path to the configuration file
+#:returns:
+#  0 on success (outputs MAC address to stdout)
+#  1 if filename is invalid or cannot be parsed
+get_mac_from_conffile() {
+  local conf_file="$1"
+  
+  if [[ -z "$conf_file" ]]; then
+    hps_log error "get_mac_from_conffile: No config file provided"
+    return 1
+  fi
+  
+  local mac
+  mac=$(basename "$conf_file" .conf 2>/dev/null)
+  
+  if [[ -z "$mac" ]] || [[ "$mac" == "$conf_file" ]]; then
+    hps_log error "get_mac_from_conffile: Cannot extract MAC from: $conf_file"
+    return 1
+  fi
+  
+  echo "$mac"
+  return 0
+}
+
 
 
 #===============================================================================
