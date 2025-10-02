@@ -24,22 +24,36 @@ else
   cmd="$(cgi_param get cmd)"
 fi
 
-
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
   hps_log info "iPXE Initialisation requested from DHCP"
   
   # Check if this is a network boot host
-  state=$(host_config "$mac" get STATE)
-  if [[ "$state" == "NETWORK_BOOT" ]]; then
-    hps_log info "Network boot requested for $mac"
+  # Use 'get' with a default value or handle the case where key doesn't exist
+  state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
+  
+  # Log the retrieved state for debugging
+  hps_log debug "Retrieved STATE for MAC ${mac}: '${state}'"
+  
+  # Check for network boot state
+  if [[ "${state}" == "NETWORK_BOOT" ]]; then
+    hps_log info "Network boot requested for MAC ${mac} (STATE=${state})"
     ipxe_network_boot "$mac"
-    exit
+    exit 0
   fi
-
+  
+  # Any other state value (including empty/undefined)
+  if [[ -n "${state}" ]]; then
+    hps_log info "Host MAC ${mac} has STATE=${state}, running standard init"
+  else
+    hps_log info "Host MAC ${mac} has no STATE defined, running standard init"
+  fi
+  
   ipxe_init
-  exit
+  exit 0
 fi
+
+
 
 # Command: Get TCH apkovol
 if [[ "$cmd" == "get_tch_apkovol" ]]; then

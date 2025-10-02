@@ -74,19 +74,37 @@ declare -gA HOST_CONFIG
 declare -g __HOST_CONFIG_PARSED=0
 declare -g __HOST_CONFIG_FILE=""
 
-
+#:name: host_config
+#:group: host-management
+#:synopsis: Manage host configuration key-value storage per MAC address.
+#:usage: host_config <mac> <command> [key] [value]
+#:description:
+#  Parses and manages host configuration from ${HPS_HOST_CONFIG_DIR}/<mac>.conf
+#  Supports get, exists, equals, and set operations on host configuration keys.
+#  Configuration is cached per MAC address to avoid repeated file parsing.
+#:parameters:
+#  mac     - MAC address of the host (e.g., 52:54:00:9c:4c:24)
+#  command - Operation: get, exists, equals, set
+#  key     - Configuration key name (alphanumeric and underscore)
+#  value   - Value to set (only for 'set' and 'equals' commands)
+#:returns:
+#  get:    0 if key exists (prints value), 1 if key not found
+#  exists: 0 if key exists, 1 if not
+#  equals: 0 if key exists and matches value, 1 otherwise
+#  set:    0 on success
+#  other:  2 for invalid command
 host_config() {
   local mac=$1
   local cmd="$2"
   local key="$3"
   local value="${4:-}"
-
+  
   # Track which MAC was parsed to avoid cross-host reuse
   if [[ "${__HOST_CONFIG_PARSED:-0}" -eq 0 || "${__HOST_CONFIG_MAC:-}" != "$mac" ]]; then
     declare -gA HOST_CONFIG=()            # reset map
     __HOST_CONFIG_FILE="${HOST_CONFIG_FILE:-${HPS_HOST_CONFIG_DIR}/${mac}.conf}"
     __HOST_CONFIG_MAC="$mac"
-
+    
     if [[ -f "$__HOST_CONFIG_FILE" ]]; then
       # Accept keys: [A-Za-z_][A-Za-z0-9_]*  (was: uppercase-only)
       # Strip surrounding double quotes if present.
@@ -100,36 +118,53 @@ host_config() {
         HOST_CONFIG["$k"]="$v"
       done < "$__HOST_CONFIG_FILE"
     fi
-
     __HOST_CONFIG_PARSED=1
   fi
-
+  
   case "$cmd" in
     get)
       # prints value if present; rc=0 if found, 1 if missing
-      [[ ${HOST_CONFIG[$key]+_} ]] && printf '%s\n' "${HOST_CONFIG[$key]}"
-      return
+      if [[ ${HOST_CONFIG[$key]+_} ]]; then
+        printf '%s\n' "${HOST_CONFIG[$key]}"
+        return 0
+      else
+        return 1
+      fi
       ;;
-
     exists)
       [[ ${HOST_CONFIG[$key]+_} ]]
-      return
+      return $?
       ;;
-
     equals)
       [[ ${HOST_CONFIG[$key]+_} && "${HOST_CONFIG[$key]}" == "$value" ]]
-      return
+      return $?
       ;;
-
     set)
+      # Validate key format
+      if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        hps_log error "[$mac] Invalid key format: $key"
+        return 2
+      fi
+      
       HOST_CONFIG["$key"]="$value"
       hps_log info "[$mac] host_config update: $key = $value"
-
+      
       local timestamp
       timestamp="$(make_timestamp)"
       HOST_CONFIG["UPDATED"]="$timestamp"
       hps_log info "[$mac] host_config UPDATED = $timestamp"
-
+      
+      # Ensure config directory exists
+      local config_dir
+      config_dir="$(dirname "$__HOST_CONFIG_FILE")"
+      if [[ ! -d "$config_dir" ]]; then
+        if ! mkdir -p "$config_dir"; then
+          hps_log error "[$mac] Failed to create config directory: $config_dir"
+          return 3
+        fi
+      fi
+      
+      # Write configuration file
       {
         echo "# Auto-generated host config"
         echo "# MAC: $mac"
@@ -139,18 +174,19 @@ host_config() {
           local v="${HOST_CONFIG[$k]//\"/\\\"}"
           printf '%s="%s"\n' "$k" "$v"
         done
-      } > "$__HOST_CONFIG_FILE"
-      return
+      } > "$__HOST_CONFIG_FILE" || {
+        hps_log error "[$mac] Failed to write config file: $__HOST_CONFIG_FILE"
+        return 3
+      }
+      
+      return 0
       ;;
-
     *)
-      echo "[x] Invalid host_config command: $cmd" >&2
+      hps_log error "Invalid host_config command: $cmd"
       return 2
       ;;
   esac
 }
-
-
 
 
 
