@@ -3,32 +3,30 @@
 
 __guard_source || return
 
-
-
-
 #===============================================================================
 # tch_apkovol_create
 # ------------------
 # Generate Alpine apkovl tarball containing TCH bootstrap script
 #
+# Arguments:
+#   $1 - output_file : Path where tarball should be written
+#
 # Behaviour:
 #   - Retrieves IPS gateway IP from cluster configuration
 #   - Creates temporary directory structure
 #   - Generates bootstrap script in etc/local.d/hps-bootstrap.start
-#   - Creates tar.gz archive
-#   - Streams tarball to stdout with HTTP headers
+#   - Configures OpenRC to enable local service
+#   - Creates tar.gz archive at specified output path
 #   - Cleans up temporary files
 #
-# CGI Output:
-#   - HTTP headers (Content-Type, Content-Disposition)
-#   - Binary tar.gz stream to stdout
-#
 # Returns:
-#   Exits via cgi_fail on any error
-#   Streams tar.gz on success
+#   0 on success
+#   1 on error
 #===============================================================================
 tch_apkovol_create() {
-  hps_log info "CGI request: tch_apkovol_create"
+  local output_file="${1:?Usage: tch_apkovol_create <output_file>}"
+  
+  hps_log info "Creating Alpine apkovl: $output_file"
   
   local gateway_ip=$(cluster_config get DHCP_IP)
   if [[ -z "$gateway_ip" ]]; then
@@ -47,10 +45,13 @@ tch_apkovol_create() {
   
   hps_log debug "Created temp directory: $tmp_dir"
   
-  if ! mkdir -p "$tmp_dir/etc/local.d" "$tmp_dir/etc/runlevels/default"; then
+  # Get kernel version from Alpine distro
+  local kernel_ver="6.6.41-0-lts"  # Could be detected from modloop filename
+  
+  if ! mkdir -p "$tmp_dir/etc/local.d" "$tmp_dir/etc/runlevels/default" "$tmp_dir/lib/modules/$kernel_ver"; then
     hps_log error "Failed to create directory structure in $tmp_dir"
     rm -rf "$tmp_dir"
-    cgi_fail "Internal error: cannot create directory structure"
+    return 1
   fi
   
   # Create symlink to enable local service at boot
@@ -104,7 +105,7 @@ EOF
   then
     hps_log error "Failed to write bootstrap script"
     rm -rf "$tmp_dir"
-    cgi_fail "Internal error: cannot write bootstrap script"
+    return 1
   fi
   
   # Substitute gateway IP
@@ -113,28 +114,27 @@ EOF
   if ! chmod +x "$tmp_dir/etc/local.d/hps-bootstrap.start"; then
     hps_log error "Failed to set execute permission on bootstrap script"
     rm -rf "$tmp_dir"
-    cgi_fail "Internal error: cannot set permissions"
+    return 1
   fi
   
   hps_log debug "Bootstrap script created successfully"
   
-  # HTTP headers - required for CGI
-  echo "Content-Type: application/gzip"
-  echo ""
-  
-  # Stream tar to stdout
-  if ! tar czf - -C "$tmp_dir" . 2>/dev/null; then
+  # Create tarball at specified location
+  if ! tar czf "$output_file" -C "$tmp_dir" . 2>/dev/null; then
     hps_log error "Failed to create tar archive"
     rm -rf "$tmp_dir"
-    exit 1
+    return 1
   fi
   
-  hps_log info "Successfully generated and streamed apkovl tarball"
+  hps_log info "Successfully created apkovl: $output_file"
   
   # Cleanup
   rm -rf "$tmp_dir"
   hps_log debug "Cleaned up temp directory: $tmp_dir"
+  
+  return 0
 }
+
 
 
 

@@ -553,6 +553,16 @@ ipxe_boot_alpine_tch() {
   local prefix_len="${network_cidr##*/}"
   local netmask=$(cidr_to_netmask "$prefix_len")
   
+  local apkovl_file="alpine-${alpine_version}/tch-bootstrap.apkovl.tar.gz"
+  local apkovl_file_disk="${HPS_DISTROS_DIR}/${apkovl_file}"
+  local apkvol_file_url="http://${gateway}/distros/${apkovl_file}"
+  
+  # Only regenerate if missing
+  if [[ ! -f "${apkovl_file_disk}" ]]; then
+    hps_log info "Generating Alpine apkovl for version $alpine_version"
+    tch_apkovol_create "${apkovl_file_disk}"
+  fi
+  
   hps_log debug "Booting Alpine TCH version $alpine_version with static IP: $client_ip"
 
   local kernel_args="initrd=initramfs-lts"
@@ -561,8 +571,8 @@ ipxe_boot_alpine_tch() {
   kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
   kernel_args="${kernel_args} ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:off"
 #  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol&filename=bootstrap.apkovl.tar.gz"
-  kernel_args="${kernel_args} apkovl=http://${gateway}/distros/alpine-3.20.2/tch-bootstrap.apkovl.tar.gz"
-
+  kernel_args="${kernel_args} apkovl=${apkvol_file_url}"
+  
   ipxe_header
   cat <<EOF
 # Alpine TCH Boot - created at $(date)

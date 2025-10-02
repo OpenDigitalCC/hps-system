@@ -210,6 +210,12 @@ sync_alpine_repository() {
       return $?
       ;;
   esac
+  # After successful sync
+  if [[ "$sync_mode" == "main" ]]; then
+    local apkovl_path="${HPS_DISTROS_DIR}/alpine-${alpine_version}/tch-bootstrap.apkovl.tar.gz"
+    tch_apkovol_create "$apkovl_path"
+  fi
+
 }
 
 #===============================================================================
