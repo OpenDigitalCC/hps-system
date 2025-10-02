@@ -2,36 +2,30 @@
 
 Contained in `lib/functions.d/opensvc-functions.sh`
 
-Function signature: 139f8d5c2ba862cce5050507f5fd6568b9bb801dd4e53613095c407548128fb3
+Function signature: 36b4990e9b99b775a8e6be52ea2f3098da2a0dd4579130e4277b663f40451e06
 
 ### Function overview
-The function `osvc_apply_identity_from_hps()` retrieves values from a local configuration file `/etc/opensvc/opensvc.conf` and sets identity information for the node and the cluster. It also checks if the required files are readable, and if necessary values are retrievable from configuration. Any errors or warning are logged through the `hps_log` function.
+
+The `osvc_apply_identity_from_hps` function specifies the identity for a node in a cluster by checking the agent nodename in the OpenSVC configuration file. If the nodename is not found, the function logs an error and terminates. If the daemon is not running, the function provides a debug log stating that the identity will be configured upon daemon startup. The function assigns a value to the `node.name` attribute if the agent nodename is "ips". It also attempts to assign a value to the `cluster.name` attribute from a cluster configuration file.
 
 ### Technical description
-**name:** osvc_apply_identity_from_hps
 
-**description:** This function retrieves nodename from configuration, sets the nodename as `node.name` if nodename is `ips`. Then it retrieves the cluster name and sets it as `cluster.name`. It logs various error and warning messages if necessary. 
-
-**globals:**
-- conf: Path of the configuration file. Default `/etc/opensvc/opensvc.conf`
-
-**arguments:** are not used in this function.
-
-**outputs:** Logs messages in case of various error and warning states. Messages include missing configuration file, nodename not found, failed attempt to set node.name or cluster.name, and CLUSTER_NAME not found.
-
-**returns:**
-- 0 if an function executes without finding error states.
-- 1 if `/etc/opensvc/opensvc.conf` is not readable or nodename is not found in the configuration.
-
-**example usage:**
+- **Name:** `osvc_apply_identity_from_hps`
+- **Description:** This function assigns identities to a node and a cluster using values from configuration files.
+- **Globals:** [ conf: A string storing the path to the OpenSVC configuration file ]
+- **Arguments:** [ No command line arguments ]
+- **Outputs:** Logs error, debug, and warning messages related to the process of assigning identities.
+- **Returns:** 1 if the configuration file is unreadable or the agent nodename is not found; 0 otherwise.
+- **Example usage:**
 ```bash
 osvc_apply_identity_from_hps
 ```
 
 ### Quality and security recommendations
-1. Handle other error exceptions which can include failing of `_osvc_kv_set` function or `_ini_get_agent_nodename`. 
-2. Provide more explicit error messages to aid in debugging.
-3. Use plain English in log messages for better understanding and potential internationalization later on.
-4. Consider limiting the potential impact of command execution through validation and sanitization.
-5. Although it appears the function is designed to be run as root (given the hard-coded file path), ensure appropriate permissions are in place and that sensitive data is adequately protected.
+
+1. Ensure that the OpenSVC and cluster configuration files exist and are readable.
+2. Handle other potential error situations, such as if the 'om' command (which checks the status of the cluster) fails or if the daemon is not running.
+3. Consider parameterizing the function so that the paths to the configuration files can be specified at the command line.
+4. Consider validating the cluster and node name to ensure they adhere to expected naming conventions, decreasing the likelihood of issues during later processes.
+5. Be mindful of the system permissions required to run commands involving cluster status and name assignments. It's best practice to run these commands with the minimum privileges necessary to reduce the potential security risks.
 

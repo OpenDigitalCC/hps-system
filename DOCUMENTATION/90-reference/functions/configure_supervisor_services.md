@@ -1,33 +1,28 @@
-### `configure_supervisor_services `
+### `configure_supervisor_services`
 
 Contained in `lib/functions.d/configure-supervisor.sh`
 
-Function signature: 94e779d35f9a3f9fea90f859607c3903523d66e35f08f1be883ff3aeb13f8ede
+Function signature: deb84b582dac93ac1bafb35b941997e641067f625a53e65feb8a6cdd938cc887
 
 ### Function overview
 
-The `configure_supervisor_services` function is a bash-defined function that aids in configuring supervisory services in a specified configuration file. It utilizes a helper program to append a block once, specifically using the program stanza name as the key.
+The `configure_supervisor_services` function in Bash creates a configuration file for handling Supervisor services. This function ensures the core header and defaults exist. If the core configuration file does not exist or can't be read, logger function `hps_log` logs an error message. The function forms several service configurations (dnsmasq, nginx, fcgiwrap, opensvc) by invoking helper function `*supervisor*append_once` which checks if a service (stanza) exists already, if not, it appends a new service configuration block.
 
 ### Technical description
-
-- **Name**: `configure_supervisor_services`
-- **Description**: This bash function aids in the configuration of supervisory services. The configuration file used is defined in the environment variable `HPS_SERVICE_CONFIG_DIR`, concatenated with `/supervisord.conf`.
-- **Globals**: 
-    - `HPS_SERVICE_CONFIG_DIR`: This global describes the directory location for the configuration file.
-- **Arguments**: None
-- **Outputs**: Modifies the `supervisord.conf` configuration file located within `HPS_SERVICE_CONFIG_DIR`.
-- **Returns**: N/A
-- **Example usage**: 
-
-```bash
-configure_supervisor_services
-```
-
-### Quality and Security Recommendations
-
-1. Program should check for the existence of `HPS_SERVICE_CONFIG_DIR` environment variable and `supervisord.conf` configuration file.
-2. The function should also handle errors when the configuration file can't be modified or appended to. It may be due to a need for root permission or the file being read-only.
-3. The function should contain a logging feature to record any modifications to the `supervisord.conf` file.
-4. The implementation should account for potential race conditions when changing the configuration file.
-5. The function should have return statuses to indicate successful or unsuccessful function execution.
+- **Name:** `configure_supervisor_services`
+- **Description:** This function is primarily used for configuring Supervisor service settings and managing associated directories and files. It helps in setting up different services and their environments and handling errors along the way by logging them.
+- **Globals:** `HPS_LOG_DIR`, `CLUSTER_SERVICES_DIR`, `HPS_SERVICE_CONFIG_DIR`.
+- **Arguments:** This function does not accept any runtime arguments.
+- **Outputs:** Logs informative, debug and error messages related to the creation, existence and validation of supervisor services configuration.
+- **Returns:** 0 if success, 1 if failed to create supervisor core configuration, 2 if failed to create directory, and 3 if failed to write service block or Supervisor configuration file validation failed.
+- **Example usage:** `configure_supervisor_services`
+  
+### Quality and security recommendations
+1. The function is missing strict mode (`set -euo pipefail`). Using strict mode makes scripts halt execution on the first error, making debugging easier and limiting data corruption.
+2. More extensive error handling could be implemented or use of `set -e` to stop script on error.
+3. Consider handling signals and traps for more graceful exits or cleanup routines.
+4. Comments and sections could be better formatted for easier understanding.
+5. Avoid hardcoding paths and user names. Consider parameterizing more aspects of the function to increase reusability.
+6. Some parts of the function are redundant and could likely be simplified.
+7. Conceptually, this function may do too many things. It may be beneficial to split it into multiple subfunctions for a cleaner code structure.
 

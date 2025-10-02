@@ -2,29 +2,33 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: 688ac6268430b453c3ca87ba80fb648cfbbf4b3b63dabdcbb2f8a76ed8fb685d
+Function signature: 6461e5f5814cbc510b1bad68822a5b0d8eb3c58618d50b5418200c62ea6dff01
 
-### Function Overview
+### Function overview
 
-The bash function `get_active_cluster_file` is used to get the contents of the active cluster configuration. It checks whether the link of the active cluster resides in `${HPS_CLUSTER_CONFIG_DIR}/active-cluster`. If the linked cluster is not active, the function throws an error. If the link fails to resolve, an error is reported. The function finally checks that the resolved target is a file. If it is not, an error message is thrown. If everything is correct, the function outputs the content of the cluster configuration file.
+The bash function `get_active_cluster_file()` is designed to retrieve the name of the active cluster saved in a file and output its content.
 
-### Technical Description
+### Technical description
 
-- **Name:** `get_active_cluster_file`
-- **Description:** This function is used for retrieving the contents of the active cluster configuration from a specific directory. In case of errors, they will get thrown and displayed inside the terminal.
-- **Globals:** [ `HPS_CLUSTER_CONFIG_DIR`: Directory containing cluster configuration ]
-- **Arguments:** None
-- **Outputs:** Contents of `cluster.conf` file or an error message
-- **Returns:** Returns 1 in case of error, otherwise doesn’t explicitly return anything.
-- **Example usage:** `get_active_cluster_file`
+**Definition:**
 
+- **name**: `get_active_cluster_file`
+- **description**: This function retrieves the name of the "active" cluster from the method `get_active_cluster_filename`, assigns it to a local variable `file` and outputs its content, i.e., the active cluster's data. If the `get_active_cluster_filename` method fails, the function will exit and return 1.
+- **globals**: None
+- **arguments**: None
+- **outputs**: The contents of the file retrieved from `get_active_cluster_filename`. 
+- **returns**: Content of the file if successful, 1 if the `get_active_cluster_filename` fails.
+- **example usage**: 
 
-### Quality and Security Recommendations
+```bash
+get_active_cluster_file
+```
 
-1. The function could benefit from more precise error messages that give further details about the type of error encountered, hence making debugging easier.
-2. Implementing a function to check the legitimacy of the 'active cluster' prior to it being used, could improve security.
-3. It is suggested to sanitize any outputs to avoid injections or misuse of representatives.
-4. Implementing logging for errors can provide better insights for future debugging and better maintainability.
-5. Security could further be enhanced by checking the permissions and ownership of the file before trying to read it.
-6. The failed attempts to access the configuration file should be limited to protect from potential brute-force attempts.
+### Quality and security recommendations
+
+1. Include more error handling for situations where file does not exist or it fails to be read by cat command.
+2. Ensure that the file reading process is secure and its contents are not accessible to unauthorized users. This can be achieved by setting appropriate permissions on the file.
+3. Sanitize output to minimize the potential impact of malicious data.
+4. The function should not trust the file's content blindly, it should validate the input before processing it. This is important to prevent possible code injection flaws.
+5. Include a more comprehensive documentation, specifying what the function expects as an input and output. This will be beneficial for users of the function. Keep improving the unit tests aiming at improved code coverage.
 

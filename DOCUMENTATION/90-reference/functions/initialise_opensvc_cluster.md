@@ -1,36 +1,35 @@
 ### `initialise_opensvc_cluster`
 
-Contained in `lib/host-scripts.d/common.d/opensvc-management.sh`
+Contained in `lib/host-scripts.d/rocky.d/opensvc-management.sh`
 
-Function signature: 93541cb524c5002ddf32259cf012379871affcf44fd786a4ff1def822ad2aaff
+Function signature: 5ae00b0ed52acd2fc297bb42596c4d4828b6218e0a73be9e8e50fce1f927287d
 
-### Function overview
-The function `initialise_opensvc_cluster` is responsible for the initiation of an OpenSVC cluster. The function first logs the initiation process, then reads the desired values from HPS configs. If a required variable `CLUSTER_NAME` is not found, the function aborts the process and returns `1`. The function lowercases the `TYPE` tag value and sets the cluster name and node tags appropriately. Near the end, it checks if the `systemctl` command exists and then proceeds to restart the OpenSVC daemon. If restarting fails, the function throws a warning and returns `1`. Otherwise, the function ends by logging the successful completion of OpenSVC cluster initialization.
+### Function Overview
 
-### Technical description
-**Name:** `initialise_opensvc_cluster`  
+The Bash function `initialise_opensvc_cluster()` is responsible for setting up an OpenSVC cluster. It retrieves necessary values such as the cluster name, cluster secret and tags from the host configuration. It handles the setup logic pertaining to different conditions, whether the parameters are not found or the heartbeat type is not set. It applies the cluster configuration using the OpenSVC commands and sets the node tags (if any are found). The function concludes with logging the completion of cluster initialization.
 
-**Description:** This function is used to initialize an OpenSVC cluster. It controls and logs the process of configuration retrieval, validation, cluster setting, tag setting, and daemon (service) restarting. It logs a warning if the OpenSVC daemon restart fails, and a success message if the initialization completes.  
-
-**Globals:** None  
-
-**Arguments:** None  
-
-**Outputs:** Logs messages about the cluster initialization process, including errors and successful initialization.  
-
-**Returns:** `0` if successful, `1` otherwise.  
-
-**Example usage:**
-```bash
-initialise_opensvc_cluster
+### Technical Description
+```pandoc
+- name: `initialise_opensvc_cluster()`
+- description: A function to initialize an OpenSVC cluster by reading config values, configuring the cluster, and setting node tags.
+- globals:
+  - `VAR: cluster_name`: The name of the cluster.
+  - `VAR: cluster_secret`: The secret key associated with the cluster.
+  - `VAR: ips_addr`: The IP addresses associated with the nodes of the cluster.
+  - `VAR: node_tags`: Tags associated with the node types in the cluster.
+- arguments:
+  - `$1: None`: This function doesn't take any arguments.
+- outputs: Logs detailing steps of the OpenSVC cluster initialization and potential errors.
+- returns: `1` if any error occurs during cluster initialization, otherwise no explicit return.
+- example usage:
+  - initialise_opensvc_cluster(): This function doesn’t take any arguments. You can simply call it in your bash script to initialize a cluster.
 ```
 
-### Quality and security recommendations
-1. It's a good practice to declare and initialize all local variables at the top of a function to promote readability and reduce errors.
-2. Although this function does not take any arguments or use global variables, it is important to check and validate any input data if this changes in the future.
-3. Try to handle errors as close as possible to where they occur. Explicitly checking the return values of commands and handling errors can make code easier to understand and debug.
-4. Avoid suppressing error outputs unless it's a must. It's better to redirect them to a log file for future debugging.
-5. Querying the OpenSVC daemon could have security implications. Therefore, proper security controls should be installed to avoid potential system vulnerabilities.
-6. Always ensure you have permission to execute commands before running them.
-7. Be very mindful of the environment variables, files and directories you are manipulating. Any mishandling could adversely affect system integrity.
+### Quality and Security Recommendations
+1. For security purposes, avoid logging the `cluster_secret` variable as it might expose sensitive information.
+2. Add error handling to the remote cluster variable calls to handle scenarios where these calls fail.
+3. Return explicit values for success scenarios, currently, the function does not return anything upon success.
+4. Consider making the function more reusable by providing arguments instead of using global variables.
+5. Make sure the global variable `node_tags` is not manipulated outside of the function as this function directly depends on its value.
+6. Document the expected format and values for the node_tags variable for easier debugging and usage.
 

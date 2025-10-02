@@ -6,23 +6,40 @@ Function signature: 1f586056ba1b573eed69d32639c3940c1c742ba73af4aae917a1d65d36c5
 
 ### Function overview
 
-The `remote_log` function is designed to allow a system to log messages to a remote server. The function initiates by defining a message from its first argument. It then URL-encodes this message in order to safely transmit it to the server. Afterward, a POST request is sent to the specified gateway using curl, containing the URL-encoded message along with some other details.
+The `remote_log()` function is created to send log messages from a local machine to a remote gateway server. The function takes one argument, which is the message that needs to be logged. Before the message is sent, it is URL-encoded to ensure that it is correctly received by the remote server. The encoding is done in a loop, character by character. After the encoding, the message is sent to the remote server using a `curl` HTTP POST request.
 
 ### Technical description
 
-- **name**: remote_log
-- **description**: This function is used to log messages to a remote server. It takes a message as input, URL-encodes it, and then makes a POST request to send the message to a server.
-- **globals**: [ macid: This the machine's MAC ID used for addressing, HOST_GATEWAY: This is the remote gateway where the log message will be sent. ]
-- **arguments**: [ $1: This is the initial message that will be encoded and sent to the server].
-- **outputs**: The function does not explicitly output anything, it sends a POST request with a log message to a remote server.
-- **returns**: This function does not return anything.
-- **example usage**: `remote_log "This is a test log message"`
+Name:
+- `remote_log()`
+
+Description:
+- This is a Bash function created to send log messages from a local machine to a remote gateway server. It takes one argument, the `message`, which needs to be logged. The function first URL-encodes the message and then sends it to the remote server via a POST request using `curl`.
+
+Globals:
+- `VAR`: Not applicable
+- `macid`: The Mac id of the local machine
+- `HOST_GATEWAY`: The IP address or URL of the remote server
+
+Arguments:
+- `$1`: The initial message that needs to be logged
+
+Outputs:
+- Sends an HTTP POST request to the remote server with the URL-encoded message
+
+Returns:
+- Null
+
+Example Usage:
+```bash
+remote_log "This is a test log message"
+```
 
 ### Quality and security recommendations
 
-1. The function does not have any error handling. It would be a good improvement to add some form of error detection and handling, such as checking if the curl command was successful or not.
-2. There is a potential security risk with the POST request being sent unsecured. This can be mitigated by using secure protocols such as HTTPS and implementing authentication.
-3. The globals `macid` and `HOST_GATEWAY` should ideally be defined in a configuration that can be easily updated, rather than hard-coded into the script.
-4. Also consider adding validation for the `message` input to prevent injection attacks.
-5. For improved code quality, consider making this function part of a larger library of network functions.
+1. Input validation: Ensure that the variable `message` does not contain malicious commands or SQL injections.
+2. Error handling: Handle exceptions to avoid function crashes e.g., if the remote server URL is incorrect or unreachable.
+3. Logging: Include more logging within the function for debugging purposes.
+4. Encryption: Consider encrypting the message content for confidentiality and data integrity.
+5. Immutable globals: Since `macid` and `HOST_GATEWAY` are used as globals, careful handling is necessary as their value shouldn't be easily manipulated.
 

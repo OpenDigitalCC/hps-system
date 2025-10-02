@@ -2,33 +2,32 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: f85fd6ef48db5cb9daae832a23896a3098e1015c070794f3fe360262d2c24879
+Function signature: 35e810345753544ce73618109f16ad97d33b5185c8ff2d374a8837aa569e5960
 
-### Function Overview
+### Function overview
 
-The `count_clusters` function is designed to count and echo the number of clusters found in a specified directory (`HPS_CLUSTER_CONFIG_BASE_DIR`). The function will give a warning and return `0` if no clusters are found or if the directory does not exist.
+The `count_clusters` function is a shell command used primarily to gather a count of directories that are considered "clusters". More specifically, it stores these cluster directories into an array and returns the count. If the array is empty, it outputs an error message, and return an exit code of 0 along with a count of 0 to illustrate that no clusters were found.
 
-### Technical Description
+### Technical description
 
-- Name: `count_clusters`
-- Description: This function counts the number of clusters in a specific directory (`HPS_CLUSTER_CONFIG_BASE_DIR`). It provides messages for situations where no clusters are found or the directory does not exist and in such cases, it returns `0`.
-- Globals: [`HPS_CLUSTER_CONFIG_BASE_DIR`: directory to count cluster files from]
-- Arguments: No arguments
-- Outputs: Writes the number of directories (which correspond to cluster files) within the base directory to the standard output. Echoes warnings to the standard error output for circumstances where no clusters are found or the base directory is not found.
-- Returns: Always returns `0`
-- Example usage: 
-```bash
-source ./count_clusters.sh
-echo $(count_clusters)
+**Name:** `count_clusters`  
+**Description:** This function is used to obtain a count of "cluster" directories.   
+**Globals:** `[ HPS_CLUSTER_CONFIG_BASE_DIR: The base directory where clusters are located ]`  
+**Arguments:** `[ None ]`  
+**Outputs:** If it cannot find any clusters, it outputs an error message stating "No clusters found in 'HPS_CLUSTER_CONFIG_BASE_DIR'". If it finds clusters, it outputs the count of clusters.  
+**Returns:** It returns 0 regardless of whether it finds any clusters. If it finds clusters, it still returns the number of clusters.  
+**Example Usage:**
+
+``` bash
+# Count the directories in the base directory.  
+count_clusters  
 ```
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. Always use double quotes around variable references to prevent word splitting and pathname expansion.
-2. Use `return` or `exit` instead of `echo` to make error messages more visible and understandable.
-3. Validate all input, particularly those from an external or untrusted source.
-4. Use a more specific file search pattern to only find correct cluster files ( e.g. use `*.conf` to only count configuration files).
-5. Avoid hard-coding values such as directory names in your scripts. This will make the script more flexible and reusable. Instead, use parameters or configuration files to customize these values.
-6. Consider adding error handling in the function to manage potential problems that may arise during its execution. For example, provide a meaningful error message if the directory does not exist or is not readable.
-7. Document the function, its inputs, outputs, and any assumptions it makes about its operating environment. This will make it easier for others to use and maintain.
+1. Based on the provided function, there's an implication that some global variables are used across multiple functions. This could lead to obscure bugs if one function modifies the global variable in a way that another function doesn't expect. In a safer, clearer, and easier-to-maintain option, those global variables should be turned into arguments to isolate side effects.
+
+2. There is a lack of argument validation in the function. For robust and error-free functioning, it is advisable to check if the calculated directories exist and are indeed directories before counting them.
+
+3. The use of `echo` to communicate errors is not following best practices. Instead, we should consider switching to an logger or exposing error messages through the use of special return codes. This would give users more context on how to resolve the error than just presenting it as a string.
 

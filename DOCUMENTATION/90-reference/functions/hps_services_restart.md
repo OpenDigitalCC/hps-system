@@ -2,38 +2,37 @@
 
 Contained in `lib/functions.d/system-functions.sh`
 
-Function signature: c09926a993a6d161495b474383d7d4499d1f392527cb63a9bc4fbff3a73c0eba
+Function signature: 7b93e7411974a37f633379e3621dbdd656b539da01549e95ae3697ceb23cb5bc
 
 ### Function Overview
 
-This function, `hps_services_restart`, is responsible for restarting all services under the supervision of the Supervisor program. The process involves four steps:
-
-1. Configuring the services which require supervision.
-2. Creating the necessary configuration file for those services.
-3. Reloading current Supervisor configurations to apply any changes.
-4. Using `supervisorctl`, a control tool for Supervisor, with a configuration file located at `HPS_SERVICE_CONFIG_DIR/supervisord.conf` to restart all services.
-
-This function is particularly useful when you have made changes to your services or updated them and need to restart them for those changes to take effect.
+The function `hps_services_restart` is used for restarting the HPS services by configuring, creating and reloading supervisor services. After these operations it logs the restart status and executes post start steps.
 
 ### Technical Description
 
-- **Name:** hps_services_restart
-- **Description:** This function configures, creates the config, reloads the config, and restarts all Supervisor services.
-- **Globals:** [ HPS_SERVICE_CONFIG_DIR: The directory where the supervisord configuration file is located ]
-- **Arguments:** No arguments are expected.
-- **Outputs:** This function does not produce any notable output beyond potential standard output and errors from Supervisor.
-- **Returns:** By default, if successful, this function will not return anything. However, if an error occurs during execution, it will return the error message.
-- **Example Usage:** `hps_services_restart`
-  
+**- Name:** hps_services_restart
+
+**- Description:** This function restarts the HPS services. It starts by configuring and creating supervisor services. Then, it reloads the supervisor configuration. It logs an information message regarding the restart status of all supervisor services, using the configuration file located at "${CLUSTER_SERVICES_DIR}/supervisord.conf". Finally, it performs post start tasks for the HPS services. 
+
+**- Globals:** [ CLUSTER_SERVICES_DIR: This global variable holds the directory where the supervisor services' configurations are stored ]
+
+**- Arguments:** This function does not take any arguments.
+
+**- Outputs:** Logs the outcome of the restart command to the standard output.
+
+**- Returns:** Does not return a value.
+
+**- Example usage:** 
+
+```bash
+  hps_services_restart
+```
+
 ### Quality and Security Recommendations
 
-1. Consider improving error handling to allow for easy debugging. Address every potential point of failure within the function, such as failing to configure services, not being able to create or reload the configuration, and not being able to restart a service.
-
-2. Environment variables like `HPS_SERVICE_CONFIG_DIR` should be properly isolated and validated to prevent injection attacks.
-
-3. The function does not currently validate the configuration file (`supervisord.conf`). A corrupted or improperly formatted file could lead to undefined behavior or interrupt running services.
-
-4. Document more thoroughly about the dependencies ("configure_supervisor_services", "create_supervisor_services_config", "reload_supervisor_config", and "supervisorctl"). Ensure they are securely coded and follow best practices.
-
-5. Ensure that the user running this function has the necessary permissions to restart these services. Accidentally running this function as an unauthorized user can cause the services to stop working.
+1. Validation checks should be implemented at the start of the function to ensure that the `CLUSTER_SERVICES_DIR` global variable is set and refers to a valid directory.
+2. Error handling should be implemented to catch unsuccessful operations, such as in case of failed reload of supervisor configuration or if logging returns an error.
+3. Consider using more specific logging levels (e.g., debug, warning, error) instead of using the 'info' level for all types of logs. This makes the system easier to debug and monitor.
+4. Carefully manage file and directory permissions for `CLUSTER_SERVICES_DIR` and `supervisord.conf`, ensuring that only authorized users/services can modify them. This can help to prevent unauthorized modification of services, which could lead to security breaches.
+5. Evaluate the necessity of executing `hps_services_post_start` at the end of the function in terms of security. If this function is not necessary, or could potentially be exploited, consider removing it.
 

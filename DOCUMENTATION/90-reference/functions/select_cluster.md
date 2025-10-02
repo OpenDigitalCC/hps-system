@@ -2,30 +2,30 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: 61156c9ba1a9860121b17799a317ed88f6eb231e11490aec4753746b8bc69cb9
+Function signature: d6887af36fa9b9a8372e021a7e7c69665b0d3eee270caacdddd223f760546494
 
 ### Function overview
 
-The `select_cluster()` function is part of a shell script running in bash. The purpose is to select a directory representing a cluster from a predetermined base directory. The function processes subdirectories in this base directory as separate clusters. If no subdirectories are identified, the function returns an error. After presenting a list of available clusters, it then allows the user to select one. The selection is stripped of its trailing slash before being returned.
+`select_cluster` is a shell function designed to effectively manage multiple clusters within a shell environment. Depending on the argument passed, it returns either the directory or the name of the selected cluster. If the shell is non-interactive, it picks the active or first cluster depending on different conditions. If the shell is interactive, it prompts the user to select a cluster from a list of available clusters.
 
 ### Technical description
 
 - **Name:** `select_cluster`
-- **Description:** Identify subdirectories in a predefined base directory (i.e. clusters) and allows the user to select one.
-- **Globals:** `HPS_CLUSTER_CONFIG_BASE_DIR` - The base directory where subdirectories (clusters) are located.
-- **Arguments:** None.
-- **Outputs:** If no clusters are found in the base directory, it echoes an error message. In the case a cluster is selected, it outputs the selected directory path without the trailing slash.
-- **Returns:** If there aren't any clusters it returns 1. If a cluster is selected, the function does not explicitly return a value. However, the selected cluster (the last command result) is returned implicitly.
-- **Example usage:** 
-  ```
-  select_cluster
-  ```
+- **Description:** This function is used to manage multiple clusters in a shell environment. It either returns the directory or the name of the active or first available cluster, depending on specific conditions.
+- **Globals:** `[ HPS_CLUSTER_CONFIG_BASE_DIR: Base directory for the cluster configuration ]`
+- **Arguments:** `[ $1: Sets the return mode to 'name' if value is '--return=name' ]`
+- **Outputs:** Prints either the directory or the name of the selected cluster.
+- **Returns:** Returns 1 if no clusters are found. Returns 0 after successfully selecting a cluster in either interactive or non-interactive mode.
+- **Example usage:**
+    ```bash
+    select_cluster --return=name
+    ```
 
 ### Quality and security recommendations
 
-1. Consider adding validation to check if the base directory exists and is readable.
-2. It would be better to handle errors more formally, using explicit error handling techniques rather than simply printing to STDERR and returning a non-zero status.
-3. The function is highly dependent on the state of `HPS_CLUSTER_CONFIG_BASE_DIR`, but does not check if this variable has been set. A check should be added.
-4. Null selection of a single cluster isn't currently handled. Meaningful feedback should be given to the user when they do not select a cluster.
-5. The list of clusters could be sorted for easier navigation and selection by the user.
+1. For better script security, ensure all input data is validated and sanitized to mitigate the risk of injection attacks.
+2. Always check return values from functions and handle any potential errors appropriately.
+3. Make good use of local variables to limit the scope to the current shell and to avoid possible variable name conflicts.
+4. Use double quotes around variable references to avoid word splitting and pathname expansion.
+5. Regularly update the script and maintain proper documentation for easier debugging and maintenance.
 

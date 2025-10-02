@@ -2,31 +2,31 @@
 
 Contained in `lib/functions.d/system-functions.sh`
 
-Function signature: 7353ea08d49309b1aa8e3187b443507d430fd727f57e8ecc29accbe8383b6169
+Function signature: b43f68b5092581de60e6451048da5e3181daccfff13eee5943191ac9d98eab43
 
-### Function Overview
+### 1. Function overview
 
-The `hps_services_stop` function is a simple bash function in a script that uses the `supervisorctl` command to stop all currently running services under supervision. The services are managed by supervisord, a supervisor process control system. The function works by passing the configuration file located at `$HPS_SERVICE_CONFIG_DIR/supervisord.conf` to `supervisorctl` command to control the services.
+The function `hps_services_stop()` is used to stop all services managed by `supervisord`, a process control system. This is done by referring to the configuration file named `supervisord.conf` within the `CLUSTER_SERVICES_DIR` directory. 
 
-### Technical Description
+### 2. Technical description
 
-- **Name:** `hps_services_stop`
-- **Description:** This function uses the `supervisorctl` command to stop all currently running services which are being managed by supervisord, a supervisor process control system.
-- **Globals:** 
-  - `HPS_SERVICE_CONFIG_DIR`: This is the directory for the supervisord configuration file
-- **Arguments:** There are no arguments needed for this function.
-- **Outputs:** The function outputs the resulting status of stopped services on the terminal
-- **Returns:** No specific return value, it only executes the command within its body.
-- **Example usage:**
-   ```bash
-   hps_services_stop
-   ```
+- **Name:** `hps_services_stop()`
+- **Description:** This function stops the running services governed by the `supervisord` located in the `CLUSTER_SERVICES_DIR` directory by using the `supervisorctl` command with `-c` flag and `stop all` argument.
+- **Globals:** [ `CLUSTER_SERVICES_DIR`: This is the directory path where the `supervisord.conf` configuration file lives. ]
+- **Arguments:** [ None ]
+- **Outputs:** This function does not explicitly outputs anything. However, command line output from `supervisorctl` command will be visible which likely includes status information about stopping the services.
+- **Returns:** It returns nothing. However, the exit status of the function will be the same as the `supervisorctl` command's exit status.
+- **Example usage:** 
 
-### Quality and Security Recommendations
+```bash
+hps_services_stop
+```
 
-1. Check that `HPS_SERVICE_CONFIG_DIR` is set and exists before using it, to prevent any command injection or path traversal issues.
-2. Implement error checking, for example checking whether the `supervisorctl` command was successful or not, and handle any failures gracefully.
-3. Avoid running this function with root privileges unless necessary as it can stop all services, which could have unwanted effects.
-4. Validate and sanitize all shell inputs, in this case the `HPS_SERVICE_CONFIG_DIR`, to enforce a tighter security standard and prevent processing unexpected or harmful input.
-5. It would be beneficial to log the status messages from supervisorctl for auditing purposes.
+### 3. Quality and security recommendations
+
+1. The function relies on the global variable `CLUSTER_SERVICES_DIR`. It is advisable to validate that this variable is set and points to the right directory for robustness.
+2. If necessary, logging should be implemented within the function to capture the status and any potential errors during the execution for debugging and traceability purposes.
+3. Ensure proper permissions are set for the scripts containing this function to prevent unauthorized execution or modification.
+4. Use secure coding practices like escaping any variables used in the function call to avoid command injection vulnerabilities. In this case, using quotes around `${CLUSTER_SERVICES_DIR}` ensures this variable is safely used even if it contains spaces or other special characters.
+5. Make sure `supervisord` and `supervisorctl` are installed, configured correctly, and updated regularly for reliable and secure function execution.
 

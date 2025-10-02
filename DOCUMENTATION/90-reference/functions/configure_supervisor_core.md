@@ -1,28 +1,38 @@
-### `configure_supervisor_core `
+### `configure_supervisor_core`
 
 Contained in `lib/functions.d/configure-supervisor.sh`
 
-Function signature: 791d70bd40d5321833762eec6e797655e2f05a2aae1ffb9e5e783ccacdf6127a
+Function signature: 85bc4baf9a5f406b060f9e65c003dcd4719029b002e68c90befff7936eb18994
 
-### Function overview
+### Function Overview
 
-The `configure_supervisor_core` function is designed to create and configure a supervisor core that commands process management. In this function, the initial step taken is to ascertain if the base directories for log storage exist. If not, it creates them. It then proceeds to generate a configuration file `supervisord.conf` for Supervisord in the `${HPS_SERVICE_CONFIG_DIR}` directory. This generated configuration file contains several blocks containing configurations and parameters for different components of Supervisord including the unix_http_server, supervisorctl, rpcinterface, and supervisord itself. 
+The `configure_supervisor_core` function generates a Supervisor core configuration file at a location defined by the `CLUSTER_SERVICES_DIR` environment variable and logs its location for further usage. It validates required environment variables, creates required directories, writes the configuration file, checks for errors, and ensures the config file is readable and contains the required sections.
 
-### Technical description
+### Technical Description
 
-- **name**: `configure_supervisor_core`
-- **description**: This function creates and configures a supervisord core configuration file.
-- **globals**: [{HPS_SERVICE_CONFIG_DIR: The directory for service configuration files}, {HPS_LOG_DIR: The base directory for log storage}]
-- **arguments**: [None]
-- **outputs**: A Supervisord configuration file `supervisord.conf`.
-- **returns**: No explicit return value.
-- **example usage**: `configure_supervisor_core`
+- **Name:** configure_supervisor_core
+- **Description:** Generates a Supervisor core configuration file.
+- **Globals:** 
+  - `CLUSTER_SERVICES_DIR`: Directory for cluster services. 
+  - `HPS_LOG_DIR`: Directory for logging.
+- **Arguments:** None
+- **Outputs:** Path to the generated configuration file through stdout.
+- **Returns:** 
+  - 1 if `CLUSTER_SERVICES_DIR` or `HPS_LOG_DIR` is not set.
+  - 2 if creation of the configuration or log directories fails.
+  - 3 if writing supervisord configuration file fails.
+  - 4 if configuration file does not exist, is not readable, appears to be empty, or is missing a required section after writing.
+  - 0 if successful.
+- **Example Usage:**
+```bash
+configure_supervisor_core
+```
 
-### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. Check for the existence of `${HPS_SERVICE_CONFIG_DIR}` and `${HPS_LOG_DIR}` at the beginning of the function. If, for some reason, these global variables have not been initialized or they do not exist, it might cause the function to fail.
-2. Add error handling mechanisms to handle any error that may occur during the execution of `mkdir` and `cat` commands. Catching and handling these errors can prevent the function from failing unexpectedly.
-3. The user credentials (username and password) should not be stored in plain text for security reasons. A secure alternative, such as using hash values, should be used.
-4. Restricting the permissions (chmod) to 0700 provides a sense of security, but consider configuring the utility to run as a non-root user to secure the system more.
-5. Improvements could be made by validating the configuration in `${SUPERVISORD_CONF}` before it is applied to avoid any malfunctioning of supervisord.
+1. Ensure to validate and sanitize all environment variables in the beginning of the script execution to avoid potential security vulnerabilities.
+2. Write proper error messages in the case of application failure. This will help in better debugging and understanding of what is happening inside your code.
+3. Handle all possible exceptional cases, such as checking if the necessary directories exist before proceeding.
+4. Make sure to secure the configuration files and restrict the permissions to only necessary users to prevent unauthorized modifications.
+5. Regularly update and maintain the application to protect from potential security threats.
 

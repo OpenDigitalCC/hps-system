@@ -4,33 +4,43 @@ Contained in `lib/functions.d/host-functions.sh`
 
 Function signature: 1acb712577aa9213ca920a051e80825c73d7775714d43d10ccad322458fc5946
 
-### Function overview
+### Function Overview
 
-The `int_to_ip` bash function plays a crucial role in the management of host configurations, particularly for setting up IP addresses and hostnames. This function is primarily used for converting an integer into an IP address. The function first generates a unique IP address that is not already in use. It then proceeds to create a unique hostname. If the function fails to generate either a unique IP address or a unique hostname, it logs a debug message and exits with a return code 1, indicating an error.
+The function `int_to_ip()` is a bash function that converts an integer to an IP address. It's primarily used in a larger code base where IP addresses are calculated and used dynamically. This function is part of a script that attempts to assign a unique IP address and host name, from a defined range, to a host type within a network base setting.
 
-### Technical description
+### Technical Description
 
-- **Name:** `int_to_ip`
-- **Description:** Transforms an integer into an IP address format. It is part of a larger script where it helps to assign unique IP addresses and hostnames for host configurations.
-- **Globals:** [ `HPS_HOST_CONFIG_DIR`: A directory containing host configuration files ]
-- **Arguments:** [ `$1`: a four-part decimal number (0-255) representing an IPv4 address ]
-- **Outputs:** Returns a unique IP address and hostname, unless encountered an error during the process.
-- **Returns:** `1` if it fails to either generate a unique IP or a unique hostname. If successful, it executes a series of `host_config` calls to set various attributes of a specified host.
+- **Name:** int_to_ip()
+
+
+- **Description:** This function receives an integer as an argument, does bitwise shifting on it and creates an IP address string by placing dots in between the numbers.
+
+
+- **Globals:** [ start_ip: A local variable to keep track of the start IP, end_ip: A local variable to keep track of the end IP, try_ip: A local variable to keep track of the tried IP, max: A local variable representing the max value to use in the loop]
+
+
+- **Arguments:** [$1 (local ip): This integer argument is used in computations to generate an output IP address]
+
+
+- **Outputs:** An IPv4 address built from the input integer.
+
+
+- **Returns:** None.
+
+  
 - **Example usage:**
-```bash
-$ int_to_ip 167772119 
-Output: 10.0.0.15
-```
-```bash
-$ int_to_ip 3232235775 
-Output: 192.168.1.255
-```
 
-### Quality and security recommendations
+```sh
+int_to_ip 16843009
+#=> output: 1.1.1.1
+``` 
 
-1. It's strongly recommended to sanitize and validate the inputs especially if they are coming from an external source to prevent command injection attacks.
-2. To improve error handling, consider emitting meaningful error messages instead of just logging debug messages.
-3. In its current state, the function could be more robust if it handled probable errors that might occur when shifting and bitwise-anding the input.
-4. For better readability and maintainability, consider refactoring the function to smaller, standalone functions that carry out specific tasks.
-5. It would be wise to implement check to ensure the directory `HPS_HOST_CONFIG_DIR` exists and is accessible before running any related commands.
+
+### Quality and Security Recommendations
+
+1. Consider validating the input data, if it is an integer and in the acceptable range.
+2. Implement error handling for improper input or unexpected output.
+3. Be cautious about information leakages or unwanted side effects due to globally scoped variables.
+4. Consider implementing some form of logging for debugging and traceability of function.
+5. Adopt defensive coding practices across the board to ensure that potential misuse of code does not result in compromising the system.
 

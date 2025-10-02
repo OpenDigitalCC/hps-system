@@ -2,28 +2,30 @@
 
 Contained in `lib/functions.d/network-functions.sh`
 
-Function signature: ac8cefca0a4fe56f9e4ef01e54a13bb17bd1107670d5f1b98c4c04d07fd2425e
+Function signature: 597ad94d9559d604fae13c8fd8ef8bde5b6c19fee81c409691213ad492d3d6b3
 
-### Function overview 
+### Function Overview
 
-The `normalise_mac()` function is used to validate and standardize the format of a MAC address. The function performs the following processes: it removes all the common delimiters such as colon (:), dash (-), dot (.), and space ( ). Then, it converts all the characters in the MAC address to lowercase. The last process validates the MAC address. The resulting MAC address should exactly have 12 hexadecimal characters. If the MAC address format is invalid, the function will print an error message and return 1. If the format is valid, it will display the normalized MAC address. 
+The `normalise_mac` function in Bash is used to standardize the format of MAC addresses. It accepts a single MAC address as input, removes all common delimiters (such as "-" , ":" , "." or white space), converts it to lowercase, and validates the resulting output for being exactly 12 hexadecimal characters, which is the standard MAC address format.
 
-### Technical description
-```yaml
-- name: normalise_mac
-- description: A function to validate and standardize MAC addresses. It removes common delimiters, converts to lower case, and validates the address to be exactly 12 hexadecimal characters.
-- globals: [ ]
-- arguments: [ $1: The MAC address to be normalized and validated ]
-- outputs: An error message to stderr if the MAC address is invalid. If valid, the normalized MAC address will be returned.
-- returns: The function will return 1 if the MAC is invalid.
-- example usage: normalise_mac "00-80-41-ae-fd-7e"
-```
+### Technical Description
 
-### Quality and security recommendations
+- **name**: normalise_mac
+- **description**: Normalizes the provided MAC address by removing common delimiters, converting to lowercase, and validating the MAC address format.
+- **globals**: NA 
+- **arguments**: [ $1: A string representing a MAC address. Input MAC address could be with any common delimiters like colon(:), hyphen(-), dot(.) or a whitespace.]
+- **outputs**: The function outputs a standardized MAC address in lowercase and without delimiters if the input is valid. If the input doesn't match the standard MAC address format, it outputs an error message to stderr "[x] Invalid MAC address format: $1". 
+- **returns**: The function returns with a status of zero when successfully offering a normalized MAC address. It returns a status of 1 if the provided MAC address is invalid.
+- **example usage**: 
+   ```
+   $ normalise_mac "01-23-45-67-89-ab"
+   0123456789ab
+   ```
 
-1. Implement higher-level error handling: Rather than only printing to stderr, throw an error that can be caught by other parts of your application.
-2. Ensure to sanitize input: Even though the script appears resistant to command injection, proper input sanitization should always be performed when accepting user input.
-3. Testing: Add various test cases to confirm the function behaves as expected and is able to handle edge cases and unexpected inputs.
-4. Document the function: Add clear and concise documentation to the function explaining its use, inputs, and outputs for better understandability and maintainability of code.
-5. Return unique error codes: Return unique error codes for different error cases for easier debugging.
+### Quality and Security Recommendations
+
+1. Be cautious while handling the argument and take steps to ensure that it does not carry any harmful inputs such as shell code injections.
+2. Always use the function in a safe environment, taking into consideration input sanitation and privilege separation.
+3. To enhance the function, consider adding more input validations, such as checking if the input is null or empty before processing.
+4. Lastly, always inform the users of the function about the correct input to provide. Since the function expects an argument to be a MAC address, providing this in the function's help or documentation would help avoid confusion and unexpected output.
 

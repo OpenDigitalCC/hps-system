@@ -4,33 +4,27 @@ Contained in `lib/functions.d/opensvc-functions.sh`
 
 Function signature: e83bb88e314eb7098eb2ed8868cdecf150f3a7c4cec631f0ac14eadabbeaa0d3
 
-### Function Overview
+### Function overview
+The `_osvc_kv_set()` function in Bash is a utility intended for setting key-value pairs in an Omniscale configuration. This function takes two arguments—a key and a value—and passes them into an `om config set` command using a keyword argument.
 
-The function `_osvc_kv_set()` is a simple key-value setting function in Bash. The purpose of this function is to set a certain key-value pair in the `om` configuration. It accepts two arguments: a key and a value and then it passes these arguments as a set operation to the `om` configuration.
+### Technical description
 
-### Technical Description
-
-- **Function name:** `_osvc_kv_set()`
-- **Description:** This Bash Script function sets a given key-value pair in the `om` configuration.
-- **Globals:** None
-- **Arguments:** 
-  - `$1: k` - Represents the key to set in the `om` configuration. This is a mandatory argument and the function will return an error if it is not provided.
-  - `$2: v` - Represents the value to set for the given key in the `om` configuration. This is a mandatory argument and the function will return an error if it is not provided.
-- **Outputs:** This function doesn't produce any output. It simply modifies the `om` configuration.
-- **Returns:** It doesn't explicitly return any value.
-- **Example usage:** 
-
+- **Name**: `_osvc_kv_set`
+- **Description**: This function takes a key and a value as inputs and sets this key-value pair in an Omniscale configuration using the `om config set` command.
+- **Globals**: None.
+- **Arguments**: 
+  - `$1`: A string representing the key of the key-value pair.
+  - `$2`: A string representing the value of the key-value pair.
+- **Outputs**: No explicit return, but changes will be made in the Omniscale configuration via the `om config set` command.
+- **Returns**: Does not return a value.
+- **Example usage**:
 ```bash
-_osvc_kv_set "username" "osvc_user"
+_osvc_kv_set "username" "admin"
 ```
-In this example, the function will set the `username` key to the `osvc_user` value in the `om` configuration.
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. Ensure that proper error handling is put in place. Right now, if arguments are not provided, the function will fail. It would better if the function did not execute until necessary arguments were provided.
-2. Consider adding additional checks for the validity of the key and value. This would prevent any invalid configurations from being made.
-3. Check for possible code injections in the key and value arguments.
-4. Make sure the `om` configuration API is secured and only accessible by authorized users or scripts.
-5. The function modifies global configuration directly. It would be more secure if these changes were reviewed or logged for auditing purposes.
-6. Documentation is very crucial for maintenance and further enhancement so make sure all the function details and changes are well documented.
+1. Always validate input before processing: The function currently does not perform any validation or sanitization of the arguments it receives before processing them, making it open to potential misuse or errors. Consider implementing input validation to ensure that correct and safe values are being passed in as arguments.
+2. Handle errors gracefully: While the function does use the `${var:?word}` expression to handle missing arguments, its error handling could be more explicit. For example, it could log a custom error message or use an `exit` call to halt the entire script.
+3. Write test cases: To fully ensure the function's reliability and maintainability, consider writing unit tests that inspect the behavior of the function in various contexts and with different inputs.
 

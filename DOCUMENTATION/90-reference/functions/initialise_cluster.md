@@ -2,30 +2,37 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: 0ec03980bf3af34dd55fa2d767b0fc494f13846b6935087299fd9161e89ab908
+Function signature: 011e924e7a556253209f90291e5c11cc6d353538a17821169829f72b6d16fe0d
 
-### Function Overview
+### Function overview
 
-The `initialise_cluster()` function in Bash is used to initialize a new cluster. An individual cluster's records are kept in a directory and the function uses this directory to generate a cluster configuration file (`cluster.conf`). The function accepts an input for the name of the cluster, and checks if that name is present or not. If the cluster name is already in use, the function will return an error. The function will then create the cluster directory and config file. Finally, it invokes `export_dynamic_paths "$cluster_name"`, checks the status of invocation, and if unsuccessful, will generate an error and return.
+The function `initialise_cluster()` is a Bash function intended to initialize a new server cluster configuration within a given directory. If provided a cluster name, it will create a new directory with that name and set up necessary subdirectories and configuration files. If the cluster name is not provided, or if a cluster with the provided name already exists, the function will return an error message. If the initialization ends successfully, it will export dynamic paths for this cluster.
 
-### Technical Description
+### Technical description
 
-- **Name**: initialise_cluster
-- **Description**: This function is responsible for initializing a cluster by creating a directory for it and generating a configuration file. If the cluster already exists or if the creation of the cluster fails, the function will return an error.
-- **Globals**: [ HPS_CLUSTER_CONFIG_BASE_DIR: Contains the base directory where clusters are stored. Default is set to /srv/hps-config/clusters if not provided. ]
-- **Arguments**: [ $1: Name of the cluster to be created, $2: (Not used in current function) ]
-- **Outputs**: Prints error messages if the cluster name is not provided, the cluster directory already exists, or if the `export_dynamic_paths()` function fails. Will print success messages when the cluster directory and config file are successfully created.
-- **Returns**: Exits with a status of 1 if the cluster name is not provided, 2 if the cluster directory already exists, and 3 if `export_dynamic_paths "$cluster_name"` fails.
-- **Example usage**:
-  ```
-  initialise_cluster "my_cluster"
-  ```
+- Name: `initialise_cluster`
+- Description: This function creates a new cluster configuration based on the given cluster name. It creates relevant directories, initial configuration file and exports dynamic paths for further use.
+- Globals: `HPS_CLUSTER_CONFIG_BASE_DIR: The base directory in which the cluster configuration will be created`
+- Arguments: 
+     - `$1: The name of the cluster to initialize`
+- Outputs: 
+    - Various status messages, indicating whether configuration has been successfully completed or not.
+    - Error messages, when an error occurred (e.g., missing argument, directory already exists).
+- Returns:  
+    - `0`: on successful initialization and cluster paths exported
+    - `1`: if the cluster name was not provided
+    - `2`: if the cluster directory already exists
+    - `3`: if exporting cluster paths fails
+- Usage Example: 
+    ```bash
+    initialise_cluster "my-cluster"
+    ```
 
 ### Quality and Security Recommendations
 
-1. Always check that the cluster name is valid and secure, to prevent unintended consequences from directory traversal or other types of injection attacks.
-2. Ensure that the base directory is backed up or version-controlled to safeguard against data loss.
-3. Consider adding error handling or rollback functions if the cluster creation process is interrupted or fails on different stages.
-4. Limit the permissions of the `cluster.conf` file to only those users who need to read or write to it.
-5. Regularly review and update the function to meet current best practices and security standards.
+1. Validate user input: Currently the function does not validate that the input is safe, or whether the name is reasonable for a directory name.
+2. Handle or report errors from `mkdir`: If the the directories cannot be created, the function will still try to create the files, which will always fail.
+3. Reduce scope of variables: Currently the function uses many local variables, which increase complexity and can potentially clash with identically named variables outside the function.
+4. Execute least privilege: Ensure that the script is run with as few privileges as possible to avoid potential security risks.
+5. Securely handle potential failures in file writing operations: Always check the status code after writing to a file. Failure to write to a file should be treated as an error and should be handled properly.
 

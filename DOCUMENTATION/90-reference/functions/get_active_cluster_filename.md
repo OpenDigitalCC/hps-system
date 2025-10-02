@@ -2,33 +2,39 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: 7207d6053d7feea7b49e85e1ac6488ca00a74177aae1bc317d07cf6d8e044fd0
+Function signature: 20bf828d972eed107690831358c6e9148058e88842050f23b8944d669bfab00a
 
 ### Function Overview
 
-The `get_active_cluster_filename` function is designed to return the path to `cluster.conf` in the active cluster directory. If it cannot find an active cluster directory, it returns an error. The function uses a local link variable to the location of the cluster configuration base directory, checks if the link is a symbolic link, and if it is, it resolves the full path to the target of the symbolic link. After resolving the path, it then concatenates the target with `cluster.conf` and returns.
+The `get_active_cluster_filename` function is designed to find the configuration file for the currently active cluster. It performs the following steps:
+1. It obtains the path to the active cluster's directory.
+2. It extracts the name of the active cluster from the directory path.
+3. It retrieves the cluster configuration file based on the cluster's name.
+4. If the file is not found, it prints an error message and returns 1.
+5. If the file is found, it prints the file.
 
 ### Technical Description
 
-- **Name:** `get_active_cluster_filename`
-- **Description:** This function checks for an active cluster directory and should return the path to the `cluster.conf` file located within it. If the directory or file does not exist, it returns an error.
-- **Globals:** [ `HPS_CLUSTER_CONFIG_BASE_DIR`: Base directory path of cluster configurations ]
-- **Arguments:** [ None ]
-- **Outputs:** The path the `cluster.conf` within the active cluster directory. If the active cluster directory does not exist, an error message detailing the absent symlink is printed to stderr.
-- **Returns:** 0 if successful, 1 if unsuccessful.
-- **Example Usage:**
-```
-path_to_active_cluster=$(get_active_cluster_filename)
-if [ $? -ne 0 ]; then
-    # handle error
-fi
+- **Function Name**: `get_active_cluster_filename`
+- **Description**: This function gets the configuration file name for the currently active cluster.
+- **Globals**: None
+- **Arguments**: None
+- **Outputs**:  
+   - The path to the configuration file for the active cluster.
+   - An error message if the configuration file does not exist.
+- **Returns**: 
+  - Returns `1` when the active directory or the configuration file of the cluster does not exist.
+  - Returns `0` otherwise.
+- **Example Usage**:  
+```bash
+filename=$(get_active_cluster_filename)
 ```
 
 ### Quality and Security Recommendations
 
-1. Input validation: This current implementation does not include checks to validate input, as it does not have any arguments. If any arguments are added later, they should be validated before usage to prevent unwanted behavior.
-2. Failure handling: Error messages are sent to stderr, which is a good practice. These messages aid in identifying the source of the error when the function is not able to return the expected output.
-3. Documentation: Documenting the behavior of the function (especially in error scenarios) in a comment block above the function can be helpful for the those who use the function.
-4. Security: Check if the resolved path (`target`) is under the desired directory path to avoid any symlink attacks.
-5. Globals: Avoiding the use of global variables in favor of function parameters can enhance the function's reusability and reduce potential naming conflicts.
+1. To improve readability and maintainability, consider adding comments explaining what each command does.
+2. It's good practice to test return values directly in `if` statements rather than relying on `|| return 1` expressions.
+3. We should validate user inputs where possible, and handle errors explicitly.
+4. Consider using a variable to capture the error message string, which would allow you to change the message in just one place if needed.
+5. Make sure to use secure coding practices, such as not making assumptions about input data, checking for null or unexpected values, and handling errors and exceptions as much as possible.
 

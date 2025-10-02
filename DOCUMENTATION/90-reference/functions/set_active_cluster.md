@@ -2,32 +2,32 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: c4f4f433c7e18e128366307bf60133a4e18e81d677c586a39bfe81ef13c6d637
+Function signature: ff67ed1fe94af1bc0a6ebd9436efd66e00f5b5f9905b2979af037bdf49fce60e
 
-### Function overview
+### Function Overview
+This function `set_active_cluster` is responsible for defining the active Kubernetes cluster by name, in a specific environment. It accomplishes this through several steps - assigning the input to a variable, checking to see if the input variable is empty, defining cluster directory and configuration file locations, ensuring both the directory and configuration file exist, and finally, linking to the active cluster.
 
-This function `set_active_cluster` is used to set an active cluster configuration by establishing a symbolic link to the specified cluster's directory from a designated 'active-cluster' file location. The function requires a single argument: the name of the cluster. The function establishes a consistently accessible location, referenced as 'active-cluster', through which to access the current, or active, cluster configuration.
-
-### Technical description
-
-- **name**: `set_active_cluster`
-- **description**: This function sets an active cluster configuration by establishing a symbolic link to the specified cluster's directory. 
-- **globals**: [ `HPS_CLUSTER_CONFIG_BASE_DIR`: The base directory for the cluster configuration files. ]
-- **arguments**: [ `$1`: The name of the cluster to activate.]
-- **outputs**: Error messages to stderr if either the cluster directory or 'cluster.conf' file does not exist. Confirmation message to stdout when the active cluster is successfully set.
-- **returns**: `1` if the cluster directory is not found, `2` if the 'cluster.conf' file is not found in the cluster directory, `0` (implicit) if the active cluster is successfully set.
-- **example usage**:
-
+### Technical Description
+* __Name__: `set_active_cluster`
+* __Description__: This function sets a specific Kubernetes cluster as active based on cluster name provided as an argument.
+* __Globals__: None
+* __Arguments__: 
+    * `$1: cluster_name` - Name of the Kubernetes cluster to be set as active.
+* __Outputs__: 
+    * Echoes an error message and usage suggestion to stderr if no argument is supplied, or if cluster directory or configuration file cannot be found.
+    * Echoes a success message if the active cluster is successfully set.
+* __Returns__: 
+    * Returns `1` if no argument is supplied or if cluster directory or configuration file cannot be found.
+    * Returns `2` if clusted configuration not found.
+* __Example usage__: 
 ```bash
-$ set_active_cluster "my-cluster"
+set_active_cluster my_cluster_name
 ```
 
-### Quality and security recommendations
-
-1. Implement additional error checking for the existence and availability of the base directory and 'active-cluster' link.
-2. Report errors with both a unique message and distinct error code for easier troubleshooting.
-3. Check the input for malicious code injections or incorrect formatting before executing the function.
-4. Consider limiting the permissions of the 'active-cluster' link for security.
-5. Implement logging mechanism to keep a record of which cluster configuration was set active at what time for auditing purposes.
-6. Optionally, you might want to backup the existing 'active-cluster' link before creating a new one.
+### Quality and Security Recommendations
+1. Input validation: Implement more comprehensive input validation; currently, the function only checks if an argument is supplied, but there might be specific naming rules for cluster names that could also be checked.
+2. Error handling: More specific error messages could help with easier problem diagnostics.
+3. Security: Review if and where this script allows for problems like symlink attacks; if a potential exists, steps should be introduced to minimize the risk.
+4. Robustness: Consider introducing checks for edge cases such as file permission issues or lack of disk space. 
+5. Testing: Incorporate this function in unit testing to ensure it continues to work correctly as the cluster environment evolves.
 
