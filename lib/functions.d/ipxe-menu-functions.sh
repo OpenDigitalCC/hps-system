@@ -307,6 +307,7 @@ ipxe_boot_installer () {
   local profile="${2:-}"
   
   hps_log info "Installing new host of type $host_type"
+  host_network_configure "$mac" "${host_type}"
 
   # Set HOST_PROFILE if profile was provided
   if [[ -n "${profile}" ]]; then
@@ -315,7 +316,6 @@ ipxe_boot_installer () {
   
   if [[ "${host_type}" == "TCH" ]]; then
     # TCH: Set state and reboot for network boot preparation
-    host_network_configure "$mac" "${host_type}"
     hps_log info "Setting up TCH for network boot"
     host_config "$mac" set STATE NETWORK_BOOT
     ipxe_reboot "TCH configured for network boot - rebooting to apply"
