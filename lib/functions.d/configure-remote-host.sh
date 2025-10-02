@@ -1,10 +1,14 @@
 __guard_source || return
 
 
+
+#!/bin/bash
+
 #===============================================================================
 # node_get_functions
 # ------------------
 # Concatenate host-side functions for a distro string and emit to stdout
+# with support for profile-specific functions.
 #
 # Arguments:
 #   $1 - distro : Distro string format: cpu-mfr-osname-osver
@@ -12,14 +16,22 @@ __guard_source || return
 #
 # Search Order:
 #   common.d/*.sh
+#   common.d/${PROFILE}/*.sh
 #   <cpu>.d/*.sh        then <cpu>.sh
+#   <cpu>.d/${PROFILE}/*.sh
 #   <mfr>.d/*.sh        then <mfr>.sh
-#   <osname>.d/*.sh     then <osname>.sh
+#   <mfr>.d/${PROFILE}/*.sh
+#   <osname>.d/*.sh        then <osname>.sh
+#   <osname>.d/${PROFILE}/*.sh
 #   <osname>-<osver>.d/*.sh then <osname>-<osver>.sh
+#   <osname>-<osver>.d/${PROFILE}/*.sh
 #
 # Behaviour:
+#   - Gets current profile via 'host-config get PROFILE'
 #   - Parses distro string into components
 #   - Searches for function files in priority order
+#   - Profile-specific functions are loaded after base functions
+#   - Logs warnings when profile directories don't exist
 #   - Logs which files are found and included
 #   - Concatenates all matching files to stdout
 #   - Adds comments showing which files were included
@@ -27,11 +39,26 @@ __guard_source || return
 # Returns:
 #   0 on success
 #   1 if distro parameter missing
+#   2 if host-config command fails
 #===============================================================================
 node_get_functions() {
-  local distro="${1:?Usage: node_get_functions <cpu-mfr-osname-osver> [func_dir]}"
+  local distro="${1:?Usage: node_get_functions <distro> [func_dir]}"
   local base="${2:-${LIB_DIR:+${LIB_DIR%/}/host-scripts.d}}"
   base="${base:-/srv/hps-system/lib/host-scripts.d}"
+  
+  # Get the current profile
+  local profile
+  if ! profile=$(host_config $mac get HOST_PROFILE 2>/dev/null); then
+    hps_log error "Failed to get HOST_PROFILE from host-config"
+    return 2
+  fi
+  
+  # Profile might be empty, which is valid
+  if [[ -z "$profile" ]]; then
+    hps_log info "No profile set, using base functions only"
+  else
+    hps_log info "Using profile: $profile"
+  fi
   
   local cpu mfr osname osver
   IFS='-' read -r cpu mfr osname osver <<<"$distro"
@@ -46,6 +73,7 @@ node_get_functions() {
   
   echo "# Host function bundle for: $distro"
   echo "# Source directory: $base"
+  [[ -n "$profile" ]] && echo "# Profile: $profile"
   echo
   
   local patterns=(
@@ -56,6 +84,17 @@ node_get_functions() {
     "$base/${osname}-${osver}.d/"*.sh "$base/${osname}-${osver}.sh"
   )
   
+  # Add profile-specific patterns if profile is set
+  if [[ -n "$profile" ]]; then
+    patterns+=(
+      "$base/common.d/${profile}/"*.sh
+      "$base/${cpu}.d/${profile}/"*.sh
+      "$base/${mfr}.d/${profile}/"*.sh
+      "$base/${osname}.d/${profile}/"*.sh
+      "$base/${osname}-${osver}.d/${profile}/"*.sh
+    )
+  fi
+  
   local file_count=0
   local p files f
   
@@ -63,6 +102,10 @@ node_get_functions() {
     files=( $p )
     if ((${#files[@]} == 0)); then
       hps_log debug "Pattern not found: $p"
+      # Only warn about missing profile directories if profile is set
+      if [[ -n "$profile" && "$p" == *"/${profile}/"* ]]; then
+        hps_log warn "Profile directory not found: ${p%/*}"
+      fi
       echo "# === $(basename "${p%/*}")/$(basename "${p##*/}") not found ==="
       continue
     fi
@@ -74,6 +117,12 @@ node_get_functions() {
       file_count=$((file_count + 1))
       
       echo "# === $(basename "$f") included ==="
+      # If it's a profile file, indicate that in the comment
+      if [[ "$f" == *"/${profile}/"* ]]; then
+        echo "# === Profile: $profile - $(basename "$(dirname "$f")")/$(basename "$f") included ==="
+      else
+        echo "# === $(basename "$(dirname "$f")")/$(basename "$f") included ==="
+      fi
       cat "$f"
       echo
     done

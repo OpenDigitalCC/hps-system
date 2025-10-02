@@ -116,13 +116,22 @@ handle_menu_item() {
 
     install_*)
       local HOST_TYPE="${item#install_}"
-      local HOST_TYPE="${HOST_TYPE%_*}"
-      local HOST_PROFILE="${item##*_}"
-      hps_log info "$item Running boot installer for type: "${HOST_TYPE}" profile: "${HOST_PROFILE}""
+      local HOST_PROFILE=""
+      
+      # Check if there's an underscore indicating a profile suffix
+      if [[ "$HOST_TYPE" =~ ^([^_]+)_(.+)$ ]]; then
+        # Extract type and profile from the match
+        HOST_TYPE="${BASH_REMATCH[1]}"
+        HOST_PROFILE="${BASH_REMATCH[2]}"
+        hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
+      else
+        # No profile suffix, HOST_PROFILE remains empty
+        hps_log info "$item Running boot installer for type: '${HOST_TYPE}' (no profile)"
+      fi
+      
       ipxe_boot_installer "${HOST_TYPE}" "${HOST_PROFILE}"
       ;;
-
-
+      
     force_install_*)
       if [[ "${item}" == "force_install_on" ]] 
        then
@@ -204,10 +213,20 @@ item --gap What would you like to configure \${mac:hexraw} as?
 item --gap 
 item init_menu    < Back to initialisation menu
 item --gap 
-item install_TCH  > Install Thin Compute Host
-item install_SCH  > Install Storage Cluster Host
-item install_DRH  > Install Disaster Recovery Host
-item install_CCH  > Install Container Cluster Host
+
+item --gap Install Thin Compute Host
+item install_TCH  > No profile (Default)
+item install_TCH_KVM  > Profile: KVM virtualisation
+item install_TCH_DOCKER  > Profile: Docker host
+item install_TCH_BUILD  > Profile: Build tools for packaging
+
+
+item --gap Install Storage Cluster Host
+item install_SCH  > No profile (Default)
+item --gap Install Disaster Recovery Host
+item install_DRH  > No profile (Default)
+item --gap Install Container Cluster Host
+item install_CCH  > No profile (Default)
 
 choose selection && goto HANDLE_MENU
 
@@ -285,9 +304,14 @@ ipxe_reboot () {
 
 ipxe_boot_installer () {
   local host_type=$1
-  local profile=$2
+  local profile="${2:-}"
   
   hps_log info "Installing new host of type $host_type"
+
+  # Set HOST_PROFILE if profile was provided
+  if [[ -n "${profile}" ]]; then
+    host_config "$mac" set HOST_PROFILE "${profile}"
+  fi  
   
   if [[ "${host_type}" == "TCH" ]]; then
     # TCH: Set state and reboot for network boot preparation
@@ -297,9 +321,6 @@ ipxe_boot_installer () {
     ipxe_reboot "TCH configured for network boot - rebooting to apply"
     exit
   fi
-
-
-  load_cluster_host_type_profiles
 
   local CPU="$(get_host_type_param ${host_type} CPU)"
   local MFR="$(get_host_type_param ${host_type} MFR)"
@@ -313,20 +334,14 @@ ipxe_boot_installer () {
     ipxe_reboot "Host already installed, aborting installation"
   fi
 
-  host_config "$mac" set TYPE "$host_type"
-  if [[ -n "$profile" ]]
-   then
-    host_config "$mac" set PROFILE "$profile"
-  fi
-
   DIST_PATH="$HPS_DISTROS_DIR/${CPU}-${MFR}-${OSNAME}-${OSVER}"
   DIST_URL="distros/${CPU}-${MFR}-${OSNAME}-${OSVER}"
 
-  mount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
 
   case "${OSNAME}" in
     rockylinux)
 
+    mount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
     KERNEL_FILE=images/pxeboot/vmlinuz
     INITRD_FILE=images/pxeboot/initrd.img
 
