@@ -2,7 +2,90 @@
 
 
 
-## NODE Functions
+## NODE Functions for any O/S
+
+#===============================================================================
+# n_node_information
+# ------------------
+# Display concise node information that fits on a standard 80x24 terminal.
+#
+# Usage:
+#   n_node_information
+#
+# Behaviour:
+#   - Loads host configuration variables
+#   - Shows essential node information
+#   - Checks console login status
+#   - Fits output to standard terminal size
+#
+# Returns:
+#   0 on success
+#   1 on failure to load configuration
+#===============================================================================
+n_node_information() {
+    # Load host configuration
+    if ! n_load_remote_host_config 2>/dev/null; then
+        echo "Error: Unable to load host configuration"
+        return 1
+    fi
+    
+    # Get essential info
+    local provisioning_node=$(n_get_provisioning_node 2>/dev/null || echo "unknown")
+    local dns_domain=$(n_remote_cluster_variable DNS_DOMAIN 2>/dev/null | tr -d '"' || echo "unknown")
+    local mac_address=$(ip link show 2>/dev/null | awk '/ether/ {print $2; exit}' || echo "unknown")
+    local uptime_display="unknown"
+    if [[ -f /proc/uptime ]]; then
+        local uptime_seconds=$(cut -d. -f1 /proc/uptime)
+        uptime_display=$(printf '%dd %dh %dm' $((uptime_seconds/86400)) $((uptime_seconds%86400/3600)) $((uptime_seconds%3600/60)))
+    fi
+    
+    # Check console status
+    local console_status="enabled"
+    if [[ -f /sbin/nologin-console ]] && grep -q "nologin-console" /etc/inittab 2>/dev/null; then
+        console_status="disabled"
+    fi
+    
+    # Count active services
+    local active_count=0
+    for svc in networking sshd rsyslog dbus libvirtd; do
+        if rc-service ${svc} status >/dev/null 2>&1; then
+            ((active_count++))
+        fi
+    done
+    
+    # Clear screen only if running interactively and not in boot
+    if [[ -t 1 ]] && [[ "$(cat /proc/uptime | cut -d. -f1)" -gt 60 ]]; then
+        clear
+    fi
+    
+    # Display compact info (24 lines total)
+    echo "================================================================================"
+    echo "                               HPS NODE: ${HOSTNAME:-unknown}"
+    echo "================================================================================"
+    echo "Type:         ${TYPE:-unknown} / ${HOST_PROFILE:-unknown}          State: ${STATE:-unknown}"
+    echo "IP:           ${IP:-unknown}/${NETMASK:-unknown}"
+    echo "Gateway:      ${provisioning_node}              MAC: ${mac_address}"
+    echo "Domain:       ${dns_domain}"
+    echo "--------------------------------------------------------------------------------"
+    echo "Uptime:       ${uptime_display}              Services: ${active_count}/5 active"
+    echo "Virt:         ${virtualization_status:-none} (${virtualization_type:-n/a})"
+    echo "Console:      ${console_status}"
+    echo "Updated:      ${UPDATED:-unknown}"
+    echo "================================================================================"
+    
+    # Add appropriate footer based on console status
+    if [[ "${console_status}" == "disabled" ]]; then
+        echo ""
+        echo "Console access disabled. Connect via SSH to ${IP:-this node}"
+        echo ""
+    fi
+    
+    return 0
+}
+
+
+
+
 
 
 
@@ -40,17 +123,15 @@ n_queue_add() {
     
     if [[ -z "${func_call}" ]]; then
         echo "Error: No function specified" >&2
-        n_remote_log "Error: No function specified"
         return 1
     fi
     
     # Append to queue file
     echo "${func_call}" >> "${N_QUEUE_FILE}" || {
         echo "Error: Failed to add to queue" >&2
-        n_remote_log "Error: Failed to add to queue"
         return 1
     }
-    n_remote_log "${func_call}"
+    
     echo "Queued: ${func_call}"
     return 0
 }
@@ -97,9 +178,15 @@ n_queue_run() {
         return 0
     fi
     
+    # Test console output at start
+    echo " * Starting queue execution..." > /dev/console
+    
     n_remote_log "Starting execution of ${total} queued functions"
     echo "Executing ${total} queued functions..."
     echo "========================================"
+    
+    # Debug: confirm we can write to console here
+    echo " * Queue has ${total} functions" > /dev/console
     
     # Read and execute each line
     while IFS= read -r func_call; do
@@ -202,40 +289,3 @@ n_queue_list() {
     
     return 0
 }
-
-refresh_node_functions() {
-  local provisioning_node
-  local functions_url
-  
-  # Get the provisioning node IP
-  provisioning_node=$(n_get_provisioning_node)
-  
-  if [ -z "$provisioning_node" ]; then
-    echo "ERROR: Could not determine provisioning node" >&2
-    return 1
-  fi
-  
-  # Construct the URL
-  functions_url="http://${provisioning_node}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=x86_64-linux-rocky-10.0"
-  
-  # Ensure directory exists
-  mkdir -p /srv/hps/lib
-  
-  # Download the functions
-  if curl -fsSL "$functions_url" > /srv/hps/lib/node_functions.sh; then
-    echo "Successfully refreshed node functions from ${provisioning_node}"
-    
-    # Reload functions in current shell if being sourced
-    if [ -n "$BASH_VERSION" ]; then
-      . /srv/hps/lib/node_functions.sh
-    fi
-    
-    return 0
-  else
-    echo "ERROR: Failed to download functions from ${provisioning_node}" >&2
-    return 1
-  fi
-}
-
-
-

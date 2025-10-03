@@ -1,5 +1,11 @@
 # This file is run first
+
 mkdir -p /lib/modules
+
+# Debug console output
+exec 2>&1  # Redirect stderr to stdout
+echo "Console test at $(date)" > /dev/console
+echo "Console test at $(date)" > /dev/tty1
 
 
 ## TODO@ This should be more sensible - we can ask IPS for this
@@ -7,6 +13,77 @@ n_get_provisioning_node() {
   # Returns the default gateway IP (provisioning node)
   ip route | awk '/^default/ { print $3; exit }'
 }
+
+
+
+#===============================================================================
+# n_enable_console_output
+# -----------------------
+# Enable console output for boot messages.
+#
+# Usage:
+#   n_enable_console_output
+#
+# Behaviour:
+#   - Ensures console output is not suppressed
+#   - Enables verbose boot messages
+#
+# Returns:
+#   0 on success
+#===============================================================================
+n_enable_console_output() {
+    # Enable console output
+    if [[ -f /proc/sys/kernel/printk ]]; then
+        echo "7 4 1 7" > /proc/sys/kernel/printk
+        n_remote_log "Enabled verbose console output"
+    fi
+    
+    # Ensure rc messages go to console
+    export RC_QUIET=no
+    export RC_VERBOSE=yes
+    
+    # For Alpine OpenRC - show service messages on console
+    if [[ -f /etc/rc.conf ]]; then
+        sed -i 's/^rc_quiet=.*/rc_quiet="NO"/' /etc/rc.conf 2>/dev/null || \
+        echo 'rc_quiet="NO"' >> /etc/rc.conf
+        
+        sed -i 's/^rc_verbose=.*/rc_verbose="YES"/' /etc/rc.conf 2>/dev/null || \
+        echo 'rc_verbose="YES"' >> /etc/rc.conf
+    fi
+    
+    n_remote_log "Configured console for boot message output"
+    return 0
+}
+
+#===============================================================================
+# n_console_message
+# -----------------
+# Print a message directly to the console.
+#
+# Usage:
+#   n_console_message "message"
+#
+# Returns:
+#   0 on success
+#===============================================================================
+n_console_message() {
+    local message="${1:-System message}"
+    
+    # Print to console if available
+    if [[ -w /dev/console ]]; then
+        echo "[HPS] ${message}" > /dev/console
+    fi
+    
+    # Also print to tty1 if available
+    if [[ -w /dev/tty1 ]]; then
+        echo "[HPS] ${message}" > /dev/tty1
+    fi
+    
+    return 0
+}
+
+
+
 
 
 #===============================================================================
@@ -261,4 +338,7 @@ n_remote_cluster_variable() {
 }
 
 n_remote_log "Starting to load node functions"
+
+n_enable_console_output    # Add this first
+
 

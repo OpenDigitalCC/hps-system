@@ -100,76 +100,6 @@ n_install_kvm() {
 
 
 
-#===============================================================================
-# n_diagnose_libvirtd
-# -------------------
-# Diagnose why libvirtd won't start.
-#
-# Usage:
-#   n_diagnose_libvirtd
-#
-# Returns:
-#   0 always (diagnostic function)
-#===============================================================================
-n_diagnose_libvirtd() {
-    echo "=== libvirtd Diagnostic ==="
-    n_remote_log "Running libvirtd diagnostic"
-    
-    # Check libvirtd dependencies
-    echo -e "\nLibvirtd dependencies:"
-    local deps=$(rc-service libvirtd describe 2>&1 | grep -A10 "depend")
-    echo "${deps}"
-    n_remote_log "libvirtd dependencies: ${deps}"
-    
-    # Check service status of dependencies
-    echo -e "\nService status:"
-    rc-status --all | grep -E "(networking|dbus|virtlogd)"
-    
-    # Check if dbus is installed/running (common dependency)
-    echo -e "\nChecking dbus:"
-    if command -v dbus-daemon >/dev/null 2>&1; then
-        echo "dbus is installed"
-        rc-service dbus status 2>&1
-    else
-        echo "dbus is NOT installed"
-    fi
-    
-    # Check for virtlogd (libvirt logging daemon)
-    echo -e "\nChecking virtlogd:"
-    if command -v virtlogd >/dev/null 2>&1; then
-        echo "virtlogd is installed"
-        rc-service virtlogd status 2>&1
-    else
-        echo "virtlogd is NOT installed"
-    fi
-    
-    # Try to start libvirtd with verbose output
-    echo -e "\nAttempting to start libvirtd with verbose output:"
-    rc-service -v libvirtd start 2>&1
-    
-    # Check libvirtd logs
-    echo -e "\nChecking /var/log/libvirt/libvirtd.log:"
-    if [[ -f /var/log/libvirt/libvirtd.log ]]; then
-        tail -20 /var/log/libvirt/libvirtd.log
-    else
-        echo "Log file does not exist"
-    fi
-    
-    # Check if libvirtd can run directly
-    echo -e "\nTrying to run libvirtd directly:"
-    timeout 5 /usr/sbin/libvirtd --version 2>&1
-    
-    # Check for missing kernel modules
-    echo -e "\nChecking for KVM kernel modules:"
-    lsmod | grep -E "(kvm|vhost)" || echo "No KVM modules loaded"
-    
-    # Check if /dev/kvm exists
-    echo -e "\nChecking /dev/kvm:"
-    ls -la /dev/kvm 2>&1 || echo "/dev/kvm does not exist"
-    
-    n_remote_log "libvirtd diagnostic complete"
-    return 0
-}
 
 #===============================================================================
 # n_force_start_services
@@ -254,7 +184,6 @@ n_force_start_services() {
 
 n_queue_add n_install_kvm
 
-n_queue_add n_diagnose_libvirtd
 
 n_queue_add n_force_start_services
 

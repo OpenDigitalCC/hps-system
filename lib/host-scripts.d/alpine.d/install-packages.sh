@@ -151,4 +151,6 @@ n_install_apk_packages_from_ips() {
 }
 
 
+n_queue_add n_install_apk_packages_from_ips opensvc-server opensvc-client
+
 

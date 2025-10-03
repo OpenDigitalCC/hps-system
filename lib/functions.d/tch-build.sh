@@ -3,6 +3,10 @@
 
 __guard_source || return
 
+
+# Note: changes to the build requires tch_apkovol_create to run, to recreate the apkvol
+
+
 #===============================================================================
 # tch_apkovol_create
 # ------------------
@@ -203,15 +207,13 @@ fi
 
 # Source HPS functions and configure TCH
 echo "[HPS] Sourcing HPS functions from IPS..."
-if ! /bin/bash -c 'eval "$(curl -fsSL http://GATEWAY_IP/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)" && tch_configure_alpine'; then
+if ! /bin/bash -c 'eval "$(curl -fsSL http://GATEWAY_IP/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)"'; then
     echo "[HPS] ERROR: TCH configuration failed"
     exit 1
 fi
 
 echo "[HPS] TCH Bootstrap complete"
 
-# Don't remove the script - it needs to run every boot
-# rm -f /etc/local.d/hps-bootstrap.start
 EOF
   then
     hps_log error "Failed to write bootstrap script"
@@ -294,12 +296,10 @@ http://${gateway_ip}/distros/alpine-3.20.2/apks/main
 REPOS
 apk update
 apk add --no-cache bash curl
-/bin/sh -c 'eval "\$(curl -fsSL http://${gateway_ip}/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)" && tch_configure_alpine'
-rm -f /etc/local.d/hps-bootstrap.start
+/bin/sh -c 'eval "\$(curl -fsSL http://${gateway_ip}/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)"'
+#rm -f /etc/local.d/hps-bootstrap.start
 EOF
 }
-
-
 
 
 
