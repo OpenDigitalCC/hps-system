@@ -243,6 +243,8 @@ if [[ "$cmd" == "node_bootstrap_functions" ]]; then
   hps_log info "Node requests to bootstrap node functions"
   cgi_header_plain
   bootstrap_initialise_functions "$mac"
+  hps_log info "Running queue on node"
+  echo "n_queue_run"
   exit
 fi
 

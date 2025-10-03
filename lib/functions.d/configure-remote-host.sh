@@ -225,7 +225,6 @@ EOF
 
 # Start the bootstrapping
   echo "n_bootstrap_get_functions"
-
 }
 
 
