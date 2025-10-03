@@ -1,14 +1,18 @@
-# MENDr Platform  
+# HPS Platform  
 
-**MENDr: because recovery is part of the lifecycle, not an afterthought.**  
+**HPS: because recovery is part of the lifecycle, not an afterthought.**  
 
 
 ## 🌍 Mission  
 
-MENDr is an open-source platform for managing infrastructure across its full lifecycle: **build, run, grow, and disaster recovery**.  
+HPS is an open-source platform for managing infrastructure across its full lifecycle: **build, run, grow, and disaster recovery**.  
 
 It treats recovery as a first-class concern, ensuring that repair and restoration are built into the same workflows that create and scale systems.  
-By making resilience part of everyday operations, MENDr helps communities run infrastructure that can adapt, heal, and keep going.  
+By making resilience part of everyday operations, HPS helps communities run infrastructure that can adapt, heal, and keep going.  
+
+Often clusters have many points of storage, lots of hosts accepting ssh, firewalls, etc which means there are lots of places to back up, lots of types of backup, many places to control access and this creates complexity. By keeping functional focus, the job of maintaining and upgrading is simpler. Storage is focused on one or tweo places, deployment of new nodes is one click, and upgrades can be rolled back.
+
+HPS can be nested, so a simple HPS infrastructure can be used to manage many HPS platforms. 
 
 > “Magrathea was the planet whose business it was to build other planets.”  
 > — Douglas Adams, *The Hitchhiker’s Guide to the Galaxy*  
@@ -21,7 +25,7 @@ This is an **ALPHA release**.
 - Implementation details are still evolving.  
 - Expect frequent changes until the first stable release.  
 
-> The original working title was HPS (Host Provisioning System) -  it is now known as the MENDr platform.
+> The working title is HPS (Host Provisioning System)
 
 
 ## 🤝 Contributing
@@ -37,7 +41,7 @@ Contributions are welcome!
 
 ## 🏗️ Platform Structure  
 
-MENDr is designed to be mounted inside a Debian-based container at:  
+HPS is designed to be mounted inside a Debian-based container at:  
 
 ```bash
 /srv/hps-container
