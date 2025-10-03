@@ -230,6 +230,9 @@ Outline:
 
 ## New functions
 
+- Verify storage can host more than one cluster
+  - will it need separate networks?
+
 ### IPS Replicate
 
 - Replicate to each storage node
