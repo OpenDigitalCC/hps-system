@@ -239,7 +239,7 @@ fi
 
 
 # Command: get the distro bootstrap script - renaming it to node_load_functions and supporting both for now
-if [[ "$cmd" == "bootstrap_initialise_distro" || "$cmd" == "node_bootstrap_functions" ]]; then
+if [[ "$cmd" == "node_bootstrap_functions" ]]; then
   hps_log info "Node requests to bootstrap node functions"
   cgi_header_plain
   bootstrap_initialise_functions "$mac"

@@ -1,9 +1,6 @@
 __guard_source || return
 
 
-
-#!/bin/bash
-
 #===============================================================================
 # node_get_functions
 # ------------------
@@ -15,6 +12,7 @@ __guard_source || return
 #   $2 - base   : Base directory (optional, defaults to ${LIB_DIR}/host-scripts.d)
 #
 # Search Order:
+#   pre-load.sh (if exists in base directory)
 #   common.d/*.sh
 #   common.d/${PROFILE}/*.sh
 #   <cpu>.d/*.sh        then <cpu>.sh
@@ -25,12 +23,15 @@ __guard_source || return
 #   <osname>.d/${PROFILE}/*.sh
 #   <osname>-<osver>.d/*.sh then <osname>-<osver>.sh
 #   <osname>-<osver>.d/${PROFILE}/*.sh
+#   post-load.sh (if exists in base directory)
 #
 # Behaviour:
 #   - Gets current profile via 'host-config get PROFILE'
 #   - Parses distro string into components
+#   - Loads pre-load.sh first if it exists
 #   - Searches for function files in priority order
 #   - Profile-specific functions are loaded after base functions
+#   - Loads post-load.sh last if it exists (for function execution)
 #   - Logs warnings when profile directories don't exist
 #   - Logs which files are found and included
 #   - Concatenates all matching files to stdout
@@ -76,6 +77,21 @@ node_get_functions() {
   [[ -n "$profile" ]] && echo "# Profile: $profile"
   echo
   
+  local file_count=0
+  
+  # Load pre-load.sh first if it exists
+  local pre_load="${base}/pre-load.sh"
+  if [[ -f "$pre_load" ]]; then
+    hps_log info "Including pre-load file: $pre_load"
+    echo "# === pre-load.sh included ==="
+    cat "$pre_load"
+    echo
+    file_count=$((file_count + 1))
+  else
+    hps_log debug "No pre-load.sh found in $base"
+  fi
+  
+  # Build patterns for regular function files
   local patterns=(
     "$base/common.d/"*.sh
     "$base/${cpu}.d/"*.sh     "$base/${cpu}.sh"
@@ -95,7 +111,6 @@ node_get_functions() {
     )
   fi
   
-  local file_count=0
   local p files f
   
   for p in "${patterns[@]}"; do
@@ -106,7 +121,6 @@ node_get_functions() {
       if [[ -n "$profile" && "$p" == *"/${profile}/"* ]]; then
         hps_log warn "Profile directory not found: ${p%/*}"
       fi
-      echo "# === $(basename "${p%/*}")/$(basename "${p##*/}") not found ==="
       continue
     fi
     
@@ -116,7 +130,6 @@ node_get_functions() {
       hps_log info "Including function file: $f"
       file_count=$((file_count + 1))
       
-      echo "# === $(basename "$f") included ==="
       # If it's a profile file, indicate that in the comment
       if [[ "$f" == *"/${profile}/"* ]]; then
         echo "# === Profile: $profile - $(basename "$(dirname "$f")")/$(basename "$f") included ==="
@@ -128,6 +141,18 @@ node_get_functions() {
     done
   done
   
+  # Load post-load.sh last if it exists (for executing collected functions)
+  local post_load="${base}/post-load.sh"
+  if [[ -f "$post_load" ]]; then
+    hps_log info "Including post-load file: $post_load"
+    echo "# === post-load.sh included (execution script) ==="
+    cat "$post_load"
+    echo
+    file_count=$((file_count + 1))
+  else
+    hps_log debug "No post-load.sh found in $base"
+  fi
+  
   # Restore nullglob to previous state
   ((had_nullglob==1)) || shopt -u nullglob
   
@@ -136,8 +161,8 @@ node_get_functions() {
 
 
 
-
 # function to create a local script, that will detect what O/S we are, and then collect the functions
+# from node_get_functions
 bootstrap_initialise_functions() {
 
 # The following is sent literally
@@ -171,7 +196,7 @@ bootstrap_get_provisioning_node() {
   ip route | awk '/^default/ { print $3; exit }'
 }
 
-bootstrap_get_functions () {
+n_bootstrap_get_functions () {
   local gateway
   gateway="$(bootstrap_get_provisioning_node)"
 
@@ -192,11 +217,14 @@ bootstrap_get_functions () {
 }
 EOF
 
+
+# Relay IPS functions to node if required
+# most won't work, as they have very differnet resources available, and also for secirty reasons.
 # Include functions here from the internal lib as required, to expand and send
-  declare -f urlencode
+  declare -f urlencode 
 
 # Start the bootstrapping
-  echo "bootstrap_get_functions"
+  echo "n_bootstrap_get_functions"
 
 }
 
