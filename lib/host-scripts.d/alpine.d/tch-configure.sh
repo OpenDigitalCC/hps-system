@@ -10,10 +10,8 @@
 # Returns:
 #   0 on success
 #===============================================================================
-tch_configure_alpine() {
-  echo "[HPS] tch_configure_alpine: Starting TCH configuration" >> /tmp/log.txt
-  echo "[HPS] tch_configure_alpine: Placeholder - configuration complete" >> /tmp/log.txt
-  return 0
+
+
+tch_configure_alpine () {
+  true
 }
-
-
