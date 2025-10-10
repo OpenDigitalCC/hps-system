@@ -26,7 +26,7 @@ fi
 
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
-  hps_log info "iPXE Initialisation requested from DHCP"
+  hps_log info "[$mac] iPXE Initialisation requested from DHCP"
   
   # Check if this is a network boot host
   # Use 'get' with a default value or handle the case where key doesn't exist
