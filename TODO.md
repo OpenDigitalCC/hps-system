@@ -3,6 +3,22 @@
 
 List of requirements and ideas not yet implemented
 
+
+- Make-docs 
+  - skip functions that no longer exist
+  - create section docs as compiled sections, sp only merge existing in to sectiondoc, plus header
+- Replace nginx with sozu
+- create hps_config get/set/unset function
+  - replace all HPS_variables with this
+- Set resources with hps_config vars
+- Tag host config with o/s and version variables
+- Update ipxe menu to choose software for host
+- Add host-conf UI
+  - list uncnfigured hosts, configure them from cli
+- create cluster config for configure_at - terminal, cli
+  - if not terminal, dont presnt menu, just search for active config, update status to searching
+  - if status is reboot, then reboot
+
 ## Provision iSCSI on SCH for thin servers
 
 
@@ -115,7 +131,7 @@ For example: iqn.2025-09.test-1:sch-001.vda
 ### Function naming
 
 - HPS functions: available to the HPS operations
-- Node functions: available on the nodes
+- Node functions: available on the nodes prefixed by n_
 
 Node functions can use the http api to access the HPS, and call HPS functions. 
 HPS functions have full access to all parts of HPS
@@ -132,20 +148,29 @@ boot manager should be renamed to hps-api as it now provides a wide range of fun
 ### Function: cgi_auto_fail
 
 - if browser, send html (currently text)
-- if cli, send json (currnelty text)
+- if cli, send json (currently text)
 - if ipxe, send pxe (done)
 - if unknown, send text (done)
 
-
-
 ## Feature development
 
+
+### Cluster policy
+
+- Set policy for cliuster, so monitoring knows what to expect
+- multi-disk?
+- multi node?
+- etc
 
 ### Generic file reader / writer
 
 - use lock files
 - check r/w capability
 - standardise warnings through hps_log
+- check file for integrity before and after
+  - this verifies the structure and variables
+- ensure all values are clean ie no quotes etc
+- All names uppercase
 
 ### host config
 
@@ -154,6 +179,10 @@ add host_config unset
 ### clustter  config
 
 add cluster_config unset
+
+### hps_config
+
+create
 
 ### Storage nodes - O/S Installation (A/B method)
 
@@ -219,14 +248,9 @@ Outline:
   - If not → reboot back into old partition (rollback).
 
 
-
 ### ZFS
 
 - add the multi disk 
-- add cli to chose storage config
-
-
-
 
 ## New functions
 
@@ -271,6 +295,7 @@ Firewall - part of the cluster? Containerised? On IPS?
 ### Network visualisation
 
 - Visualise the network config via web page and pdf print
+- include current state of each node in visualisation
 
 ### Monitoring
 
@@ -303,11 +328,9 @@ Firewall - part of the cluster? Containerised? On IPS?
 - for thin compute nodes
 - Implement function, available in ipxe and cli
 
-
-
 ## Security
 
-- only send my config to my MAC address, decline to anyone else
+- only send my config to my MAC address, decline to anyone else - Done
 - only send my cluster ifo to members of my cluster
 - reject all queries from unknown MAC, with one exception
   - only allow initial config options to systems that we have dhcp booted
