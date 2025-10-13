@@ -1,7 +1,5 @@
 ## Glossary
 
-## Glossary
-
 Btrfs  
 : A modern Linux file system with support for snapshots, pooling, and checksumming. Considered for HPS storage but not selected due to lack of native block device export.
 
