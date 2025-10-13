@@ -33,9 +33,8 @@ fi
 
 # -- openai caller
 call_openai() {
-  local func="$1" name="$2" file="$3"
+  local func="$1" name="$2" file="$3" out_file="$4"
   local function_hash
-  local out_file="$DST_DIR/${name}.md"
   function_hash=$(printf "%s" "$func" | sed 's/[[:space:]]\+$//' | sha256sum | awk '{print $1}')
 
 
@@ -160,7 +159,16 @@ extract_functions() {
   ' "$file"
 }
 
+write_index () {
+  local func_name=$1 func_file=$2
+  mkdir -p "$DST_DIR"
+  echo "$func_name $func_file" >> "$index_file"
+}
+
 # -- run over files
+index_file="$DST_DIR/function-index-$(date +%Y%m%d%H%M).txt"
+rm -f "$index_file"
+echo "Writing to index file $index_file"
 find "$SRC_DIR" -type f -name "*.sh" | while read -r file; do
   extract_functions "$file"
 done | {
@@ -170,8 +178,12 @@ done | {
       "###FUNCSTART###") state=1; file=""; name=""; body=""; continue ;;
       "###FUNCEND###")
         if [[ -z "$TARGET_FUNC" || "$name" == "$TARGET_FUNC" ]]; then
-          echo "Found function $name"
-          call_openai "$body" "$name" "$file"
+          out_file="$DST_DIR/${name}.md.src"
+          echo ""
+          echo "Found function $name to be written to $out_file"
+          cp "$out_file" "$DST_DIR/${name}.md"
+          write_index "$name" "$out_file" 
+          call_openai "$body" "$name" "$file" "$out_file"
         fi
         state=0; continue
         ;;
