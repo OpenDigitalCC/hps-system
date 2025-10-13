@@ -503,6 +503,36 @@ host_config_exists() {
 }
 
 
+host_post_config_hooks() {
+    local key="$1"
+    local value="$2"
+    
+    # Define hook mappings
+    declare -A hooks=(
+        ["IP"]="update_dns_dhcp_files"
+        ["HOSTNAME"]="update_dns_dhcp_files"
+    )
+    
+    # Check if we have a hook for this key
+    if [[ -n "${hooks[$key]}" ]]; then
+        local hook_function="${hooks[$key]}"
+        
+        # Log that we're calling the hook
+        hps_log info "host_post_config_hooks: Calling $hook_function for $key change"
+        
+        # Call the hook function with output suppression
+        if ! $hook_function >/dev/null 2>&1; then
+            hps_log warn "host_post_config_hooks: Hook $hook_function failed for $key=$value"
+        fi
+    fi
+    
+    # Always return success
+    return 0
+}
+
+
+
+# Required for host_config
 
 declare -gA HOST_CONFIG
 declare -g __HOST_CONFIG_PARSED=0
@@ -582,11 +612,12 @@ host_config() {
       
       HOST_CONFIG["$key"]="$value"
       hps_log info "[$mac] host_config update: $key = $value"
-      
+            
       local timestamp
       timestamp="$(make_timestamp)"
       HOST_CONFIG["UPDATED"]="$timestamp"
       hps_log info "[$mac] host_config UPDATED = $timestamp"
+
       
       # Ensure config directory exists
       local config_dir
@@ -598,6 +629,7 @@ host_config() {
         fi
       fi
       
+
       # Write configuration file
       {
         echo "# Auto-generated host config"
@@ -613,6 +645,9 @@ host_config() {
         return 3
       }
       
+      # Call any post-config changes required
+      host_post_config_hooks "$key" "$value"
+
       return 0
       ;;
     *)
