@@ -19,3 +19,12 @@ while true; do
         echo "Enter a number between 1 and 5."
     fi
 done
+
+
+
+# Set MTU
+# If swithces manage jumbo frames (MTU 9000) then set here, so interfaces are configured with jumbo
+# for 10% storage improvement, lower latency, less processing
+# otherwise all MTU is 1500
+
+
