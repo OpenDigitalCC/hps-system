@@ -1,0 +1,34 @@
+### `_osvc_kv_set`
+
+Contained in `lib/functions.d/opensvc-functions.sh`
+
+Function signature: e83bb88e314eb7098eb2ed8868cdecf150f3a7c4cec631f0ac14eadabbeaa0d3
+
+### Function Overview
+The function `_osvc_kv_set` is a key value setting function used to configure an object in some environment. It accepts two arguments; the first one is the key, and the second one is its corresponding value. 
+
+### Technical Description
+```bash
+_osvc_kv_set() {
+  local k="${1:?key}" v="${2:?value}"
+  om config set --kw "${k}=${v}"
+}
+```
+   
+- **Name**: `_osvc_kv_set`
+- **Description**: Sets configuration values in the application environment.
+- **Globals**: None
+- **Arguments**: 
+    - `$1`: This is the key which needs to be set in the configuration.
+    - `$2`: This is the corresponding value with which the key needs to be set.
+- **Outputs**: No explicit output. Changes are directly made to the configuration file in the environment.
+- **Returns**: Return status of the om config set command.
+- **Example usage**: `_osvc_kv_set hostname server01.domain.com`
+
+### Quality and Security Recommendations
+
+1. In order to ensure quality, provide appropriate default values or error messages for empty keys or values.
+2. It is critical to verify the successful execution of this function in the program, as its return status is the return status of the `om config set` statement.
+3. Always validate key-value pairs before appending to a configuration file, to avoid a potential security risk.
+4. Be mindful of potential disk space problems. If the key-value pairs are extremely large, or if they are just very numerous, you could end up filling your disk space.
+
