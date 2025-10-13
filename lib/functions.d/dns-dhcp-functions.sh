@@ -94,21 +94,24 @@ build_dhcp_addresses_file() {
       hps_log "WARN" "Skipping host $mac: could not format MAC address"
       continue
     fi
-    
+
+
     # Check for duplicate MAC address
-    if [[ -n "${seen_macs[$mac_formatted]}" ]]; then
-      hps_log "WARN" "Skipping host $mac: duplicate MAC address $mac_formatted (already assigned to ${seen_macs[$mac_formatted]})"
+    if [[ ${seen_macs[$mac_formatted]+isset} ]]; then
+      hps_log "WARN" "Skipping host: duplicate MAC address $mac_formatted (already assigned to ${seen_macs[$mac_formatted]})"
       continue
     fi
-    
+
     # Check for duplicate IP address - this is a fatal error
-    if [[ -n "${seen_ips[$ip]}" ]]; then
+    if [[ ${seen_ips[$ip]+isset} ]]; then
       local previous_mac="${seen_ips[$ip]}"
       hps_log "ERROR" "Duplicate IP address detected: $ip is assigned to both MAC $mac ($hostname) and MAC $previous_mac"
       hps_log "ERROR" "Cannot build DHCP addresses file with duplicate IP addresses"
       rm -f "$DHCP_ADDRESSES_TMP"
       return 1
     fi
+
+
     
     # Write entry to temp file
     echo "${mac_formatted},${ip},${hostname}" >> "$DHCP_ADDRESSES_TMP"
