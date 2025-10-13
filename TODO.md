@@ -128,6 +128,11 @@ For example: iqn.2025-09.test-1:sch-001.vda
 
 ## Refactoring of scripts and libraries
 
+## Registering new host
+
+If current MAC exists, reuse the hostname instead of issuing a new one at 'install new TCH'
+
+
 ### Function naming
 
 - HPS functions: available to the HPS operations
