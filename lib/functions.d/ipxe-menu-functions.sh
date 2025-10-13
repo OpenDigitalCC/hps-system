@@ -225,8 +225,6 @@ item --gap Install Storage Cluster Host
 item install_SCH  > No profile (Default)
 item --gap Install Disaster Recovery Host
 item install_DRH  > No profile (Default)
-item --gap Install Container Cluster Host
-item install_CCH  > No profile (Default)
 
 choose selection && goto HANDLE_MENU
 
