@@ -10,7 +10,7 @@ MODE="gendoc"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --src) SRC_DIR="$2"; shift 2 ;;
-    --dst) DST_DIR="$2"; shift 2 ;;
+    --dst) DST_DIR="${2%/}"; shift 2 ;;
     --function) TARGET_FUNC="$2"; shift 2 ;;
     gendoc) MODE="gendoc"; shift ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
@@ -177,13 +177,14 @@ done | {
     case "$line" in
       "###FUNCSTART###") state=1; file=""; name=""; body=""; continue ;;
       "###FUNCEND###")
+        name=$(echo "$name" | xargs) # strip spaces
         if [[ -z "$TARGET_FUNC" || "$name" == "$TARGET_FUNC" ]]; then
-          out_file="$DST_DIR/${name}.md.src"
+          out_file="$DST_DIR/${name}.md"
           echo ""
           echo "Found function $name to be written to $out_file"
-          cp "$out_file" "$DST_DIR/${name}.md"
-          write_index "$name" "$out_file" 
-          call_openai "$body" "$name" "$file" "$out_file"
+#          write_index "$name" "$out_file" 
+          call_openai "$body" "$name" "$file" "$out_file.src"
+          cp -f "$out_file.src" "$DST_DIR/${name}.md"
         fi
         state=0; continue
         ;;
