@@ -63,6 +63,16 @@ if [[ "$cmd" == "get_tch_apkovol" ]]; then
 fi
 
 
+
+# Command: Handle a keysafe token request
+if [[ "$cmd" == "keysafe_request_token" ]]; then
+    purpose=$(cgi_param get purpose)
+    token=$(keysafe_handle_token_request "$mac" "$purpose")
+    cgi_header_plain
+    echo "$token"
+    exit 0  # <- ADD THIS
+fi
+
 # Command: Get alpine bootstrap 
 if [[ "$cmd" == "get_alpine_bootstrap" ]]; then
   cgi_header_plain
