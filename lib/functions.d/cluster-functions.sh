@@ -1,6 +1,7 @@
 __guard_source || return
 
 
+
 #===============================================================================
 # get_active_cluster_name
 # -----------------------
@@ -600,40 +601,96 @@ write_cluster_config() {
 
 
 
+#===============================================================================
+# cluster_config
+# --------------
+# Get/set/check cluster configuration values
+#
+# Parameters:
+#   $1 - Operation (get/set/exists)
+#   $2 - Configuration key
+#   $3 - Value (for set operation)
+#   $4 - Cluster name (optional, defaults to active cluster)
+#
+# Behaviour:
+#   - set: Quotes values when writing if they contain spaces/special chars
+#   - get: Returns values without quotes
+#   - Handles both quoted and unquoted values when reading
+#
+# Returns:
+#   0 on success
+#   1 on error
+#   2 on invalid operation
+#===============================================================================
 cluster_config() {
   local op="$1"
   local key="$2"
   local value="${3:-}"
-
+  local cluster="${4:-}"
   local cluster_file
-  cluster_file=$(get_active_cluster_filename) || {
-    echo "[x] No active cluster config found." >&2
-    return 1
-  }
-
+  
+  # If cluster name provided, use that cluster's config
+  if [[ -n "$cluster" ]]; then
+    cluster_file="${HPS_CONFIG_DIR}/clusters/${cluster}/cluster.conf"
+    if [[ ! -f "$cluster_file" ]]; then
+      # Create if doesn't exist for set operations
+      if [[ "$op" == "set" ]]; then
+        mkdir -p "$(dirname "$cluster_file")"
+        touch "$cluster_file"
+      else
+        return 1
+      fi
+    fi
+  else
+    # Use active cluster
+    cluster_file=$(get_active_cluster_filename) || {
+      echo "[x] No active cluster config found." >&2
+      return 1
+    }
+  fi
+  
   case "$op" in
     get)
-      grep -E "^${key}=" "$cluster_file" | cut -d= -f2-
-      ;;
-
-    set)
-      if grep -qE "^${key}=" "$cluster_file"; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$cluster_file"
+      local raw_value=$(grep -E "^${key}=" "$cluster_file" 2>/dev/null | cut -d= -f2-)
+      # Strip surrounding quotes if present (handles both single and double quotes)
+      if [[ "$raw_value" =~ ^\"(.*)\"$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+      elif [[ "$raw_value" =~ ^\'(.*)\'$ ]]; then
+        echo "${BASH_REMATCH[1]}"
       else
-        echo "${key}=${value}" >> "$cluster_file"
+        echo "$raw_value"
       fi
       ;;
-
-    exists)
-      grep -qE "^${key}=" "$cluster_file"
+    set)
+      # Determine if value needs quoting
+      local quoted_value="$value"
+      
+      # Quote if contains: spaces, $, `, \, ", ', newlines, tabs
+      if [[ "$value" =~ [[:space:]\$\`\\\"\'] ]] || [[ -z "$value" ]]; then
+        # Escape any existing double quotes in the value
+        quoted_value="${value//\"/\\\"}"
+        quoted_value="\"${quoted_value}\""
+      fi
+      
+      # Update or add the key=value pair
+      if grep -qE "^${key}=" "$cluster_file" 2>/dev/null; then
+        # Use a different delimiter to avoid issues with / in values
+        sed -i "s|^${key}=.*|${key}=${quoted_value}|" "$cluster_file"
+      else
+        echo "${key}=${quoted_value}" >> "$cluster_file"
+      fi
       ;;
-
+    exists)
+      grep -qE "^${key}=" "$cluster_file" 2>/dev/null
+      ;;
     *)
       echo "[x] Unknown cluster_config operation: $op" >&2
       return 2
       ;;
   esac
 }
+
+
 
 initialise_cluster() {
   local cluster_name="$1"
@@ -642,28 +699,28 @@ initialise_cluster() {
   local cluster_file="${cluster_dir}/cluster.conf"
 
   if [[ -z "$cluster_name" ]]; then
-    echo "[x] Cluster name must be provided." >&2
+    hps_log ERROR "[x] Cluster name must be provided."
     return 1
   fi
 
   if [[ -d "$cluster_dir" ]]; then
-    echo "[!] Cluster directory already exists: $cluster_dir" >&2
+    hps_log ERROR "[!] Cluster directory already exists: $cluster_dir"
     return 2
   fi
 
   mkdir -p "${cluster_dir}/hosts"
   mkdir -p "${cluster_dir}/services"
+  mkdir -p "${cluster_dir}/keysafe"
 
-  cat > "$cluster_file" <<EOF
-# Cluster configuration
-CLUSTER_NAME=${cluster_name}
-EOF
+  touch "$cluster_file"
 
-  echo "[OK] Cluster initialised at: $cluster_dir"
-  echo "[OK] Created config: $cluster_file"
+  hps_log info "[OK] Cluster initialised at: $cluster_dir"
+  hps_log info "[OK] Created config: $cluster_file"
+
+  cluster_config "set" "CLUSTER_NAME" "${cluster_name}"
 
   export_dynamic_paths "$cluster_name" || {
-    echo "[x] Failed to export cluster paths for $cluster_name" >&2
+    hps_log ERROR "[x] Failed to export cluster paths for $cluster_name"
     return 3
   }
 }
@@ -723,6 +780,187 @@ cluster_has_installed_sch() {
 }
 
 ## Interactive functions
+
+
+#===============================================================================
+# cli_set_active_cluster
+# ----------------------
+# Prompt to set a cluster as active and apply changes
+#
+# Parameters:
+#   $1 - Cluster name to potentially set as active
+#
+# Behaviour:
+#   - Checks if cluster is already active (skips if so)
+#   - Prompts user to set as active and apply changes
+#   - Sets active cluster, exports paths, and commits changes if confirmed
+#
+# Returns:
+#   0 on success or if already active
+#   1 on error
+#   2 if user declines
+#===============================================================================
+cli_set_active_cluster() {
+    local cluster_name="$1"
+    
+    if [[ -z "$cluster_name" ]]; then
+        hps_log "error" "No cluster name provided"
+        return 1
+    fi
+    
+    # Get current active cluster
+    local current_active=$(get_active_cluster 2>/dev/null || echo "")
+    
+    # Skip if this cluster is already active
+    if [[ "$cluster_name" == "$current_active" ]]; then
+        cli_note "Cluster '$cluster_name' is already active"
+        return 0
+    fi
+    
+    # Ask if user wants to set as active
+    if [[ $(cli_prompt_yesno "Set $cluster_name as active cluster and apply changes?" "n") == "y" ]]; then
+        cli_info "Setting $cluster_name as active cluster..."
+        
+        # Set as active
+        if set_active_cluster "$cluster_name"; then
+            export_dynamic_paths
+            
+            # Commit changes
+            if commit_changes; then
+                cli_info "Cluster $cluster_name is now active and changes are applied"
+                return 0
+            else
+                hps_log "error" "Failed to commit changes"
+                return 1
+            fi
+        else
+            hps_log "error" "Failed to set active cluster"
+            return 1
+        fi
+    else
+        # User declined
+        return 2
+    fi
+}
+
+
+#===============================================================================
+# select_network_interface
+# ------------------------
+# Present menu to select a network interface
+#
+# Parameters:
+#   $1 - Prompt text (optional, default: "Select network interface")
+#   $2 - Include "None" option (optional, "true"/"false", default: "false")
+#   $3 - None option text (optional, default: "None")
+#
+# Behaviour:
+#   - Shows numbered list of interfaces with IP/gateway info
+#   - Returns selected interface name via echo
+#   - Returns "NONE" if None option selected
+#
+# Returns:
+#   0 on valid selection
+#   1 on cancel/error
+#===============================================================================
+select_network_interface() {
+  local prompt="${1:-Select network interface}"
+  local include_none="${2:-false}"
+  local none_text="${3:-None}"
+  
+  local interfaces=()
+  local labels=()
+  local iface ip_cidr gateway
+  
+  # Build interface list
+  while IFS='|' read -r iface ip_cidr gateway; do
+    local label="$iface"
+    [[ -n "$ip_cidr" ]] && label+=" - $ip_cidr"
+    [[ -n "$gateway" ]] && label+=" (gateway: $gateway)"
+    
+    interfaces+=("$iface")
+    labels+=("$label")
+  done < <(get_network_interfaces)
+  
+  # Add None option if requested
+  [[ "$include_none" == "true" ]] && labels+=("$none_text")
+  
+  # Show selection menu - send prompt to stderr so it's not captured
+  echo "$prompt:" >&2
+  local PS3="#? "  # Set the prompt for select
+  select label in "${labels[@]}"; do
+    if [[ -z "$label" ]]; then
+      hps_log "error" "Invalid selection"
+      continue
+    fi
+    
+    # Check if None was selected
+    if [[ "$include_none" == "true" ]] && [[ "$REPLY" == "${#labels[@]}" ]]; then
+      echo "NONE"
+      return 0
+    fi
+    
+    # Return the selected interface NAME, not the label
+    local index=$((REPLY - 1))
+    if [[ $index -ge 0 ]] && [[ $index -lt ${#interfaces[@]} ]]; then
+      echo "${interfaces[$index]}"
+      return 0
+    fi
+    
+    break
+  done
+  
+  return 1
+}
+
+#===============================================================================
+# config_get_value
+# ----------------
+# Get configuration value with precedence: pending > existing > default
+#
+# Parameters:
+#   $1 - Configuration key
+#   $2 - Default value (optional)
+#   $3 - Cluster name (optional, defaults to $CLUSTER_NAME)
+#
+# Behaviour:
+#   - First checks CLUSTER_CONFIG_PENDING array
+#   - Then checks existing cluster config for specified cluster
+#   - Finally uses provided default (or empty string)
+#   - Uses $CLUSTER_NAME if no cluster specified
+#
+# Returns:
+#   Echoes the found value
+#   Exit code 0 always
+#===============================================================================
+config_get_value() {
+  local key="$1"
+  local default="${2:-}"
+  local cluster="${3:-$CLUSTER_NAME}"
+  local value=""
+  
+  # Check pending config first
+  local config_item
+  for config_item in "${CLUSTER_CONFIG_PENDING[@]:-}"; do
+    if [[ "$config_item" =~ ^${key}:(.*)$ ]]; then
+      echo "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done
+  
+  # Check existing config for the specified cluster
+  if [[ -n "$cluster" ]]; then
+    value=$(cluster_config "get" "$key" "" "$cluster" 2>/dev/null || echo "")
+    if [[ -n "$value" ]]; then
+      echo "$value"
+      return 0
+    fi
+  fi
+  
+  # Use default
+  echo "$default"
+  return 0
+}
 
 
 

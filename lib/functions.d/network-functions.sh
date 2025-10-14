@@ -1,6 +1,146 @@
 __guard_source || return
 
 
+#===============================================================================
+# get_network_interfaces
+# ----------------------
+# Get list of network interfaces with IP and gateway information
+#
+# Behaviour:
+#   - Lists all interfaces except loopback
+#   - Collects IP, CIDR, and gateway for each
+#   - Outputs tab-delimited: interface|ip_cidr|gateway
+#
+# Returns:
+#   0 on success
+#   1 if no interfaces found
+#===============================================================================
+get_network_interfaces() {
+  local found=0
+  
+  while IFS= read -r line; do
+    local iface=$(echo "$line" | awk -F': ' '{print $2}')
+    [[ "$iface" == "lo" ]] && continue
+    
+    local ip_cidr=$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | head -n1)
+    local gateway=$(ip route 2>/dev/null | awk "/^default/ && /dev $iface/ {print \$3}" | head -n1)
+    
+    # Output interface info
+    echo "${iface}|${ip_cidr}|${gateway}"
+    found=1
+  done < <(ip -o link show 2>/dev/null)
+  
+  [[ $found -eq 1 ]] && return 0 || return 1
+}
+
+#===============================================================================
+# get_interface_network_info
+# --------------------------
+# Get detailed network information for an interface
+#
+# Parameters:
+#   $1 - Interface name
+#
+# Behaviour:
+#   - Validates interface has IPv4 address
+#   - Calculates network using ipcalc
+#   - Outputs: interface|ip|cidr|ip_cidr|network_cidr
+#
+# Returns:
+#   0 on success
+#   1 on error (no IP, ipcalc missing, etc)
+#===============================================================================
+get_interface_network_info() {
+  local iface="$1"
+  
+  [[ -z "$iface" ]] && return 1
+  
+  # Get IP and CIDR
+  local ip_cidr=$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | head -n1)
+  if [[ -z "$ip_cidr" ]]; then
+    hps_log "error" "Interface $iface has no IPv4 address"
+    return 1
+  fi
+  
+  local ipaddr=$(echo "$ip_cidr" | cut -d/ -f1)
+  local cidr=$(echo "$ip_cidr" | cut -d/ -f2)
+  
+  # Check for ipcalc
+  if ! command -v ipcalc &>/dev/null; then
+    hps_log "error" "ipcalc is required but not installed"
+    return 1
+  fi
+  
+  # Calculate network
+  local network=$(ipcalc "$ip_cidr" 2>/dev/null | awk '/^Network:/ {print $2}')
+  if [[ -z "$network" ]]; then
+    hps_log "error" "Failed to calculate network for $ip_cidr"
+    return 1
+  fi
+  
+  echo "${iface}|${ipaddr}|${cidr}|${ip_cidr}|${network}"
+  return 0
+}
+
+#===============================================================================
+# network_calculate_subnet
+# ------------------------
+# Calculate subnet address based on base, index, and CIDR
+#
+# Behaviour:
+#   - Calculates subnet address for indexed networks
+#   - Supports /24 networks (increments 3rd octet)
+#   - Supports /16 networks (uses base as-is)
+#   - Returns full subnet in CIDR notation
+#
+# Parameters:
+#   $1: Base subnet (e.g., "10.31")
+#   $2: Index (0-based)
+#   $3: CIDR prefix length (16-28)
+#
+# Returns:
+#   0 on success (echoes subnet)
+#   1 on error
+#===============================================================================
+network_calculate_subnet() {
+    local base="$1"
+    local index="$2"
+    local cidr="$3"
+    
+    # Validate inputs
+    if [[ -z "$base" ]] || [[ -z "$index" ]] || [[ -z "$cidr" ]]; then
+        return 1
+    fi
+    
+    # Extract octets
+    local octet1 octet2
+    IFS='.' read -r octet1 octet2 <<< "$base"
+    
+    case "$cidr" in
+        24)
+            # /24 - increment third octet
+            echo "${octet1}.${octet2}.$((index)).0/${cidr}"
+            ;;
+        16)
+            # /16 - use base as-is for all indexes
+            echo "${base}.0.0/${cidr}"
+            ;;
+        25|26|27|28)
+            # Smaller subnets - calculate based on available IPs
+            local hosts_per_subnet=$((2**(32-cidr)))
+            local offset=$((index * hosts_per_subnet))
+            # For now, simple third octet calculation
+            echo "${octet1}.${octet2}.$((offset/256)).$((offset%256))/${cidr}"
+            ;;
+        *)
+            hps_log "error" "Unsupported CIDR: /${cidr}"
+            return 1
+            ;;
+    esac
+    
+    return 0
+}
+
 
 #:name: ip_to_int
 #:group: network
