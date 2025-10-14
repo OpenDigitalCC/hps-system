@@ -226,7 +226,7 @@ osvc_bootstrap_cluster_on_ips() {
   fi
   
   # 2. Start daemon via supervisord
-  supervisorctl -c ${CLUSTER_SERVICES_DIR}/supervisord.conf start opensvc
+  supervisorctl -c $(get_path_cluster_services_dir)/supervisord.conf start opensvc
   sleep 3
   
   if ! pgrep -f "om daemon run" >/dev/null 2>&1; then

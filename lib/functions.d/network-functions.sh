@@ -185,6 +185,63 @@ int_to_ip() {
   return 0
 }
 
+#===============================================================================
+# netmask_to_cidr
+# ----------------
+# Convert netmask notation to CIDR prefix length
+#
+# Behaviour:
+#   - Converts dotted decimal netmask to CIDR bits
+#   - Handles common netmasks from /16 to /32
+#   - Returns error for invalid netmasks
+#
+# Parameters:
+#   $1: Netmask in dotted decimal notation (e.g., 255.255.255.0)
+#
+# Returns:
+#   0 on success (echoes CIDR prefix length)
+#   1 on invalid netmask
+#
+# Example usage:
+#   cidr=$(netmask_to_cidr "255.255.255.0")
+#   echo $cidr  # outputs: 24
+#===============================================================================
+netmask_to_cidr() {
+    local netmask="$1"
+    
+    case "$netmask" in
+        255.255.255.255) echo "32" ;;
+        255.255.255.254) echo "31" ;;
+        255.255.255.252) echo "30" ;;
+        255.255.255.248) echo "29" ;;
+        255.255.255.240) echo "28" ;;
+        255.255.255.224) echo "27" ;;
+        255.255.255.192) echo "26" ;;
+        255.255.255.128) echo "25" ;;
+        255.255.255.0)   echo "24" ;;
+        255.255.254.0)   echo "23" ;;
+        255.255.252.0)   echo "22" ;;
+        255.255.248.0)   echo "21" ;;
+        255.255.240.0)   echo "20" ;;
+        255.255.224.0)   echo "19" ;;
+        255.255.192.0)   echo "18" ;;
+        255.255.128.0)   echo "17" ;;
+        255.255.0.0)     echo "16" ;;
+        255.254.0.0)     echo "15" ;;
+        255.252.0.0)     echo "14" ;;
+        255.248.0.0)     echo "13" ;;
+        255.240.0.0)     echo "12" ;;
+        255.224.0.0)     echo "11" ;;
+        255.192.0.0)     echo "10" ;;
+        255.128.0.0)     echo "9" ;;
+        255.0.0.0)       echo "8" ;;
+        *)
+            return 1
+            ;;
+    esac
+    
+    return 0
+}
 
 #===============================================================================
 # cidr_to_netmask

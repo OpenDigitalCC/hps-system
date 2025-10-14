@@ -142,19 +142,19 @@ printf 'pid:%s user:%s host:%s' "$$" "$user" "$host"
 hps_services_start() {
   configure_supervisor_services
   reload_supervisor_config
-  supervisorctl -c "${CLUSTER_SERVICES_DIR}/supervisord.conf" start all
+  supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" start all
   hps_services_post_start
 }
 
 hps_services_stop() {
-  supervisorctl -c "${CLUSTER_SERVICES_DIR}/supervisord.conf" stop all
+  supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" stop all
 }
 
 hps_services_restart() {
   configure_supervisor_services
   create_supervisor_services_config
   reload_supervisor_config
-  hps_log info "$(supervisorctl -c "${CLUSTER_SERVICES_DIR}/supervisord.conf" restart all)"
+  hps_log info "$(supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" restart all)"
   hps_services_post_start
 }
 
@@ -163,6 +163,9 @@ hps_services_post_start () {
   hps_configure_opensvc_cluster
 }
 
+get_path_cluster_services_dir () {
+  echo "$(get_active_cluster_dir)/services"
+}
 
 
 export_dynamic_paths() {

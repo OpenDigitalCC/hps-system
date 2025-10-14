@@ -4,10 +4,10 @@ __guard_source || return
 
 create_config_dnsmasq () {
 
-local DNSMASQ_CONF="${CLUSTER_SERVICES_DIR}/dnsmasq.conf"
+local DNSMASQ_CONF="$(get_path_cluster_services_dir)/dnsmasq.conf"
 # these are cluster specific so should be in cluster/services
-local DNS_HOSTS="${CLUSTER_SERVICES_DIR}/dns_hosts"
-local DHCP_ADDRESSES="${CLUSTER_SERVICES_DIR}/dhcp_addresses"
+local DNS_HOSTS="$(get_path_cluster_services_dir)/dns_hosts"
+local DHCP_ADDRESSES="$(get_path_cluster_services_dir)/dhcp_addresses"
 
 if [[ -z "${DHCP_IP}" ]]; then
   echo "[ERROR] No DHCP IP, can't configure dnsmasq"

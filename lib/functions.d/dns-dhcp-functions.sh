@@ -25,16 +25,15 @@
 #   1 on failure (invalid data, write error, missing dependencies)
 #===============================================================================
 build_dhcp_addresses_file() {
-  local CLUSTER_SERVICES_DIR="${HPS_CLUSTER_CONFIG_DIR}/services"
-  local DHCP_ADDRESSES="${CLUSTER_SERVICES_DIR}/dhcp_addresses"
+  local DHCP_ADDRESSES="$(get_path_cluster_services_dir)/dhcp_addresses"
   local DHCP_ADDRESSES_TMP="${DHCP_ADDRESSES}.tmp"
   
   hps_log "INFO" "Building DHCP addresses file: $DHCP_ADDRESSES"
   
   # Create services directory if it doesn't exist
-  if [[ ! -d "$CLUSTER_SERVICES_DIR" ]]; then
-    if ! mkdir -p "$CLUSTER_SERVICES_DIR"; then
-      hps_log "ERROR" "Failed to create services directory: $CLUSTER_SERVICES_DIR"
+  if [[ ! -d "$(get_path_cluster_services_dir)" ]]; then
+    if ! mkdir -p "$(get_path_cluster_services_dir)"; then
+      hps_log "ERROR" "Failed to create services directory: $(get_path_cluster_services_dir)"
       return 1
     fi
   fi
@@ -164,16 +163,15 @@ build_dhcp_addresses_file() {
 #   1 on failure (invalid data, write error, missing dependencies)
 #===============================================================================
 build_dns_hosts_file() {
-  local CLUSTER_SERVICES_DIR="${HPS_CLUSTER_CONFIG_DIR}/services"
-  local DNS_HOSTS="${CLUSTER_SERVICES_DIR}/dns_hosts"
+  local DNS_HOSTS="$(get_path_cluster_services_dir)/dns_hosts"
   local DNS_HOSTS_TMP="${DNS_HOSTS}.tmp"
   
   hps_log "INFO" "Building DNS hosts file: $DNS_HOSTS"
   
   # Create services directory if it doesn't exist
-  if [[ ! -d "$CLUSTER_SERVICES_DIR" ]]; then
-    if ! mkdir -p "$CLUSTER_SERVICES_DIR"; then
-      hps_log "ERROR" "Failed to create services directory: $CLUSTER_SERVICES_DIR"
+  if [[ ! -d "$(get_path_cluster_services_dir)" ]]; then
+    if ! mkdir -p "$(get_path_cluster_services_dir)"; then
+      hps_log "ERROR" "Failed to create services directory: $(get_path_cluster_services_dir)"
       return 1
     fi
   fi

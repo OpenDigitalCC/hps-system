@@ -22,57 +22,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 #===============================================================================
 
 
-#===============================================================================
-# commit_changes
-# --------------
-# Commit all pending cluster configuration changes
-#
-# Behaviour:
-#   - Processes all settings from CLUSTER_CONFIG_PENDING array
-#   - Applies changes using cluster_config
-#   - Clears the pending array
-#
-# Returns:
-#   0 on success
-#   1 on error
-#===============================================================================
-commit_changes() {
-    local cluster="${CLUSTER_NAME:-}"
-    
-    if [[ -z "$cluster" ]]; then
-        hps_log "error" "No cluster name available for commit"
-        return 1
-    fi
-    
-    if [[ ${#CLUSTER_CONFIG_PENDING[@]} -eq 0 ]]; then
-        cli_note "No configuration changes to commit"
-        return 0
-    fi
-    
-    cli_info "Committing configuration changes for cluster: $cluster"
-    
-    # Process all pending configuration
-    local config_item
-    for config_item in "${CLUSTER_CONFIG_PENDING[@]}"; do
-        local key="${config_item%%:*}"
-        local value="${config_item#*:}"
-        
-        if ! cluster_config "set" "$key" "$value" "$cluster"; then
-            hps_log "error" "Failed to set: $key=$value"
-            return 1
-        fi
-        
-        hps_log "info" "Set: $cluster $key=$value"
-    done
-    
-    # Clear pending array
-    CLUSTER_CONFIG_PENDING=()
-    
-    hps_log "info" "Configuration changes committed for cluster: $cluster"
-    return 0
-}
-
-
 
 #===============================================================================
 # run_cluster_configuration
@@ -295,7 +244,9 @@ main() {
             return 0
         elif [[ "$cluster_choice" =~ ^[0-9]+$ ]] && [[ "$cluster_choice" -ge 1 ]] && [[ "$cluster_choice" -le "${#clusters[@]}" ]]; then
             cluster_name="${clusters[$((cluster_choice - 1))]}"
+            hps_log info "Updating active cluster to $cluster_name"
             cli_set_active_cluster "$cluster_name"
+            update_dns_dhcp_files
         else
             hps_log "error" "Invalid selection"
             return 1

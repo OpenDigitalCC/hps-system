@@ -6,7 +6,7 @@ __guard_source || return
 #:synopsis: Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, and OpenSVC agent.
 #:usage: configure_supervisor_services
 #:description:
-#  Writes ${CLUSTER_SERVICES_DIR}/supervisord.conf with dnsmasq, nginx,
+#  Writes $(get_path_cluster_services_dir)/supervisord.conf with dnsmasq, nginx,
 #  fcgiwrap, and OpenSVC agent programs. Logs are written to ${HPS_LOG_DIR}.
 #  The function is idempotent: each program block is only added once.
 #  Validates that the configuration file and required directories are created successfully.
@@ -69,7 +69,7 @@ configure_supervisor_services() {
   # --- dnsmasq ---
 
 
-  local DNSMASQ_CONF="${CLUSTER_SERVICES_DIR}/dnsmasq.conf"
+  local DNSMASQ_CONF="$(get_path_cluster_services_dir)/dnsmasq.conf"
   local DNSMASQ_LOG_STDERR="${HPS_LOG_DIR}/dnsmasq.err.log"
   local DNSMASQ_LOG_STDOUT="${HPS_LOG_DIR}/dnsmasq.out.log"
   
@@ -136,6 +136,9 @@ EOF
   return 0
 }
 
+get_path_supervisord_conf () {
+  echo "$(get_path_cluster_services_dir)/supervisord.conf"
+}
 
 
 #:name: configure_supervisor_core
@@ -143,7 +146,7 @@ EOF
 #:synopsis: Write the base supervisord.conf using ${HPS_LOG_DIR} for all logs.
 #:usage: configure_supervisor_core
 #:description:
-#  Generates ${CLUSTER_SERVICES_DIR}/supervisord.conf core sections and sets:
+#  Generates $(get_path_cluster_services_dir)/supervisord.conf core sections and sets:
 #    - logfile=${HPS_LOG_DIR}/supervisord.log
 #    - childlogdir=${HPS_LOG_DIR}/supervisor
 #  Ensures ${HPS_LOG_DIR} and ${HPS_LOG_DIR}/supervisor exist.
@@ -156,8 +159,8 @@ EOF
 #  4 if configuration file validation fails
 configure_supervisor_core() {
   # Validate required environment variables
-  if [[ -z "${CLUSTER_SERVICES_DIR}" ]]; then
-    hps_log error "CLUSTER_SERVICES_DIR is not set"
+  if [[ -z "$(get_path_cluster_services_dir)" ]]; then
+    hps_log error "Cannot locate cluster services dir"
     return 1
   fi
   
@@ -166,7 +169,7 @@ configure_supervisor_core() {
     return 1
   fi
 
-  local SUPERVISORD_CONF="${CLUSTER_SERVICES_DIR}/supervisord.conf"
+  local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
   local SUPERVISOR_CHILD_LOG_DIR="${HPS_LOG_DIR}/supervisor"
   
   hps_log info "Creating Supervisor core config ${SUPERVISORD_CONF}"

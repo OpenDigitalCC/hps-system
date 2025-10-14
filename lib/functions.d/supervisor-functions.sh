@@ -1,18 +1,13 @@
 __guard_source || return
 
-
-
-
 create_supervisor_services_config () {
   create_config_nginx
   create_config_dnsmasq
   create_config_opensvc IPS # specify that this is an IPS node
-
 }
 
-
 reload_supervisor_config () {
-  SUPERVISORD_CONF="${CLUSTER_SERVICES_DIR}/supervisord.conf"
+  local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
   hps_log info "Reread: $(supervisorctl -c "$SUPERVISORD_CONF" reread) $?"
   hps_log info "Update: $(supervisorctl -c "$SUPERVISORD_CONF" update) $?"
 }
@@ -34,7 +29,7 @@ reload_supervisor_config () {
 #  1 if SUPERVISORD_CONF is not set or file doesn't exist
 #  2 if supervisorctl command fails
 reload_supervisor_services() {
-  SUPERVISORD_CONF="${CLUSTER_SERVICES_DIR}/supervisord.conf"
+  local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
   local service_name="${1:-}"
   
   # Validate SUPERVISORD_CONF is set
