@@ -14,7 +14,7 @@ __guard_source || return
 #:returns:
 #  0 always
 hps_log() {
-  local level="$1"; shift
+  local level="${1^^}"; shift
   local raw_msg="$*"
   local ident="${HPS_LOG_IDENT:-hps}"
   local logfile="${HPS_LOG_DIR}/hps-system.log"
