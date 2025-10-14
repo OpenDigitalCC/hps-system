@@ -127,9 +127,11 @@ if declare -f export_dynamic_paths >/dev/null; then
 fi
 
 
-
-# Load up cluster variables
-eval $(get_active_cluster_file)
+# Load up cluster variables, capture eval errors
+if ! error_output=$(eval $(get_active_cluster_file) 2>&1); then
+  hps_log "error" "Failed to load cluster configuration: $error_output"
+  return 1
+fi
 
 
 
