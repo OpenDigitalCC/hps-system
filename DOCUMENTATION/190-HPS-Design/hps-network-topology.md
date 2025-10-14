@@ -27,7 +27,7 @@
 The HPS network design uses **VLAN abstraction at the infrastructure level** combined with **VXLAN overlays for customer networks**. This creates a clear separation:
 
 **HPS Infrastructure Networks**
-: Predefined VLANs (10, 20, 31, 32+) for management, VXLAN transport, and storage, mapped to physical interfaces based on deployment stage.
+: Predefined VLANs (10, 20, 31, 32+) for management, VXLAN transport, and storage, mapped to physical interfaces based on deployment profile.
 
 **Customer Networks**
 : VXLAN overlays (VNI 1000+) providing isolated layer-2 domains spanning all host types (KVM, Docker, physical).
@@ -58,7 +58,7 @@ This ensures:
 │  VLAN 10: Management Network (192.168.10.0/24)             │
 │    - SSH, monitoring, provisioning                          │
 │    - Cluster coordination                                   │
-│    - 1Gbps sufficient for Stage 2+                          │
+│    - 1Gbps sufficient for Profile 2+                          │
 │                                                              │
 │  VLAN 20: VXLAN Transport Network (10.20.0.0/24)           │
 │    - VXLAN multicast traffic                                │
@@ -171,10 +171,10 @@ Phase 3: Full Boot and Runtime (VLAN 10)
 
 ### Bootstrap Security Modes
 
-**Exploratory Mode (Default - Stage 1)**
+**Exploratory Mode (Default - Profile 1)**
 : Untagged bootstrap enabled. Suitable for: Lab, testing, home, POC. Minimal security risk (seconds of exposure).
 
-**Production Mode (Stage 2+)**
+**Production Mode (Profile 2+)**
 : Untagged bootstrap on dedicated 1Gb management NIC. Management traffic isolated from data networks. Suitable for: Production deployments.
 
 **High Security Mode (Optional)**
@@ -184,7 +184,7 @@ Phase 3: Full Boot and Runtime (VLAN 10)
 
 ## Deployment Stages
 
-### Stage 1: Single NIC (Testing/POC)
+### Profile 1: Single NIC (Testing/POC)
 
 **Hardware**: 1 x 10G NIC per host, any switch (managed or unmanaged)
 
@@ -243,7 +243,7 @@ Phase 3: Full Boot and Runtime (VLAN 10)
 
 ---
 
-### Stage 2: Dual NIC (Production Entry)
+### Profile 2: Dual NIC (Production Entry)
 
 **Hardware**:
 
@@ -330,7 +330,7 @@ eth1 (10Gb)
 
 ---
 
-### Stage 3: Dual NIC, Dual Switch (High Availability)
+### Profile 3: Dual NIC, Dual Switch (High Availability)
 
 **Hardware**:
 
@@ -393,13 +393,13 @@ Failover
 
 **Switch Requirements**:
 
-- Same as Stage 2
+- Same as Profile 2
 - Switches can be independent (no stacking/MC-LAG needed)
 - If bonding used: same trunk configuration on both switches
 
 ---
 
-### Stage 4: Quad NIC with LACP Bonding (Maximum Performance)
+### Profile 4: Quad NIC with LACP Bonding (Maximum Performance)
 
 **Hardware**:
 
@@ -472,13 +472,13 @@ Hash policy
 - No switch stacking or MC-LAG required
 - Traffic distributed per-flow between switches
 
-**Important**: Each bond operates independently with standard LACP on each switch. This is the base Stage 4 configuration and works with any LACP-capable managed switches.
+**Important**: Each bond operates independently with standard LACP on each switch. This is the base Profile 4 configuration and works with any LACP-capable managed switches.
 
 ---
 
-### Optional Enhancement: MC-LAG for Stage 2+
+### Optional Enhancement: MC-LAG for Profile 2+
 
-**MC-LAG (Multi-Chassis Link Aggregation)** is an **optional enhancement** available for Stage 2, 3, or 4 when using advanced switches that support this feature.
+**MC-LAG (Multi-Chassis Link Aggregation)** is an **optional enhancement** available for Profile 2, 3, or 4 when using advanced switches that support this feature.
 
 MC-LAG allows two independent switches to coordinate and appear as a single logical switch for LACP purposes. This provides:
 
@@ -501,7 +501,7 @@ MC-LAG allows two independent switches to coordinate and appear as a single logi
 - Higher switch cost (enterprise feature)
 - Vendor-specific setup
 
-**Recommendation**: Start without MC-LAG using standard LACP (Stage 4 base configuration). This works with any LACP-capable managed switch and provides excellent redundancy and performance. Add MC-LAG later if you upgrade to enterprise switches with this capability and need sub-second failover for critical workloads.
+**Recommendation**: Start without MC-LAG using standard LACP (Profile 4 base configuration). This works with any LACP-capable managed switch and provides excellent redundancy and performance. Add MC-LAG later if you upgrade to enterprise switches with this capability and need sub-second failover for critical workloads.
 
 ---
 
@@ -683,14 +683,14 @@ VXLAN transport VLAN 20 MTU: 1504 bytes (accommodates overhead)
 Network Layer                         MTU Setting
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Physical Interfaces (Stage 1):
+Physical Interfaces (Profile 1):
 ├─ eth0                               1504 bytes
 
-Physical Interfaces (Stage 2+):
+Physical Interfaces (Profile 2+):
 ├─ eth0 (management)                  1500 bytes
 └─ eth1 (VXLAN + storage)             9000 bytes
 
-Bonded Interfaces (Stage 3+):
+Bonded Interfaces (Profile 3+):
 ├─ bond0 (management)                 1500 bytes
 └─ bond1 (VXLAN + storage)            9000 bytes
 
@@ -748,7 +748,7 @@ Customer VMs: 1450
 - Support for 1608+ byte frames (VXLAN on VLAN 20)
 - Jumbo frame support on storage ports (9000+ bytes)
 
-### Stage 2+ Requirements
+### Profile 2+ Requirements
 
 **IGMP Snooping** (recommended for VXLAN efficiency on VLAN 20):
 
@@ -798,7 +798,7 @@ Allowed VLANs: 10, 31 (or 32, 33, etc.)
 MTU: 9216
 ```
 
-### Stage 4 Base Requirements (Standard LACP)
+### Profile 4 Base Requirements (Standard LACP)
 
 **Link Aggregation (LACP/802.3ad)**:
 
@@ -841,13 +841,13 @@ Host bond spans both switches independently
 - [ ] Spanning tree configured (edge ports for host connections)
 - [ ] Allow untagged traffic for bootstrap (can be removed after deployment)
 
-**For Stage 4 base deployments**:
+**For Profile 4 base deployments**:
 
 - [ ] LACP/802.3ad support (standard on managed switches)
 - [ ] Per-switch LAG configuration
 - [ ] No coordination between switches needed
 
-**For Stage 4 with MC-LAG enhancement (optional)**:
+**For Profile 4 with MC-LAG enhancement (optional)**:
 
 - [ ] Switch stacking OR MC-LAG capability
 - [ ] Peer link configuration between switches
@@ -934,7 +934,7 @@ bridge fdb show dev vxlan-cust-a
 
 ### Bonding Configuration
 
-**Active-backup bond (Stage 3)**:
+**Active-backup bond (Profile 3)**:
 
 ```bash
 ip link add bond0 type bond mode active-backup
@@ -944,7 +944,7 @@ ip link set eth1 master bond0
 ip link set bond0 up
 ```
 
-**LACP bond (Stage 4 base)**:
+**LACP bond (Profile 4 base)**:
 
 ```bash
 ip link add bond0 type bond mode 802.3ad
@@ -997,10 +997,10 @@ The following components require configuration management functions. Each repres
 
 **Key considerations**:
 
-- Stage detection (how many NICs available?)
+- Profile detection (how many NICs available?)
 - 1G management, 10G data differentiation
 - Validation of physical connectivity
-- MTU requirements per stage and purpose
+- MTU requirements per profile and purpose
 
 ---
 
@@ -1011,14 +1011,14 @@ The following components require configuration management functions. Each repres
 **Responsibilities**:
 
 - Create VLAN interfaces (vlan.10, vlan.20, vlan.31, vlan.32+)
-- Map VLANs to physical interfaces based on deployment stage
+- Map VLANs to physical interfaces based on deployment profile
 - Set MTU on VLAN interfaces (1500 mgmt, 1504 VXLAN, 9000 storage)
 - Handle VLAN interface lifecycle
 - Validate VLAN tag configuration
 
 **Key considerations**:
 
-- Stage-specific VLAN-to-interface mapping
+- Profile-specific VLAN-to-interface mapping
 - Infrastructure VLANs (10, 20, 31, 32+) are predefined
 - VLAN 10: Management
 - VLAN 20: VXLAN transport (dedicated)
@@ -1042,8 +1042,8 @@ The following components require configuration management functions. Each repres
 
 **Key considerations**:
 
-- Stage 3 uses active-backup (no switch dependency)
-- Stage 4 uses 802.3ad/LACP (standard managed switch feature)
+- Profile 3 uses active-backup (no switch dependency)
+- Profile 4 uses 802.3ad/LACP (standard managed switch feature)
 - Separate bonds for management and data
 - Failover detection and recovery
 - MC-LAG is optional enhancement (not required)
@@ -1177,8 +1177,8 @@ The following components require configuration management functions. Each repres
 
 **Key considerations**:
 
-- Stage 1: 1504 on eth0 (accommodates all traffic)
-- Stage 2+: 1500 on management NIC, 9000 on data NIC
+- Profile 1: 1504 on eth0 (accommodates all traffic)
+- Profile 2+: 1500 on management NIC, 9000 on data NIC
 - VLAN 10 (management): 1500
 - VLAN 20 (VXLAN transport): 1504
 - VLAN 31+ (storage): 9000
@@ -1227,7 +1227,7 @@ The following components require configuration management functions. Each repres
 - Store per-host interface assignments
 - Track IP address allocations
 - Store multicast group assignments
-- Maintain deployment stage configuration
+- Maintain deployment profile configuration
 - Track bootstrap security mode
 
 **Key considerations**:
@@ -1275,7 +1275,7 @@ Bootstrap Manager
       ↓
 Physical Interface
       ↓
-   Bonding (optional, Stage 3+4)
+   Bonding (optional, Profile 3+4)
       ↓
    VLAN Interface
       ↓
@@ -1294,61 +1294,61 @@ Management (VLAN 10)    Data Networks
                    VM/Container attachment
 ```
 
-Each component should be implemented as independent, testable functions that can be composed to build the complete network stack based on the deployment stage.
+Each component should be implemented as independent, testable functions that can be composed to build the complete network stack based on the deployment profile.
 
 ---
 
-## Deployment Stage Decision Matrix
+## Deployment Profile Decision Matrix
 
 ```
-Available Hardware            Recommended Stage      Management NIC
+Available Hardware            Recommended Profile      Management NIC
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1 NIC per host               Stage 1 (Testing only) Shared 10G
+1 NIC per host               Profile 1 (Testing only) Shared 10G
 Any switch                   No switch config       Bootstrap: untagged
                                                     Runtime: VLAN 10
 
-1G + 10G NIC per host        Stage 2 (Production)   Dedicated 1G
+1G + 10G NIC per host        Profile 2 (Production)   Dedicated 1G
 1 managed switch             Configure VLANs        Bootstrap: untagged
                              IGMP snooping          Runtime: VLAN 10
 
-1G + 10G NIC per host        Stage 3 (HA)           Dedicated 1G
+1G + 10G NIC per host        Profile 3 (HA)           Dedicated 1G
 2 independent switches       Configure VLANs        Optional bonding
                              Optional bonding       Bootstrap: untagged
 
-2x1G + 2x10G per host        Stage 4 (Max perf)     Bonded 2x1G
+2x1G + 2x10G per host        Profile 4 (Max perf)     Bonded 2x1G
 2 switches with LACP         LACP bonding           Bootstrap: untagged
                              VLANs + LAG            Runtime: bond.10
 ```
 
-### VLAN Usage Summary by Stage
+### VLAN Usage Summary by Profile
 
-**Stage 1 (Single 10G NIC)**:
+**Profile 1 (Single 10G NIC)**:
 
 - VLAN 10: Management (eth0.10)
 - VLAN 20: VXLAN transport (eth0.20)
 - VLAN 31: Storage 1 (eth0.31)
 - VLAN 32: Storage 2 (eth0.32)
 
-**Stage 2 (1G mgmt + 10G data)**:
+**Profile 2 (1G mgmt + 10G data)**:
 
 - VLAN 10: Management (eth0.10) - on 1G NIC
 - VLAN 20: VXLAN transport (eth1.20) - on 10G NIC
 - VLAN 31: Storage 1 (eth1.31) - on 10G NIC
 - VLAN 32: Storage 2 (eth1.32) - on 10G NIC
 
-**Stage 3 (with optional bonding)**:
+**Profile 3 (with optional bonding)**:
 
-- Same as Stage 2, but interfaces may be bonded
+- Same as Profile 2, but interfaces may be bonded
 - VLAN 10: Management (bond0.10)
 - VLAN 20: VXLAN transport (bond1.20)
 - VLAN 31: Storage 1 (bond1.31)
 - VLAN 32: Storage 2 (bond1.32)
 
-**Stage 4 (full bonding)**:
+**Profile 4 (full bonding)**:
 
 - VLAN 10: Management (bond0.10) - on 2x1G bonded
 - VLAN 20: VXLAN transport (bond1.20) - on 2x10G bonded
 - VLAN 31: Storage 1 (bond1.31) - on 2x10G bonded
 - VLAN 32: Storage 2 (bond1.32) - on 2x10G bonded
 
-Each stage builds upon the same logical network definitions (VLANs 10, 20, 31, 32+), differing only in physical interface mapping and redundancy features. This allows progressive hardware enhancement without reconfiguring the logical network layer.
+Each profile builds upon the same logical network definitions (VLANs 10, 20, 31, 32+), differing only in physical interface mapping and redundancy features. This allows progressive hardware enhancement without reconfiguring the logical network layer.
