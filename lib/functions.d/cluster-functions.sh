@@ -1103,7 +1103,121 @@ select_cluster() {
 }
 
 
+#!/bin/bash
 
+#===============================================================================
+# cluster_storage_init_network
+# ----------------------------
+# Initialize storage network configuration in cluster_config
+#
+# Behaviour:
+#   - Prompts admin for storage network preferences
+#   - Sets up storage VLAN range and configuration
+#   - Creates DNS subdomain mapping for each storage network
+#   - Stores configuration in cluster_config
+#
+# Returns:
+#   0 on success
+#   1 on error
+#===============================================================================
+cluster_storage_init_network() {
+  local num_storage_networks
+  local enable_jumbo_frames
+  local storage_base_vlan
+  local storage_subnet_base
+  local storage_subnet_cidr
+  local cluster_domain
+  
+  # Get cluster domain
+  cluster_domain=$(cluster_config "get" "cluster.domain")
+  if [[ -z "$cluster_domain" ]]; then
+    hps_log "error" "Cluster domain not set"
+    return 1
+  fi
+  
+  # Get number of storage networks
+  num_storage_networks=$(cli_prompt \
+    "Number of storage networks to configure (1-10)" \
+    "2" \
+    "^[1-9]$|^10$" \
+    "Please enter a number between 1 and 10")
+  
+  # Get base VLAN ID
+  storage_base_vlan=$(cli_prompt \
+    "Storage network base VLAN ID (31-99)" \
+    "31" \
+    "^(3[1-9]|[4-9][0-9])$" \
+    "VLAN ID must be between 31 and 99")
+  
+  # Get subnet base
+  storage_subnet_base=$(cli_prompt \
+    "Storage subnet base (e.g., 10.31 for 10.31.x.0/24)" \
+    "10.${storage_base_vlan}" \
+    "^[0-9]{1,3}\.[0-9]{1,3}$" \
+    "Please enter subnet base as X.Y format (e.g., 10.31)")
+  
+  # Validate subnet base octets
+  local octet1 octet2
+  IFS='.' read -r octet1 octet2 <<< "$storage_subnet_base"
+  if [[ "$octet1" -gt 255 ]] || [[ "$octet2" -gt 255 ]]; then
+    hps_log "error" "Invalid subnet base: octets must be 0-255"
+    return 1
+  fi
+  
+  # Get CIDR
+  storage_subnet_cidr=$(cli_prompt \
+    "Storage subnet CIDR mask (16-28)" \
+    "24" \
+    "^(1[6-9]|2[0-8])$" \
+    "CIDR must be between 16 and 28")
+  
+  # Ask about jumbo frames
+  echo "Note: Jumbo frames require switch support with MTU 9000+ on all storage ports"
+  enable_jumbo_frames=$(cli_prompt \
+    "Enable jumbo frames (9000 MTU) on storage networks? [y/n]" \
+    "y" \
+    "^[yn]$" \
+    "Please enter 'y' for yes or 'n' for no")
+  
+  local mtu=1500
+  [[ "$enable_jumbo_frames" == "y" ]] && mtu=9000
+  
+  # Store base configuration
+  cluster_config "set" "network_storage_count" "$num_storage_networks"
+  cluster_config "set" "network_storage_mtu" "$mtu"
+  cluster_config "set" "network_storage_base_vlan" "$storage_base_vlan"
+  cluster_config "set" "network_storage_subnet_base" "$storage_subnet_base"
+  cluster_config "set" "network_storage_subnet_cidr" "$storage_subnet_cidr"
+  
+  # Configure each storage network
+  local i
+  for ((i=0; i<num_storage_networks; i++)); do
+    local vlan=$((storage_base_vlan + i))
+    
+    # Calculate subnet using the shared function
+    local subnet=$(network_calculate_subnet "$storage_subnet_base" "$i" "$storage_subnet_cidr")
+    if [[ $? -ne 0 ]]; then
+      hps_log "error" "Failed to calculate subnet for storage network $((i+1))"
+      return 1
+    fi
+    
+    # Extract network portion for gateway
+    local network_addr="${subnet%/*}"
+    local gateway="${network_addr%.*}.1"
+    local netmask=$(cidr_to_netmask "${storage_subnet_cidr}")
+    local domain="storage$((i+1)).${cluster_domain}"
+    
+    cluster_config "set" "network_storage_vlan${vlan}_subnet" "$subnet"
+    cluster_config "set" "network_storage_vlan${vlan}_gateway" "$gateway"
+    cluster_config "set" "network_storage_vlan${vlan}_netmask" "$netmask"
+    cluster_config "set" "network_storage_vlan${vlan}_domain" "$domain"
+    cluster_config "set" "network_storage_vlan${vlan}_allocated" "false"
+    
+    hps_log "info" "Configured storage network $((i+1)): VLAN $vlan, subnet $subnet, domain $domain"
+  done
+  
+  return 0
+}
 
 
 
