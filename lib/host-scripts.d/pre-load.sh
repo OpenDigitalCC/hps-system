@@ -275,7 +275,7 @@ n_ips_command() {
     
     # Special handling for 502 Bad Gateway
     if [[ "$http_code" == "502" ]]; then
-      N_IPS_COMMAND_LAST_ERROR="HTTP 502 Bad Gateway - An error occurred while reading CGI reply (no response received). Command: $cmd"
+      N_IPS_COMMAND_LAST_ERROR="HTTP 502 Bad Gateway - An error occurred while reading CGI reply (no response received). Command: $cmd url: $url"
     fi
     
     # Don't output error responses

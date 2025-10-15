@@ -2,6 +2,12 @@
 
 
 
+# relay functions from IPS to nodes
+
+declare -f urlencode
+
+
+
 ## NODE Functions for any O/S
 
 #===============================================================================

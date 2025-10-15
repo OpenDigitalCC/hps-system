@@ -106,24 +106,71 @@ n_show_vlan_interfaces() {
 # n_vlan_create
 # --------------
 # Create a VLAN interface on a physical interface
+#
+# Behaviour:
+#   - Creates VLAN interface
+#   - Handles MTU properly (sets physical first if needed)
+#   - Works on both Alpine and Rocky Linux
+#   - Idempotent - removes existing before creating
+#
+# Parameters:
+#   $1: Physical interface (e.g., eth0)
+#   $2: VLAN ID
+#   $3: MTU (optional, default 1500)
+#
+# Returns:
+#   0 on success
+#   1 on error
 #===============================================================================
 n_vlan_create() {
   local phys_iface="$1"
   local vlan_id="$2"
   local mtu="${3:-1500}"
   
+  if [[ ! -d "/sys/class/net/$phys_iface" ]]; then
+    n_remote_log "ERROR: Physical interface $phys_iface not found"
+    return 1
+  fi
+  
   local vlan_iface="${phys_iface}.${vlan_id}"
   
   # Remove if exists
-  [[ -d "/sys/class/net/$vlan_iface" ]] && ip link delete "$vlan_iface" 2>/dev/null
+  if [[ -d "/sys/class/net/$vlan_iface" ]]; then
+    ip link delete "$vlan_iface" 2>/dev/null
+    sleep 1
+  fi
+  
+  # Check physical interface MTU
+  local phys_mtu=$(cat "/sys/class/net/$phys_iface/mtu")
+  
+  # If requested MTU > physical MTU, update physical first
+  if [[ "$mtu" -gt "$phys_mtu" ]]; then
+    n_remote_log "Setting $phys_iface MTU to $mtu"
+    if ! ip link set dev "$phys_iface" mtu "$mtu"; then
+      n_remote_log "WARNING: Could not set MTU $mtu on $phys_iface"
+      # Continue with current physical MTU
+      mtu="$phys_mtu"
+    fi
+  fi
   
   # Create VLAN
-  ip link add link "$phys_iface" name "$vlan_iface" type vlan id "$vlan_id"
-  ip link set dev "$vlan_iface" mtu "$mtu"
+  if ! ip link add link "$phys_iface" name "$vlan_iface" type vlan id "$vlan_id"; then
+    n_remote_log "ERROR: Failed to create VLAN $vlan_id on $phys_iface"
+    return 1
+  fi
+  
+  # Set MTU on VLAN
+  if ! ip link set dev "$vlan_iface" mtu "$mtu"; then
+    n_remote_log "WARNING: Could not set MTU $mtu on $vlan_iface"
+  fi
+  
+  # Bring up
   ip link set dev "$vlan_iface" up
   
+  n_remote_log "Created VLAN interface $vlan_iface with MTU $mtu"
   return 0
 }
+
 
 #===============================================================================
 # n_interface_add_ip

@@ -79,13 +79,13 @@ n_load_kernel_module() {
 #
 # Prerequisites:
 #   - Alpine Linux base system with BusyBox
-#   - Node functions loaded
+#   - bash installed
+#   - Node functions available via hps-bootstrap-lib.sh
 #
 # Behaviour:
-#   - Creates wrapper scripts in /usr/local/sbin that have PATH priority
+#   - Creates wrapper scripts that use bash and source HPS functions
 #   - Logs all reboot attempts to IPS before reboot occurs
 #   - Preserves original busybox symlinks in /sbin
-#   - Adds shutdown hooks for init system
 #
 # Returns:
 #   0 on success
@@ -93,6 +93,13 @@ n_load_kernel_module() {
 n_configure_reboot_logging() {
     echo "[HPS] Configuring reboot logging..."
     n_remote_log "Configuring reboot logging on TCH node"
+    
+    # Ensure bash is available
+    if ! command -v bash >/dev/null 2>&1; then
+        echo "[HPS] ERROR: bash not found, required for reboot logging"
+        n_remote_log "ERROR: bash not found on TCH node"
+        return 1
+    fi
     
     # Ensure /usr/local/sbin exists
     mkdir -p /usr/local/sbin
@@ -109,17 +116,29 @@ n_configure_reboot_logging() {
     # 2. Create wrapper scripts in /usr/local/sbin for each command
     for cmd in reboot poweroff halt; do
         cat > "/usr/local/sbin/${cmd}" <<EOF
-#!/bin/sh
+#!/bin/bash
 # HPS TCH Reboot Logger for ${cmd}
+
+# Source HPS node functions
+if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
+    source /usr/local/lib/hps-bootstrap-lib.sh
+    hps_load_node_functions >/dev/null 2>&1
+fi
 
 TIMESTAMP="\$(date '+%Y-%m-%d %H:%M:%S')"
 
 # Log to IPS if available
-if type n_remote_log >/dev/null 2>&1; then
+if command -v n_remote_log >/dev/null 2>&1; then
     n_remote_log "REBOOT: ${cmd} \$@ initiated on TCH node at \${TIMESTAMP}"
-    n_remote_host_variable "last_reboot_command" "${cmd} \$@"
-    n_remote_host_variable "last_reboot_time" "\${TIMESTAMP}"
-    n_remote_host_variable "status" "rebooting"
+    
+    if command -v n_remote_host_variable >/dev/null 2>&1; then
+        n_remote_host_variable "last_reboot_command" "${cmd} \$@"
+        n_remote_host_variable "last_reboot_time" "\${TIMESTAMP}"
+        n_remote_host_variable "status" "rebooting"
+    fi
+else
+    # Log locally as fallback
+    echo "[HPS] Warning: n_remote_log not available" >&2
 fi
 
 # Log locally
@@ -136,17 +155,26 @@ EOF
     # 3. Handle shutdown if it exists
     if /bin/busybox --list | grep -q "^shutdown$"; then
         cat > "/usr/local/sbin/shutdown" <<'EOF'
-#!/bin/sh
+#!/bin/bash
 # HPS TCH Reboot Logger for shutdown
+
+# Source HPS node functions
+if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
+    source /usr/local/lib/hps-bootstrap-lib.sh
+    hps_load_node_functions >/dev/null 2>&1
+fi
 
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 
 # Log to IPS if available
-if type n_remote_log >/dev/null 2>&1; then
+if command -v n_remote_log >/dev/null 2>&1; then
     n_remote_log "REBOOT: shutdown $@ initiated on TCH node at ${TIMESTAMP}"
-    n_remote_host_variable "last_reboot_command" "shutdown $@"
-    n_remote_host_variable "last_reboot_time" "${TIMESTAMP}"
-    n_remote_host_variable "status" "shutting_down"
+    
+    if command -v n_remote_host_variable >/dev/null 2>&1; then
+        n_remote_host_variable "last_reboot_command" "shutdown $@"
+        n_remote_host_variable "last_reboot_time" "${TIMESTAMP}"
+        n_remote_host_variable "status" "shutting_down"
+    fi
 fi
 
 # Log locally
@@ -161,19 +189,23 @@ EOF
     
     # 4. Ensure /usr/local/sbin is first in PATH
     if ! grep -q "PATH=\"/usr/local/sbin:" /etc/profile 2>/dev/null; then
-        # Prepend to PATH in /etc/profile
         sed -i '1i export PATH="/usr/local/sbin:$PATH"' /etc/profile
     fi
-    # Also set for current session
     export PATH="/usr/local/sbin:$PATH"
     
-    # 5. Add OpenRC shutdown hook
+    # 5. Add OpenRC shutdown hook (also using bash)
     mkdir -p /etc/local.d
     cat > /etc/local.d/hps-shutdown.stop <<'EOF'
-#!/bin/sh
+#!/bin/bash
 # HPS shutdown logging hook
 
-if type n_remote_log >/dev/null 2>&1; then
+# Source HPS node functions
+if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
+    source /usr/local/lib/hps-bootstrap-lib.sh
+    hps_load_node_functions >/dev/null 2>&1
+fi
+
+if command -v n_remote_log >/dev/null 2>&1; then
     n_remote_log "TCH node shutting down via init system"
 fi
 EOF
@@ -185,9 +217,7 @@ EOF
     n_remote_log "Reboot logging configured successfully"
     n_remote_host_variable "reboot_logging" "enabled"
     
-    # Verify setup
     echo "[HPS] Reboot logging configured. Wrappers installed in /usr/local/sbin/"
-    echo "[HPS] Original commands remain in /sbin/"
     
     return 0
 }
