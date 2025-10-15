@@ -65,6 +65,11 @@ node_get_functions() {
   IFS='-' read -r cpu mfr osname osver <<<"$distro"
   
   hps_log info "Building function bundle for distro: $distro"
+
+  declare -f urlencode
+  declare -f netmask_to_cidr
+ 
+  
   hps_log debug "Components: cpu=$cpu mfr=$mfr osname=$osname osver=$osver"
   hps_log debug "Searching in: $base"
   
