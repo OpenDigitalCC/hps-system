@@ -2,6 +2,110 @@ __guard_source || return
 
 
 #===============================================================================
+# ips_allocate_storage_ip
+# ------------------------
+# Allocate storage IP address for requesting host
+#
+# Behaviour:
+#   - Identifies host by source MAC of request
+#   - Scans all host configs to find used IPs
+#   - Allocates next available IP
+#   - Writes allocation to host_config
+#   - Returns configuration to node
+#
+# Parameters:
+#   $1: Storage network index (0, 1, etc.)
+#   $2: Source MAC (provided by n_ips_command framework)
+#
+# Returns:
+#   Echoes "vlan_id:ip:netmask:gateway:mtu" on success
+#   Echoes "ERROR: message" on failure
+#===============================================================================
+ips_allocate_storage_ip() {
+  local storage_index="${1:-0}"
+  local source_mac="$2"  # Passed by n_ips_command framework
+  
+  source_mac=$(normalise_mac "$source_mac")
+  
+  # Check if already allocated
+  local existing_ip=$(host_config "$source_mac" "get" "storage${storage_index}_ip")
+  if [[ -n "$existing_ip" ]]; then
+    # Return existing allocation
+    local vlan_id=$(host_config "$source_mac" "get" "storage${storage_index}_vlan")
+    local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
+    local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
+    local mtu=$(cluster_config "get" "network_storage_mtu")
+    
+    hps_log "info" "Returning existing storage allocation for $source_mac: $existing_ip"
+    echo "${vlan_id}:${existing_ip}:${netmask}:${gateway}:${mtu}"
+    return 0
+  fi
+  
+  # Get storage network configuration
+  local base_vlan=$(cluster_config "get" "network_storage_base_vlan")
+  local vlan_id=$((base_vlan + storage_index))
+  local subnet=$(cluster_config "get" "network_storage_vlan${vlan_id}_subnet")
+  local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
+  local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
+  local mtu=$(cluster_config "get" "network_storage_mtu")
+  
+  # Extract network prefix
+  local ip_base="${subnet%/*}"
+  local ip_prefix="${ip_base%.*}"
+  
+  # Build list of used IPs for this storage network
+  local used_ips=()
+  local host_dir="/srv/hps-config/clusters/$(readlink /srv/hps-config/clusters/active-cluster)/hosts"
+  
+  # Scan all host configs for used IPs on this storage network
+  for host_file in "$host_dir"/*; do
+    [[ -f "$host_file" ]] || continue
+    local stored_vlan=$(grep "storage${storage_index}_vlan=" "$host_file" 2>/dev/null | cut -d= -f2)
+    if [[ "$stored_vlan" == "$vlan_id" ]]; then
+      local used_ip=$(grep "storage${storage_index}_ip=" "$host_file" 2>/dev/null | cut -d= -f2)
+      [[ -n "$used_ip" ]] && used_ips+=("$used_ip")
+    fi
+  done
+  
+  # Find next available IP (starting at .100)
+  local ip_offset=100
+  local new_ip
+  while [[ $ip_offset -lt 250 ]]; do
+    new_ip="${ip_prefix}.${ip_offset}"
+    
+    # Check if IP is already used
+    local ip_used=0
+    for used in "${used_ips[@]}"; do
+      if [[ "$used" == "$new_ip" ]]; then
+        ip_used=1
+        break
+      fi
+    done
+    
+    if [[ $ip_used -eq 0 ]]; then
+      # Found available IP
+      break
+    fi
+    
+    ((ip_offset++))
+  done
+  
+  if [[ $ip_offset -ge 250 ]]; then
+    echo "ERROR: No available IPs in storage network $vlan_id"
+    return 1
+  fi
+  
+  # Allocate and store
+  host_config "$source_mac" "set" "storage${storage_index}_vlan" "$vlan_id"
+  host_config "$source_mac" "set" "storage${storage_index}_ip" "$new_ip"
+  
+  hps_log "info" "Allocated storage IP $new_ip on VLAN $vlan_id to $source_mac"
+  
+  echo "${vlan_id}:${new_ip}:${netmask}:${gateway}:${mtu}"
+  return 0
+}
+
+#===============================================================================
 # get_network_interfaces
 # ----------------------
 # Get list of network interfaces with IP and gateway information
