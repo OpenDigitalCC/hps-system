@@ -75,7 +75,8 @@ http {
       gzip off;
       include /etc/nginx/fastcgi_params;
       fastcgi_pass unix:/var/run/fcgiwrap.socket;
-      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP_STATIC_DIR}\$fastcgi_script_name;
+#      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP_STATIC_DIR}\$fastcgi_script_name;
+      fastcgi_param SCRIPT_FILENAME ${HPS_HTTP_CGI_DIR}\$fastcgi_script_name;
       fastcgi_param DOCUMENT_ROOT ${HPS_HTTP_STATIC_DIR};
     }
 
