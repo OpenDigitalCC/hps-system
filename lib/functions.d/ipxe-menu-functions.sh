@@ -581,7 +581,7 @@ ipxe_boot_alpine_tch() {
   local kernel_args="initrd=initramfs-lts"
   kernel_args="${kernel_args} console=ttyS0,115200n8"
   kernel_args="${kernel_args} alpine_repo=http://10.99.1.1/distros/alpine-3.20.2/apks/main"
-  kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
+#  kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
   kernel_args="${kernel_args} ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:off"
 #  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol&filename=bootstrap.apkovl.tar.gz"
   kernel_args="${kernel_args} apkovl=${apkvol_file_url}"
