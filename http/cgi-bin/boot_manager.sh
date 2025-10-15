@@ -73,6 +73,8 @@ if [[ "$cmd" == "keysafe_request_token" ]]; then
     exit 0  # <- ADD THIS
 fi
 
+
+# this and associated functions in tch-build.sh are redundant AFAIK
 # Command: Get alpine bootstrap 
 if [[ "$cmd" == "get_alpine_bootstrap" ]]; then
   cgi_header_plain
@@ -106,34 +108,67 @@ if [[ "$cmd" == "set_status" ]]
 fi
 
 
-# --- Command: get or set host variables (receiver side) ---
-# cmd=host_variable&name=<name>[&value=<value>]
-# - Requires: name
-# - If 'value' param exists (even empty) -> set name=value, return success
-# - If 'value' param missing            -> get current value, return it
+#===============================================================================
+# host_variable command handler
+# -----------------------------
+# Get or set host configuration variables via CGI interface.
+#
+# Parameters (via CGI):
+#   cmd=host_variable
+#   name=<variable_name>     (required)
+#   value=<variable_value>   (optional - if present, sets the value)
+#
+# Behaviour:
+#   - If 'value' parameter exists (even if empty): SET operation
+#   - If 'value' parameter is missing: GET operation
+#   - Uses host_config function to manage the actual storage
+#
+# Returns:
+#   - GET: Success with value if found, failure if key not found
+#   - SET: Success message on update, failure on error
+#
+# Example usage:
+#   GET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging"
+#   SET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging&value=enabled"
+#
+#===============================================================================
 if [[ "$cmd" == "host_variable" ]]; then
-  if ! cgi_param exists name; then cgi_auto_fail "Param 'name' is required"; exit; fi
-  name="$(cgi_param get name)"
-
+  # Validate required parameter
+  if ! cgi_param exists name; then 
+    cgi_auto_fail "Param 'name' is required"
+    exit 1
+  fi
+  
+  # Extract variable name
+  var_name="$(cgi_param get name)"
+  
+  # Determine if this is a GET or SET operation
   if cgi_param exists value; then
-    # SET path
-    value="$(cgi_param get value)"
-    if host_config "$mac" set "$name" "$value" >/dev/null 2>&1; then
-      cgi_success "$mac set $name to $value"
+    # SET operation - value parameter exists
+    var_value="$(cgi_param get value)"
+    
+    # Attempt to set the host variable
+    if host_config "$mac" set "$var_name" "$var_value" >/dev/null 2>&1; then
+      cgi_success "$mac set $var_name to $var_value"
+      exit 0
     else
-      cgi_auto_fail "set failed"
+      cgi_auto_fail "Failed to set $var_name"
+      exit 1
     fi
   else
-    # GET path — call 'get' directly and trust its rc
-    val=""
-    if val="$(host_config "$mac" get "$name" 2>/dev/null)"; then
-      cgi_success "$val"
+    # GET operation - no value parameter
+    if current_value="$(host_config "$mac" get "$var_name" 2>/dev/null)"; then
+      cgi_success "$current_value"
+      exit 0
     else
-      cgi_auto_fail "Key '$name' not found"
+      cgi_auto_fail "Key '$var_name' not found"
+      exit 1
     fi
   fi
-  exit
 fi
+
+
+
 
 # --- Command: get or set cluster variables (receiver side) ---
 # cmd=cluster_variable&name=<name>[&value=<value>]
@@ -248,28 +283,34 @@ if [[ "$cmd" == "config_host" ]]; then
 fi
 
 
-# Command: get the distro bootstrap script - renaming it to node_load_functions and supporting both for now
-if [[ "$cmd" == "node_bootstrap_functions" ]]; then
-  hps_log info "Node requests to bootstrap node functions"
-  cgi_header_plain
-  bootstrap_initialise_functions "$mac"
-  hps_log info "Running queue on node"
-  echo "n_queue_run"
-  exit
-fi
 
 # Command: get the node function library appropriate for this distro
 if [[ "$cmd" == "node_get_functions" ]]; then
   cgi_header_plain
-    if cgi_param exists distro; then
-      DISTRO="$(cgi_param get distro)"
-      hps_log info "Node requests function lib for $DISTRO"
-      node_get_functions "${DISTRO}"
-  else
-    cgi_auto_fail "$cmd: Parameter distro not provided"
+  
+  # Check if distro parameter exists
+  if ! cgi_param exists distro; then
+    cgi_auto_fail "$cmd: Parameter 'distro' not provided"
+    exit 1
   fi
-  exit
+  
+  # Get distro value
+  DISTRO="$(cgi_param get distro)"
+  
+  # Validate distro is not empty
+  if [[ -z "$DISTRO" ]]; then
+    cgi_auto_fail "$cmd: Parameter 'distro' is empty"
+    exit 1
+  fi
+  
+  # Log and generate function library
+  hps_log info "Node requests function lib for $DISTRO"
+  node_get_functions "${DISTRO}"
+  
+  exit 0
 fi
+
+
 
 # Command: Generate an opensvc conf
 if [[ "$cmd" == "generate_opensvc_conf" ]]; then

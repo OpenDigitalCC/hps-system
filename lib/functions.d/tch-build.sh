@@ -86,8 +86,17 @@ tch_apkovol_create() {
     rm -rf "$tmp_dir"
     return 1
   fi
+
+  # Create HPS bootstrap library
+  if ! _apkovl_create_lib "$tmp_dir"; then
+    hps_log error "Failed to create bootstrap library"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
   
-  if ! _apkovol_create_bootstrap_script "$tmp_dir" "$gateway_ip" "$alpine_version"; then
+  # Create bootstrap script
+  if ! _apkovl_create_bootstrap_script "$tmp_dir" "$gateway_ip" "$alpine_version"; then
+    hps_log error "Failed to create bootstrap script"
     rm -rf "$tmp_dir"
     return 1
   fi
@@ -96,6 +105,7 @@ tch_apkovol_create() {
     rm -rf "$tmp_dir"
     return 1
   fi
+
 
   # Create tarball
   if ! tar czf "$output_file" -C "$tmp_dir" . 2>/dev/null; then
@@ -208,6 +218,9 @@ if [ ! -d "\$MODULE_DIR" ]; then
   echo "ERROR: Module directory not found: \$MODULE_DIR" >&2
   exit 1
 fi
+
+# create a symlink to make modprobe etc happy
+ln -s $MODULE_DIR /lib/modules/
 
 # Load modules
 EOF
@@ -347,27 +360,159 @@ _apkovl_create_resolv_conf() {
   return 0
 }
 
+
+
+_apkovl_create_lib() {
+  local tmp_dir="$1"
+  
+  hps_log debug "Creating HPS bootstrap library"
+  
+  # Ensure directory exists
+  mkdir -p "$tmp_dir/usr/local/lib"
+  
+  # Create the library file dynamically
+  if ! cat > "$tmp_dir/usr/local/lib/hps-bootstrap-lib.sh" <<'LIBEOF'
+#!/bin/bash
 #===============================================================================
-# _apkovol_create_bootstrap_script
-# ---------------------------------
-# Create TCH bootstrap script in etc/local.d/
-#
-# Arguments:
-#   $1 - tmp_dir        : Temporary directory path
-#   $2 - gateway_ip     : IPS gateway IP address
-#   $3 - alpine_version : Alpine Linux version
-#
-# Returns:
-#   0 on success, 1 on failure
+# HPS Bootstrap Library
+# --------------------
+# Core functions for HPS node bootstrap and initialization.
+# This file is deployed to nodes via apkovl and persists across reboots.
 #===============================================================================
-_apkovol_create_bootstrap_script() {
+
+# URL encoding function
+hps_url_encode() {
+  local s="$1"
+  local out=""
+  local i c
+  for ((i=0; i<${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-])
+        out+="$c"
+        ;;
+      *)
+        printf -v hex '%%%02X' "'$c"
+        out+="$hex"
+        ;;
+    esac
+  done
+  printf '%s\n' "$out"
+}
+
+# Get distribution string
+hps_get_distro_string() {
+  local cpu osname osver mfr
+  cpu="$(uname -m)"
+  mfr="linux"
+  
+  if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    osname="${ID,,}"
+    osver="${VERSION_ID,,}"
+  else
+    osname="unknown"
+    osver="unknown"
+  fi
+  
+  echo "${cpu}-${mfr}-${osname}-${osver}"
+}
+
+# Get provisioning node IP
+hps_get_provisioning_node() {
+  ip route | awk '/^default/ { print $3; exit }'
+}
+
+# Load node functions from IPS
+hps_load_node_functions() {
+  local gateway distro url
+  
+  gateway="$(hps_get_provisioning_node)" || {
+    echo "[HPS] ERROR: Could not determine provisioning node" >&2
+    return 1
+  }
+  
+  distro="$(hps_get_distro_string)"
+  url="http://${gateway}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=$(hps_url_encode "$distro")"
+  
+  echo "[HPS] Loading functions from IPS..." >&2
+  if ! eval "$(curl -fsSL "$url")"; then
+    echo "[HPS] ERROR: Failed to load functions" >&2
+    return 1
+  fi
+  
+  echo "[HPS] Functions loaded successfully" >&2
+  return 0
+}
+
+# Initialize node (load functions and run queue)
+hps_node_init() {
+  # Load functions first
+  hps_load_node_functions || return $?
+  
+  # Run initialization queue if available
+  if type n_queue_run >/dev/null 2>&1; then
+    echo "[HPS] Running initialization queue..." >&2
+    n_queue_run
+  else
+    echo "[HPS] WARNING: n_queue_run not found" >&2
+  fi
+}
+
+# Reload functions (alias for convenience)
+hps_reload() {
+  hps_load_node_functions
+}
+
+# Quick status function
+hps_status() {
+  echo "HPS Bootstrap Library Status:"
+  echo "  Provisioning node: $(hps_get_provisioning_node)"
+  echo "  Distribution: $(hps_get_distro_string)"
+  echo "  Library version: 1.0"
+  
+  # Check if node functions are loaded
+  if type n_ips_command >/dev/null 2>&1; then
+    echo "  Node functions: Loaded"
+  else
+    echo "  Node functions: Not loaded"
+  fi
+}
+LIBEOF
+  then
+    hps_log error "Failed to create bootstrap library"
+    return 1
+  fi
+  
+  # Make it executable
+  if ! chmod +x "$tmp_dir/usr/local/lib/hps-bootstrap-lib.sh"; then
+    hps_log error "Failed to set execute permission on library"
+    return 1
+  fi
+  
+  # Ensure the directory for protected paths exists
+  mkdir -p "$tmp_dir/etc/apk/protected_paths.d"
+  
+  # Add to LBU include list to persist across reboots
+  echo "/usr/local/lib/hps-bootstrap-lib.sh" >> "$tmp_dir/etc/apk/protected_paths.d/lbu.list"
+  
+  hps_log debug "HPS bootstrap library created successfully"
+  return 0
+}
+
+
+
+
+
+
+_apkovl_create_bootstrap_script() {
   local tmp_dir="$1"
   local gateway_ip="$2"
   local alpine_version="$3"
   
   hps_log debug "Creating bootstrap script"
   
-  # Create bootstrap script with placeholders
+  # Create bootstrap script
   if ! cat > "$tmp_dir/etc/local.d/hps-bootstrap.start" <<'EOF'
 #!/bin/sh
 echo "[HPS] TCH Bootstrap starting..."
@@ -379,37 +524,18 @@ http://ips/distros/alpine-ALPINE_VERSION/apks/main
 http://ips/distros/alpine-ALPINE_VERSION/apks/community
 REPOS
 
-# Update package index with retry logic
-echo "[HPS] Updating package index..."
-for attempt in 1 2 3; do
-    if apk update; then
-        break
-    fi
-    if [ $attempt -lt 3 ]; then
-        echo "[HPS] Retry $attempt/3..."
-        sleep 2
-    else
-        echo "[HPS] ERROR: Failed to update package index after 3 attempts"
-        exit 1
-    fi
-done
-
-# Install required packages
-echo "[HPS] Installing bash and curl..."
-if ! apk add --no-cache bash curl; then
+# Update and install packages
+echo "[HPS] Installing required packages..."
+apk update && apk add --no-cache bash curl || {
     echo "[HPS] ERROR: Failed to install packages"
     exit 1
-fi
+}
 
-# Source HPS functions and configure TCH
-echo "[HPS] Sourcing HPS functions from IPS..."
-if ! /bin/bash -c 'eval "$(curl -fsSL http://GATEWAY_IP/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)"'; then
-    echo "[HPS] ERROR: TCH configuration failed"
-    exit 1
-fi
+# Source the library and initialize
+echo "[HPS] Starting node initialization..."
+/bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_node_init'
 
 echo "[HPS] TCH Bootstrap complete"
-
 EOF
   then
     hps_log error "Failed to write bootstrap script"
@@ -417,16 +543,11 @@ EOF
   fi
   
   # Substitute placeholders
-  sed -i "s|GATEWAY_IP|${gateway_ip}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
   sed -i "s|ALPINE_VERSION|${alpine_version}|g" "$tmp_dir/etc/local.d/hps-bootstrap.start"
   
   # Make executable
-  if ! chmod +x "$tmp_dir/etc/local.d/hps-bootstrap.start"; then
-    hps_log error "Failed to set execute permission on bootstrap script"
-    return 1
-  fi
+  chmod +x "$tmp_dir/etc/local.d/hps-bootstrap.start"
   
-  hps_log debug "Bootstrap script created successfully"
   return 0
 }
 
@@ -435,67 +556,7 @@ EOF
 
 
 
-get_alpine_bootstrap() {
-  local stage="${1:-initramfs}"
-  
-  local gateway_ip=$(cluster_config get DHCP_IP)
-  if [[ -z "$gateway_ip" ]]; then
-    hps_log error "Failed to get gateway IP from cluster config"
-    cgi_fail "Unable to determine IPS gateway IP"
-  fi
-  
-  hps_log debug "Generating bootstrap script for stage: ${stage}, gateway IP: ${gateway_ip}"
-  
-  if [[ "$stage" != "initramfs" && "$stage" != "rc" ]]; then
-    hps_log error "Invalid bootstrap stage: ${stage}"
-    cgi_fail "Invalid stage parameter: ${stage}"
-    return 1
-  fi
-  
-  if [[ "$stage" == "initramfs" ]]; then
-    generate_initramfs_script "$gateway_ip"
-  else
-    generate_rc_script "$gateway_ip"
-  fi
-}
 
-generate_initramfs_script() {
-  local gateway_ip="$1"
-  cat <<'EOF'
-#!/bin/sh
-echo "[HPS] Installing post-boot bootstrap script..."
-if [ ! -d /sysroot ]; then
-    echo "[HPS] ERROR: /sysroot not available"
-    exit 1
-fi
-mkdir -p /sysroot/etc/local.d
-EOF
-  
-  # Write the RC script content dynamically
-  echo "cat > /sysroot/etc/local.d/hps-bootstrap.start <<'RCSCRIPT'"
-  generate_rc_script "$gateway_ip"
-  echo "RCSCRIPT"
-  
-  cat <<'EOF'
-chmod +x /sysroot/etc/local.d/hps-bootstrap.start
-echo "[HPS] Bootstrap script installed to /sysroot/etc/local.d/"
-EOF
-}
-
-generate_rc_script() {
-  local gateway_ip="$1"
-  cat <<EOF
-#!/bin/sh
-echo "[HPS] TCH Bootstrap starting..."
-cat > /etc/apk/repositories <<REPOS
-http://${gateway_ip}/distros/alpine-3.20.2/apks/main
-REPOS
-apk update
-apk add --no-cache bash curl
-/bin/sh -c 'eval "\$(curl -fsSL http://${gateway_ip}/cgi-bin/boot_manager.sh?cmd=node_bootstrap_functions)"'
-#rm -f /etc/local.d/hps-bootstrap.start
-EOF
-}
 
 
 

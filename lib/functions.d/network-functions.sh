@@ -530,19 +530,19 @@ get_client_mac() {
     }
   ')"
 
-  # Fallback to arp
-  if [[ -z "$mac" ]]; then
-    mac="$(arp -n | awk -v ip="$ip" '
-      $1 == ip {
-        for (i=1; i<=NF; i++) {
-          if ($i ~ /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/) {
-            print $i
-            exit
-          }
-        }
-      }
-    ')"
-  fi
+#  # Fallback to arp
+#  if [[ -z "$mac" ]]; then
+#    mac="$(arp -n | awk -v ip="$ip" '
+#      $1 == ip {
+#        for (i=1; i<=NF; i++) {
+#          if ($i ~ /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/) {
+#            print $i
+#            exit
+#          }
+#        }
+#      }
+#    ')"
+#  fi
   echo $(normalise_mac "$mac")
 }
 
