@@ -182,8 +182,5 @@ n_force_network_started() {
 }
 
 
-n_queue_add n_configure_minimal_networking
-
-n_queue_add n_force_network_started
 
 

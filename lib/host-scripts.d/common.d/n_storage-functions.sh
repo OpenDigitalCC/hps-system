@@ -9,114 +9,75 @@ build_zfs_source() {
 
 
 #===============================================================================
-# n_storage_configure_interface
-# -----------------------------
-# Configure storage VLAN interface on node
+# n_storage_network_setup
+# ------------------------
+# Setup storage network using IPS allocation
 #
 # Behaviour:
-#   - Creates VLAN interface on specified physical interface
-#   - Sets MTU based on cluster configuration
-#   - Assigns IP address and netmask
-#   - Brings interface up
-#   - Validates connectivity to gateway
+#   - Requests IP allocation from IPS
+#   - Configures storage VLAN
+#   - Uses generic network functions
 #
 # Parameters:
-#   $1: Physical interface name (e.g., eth0, eth1, bond1)
-#   $2: VLAN ID
-#   $3: IP address
-#   $4: Netmask
-#   $5: Gateway
-#   $6: MTU
+#   $1: Physical interface
+#   $2: Storage network index (0, 1, etc.)
 #
 # Returns:
 #   0 on success
 #   1 on error
 #
 # Example usage:
-#   n_storage_configure_interface eth0 31 10.31.0.100 255.255.255.0 10.31.0.1 9000
+#   n_storage_network_setup eth0 0
 #===============================================================================
-n_storage_configure_interface() {
-    local phys_iface="$1"
-    local vlan_id="$2"
-    local ip_addr="$3"
-    local netmask="$4"
-    local gateway="$5"
-    local mtu="${6:-1500}"
-    
-    # Validate parameters
-    if [[ -z "$phys_iface" ]] || [[ -z "$vlan_id" ]] || [[ -z "$ip_addr" ]] || \
-       [[ -z "$netmask" ]] || [[ -z "$gateway" ]]; then
-        n_remote_log "ERROR: Missing required parameters for storage interface"
-        return 1
-    fi
-    
-    # Check if physical interface exists
-    if [[ ! -d "/sys/class/net/$phys_iface" ]]; then
-        n_remote_log "ERROR: Physical interface $phys_iface does not exist"
-        return 1
-    fi
-    
-    local vlan_iface="${phys_iface}.${vlan_id}"
-    
-    n_remote_log "Configuring storage interface $vlan_iface with IP $ip_addr"
-    
-    # Remove existing VLAN interface if it exists
-    if [[ -d "/sys/class/net/$vlan_iface" ]]; then
-        n_remote_log "Removing existing VLAN interface $vlan_iface"
-        ip link delete "$vlan_iface" 2>/dev/null
-        sleep 1
-    fi
-    
-    # Create VLAN interface
-    if ! ip link add link "$phys_iface" name "$vlan_iface" type vlan id "$vlan_id"; then
-        n_remote_log "ERROR: Failed to create VLAN interface $vlan_iface"
-        return 1
-    fi
-    
-    # Set MTU on VLAN interface
-    if ! ip link set dev "$vlan_iface" mtu "$mtu"; then
-        n_remote_log "ERROR: Failed to set MTU $mtu on $vlan_iface"
-        return 1
-    fi
-    
-    # Bring interface up
-    if ! ip link set dev "$vlan_iface" up; then
-        n_remote_log "ERROR: Failed to bring up $vlan_iface"
-        return 1
-    fi
-    
-    # Assign IP address
-    local cidr_bits=$(netmask_to_cidr "$netmask")
-    if [[ $? -ne 0 ]]; then
-      n_remote_log "ERROR: Invalid netmask $netmask"
-      return 1
-    fi
-
-    
-    if ! ip addr add "${ip_addr}/${cidr_bits}" dev "$vlan_iface"; then
-        n_remote_log "ERROR: Failed to assign IP ${ip_addr}/${cidr_bits} to $vlan_iface"
-        return 1
-    fi
-    
-    # Add route to storage network if gateway is not directly reachable
-    # (Gateway should be on the same subnet for storage networks)
-    
-    # Store configuration for persistence
-    n_remote_host_variable "storage_vlan_interface" "$vlan_iface"
-    n_remote_host_variable "storage_vlan_ip" "$ip_addr"
-    n_remote_host_variable "storage_vlan_mtu" "$mtu"
-    
-    # Validate connectivity with ping (3 attempts)
-    sleep 2
-    if ping -c 3 -W 2 -s $((mtu - 28)) -M do "$gateway" &>/dev/null; then
-        n_remote_log "Storage interface $vlan_iface configured successfully, gateway reachable"
-        return 0
-    else
-        n_remote_log "WARNING: Storage interface configured but gateway $gateway not reachable"
-        # Still return success as interface is configured
-        return 0
-    fi
+n_storage_network_setup() {
+  local phys_iface="$1"
+  local storage_index="${2:-0}"
+  
+  # Get our MAC for identification
+  local mac=$(cat /sys/class/net/${phys_iface}/address)
+  
+  # Request IP allocation from IPS
+  n_remote_log "Requesting storage IP allocation from IPS"
+  local allocation=$(n_ips_command "allocate_storage_ip" \
+    "mac=$mac" \
+    "storage_index=$storage_index")
+  
+  if [[ -z "$allocation" ]] || [[ "$allocation" == "ERROR"* ]]; then
+    n_remote_log "ERROR: Failed to get IP allocation from IPS"
+    return 1
+  fi
+  
+  # Parse allocation (format: vlan_id:ip:netmask:gateway:mtu)
+  local vlan_id ip netmask gateway mtu
+  IFS=':' read -r vlan_id ip netmask gateway mtu <<< "$allocation"
+  
+  # Create VLAN
+  if ! n_vlan_create "$phys_iface" "$vlan_id" "$mtu"; then
+    return 1
+  fi
+  
+  # Add IP
+  local vlan_iface="${phys_iface}.${vlan_id}"
+  if ! n_interface_add_ip "$vlan_iface" "$ip" "$netmask"; then
+    return 1
+  fi
+  
+  # Store in host variables
+  n_remote_host_variable "storage${storage_index}_interface" "$vlan_iface"
+  n_remote_host_variable "storage${storage_index}_ip" "$ip"
+  n_remote_host_variable "storage${storage_index}_gateway" "$gateway"
+  
+  # Test gateway
+  if ping -c 1 -W 2 "$gateway" &>/dev/null; then
+    n_remote_log "Storage network configured, gateway $gateway reachable"
+  else
+    n_remote_log "Storage network configured, gateway $gateway not yet reachable"
+  fi
+  
+  return 0
 }
+
+
 
 #===============================================================================
 # n_storage_validate_jumbo_frames

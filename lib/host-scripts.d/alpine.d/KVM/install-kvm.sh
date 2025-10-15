@@ -182,9 +182,6 @@ n_force_start_services() {
 }
 
 
-n_queue_add n_install_kvm
 
-
-n_queue_add n_force_start_services
 
 

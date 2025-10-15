@@ -161,8 +161,6 @@ n_url_encode() {
 }
 
 
-
-
 #===============================================================================
 # n_ips_command
 # -------------
@@ -180,7 +178,9 @@ n_url_encode() {
 #   - URL-encodes all parameter values to handle special characters
 #   - Constructs query string with command and encoded parameters
 #   - POSTs to boot_manager.sh CGI endpoint
-#   - Returns raw response data to caller for processing
+#   - Checks for HTTP 502 and other error responses
+#   - Returns raw response data to caller for processing on success
+#   - Stores error details in global variables on failure
 #
 # Examples:
 #   n_ips_command "log_message" "message=System started" "function=init"
@@ -193,20 +193,42 @@ n_url_encode() {
 #   - curl command must be installed
 #   - Provisioning node must be reachable via HTTP
 #
+# Error Handling:
+#   - Sets global variables on failure:
+#     * N_IPS_COMMAND_LAST_ERROR - Human-readable error description
+#     * N_IPS_COMMAND_LAST_RESPONSE - Server's error response body (if any)
+#   - No error output to stdout or stderr (silent operation)
+#   - Callers must check return code and/or global variables
+#
 # Returns:
-#   0 on success (HTTP request completed)
+#   0 on success (HTTP 2xx response)
 #   1 if gateway cannot be determined
-#   curl exit code on HTTP failure
+#   2 if curl fails (network error)
+#   3 if HTTP error response (4xx, 5xx)
 #
 # Output:
-#   Writes response body to stdout for caller to capture
+#   Success: Response body to stdout
+#   Failure: No output (check global variables)
+#
+# Example error handling:
+#   if ! result=$(n_ips_command "some_command"); then
+#     echo "Error: $N_IPS_COMMAND_LAST_ERROR" >&2
+#     echo "Response: $N_IPS_COMMAND_LAST_RESPONSE" >&2
+#   fi
 #===============================================================================
 n_ips_command() {
   local cmd="${1:?Usage: n_ips_command <command> [param=value ...]}"
   shift
   
+  # Clear previous error info
+  N_IPS_COMMAND_LAST_ERROR=""
+  N_IPS_COMMAND_LAST_RESPONSE=""
+  
   local ips
-  ips="$(n_get_provisioning_node)" || return 1
+  ips="$(n_get_provisioning_node)" || {
+    N_IPS_COMMAND_LAST_ERROR="Failed to determine IPS gateway"
+    return 1
+  }
   
   # Start building query string with command
   local query="cmd=${cmd}"
@@ -223,8 +245,46 @@ n_ips_command() {
     query="${query}&${key}=${value}"
   done
   
-  # Execute POST request
-  curl -fsS -X POST "http://${ips}/cgi-bin/boot_manager.sh?${query}"
+  local url="http://${ips}/cgi-bin/boot_manager.sh?${query}"
+  local response
+  local http_code
+  local curl_exit
+  
+  # Execute POST request with separate capture of HTTP code
+  # Using -w to get HTTP code, -s for silent, -S to show errors
+  # Redirect stderr to capture curl errors silently
+  response=$(curl -sS -w "\n%{http_code}" -X POST "$url" 2>&1)
+  curl_exit=$?
+  
+  # Check if curl itself failed
+  if [[ $curl_exit -ne 0 ]]; then
+    N_IPS_COMMAND_LAST_ERROR="curl failed (exit $curl_exit) for command: $cmd"
+    N_IPS_COMMAND_LAST_RESPONSE="$response"
+    return 2
+  fi
+  
+  # Extract HTTP code from last line
+  http_code=$(echo "$response" | tail -n1)
+  # Remove HTTP code from response
+  response=$(echo "$response" | sed '$d')
+  
+  # Check HTTP response code
+  if [[ "$http_code" =~ ^[45][0-9][0-9]$ ]]; then
+    N_IPS_COMMAND_LAST_ERROR="HTTP $http_code for command: $cmd (URL: $url)"
+    N_IPS_COMMAND_LAST_RESPONSE="$response"
+    
+    # Special handling for 502 Bad Gateway
+    if [[ "$http_code" == "502" ]]; then
+      N_IPS_COMMAND_LAST_ERROR="HTTP 502 Bad Gateway - An error occurred while reading CGI reply (no response received). Command: $cmd"
+    fi
+    
+    # Don't output error responses
+    return 3
+  fi
+  
+  # Success - output response to stdout
+  echo "$response"
+  return 0
 }
 
 #===============================================================================
@@ -241,18 +301,33 @@ n_ips_command() {
 # Behaviour:
 #   - Retrieves the calling function name from bash call stack
 #   - Sends log_message command to IPS with message and function context
+#   - Outputs any errors to stdout for visibility
 #
 # Dependencies:
 #   - n_ips_command function must be available
 #
+# Output:
+#   Success: No output
+#   Failure: Error details to stdout
+#
 # Returns:
-#   Exit code from n_ips_command
+#   0 on success
+#   Exit code from n_ips_command on failure (1-3)
 #===============================================================================
 n_remote_log() {
   local message="${1:?Usage: n_remote_log <message>}"
   local function="${FUNCNAME[1]}"
   
-  n_ips_command "log_message" "message=${message}" "function=${function}"
+  if ! n_ips_command "log_message" "message=${message}" "function=${function}"; then
+    # Output error info to stdout
+    echo "n_remote_log: $N_IPS_COMMAND_LAST_ERROR"
+    if [[ -n "$N_IPS_COMMAND_LAST_RESPONSE" ]]; then
+      echo "Server response: $N_IPS_COMMAND_LAST_RESPONSE"
+    fi
+    return $?
+  fi
+  
+  return 0
 }
 
 #===============================================================================
@@ -272,27 +347,45 @@ n_remote_log() {
 #   - GET: When called with only name, retrieves the variable value
 #   - SET: When called with name and value, sets the variable
 #   - Uses host_variable command on IPS
+#   - Logs errors to IPS via n_remote_log
 #
 # Dependencies:
 #   - n_ips_command function must be available
+#   - n_remote_log function must be available
 #
 # Output:
-#   GET: Raw value of the variable
-#   SET: Success/failure message from server
+#   GET: Raw value of the variable (or nothing on error)
+#   SET: Success/failure message from server (or nothing on error)
 #
 # Returns:
-#   Exit code from n_ips_command
+#   0 on success
+#   Exit code from n_ips_command on failure (1-3)
 #===============================================================================
 n_remote_host_variable() {
   local name="${1:?Usage: n_remote_host_variable <name> [<value>]}"
   local value="${2-}"
+  local result
+  local exit_code
   
   if [[ -n "$value" ]]; then
     # SET operation
-    n_ips_command "host_variable" "name=${name}" "value=${value}"
+    result=$(n_ips_command "host_variable" "name=${name}" "value=${value}")
+    exit_code=$?
   else
     # GET operation
-    n_ips_command "host_variable" "name=${name}"
+    result=$(n_ips_command "host_variable" "name=${name}")
+    exit_code=$?
+  fi
+  
+  if [[ $exit_code -eq 0 ]]; then
+    # Success - output result
+    echo "$result"
+    return 0
+  else
+    # Log error
+    local operation=$([[ -n "$value" ]] && echo "set" || echo "get")
+    n_remote_log "Failed to $operation host variable '$name': $N_IPS_COMMAND_LAST_ERROR"
+    return $exit_code
   fi
 }
 
@@ -313,29 +406,49 @@ n_remote_host_variable() {
 #   - GET: When called with only name, retrieves the variable value
 #   - SET: When called with name and value, sets the variable
 #   - Uses cluster_variable command on IPS
+#   - Logs errors to IPS via n_remote_log
 #
 # Dependencies:
 #   - n_ips_command function must be available
+#   - n_remote_log function must be available
 #
 # Output:
-#   GET: Raw value of the variable
-#   SET: Success/failure message from server
+#   GET: Raw value of the variable (or nothing on error)
+#   SET: Success/failure message from server (or nothing on error)
 #
 # Returns:
-#   Exit code from n_ips_command
+#   0 on success
+#   Exit code from n_ips_command on failure (1-3)
 #===============================================================================
 n_remote_cluster_variable() {
   local name="${1:?Usage: n_remote_cluster_variable <name> [<value>]}"
   local value="${2-}"
+  local result
+  local exit_code
   
   if [[ $# -ge 2 ]]; then
     # SET operation - check arg count to handle empty string values
-    n_ips_command "cluster_variable" "name=${name}" "value=${value}"
+    result=$(n_ips_command "cluster_variable" "name=${name}" "value=${value}")
+    exit_code=$?
   else
     # GET operation
-    n_ips_command "cluster_variable" "name=${name}"
+    result=$(n_ips_command "cluster_variable" "name=${name}")
+    exit_code=$?
+  fi
+  
+  if [[ $exit_code -eq 0 ]]; then
+    # Success - output result
+    echo "$result"
+    return 0
+  else
+    # Log error
+    local operation=$([[ $# -ge 2 ]] && echo "set" || echo "get")
+    n_remote_log "Failed to $operation cluster variable '$name': $N_IPS_COMMAND_LAST_ERROR"
+    return $exit_code
   fi
 }
+
+
 
 n_remote_log "Starting to load node functions"
 
