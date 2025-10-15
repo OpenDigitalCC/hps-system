@@ -11,7 +11,7 @@ n_queue_add n_display_info_before_prompt  # Handle console display
 cat /etc/issue
 
 # Check if node_information works
-n_node_information
+#n_node_information
 
 
 # uncommenting this will disable login

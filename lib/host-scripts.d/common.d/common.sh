@@ -1,14 +1,12 @@
 # /srv/hps/functions.d/common.sh
 
-
-
-# relay functions from IPS to nodes
-
-declare -f urlencode
-
-
-
 ## NODE Functions for any O/S
+
+
+
+
+
+
 
 #===============================================================================
 # n_node_information
@@ -295,3 +293,6 @@ n_queue_list() {
     
     return 0
 }
+
+
+
