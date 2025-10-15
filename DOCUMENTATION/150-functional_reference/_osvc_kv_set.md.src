@@ -4,27 +4,26 @@ Contained in `lib/functions.d/opensvc-functions.sh`
 
 Function signature: e83bb88e314eb7098eb2ed8868cdecf150f3a7c4cec631f0ac14eadabbeaa0d3
 
-### Function Overview
+### Function overview
 
-This function, `_osvc_kv_set()`, is utilized to set a configuration value in an application named 'om'. It takes a key-value pair as input, creates a local variable for each, and then uses the `om config set --kw` command to set the configuration parameter with the key-value pair.
+The function `_osvc_kv_set()` is a local key-value setter. This bash function sets a key-value combination in the OSVC configuration file. It uses the local variable `k` to represent key, and `v` to represent value. These are then passed to `om config set` with the `--kw` option.
 
-### Technical Description
+### Technical description
 
- - **Name:** `_osvc_kv_set()`
- - **Description:** This function takes a key-value pair as arguments, and uses these to set a configuration parameter in an 'om' application using its built-in settings interface.
- - **Globals:** None
- - **Arguments:** 
-   - `$1: k` This argument represents the configuration key to be updated. It is necessary and the function will not run without providing this argument.
-   - `$2: v` This argument represents the new configuration value for the specified key. This is also required for the function to run.
- - **Outputs:** The function does not output anything. It only updates a configuration setting within an application.
- - **Returns:** It does not return a value.
- - **Example usage:** `_osvc_kv_set database-url 'http://example.com'` would set the `database-url` configuration parameter in the 'om' application to 'http://example.com'.
+- **Name**: `_osvc_kv_set`
+- **Description**: This function takes a key and a value as inputs, and sets this pair in the OSVC configuration, by using `om config set` command.
+- **Globals**: None.
+- **Arguments**: 
+  - `$1: key` - This argument represents the key that we need to set.
+  - `$2: value` - This argument represents the corresponding value for the key.
+- **Outputs**: Executes `om config set` with `--kw` option and the passed key-value pair.
+- **Returns**: None. The changes are made in the configuration.
+- **Example usage**: `_osvc_kv_set "myKey" "myVal"`
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. Checks should be implemented to ensure that the key and value arguments are not empty, null, or undefined before their usage. This can avoid unexpected application behavior.
-2. Security checks such as character escaping or sanitizing should be applied to prevent possible command injection or other security vulnerabilities.
-3. To improve quality, unit tests should be written for this function to ensure expected behavior.
-4. Function documentation should be kept updated to align with its latest version or iteration.
-5. In terms of security, consider implementing encryption for sensitive data as function parameters.
+1. Check for null or empty key-value pairs: Before setting a key-value pair in the configuration, it should be validated that neither the key nor the value is null or empty. This could be done as a guard clause within the function.
+2. Avoid overriding of existing keys: While setting a new key-value pair, ensure that the key does not already exist to prevent unintentional overwriting.
+3. Input sanitization: Ensure that key and value inputs do not contain characters that could potentially exploit script vulnerabilities or disrupt normal operation.
+4. Configuration file permissions: Check for necessary permissions before updating the configuration file. If the permissions are not sufficient, the function should either notify the user or fail gracefully.
 

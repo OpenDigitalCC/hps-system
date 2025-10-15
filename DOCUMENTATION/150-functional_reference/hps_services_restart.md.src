@@ -2,37 +2,31 @@
 
 Contained in `lib/functions.d/system-functions.sh`
 
-Function signature: 7b93e7411974a37f633379e3621dbdd656b539da01549e95ae3697ceb23cb5bc
+Function signature: a6205428f2faad6f9af5847c527a10dd5eced1de31f2f36738b99daede46ce67
 
 ### Function Overview
 
-The function `hps_services_restart` is used for restarting the HPS services by configuring, creating and reloading supervisor services. After these operations it logs the restart status and executes post start steps.
+The `hps_services_restart` function is part of the bash scripting language and is primarily used for restarting services in a High Performance System (HPS). Its tasks are executed in sequence including arranging supervisor services, creating a supervisor services configuration, reloading the supervisor configuration, logging the restarting process, and executing post-start tasks for the services.
 
 ### Technical Description
 
-**- Name:** hps_services_restart
-
-**- Description:** This function restarts the HPS services. It starts by configuring and creating supervisor services. Then, it reloads the supervisor configuration. It logs an information message regarding the restart status of all supervisor services, using the configuration file located at "${CLUSTER_SERVICES_DIR}/supervisord.conf". Finally, it performs post start tasks for the HPS services. 
-
-**- Globals:** [ CLUSTER_SERVICES_DIR: This global variable holds the directory where the supervisor services' configurations are stored ]
-
-**- Arguments:** This function does not take any arguments.
-
-**- Outputs:** Logs the outcome of the restart command to the standard output.
-
-**- Returns:** Does not return a value.
-
-**- Example usage:** 
-
-```bash
+- **Name:** `hps_services_restart`
+- **Description:** This function is responsible for restarting all of the services in an HPS environment. It undertakes several responsibilities including configuring, creating, and reloading supervisor services, logging the whole restart process, and finally triggering post-start functions.
+- **Globals:** No global variables are directly addressed by this function.
+- **Arguments:** This function does not require any arguments.
+- **Outputs:** The function outputs an info log message which includes the results of the `supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf"` command, which restarts all services.
+- **Returns:** The function does not explicitly return a value. The outcome of the function depends on the success of restarting all services.
+- **Example usage:** 
+  ```
   hps_services_restart
-```
+  ```
 
 ### Quality and Security Recommendations
 
-1. Validation checks should be implemented at the start of the function to ensure that the `CLUSTER_SERVICES_DIR` global variable is set and refers to a valid directory.
-2. Error handling should be implemented to catch unsuccessful operations, such as in case of failed reload of supervisor configuration or if logging returns an error.
-3. Consider using more specific logging levels (e.g., debug, warning, error) instead of using the 'info' level for all types of logs. This makes the system easier to debug and monitor.
-4. Carefully manage file and directory permissions for `CLUSTER_SERVICES_DIR` and `supervisord.conf`, ensuring that only authorized users/services can modify them. This can help to prevent unauthorized modification of services, which could lead to security breaches.
-5. Evaluate the necessity of executing `hps_services_post_start` at the end of the function in terms of security. If this function is not necessary, or could potentially be exploited, consider removing it.
+1. Always test this function with non-critical services before applying it to a live cluster to ensure its proper operation.
+2. Guarantee that each of the invoked functions (like `configure_supervisor_services`, `create_supervisor_services_config`, `reload_supervisor_config`, `hps_log`, and `hps_services_post_start`) securely manage exceptions, errors and return statuses.
+3. Ensure that logging is set at an appropriate verbosity level to provide enough detail for troubleshooting any issues that may arise without overcrowding the log files.
+4. Validate user inputs or values loaded from files before utilizing them to prevent potential code injection attacks.
+5. Make sure access permissions are correctly set, to prevent unauthorized access.
+6. Always keep the HPS environment and the related software components updated, as new updates often bring security patches and enhanced performance.
 

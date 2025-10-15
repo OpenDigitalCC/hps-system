@@ -2,31 +2,34 @@
 
 Contained in `lib/functions.d/tch-build.sh`
 
-Function signature: a007a0818596cb39af8229e52a0b9936c78e7463a081efc4d73d2c4067076a5c
+Function signature: ed1d82a379d9d6afbfe07af535414a6e06f0d874630568ae59ea3561918ad0ec
 
-### Function Overview 
+### Function Overview
 
-The `tch_apkovol_create()` is a Bash function responsible for creating an Alpine Linux apkovl (Alpine local backup) file. The function performs this task by obtaining important configuration information first (like the gateway IP, Alpine version, and name server), logging relevant activities and potential issues/errors, and then building the necessary components of the apkovl. Upon successful creation, information is logged, and a tarball archive is created. If any step fails, it performs necessary cleanups and returns an error status of 1.
+`tch_apkovol_create` is a Bash function primarily responsible for collecting configuration details (such as the IP of the gateway and the latest Alpine version) and generating the Alpine apkovl (Alpine Linux package overlay) tarball in the specified output file. The function also handles temporary directory creation for building apkovl components and cleanup actions once the tarball is created. It also manages logging of the operation statuses.
 
 ### Technical Description
 
-- **Name**: `tch_apkovol_create()`
-- **Description**: Bash function that creates an Alpine Linux apkovl file.
-- **Globals**: None.
-- **Arguments**: 
-  - `$1: output_file`: Represents the name/path of the output file of the tarball archive that will be created.
-- **Outputs**: Logging messages to the console regarding the progression of apkovl creation or errors if they occur.
-- **Returns**: Function returns 0 if the apkovl and tarball creation is successful or 1 if it encounters an error.
-- **Example Usage**:
-
-```bash
-tch_apkovol_create "my_archive.tar.gz"
-```
+- **Name:** `tch_apkovol_create`
+- **Description:** Used for collecting configuration details and creating an Alpine apkovl tarball containing essential configuration files and scripts for a target system.
+- **Globals:** None
+- **Arguments:** 
+  - `$1: output_file` – The file path at which to generate the apkovl tarball
+- **Outputs:** Logs informational, error and debug messages related to the progress and status of the Alpine apkovl creation process.
+- **Returns:** 
+  - `0` if the apkovl creation process is successful
+  - `1` if an error is encountered during the process
+- **Example Usage:** 
+  ```bash
+  tch_apkovol_create "/path/to/output/file"
+  ```
 
 ### Quality and Security Recommendations
-1. **Error handling**: The function already does a good job of returning 1 when an error is encountered, but it might be beneficial to also return distinct error codes for different types of errors.
-2. **Input validation**: The function does not currently validate the input $1. It should check that the output file path provided as an argument is both valid and writable before attempting to create a tar archive.
-3. **Temporary directory**: The usage of `tmp_dir` can be better managed with a trap on EXIT signal to clean it up instead of cleaning in several places.
-4. **Security**: Ensure that the files which are written to `tmp_dir` have proper file permissions set, to avoid unauthorized access.
-5. **Code Commenting**: Commenting is important to understand the function, variables, and logic used in the code. Detailed comments explaining complex parts of the function would improve readability and maintainability.
+
+1. Always validate function inputs for proper format and expected data type to prevent unexpected behavior or errors.
+2. Use a more unique naming scheme for temporary directories to reduce the risk of naming collisions.
+3. Implement more granular error handling for the different stages of the apkovl creation process, ensuring the cleanup of any created resources.
+4. Consider better logging for debug, informational and error messages across the function for easier troubleshooting and tracing.
+5. Handle exceptions that might occur when querying configuration settings.
+6. Secure the creation, utilization and deletion of the temporary directory.
 

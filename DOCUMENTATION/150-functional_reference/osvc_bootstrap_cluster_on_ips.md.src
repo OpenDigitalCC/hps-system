@@ -2,39 +2,25 @@
 
 Contained in `lib/functions.d/opensvc-functions.sh`
 
-Function signature: ec4bc28c436647a67226fa73910324c86c5355dbbbdbcaf89b48043c9fdb5796
+Function signature: 5c6e0561effddf61773afa3a92bd63b874a69bc5288818a661a33cb6934cf68e
 
-### Function Overview
+### Function overview
 
-The `osvc_bootstrap_cluster_on_ips` function acts as a procedure for initializing an OpenSVC cluster within an IPS (Internet Protocol Suite) environment. This function involves several steps including:
+This function, `osvc_bootstrap_cluster_on_ips()`, is a crucial part of setting up a Clustering Infrastructure using OpenSVC. The procedure involves bootstrapping a cluster on IPs, configuring necessary parameters such as Cluster Name and Node Name, enforcing certain configurations, starting a daemon, and setting up a heartbeat for the operation. An essential part of this function includes getting or generating a cluster secret.
 
-1. Configuration generation and enforcing the key.
-2. Starting up a daemon with the aid of supervisord.
-3. Then undertaking further configuration steps with regards to the cluster,
-4. Including the setup of a heartbeat.
-5. Generation and/or retrieval of the cluster secret.
-6. Ultimately resulting in the verification of the daemon.
+### Technical description
 
-### Technical Description
+* _Name_: `osvc_bootstrap_cluster_on_ips()`
+* _Description_: The function's main role is in the bootstrapping process of a cluster on IPS using OpenSVC. It has several operations with checks and logging at each step to ensure smooth operation and reporting any possible failures.
+* _Globals_: [ `ips_role`: stores the OSVC_IPS_ROLE, `cluster_name`: stores the name of the cluster, `hb_type`: takes the type of heartbeat, `cluster_secret`: holds the cluster secret]
+* _Arguments_: This function does not take any arguments.
+* _Outputs_: The function outputs several log messages, consisting of information, error and status details about the state of bootstrapping, possible failures, and the final status of the process.
+* _Returns_: The function returns 0 on successful bootstrapping, 1 if any configuration fails, and 2 if the daemon fails to start or is not responsive.
+* _Example usage_: The function is intended to be called without any arguments in the form of `osvc_bootstrap_cluster_on_ips`.
 
-- **Function Name**: `osvc_bootstrap_cluster_on_ips`
-- **Description**: This function bootstraps an OpenSVC cluster on IPS (Internet Protocol Suite). It performs several steps such as generating a configuration, starting a daemon, setting up cluster settings, and verifying the daemon.
-- **Globals**: 
-  - `CLUSTER_SERVICES_DIR`: Directory containing services for the cluster.
-  - `cluster_name`: Name of the cluster.
-  - `cluster_secret`: Secret passphrase for the cluster.
-- **Arguments**: This function does not accept any arguments.
-- **Outputs**: This function logs either the success or the failure of each step and prints these messages to the standard output.
-- **Returns**: 0 on successful execution, 1 on failure due to configuration issues or failure to set parameters, and 2 on failure due to daemon start issues or the daemon not responding after bootstrapping.
-- **Example Usage**: 
+### Quality and security recommendations
 
-           osvc_bootstrap_cluster_on_ips
-
-### Quality and Security Recommendations
-
-1. Strict handling of the `cluster_secret`: The cluster secret should be securely stored and its read access should be tightly controlled. Logging the secret value should also be avoided.
-2. Exception handling: The function should robustly handle any exceptions or failures that may occur during execution especially during critical actions such as creating configurations and starting daemons.
-3. Function validation: Additional validation checks could be included to ensure the function is executing in the expected environment that complies with other necessary specifications.
-4. Logging: Including more logs in the function would help tracking the progress and tracing any failures more easily.
-5. Secure daemon: Ensure that the "om daemon run" command runs securely, especially when exposing IP addresses and other sensitive details.
+1. Input Validation: As is common with bash functions, an implicit assumption is that any provided environment variables or globals are already set and valid. To improve this, consider validating these variables inside the function or explicitly handle the case when these globals are not provided.
+2. Error Handling: The function does good job logging errors in most cases. Still, it might be beneficial to have more granular error handling, especially when dealing with sensitive information like the cluster secret.
+3. Security Recommendations: As the function is dealing with sensitive data (like the cluster secret), it becomes critical to safeguard this information. Always ensure that such data is securely stored and used only over safe connections/protocols.
 

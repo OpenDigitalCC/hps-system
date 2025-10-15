@@ -2,31 +2,32 @@
 
 Contained in `lib/functions.d/create_config_dnsmasq.sh`
 
-Function signature: 22bc6c19aa391d4d58e332e373400aad4f02035bedd99d8d94127662dcf30360
+Function signature: e8e5c3ae68c6edbb046d7d24d90b6f00e97a7553b5f4271d29d93e11655d696a
 
-### Function Overview
+### Function overview
 
-The `create_config_dnsmasq` function is a helper script designed to create the `dnsmasq.conf` and related configuration files required for dnsmasq functions, like binding to an IP, DHCP reservations, DNS settings, TFTP, and PXE. This function creates and writes the configuration files, and ensures they exist in the specified paths. The function will generate an error message if there is no `DHCP_IP` given.
+The function `create_config_dnsmasq` is utilized for setting up and configuring the dnsmasq service. This function generates dnsmasq configuration about System, DHCP, DNS, TFTP and PXE by defining specific parameters obtained from the cluster configuration. It's important to note that the function utilizes a variety of global variables that are assumed to be pre-defined before the function runs. The function is invoked without any arguments.
 
-### Technical Description
+### Technical description
+> - **name:** `create_config_dnsmasq`
+> - **description:** This function sets up the dnsmasq service by generating a configuration file.
+> - **globals:**
+>   - `DHCP_IP`: Description (assumed to be IP address for DHCP)
+>   - `DHCP_IFACE`: Description (assumed to be network interface for DHCP)
+>   - `NETWORK_CIDR`: Description (assumed to be network CIDR for DHCP)
+>   - `DHCP_RANGESIZE`: Description (assumed to be DHCP's range size)
+>   - `DNS_DOMAIN`: Description (assumed to be the domain for DNS)
+>   - `HPS_TFTP_DIR`: Description (assumed to be the directory for TFTP)
+> - **arguments:** None.
+> - **outputs:** A dnsmasq configuration file.
+> - **returns:** Nothing explicitly but presumably exits the script if DHCP_IP global variable is undefined.
+> - **example usage:** `create_config_dnsmasq`
 
-* **Name:** `create_config_dnsmasq`
-* **Description:** This function creates the `dnsmasq.conf`, `dns_hosts`, and `dhcp_addresses` configuration files for dnsmasq. It also logs the configuration process and checks for the presence of `DHCP_IP`. If `DHCP_IP` is absent, it returns an error message and exits.
-* **Globals:** 
-  - `DHCP_IP`: description TBD
-  - `DNSMASQ_CONF`, `DNS_HOSTS`, `DHCP_ADDRESSES`: Paths for the configuration files
-* **Arguments:**
-  - Not applicable for this function.
-* **Outputs:** Creates the configuration files and logs the process. If `DHCP_IP` is not set, it outputs an error message.
-* **Returns:** Technically, as a function, it doesn't return anything.
-* **Example Usage:** `create_config_dnsmasq`
+### Quality and security recommendations
 
-### Quality and Security Recommendations
-
-1. It is always a good practice to validate input parameters before proceeding with the rest of the function. For this function, more checks could be included to ensure the validity of the supplied IP addresses.
-2. Error handling should be improved - currently, if `DHCP_IP` is not set it echos an error line and then exits. It would be better to implement more robust error handling.
-3. Avoid using relative paths for configuration files, as this increases the risk of path injection vulnerabilities.
-4. Add specific file permissions to the configuration files created using this function. This would restrict unauthorized access to these configuration files.
-5. The function currently creates files and logs the process - logging should be considered for all significant steps of the function, not restricted to just the configuration section.
-6. The script could benefit from some comments explaining what each section of the created configuration file does.
+1. It's recommended to have error checking for all global variables used in this function to avoid misbehavior in case any of them is not defined.
+2. Log all function execution and exit paths for debugging purposes and maintaining a traceable log of all actions taken by the function.
+3. Check the result of the `cat` command for successful file creation and write in addition to the existence of the `DHCP_ADDRESSES` and `DNS_HOSTS` files.
+4. Global variable names should be more descriptive to provide context about what value they should hold.
+5. Avoid using `exit` function directly in the function; instead, return a status code and handle it in the caller function. Doing so allows for better error handling and script execution control.
 

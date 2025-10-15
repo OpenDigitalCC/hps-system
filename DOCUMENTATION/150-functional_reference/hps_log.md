@@ -2,28 +2,41 @@
 
 Contained in `lib/functions.d/hps_log.sh`
 
-Function signature: 7097e5f6dbf7eb35af6d5c1fe86b7ea40ce7ed8d95259fe409cfc4e8eb117559
+Function signature: 7cb7f11ea9e4a792671d9c09325d32e8a4dd46d495d30350236ad1cc427116bf
 
-### Function overview
+### Function Overview
+This bash function, `hps_log()`, is a logging mechanism in the Bash script dedicated to logging events from a particular system. Through this function, messages with different levels can be logged in a well-structured format including timestamp, identifier and log level into a system log file. The log identifier `ident`, the log file directory `HPS_LOG_DIR`, and the log level are adjusted through global variables and arguments.
 
-The `hps_log` function is a custom log function that logs system events in a file named `hps-system.log` located in the directory specified by `HPS_LOG_DIR`. The function creates logs with timestamps and a log level which can be set from the command input. It also helps organize logs by supporting an identifier input. Lastly, if this function is called without the `HPS_LOG_IDENT` variable having been set, it defaults the identifier as 'hps'.
+### Technical Description
+**name**: `hps_log`
 
-### Technical description
+**description**: A bash function for logging events in a system. It logs events into a system log file with the log format of timestamp, identifier, log level, and message.
 
-- **name**: hps_log
-- **description**: This function logs data with the specified level, message, and identity into a file defined by environment variable `HPS_LOG_DIR`. Default identity is 'hps' when `HPS_LOG_IDENT` is not set.
-- **globals**: [ HPS_LOG_DIR: Directory to store the log files, HPS_LOG_IDENT: Identity for the logs]
-- **arguments**: [ $1: Log level, $... : Log message ]
-- **outputs**: Writes logs to `hps-system.log` file in the location specified by `HPS_LOG_DIR`.
-- **returns**: Not applicable since logging functions typically do not return a value.
-- **example usage**: `hps_log "error" "This is a sample error message"`
+**globals**: 
+- `HPS_LOG_IDENT`: Used to set the identifier in the log. If not defined, defaults to 'hps'.
+- `HPS_LOG_DIR`: Used to set the directory where the log file will be saved. Defaults must be set externally.
 
-### Quality and security recommendations
+**arguments**: 
+- `$1`: Represents the log level for the event. It's converted to uppercase.
+- `$*`: Represents the message for the log that captures the system event details.
 
-1. Protect the log file by setting appropriate permissions to prevent unauthorized access or tampering.
-2. Regularly rotate and archive log files to avoid them becoming too large.
-3. Implement checks to ensure that `HPS_LOG_DIR` is set to a valid directory.
-4. Provide error handling mechanisms if the log file cannot be written to.
-5. Assign a default value to `HPS_LOG_DIR` that points to a secure and writeable directory if it has not been set.
-6. Avoid logging sensitive information to maintain user data privacy.
+**outputs**: 
+Writes a log entry to the `hps-system.log` file located at the log file directory `HPS_LOG_DIR`.
+
+**returns**: 
+Does not return a value but exits the function after writing the log entry.
+
+**example usage**:
+
+```bash
+HPS_LOG_DIR="/path/to/log/directory"
+hps_log "info" "System operation successful."
+```
+
+### Quality and Security Recommendations
+1. It's crucial to ensure the write permission for `HPS_LOG_DIR` directory to avoid permission denied error.
+2. Sanitize user-supplied input to the function. Any user-supplied input incorporated into the log message should be properly sanitized to prevent code injection attacks and log forgery.
+3. Implement log rotation and archival strategy. If the logging function is not properly managed, the log file could grow very large which could create a Denial-of-service (DoS) condition on the file system.
+4. Add error handling to the logging function, to gracefully handle any errors occurred during logging, such as file write errors. 
+5. Consider time synchronization and timezone information since log files often serve as a key piece of evidence during incident response and digital forensics.
 

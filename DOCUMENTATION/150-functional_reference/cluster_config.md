@@ -2,27 +2,43 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: ea561bb0141a57e976a8d270b800ed25635238facc99a0dcb1b5ee58af4ad106
+Function signature: 7945db2fcd65e8be1bffb4a38e55baa1da3c40817d5dbfa6899ec1986871997e
 
 ### Function overview
 
-The Bash function `cluster_config()` provides an interface to manage the configuration of a cluster. The function takes three arguments: an operation, a key, and optionally a value. The operation can be 'get', 'set', 'exists', or any other string (which will be treated as an error). The function attempts to find the active cluster configuration file. If it doesn't find one, it returns an error. If it does find one, it performs the desired operation on the key-value pair.
+The `cluster_config()` function is a bash function designed to retrieve, set, or confirm the existence of key-value pairs within a cluster configuration file. It takes four arguments, three of which are optional, namely an operation to be executed (`op` - either get, set, or exists), a key (`key`), a value (`value`), and a cluster name (`cluster`). It utilizes local variables and command-line utilities such as `grep`, `sed`, `cut` to perform operations on the configuration file.
 
 ### Technical description
 
-- **Name**: `cluster_config`
-- **Description**: A Bash function to manage the key-value pairs in the configuration of an active cluster.
-- **Globals**: `[ cluster_file: a file containing the active cluster configuration ]`
-- **Arguments**: `[ $1: operation to perform (get, set, exists), $2: a key to operate on, $3(Optional): a value corresponding to the key ]`
-- **Outputs**: Outputs depend on operation. If 'get', it prints the value corresponding to the key. If 'set', it modifies or creates a key-value pair. If 'exists', it searches for the key. Any other string will result in an error message.
-- **Returns**: 1 if no active cluster config is found, 2 if an unknown operation is passed to the function.
-- **Example usage**: To set the value of a key 'key1' in the active cluster's config to 'value1', command will look like `cluster_config set key1 value1`.
+- `name`: `cluster_config()`
+- `description`: Function to get, set, or confirm the existence of keys and values in a specified or active cluster configuration file.
+- `globals`: `[ HPS_CONFIG_DIR: Directory containing the cluster configuration files ]`
+- `arguments`: `[ $1: The operation to be performed (get, set, or exists), $2: The key in the config file to be processed, $3: The value to be assigned to the key when performing set operation (optional), $4: The name of the cluster (optional) ]`
+- `outputs`: Depending on the operation, it may output the value associated with a key (get operation), a confirmation message (set operation), or indication of the existence of a specific key (exists operation). It may also output error messages in case of failure.
+- `returns`: The function can return an exit status of 1 or 2 indicating failure due to certain conditions.
+- `example usage`:
+
+  To get the value of a key in the active cluster:
+  ```bash
+  cluster_config get my_key
+  ```
+
+  To set the value of a key in a specific cluster:
+  ```bash
+  cluster_config set my_key my_value my_cluster
+  ```
+
+  To check if a key exists in the active cluster:
+  ```bash
+  cluster_config exists my_key
+  ```
 
 ### Quality and security recommendations
 
-1. The function currently writes error messages to stderr, which is a good practice. However, no positive messages are provided for successful operations. Providing feedback for success can improve usability and debuggability.
-2. The 'set' operation makes use of `echo` to append to a file, which can be unsafe if the script does not control the content being echoed. A safer alternative would be to use `printf`.
-3. The 'get' operation uses cut and grep to parse the key-value pairs. If the values contain special characters, or if another '=' appears in the line, this could have unintended consequences. A more robust parsing mechanism could improve this.
-4. The function may consider input validation to ensure that provided keys and values are valid before attempting operations.
-5. It could be beneficial to check if the operation succeeded (i.e., the value was actually set or got), and return appropriate errors if not.
+1. Consider documenting the function more systematically: Describing accepted arguments, operation types and errors in return values would improve maintenance and usability of the function.
+2. The function should validate the input more carefully in order to prevent injection attacks. For example, it might process special characters in the `key` and `value` variables which could lead to unexpected behavior.
+3. The number of global variables should be minimized. For instance, instead of relying on `HPS_CONFIG_DIR`, the function could be refined to allow passing of the directory path as an argument.
+4. This function performs several commands without verifying their successful execution. These commands should be checked for success (and potential error messages handled) to prevent inconsistent or faulty output.
+5. Hardcoded strings such as error messages could be replaced with constants or configuration options to improve consistency and maintainability.
+6. Setting default values for optional parameters (namely, `value` and `cluster`) can help streamline the function's usage and avoid confusion.
 

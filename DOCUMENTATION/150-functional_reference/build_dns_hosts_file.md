@@ -2,30 +2,31 @@
 
 Contained in `lib/functions.d/dns-dhcp-functions.sh`
 
-Function signature: 202234c143dffc920a5780db8420eb67121377864cabc2f9cd898343ab9493ab
+Function signature: 5461e3745b5a083907bf1bee9dc85e7152eee86bf62dd7cacbb4c5805079967f
 
-### Function overview
+### Function Overview
 
-The `build_dns_hosts_file` function in Bash is essentially a method that configures the details required for a DNS hosts file in a cluster. The function works by setting the specific directories and files, logging the process, analysing cluster configurations for domain name and IP address, validating the given IP, defining IPS service aliases, starting with an empty temporary file, and writing these entries into the file. It then moves this temporary file to the destined location. If any step fails, it logs an error and returns from the function. 
+The function `build_dns_hosts_file()` is tasked with constructing a DNS hosts file. It first defines the working paths and logs the action it's about to execute. Then, the function does a check and creates a services directory if it's not already there. 
 
-### Technical description
+The function then retrieves the DNS domain and the IPS IP address from the cluster configuration. These values are then validated, and possible errors are logged. Then, aliases for the IPS service are defined.
 
-- **Name:** build_dns_hosts_file
-- **Description:** The function `build_dns_hosts_file` sets up a DNS hosts file in a cluster. It first sets directories and goes on to fetch important details like DNS domain and IP address from the cluster configuration. It validates the received IP and then constructs the DNS hosts file. If any step fails, it logs the error message and returns from the function.
-- **Globals:** [ HPS_CLUSTER_CONFIG_DIR: An environmental variable defining the directory path of the cluster services ]
-- **Arguments:** [ None: This function doesn't require any arguments ]
-- **Outputs:** This function writes entries into a temporary file and then moves this file to the final location. If any error occurs during the process, it logs the error message.
-- **Returns:** The function will return '1' if the process fails at any step, and '0' if the function is executed successfully. 
-- **Example Usage:** 
-```bash
-build_dns_hosts_file
-```
-### Quality and security recommendations
+Afterwards, it starts with an empty temporary file and begins to add entries, keeping count of each one. Finally, the function attempts to move the temporary file to the intended location. Should this fail, the temporary file is deleted and an error logged. If successful, an information log is created outlining how many entries were made.
 
-1. Implement error message handling for each step, to avoid cascading failure effects.
-2. Include input validation to the best extent possible.
-3. Use security measures to protect IP and other sensitive details from being mishandled.
-4. Workflow debugging might be needed to spot code imperfections to pre-empt errors.
-5. Use file permissions correctly to prevent unauthorized access to sensitive files and directories. The DNS hosts file should have appropriate restrictive permissions.
-6. Protect the function and its processes from interruptions and ensure graceful exits in case of errors.
+### Technical Description
+
+- **Name:** `build_dns_hosts_file`
+- **Description:** This function builds a DNS hosts file by adding entries to a temporary file before finally moving it to the final location.
+- **Globals:** None
+- **Arguments:** None
+- **Outputs:** Logs various messages depending on the steps. These could be successful steps or errors during executing the function.
+- **Returns:** 1 when there is an error (like failing to create directory or get DNS domain, failing to get or validate IPS IP, or failing to write DNS hosts file), 0 on successful function execution.
+- **Example usage:** `build_dns_hosts_file`
+
+### Quality and Security Recommendations
+
+1. Error Handling: Increase the robustness of the function by adding more nuanced error-handling, perhaps with specific error codes or messages depending on the point of failure.
+2. Check for Dependencies: At the start of the function, check whether all necessary dependencies (such as dnsmasq or other commands used) are available on the system.
+3. Logging: Consider enhancing logging to record more detailed information about the function’s operation, which could be useful for auditing or troubleshooting purposes.
+4. Security Hardening: Be sure to carefully validate and sanitize all inputs to the function to guard against injection attacks or other forms of malicious input.
+5: Consider implementing a safe-guard or confirmation prompt before creating directories or files on the user’s system.
 
