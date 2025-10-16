@@ -86,7 +86,7 @@ node_get_functions() {
   # Load pre-load.sh first if it exists
   local pre_load="${base}/pre-load.sh"
   if [[ -f "$pre_load" ]]; then
-    hps_log info "Including pre-load file: $pre_load"
+    hps_log debug "Including pre-load file: $pre_load"
     echo "# === pre-load.sh included ==="
     cat "$pre_load"
     echo
@@ -131,7 +131,7 @@ node_get_functions() {
     for f in "${files[@]}"; do
       [[ -f $f ]] || continue
       
-      hps_log info "Including function file: $f"
+      hps_log debug "Including function file: $f"
       file_count=$((file_count + 1))
       
       # If it's a profile file, indicate that in the comment
@@ -148,7 +148,7 @@ node_get_functions() {
   # Load post-load.sh last if it exists (for executing collected functions)
   local post_load="${base}/post-load.sh"
   if [[ -f "$post_load" ]]; then
-    hps_log info "Including post-load file: $post_load"
+    hps_log debug "Including post-load file: $post_load"
     echo "# === post-load.sh included (execution script) ==="
     cat "$post_load"
     echo
