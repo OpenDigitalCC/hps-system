@@ -15,13 +15,11 @@ __guard_source() {
 
 #===============================================================================
 # hps_check_bash_syntax
-# -----------------
-# Check bash code for syntax errors and identify problematic functions.
+# ---------------------
+# Check bash code for syntax errors with context.
 #
 # Usage:
 #   hps_check_bash_syntax <file_or_stdin> [label]
-#   echo "$code" | hps_check_bash_syntax - "my code"
-#   hps_check_bash_syntax /path/to/script.sh
 #
 # Parameters:
 #   $1 - File path or '-' for stdin
@@ -55,6 +53,10 @@ hps_check_bash_syntax() {
   else
     echo "[SYNTAX] ✗ Syntax errors found in $label:" >&2
     
+    # Load file into array for context
+    local -a lines
+    mapfile -t lines < "$tempfile"
+    
     # Parse each error
     while IFS= read -r error; do
       # Extract line number from error message
@@ -66,36 +68,112 @@ hps_check_bash_syntax() {
         local func_name="(not in function)"
         local current_func=""
         local line_no=0
+        local func_start_line=0
         
-        while IFS= read -r line; do
-          ((line_no++))
+        # First pass: find the function
+        for line_no in "${!lines[@]}"; do
+          local line="${lines[$line_no]}"
           
           # Check if we're at a function definition
           if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]]; then
             current_func="${BASH_REMATCH[1]}"
+            func_start_line=$line_no
           fi
           
           # If we've reached the error line, we know which function
-          if [[ $line_no -eq $error_line ]]; then
+          if [[ $((line_no + 1)) -eq $error_line ]]; then
             func_name="${current_func:-"(top level)"}"
-            
-            echo "" >&2
-            echo "  Error in function: $func_name" >&2
-            echo "  Line $error_line: $error_msg" >&2
-            echo "  Content: $line" >&2
             break
           fi
-        done < "$tempfile"
+        done
+        
+        echo "" >&2
+        echo "  Error: $error_msg" >&2
+        echo "  Function: $func_name" >&2
+        [[ "$current_func" ]] && echo "  Function starts at line: $((func_start_line + 1))" >&2
+        echo "  Error at line $error_line" >&2
+        echo "" >&2
+        echo "  Context:" >&2
+        
+        # Show context (5 lines before and after)
+        local start=$((error_line - 6))
+        local end=$((error_line + 4))
+        [[ $start -lt 0 ]] && start=0
+        [[ $end -ge ${#lines[@]} ]] && end=$((${#lines[@]} - 1))
+        
+        for ((i=start; i<=end; i++)); do
+          local line_num=$((i + 1))
+          local prefix="    "
+          if [[ $line_num -eq $error_line ]]; then
+            prefix=">>> "
+            echo "${prefix}${line_num}: ${lines[$i]}" >&2
+          else
+            echo "${prefix}${line_num}: ${lines[$i]}" >&2
+          fi
+        done
+        echo "" >&2
+        
       else
         # Couldn't parse line number, show raw error
         echo "  $error" >&2
       fi
     done <<< "$syntax_errors"
     
+    # Add helpful hints
+    echo "[HINT] Common causes for ')' syntax errors:" >&2
+    echo "  - Missing opening '(' earlier in the function" >&2
+    echo "  - Unclosed quotes or command substitution before this line" >&2
+    echo "  - Missing 'then' in if statement or 'do' in loop" >&2
+    echo "  - Extra closing ')' from copy/paste error" >&2
+    
     [[ "$input" == "-" ]] && rm -f "$tempfile"
     return 1
   fi
 }
+
+#===============================================================================
+# hps_find_syntax_pattern
+# ------------------------
+# Search for common syntax error patterns near an error line.
+#
+# Usage:
+#   hps_find_syntax_pattern <file> <error_line>
+#
+# Parameters:
+#   $1 - File to analyze
+#   $2 - Line number with error
+#===============================================================================
+hps_find_syntax_pattern() {
+  local file="$1"
+  local error_line="$2"
+  
+  echo "[PATTERN] Checking for common issues near line $error_line:" >&2
+  
+  # Check for unmatched quotes before error line
+  local quote_check=$(sed -n "1,${error_line}p" "$file" | grep -n "['\"]" | tail -5)
+  if [[ -n "$quote_check" ]]; then
+    echo "  Recent quotes (check for unclosed):" >&2
+    echo "$quote_check" | sed 's/^/    /' >&2
+  fi
+  
+  # Check for unmatched parentheses
+  local open_parens=$(sed -n "1,${error_line}p" "$file" | tr -cd '(' | wc -c)
+  local close_parens=$(sed -n "1,${error_line}p" "$file" | tr -cd ')' | wc -c)
+  if [[ $open_parens -ne $close_parens ]]; then
+    echo "  Parentheses mismatch: $open_parens '(' vs $close_parens ')'" >&2
+    echo "  Missing $(($open_parens - $close_parens)) closing parentheses" >&2
+  fi
+  
+  # Look for if/then/fi structure issues
+  local if_count=$(sed -n "1,${error_line}p" "$file" | grep -c "^[[:space:]]*if[[:space:]]")
+  local then_count=$(sed -n "1,${error_line}p" "$file" | grep -c "then")
+  local fi_count=$(sed -n "1,${error_line}p" "$file" | grep -c "^[[:space:]]*fi")
+  
+  if [[ $if_count -ne $then_count ]]; then
+    echo "  Possible missing 'then': $if_count 'if' vs $then_count 'then'" >&2
+  fi
+}
+
 
 #===============================================================================
 # hps_debug_function_load
