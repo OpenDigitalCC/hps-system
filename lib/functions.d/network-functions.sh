@@ -1,5 +1,170 @@
 __guard_source || return
 
+
+
+
+#===============================================================================
+# ips_allocate_storage_ip
+# ------------------------
+# Allocate storage IP address for requesting host
+#
+# Behaviour:
+#   - Validates arguments
+#   - Checks if storage network exists
+#   - Finds next available IP
+#   - Stores allocation in host_config
+#
+# Parameters:
+#   $1: Storage network index (0, 1, etc.)
+#   $2: Source MAC (provided by n_ips_command framework)
+#
+# Returns:
+#   Echoes "vlan_id:ip:netmask:gateway:mtu" on success
+#   Echoes "ERROR: message" on failure
+#===============================================================================
+ips_allocate_storage_ip() {
+  local storage_index="$1"
+  local source_mac="$2"
+  
+  # Validate arguments
+  if [[ -z "$storage_index" ]] || [[ -z "$source_mac" ]]; then
+    echo "ERROR: Missing arguments. Usage: ips_allocate_storage_ip <index> <mac>"
+    return 1
+  fi
+  
+  source_mac=$(normalise_mac "$source_mac")
+  if [[ $? -ne 0 ]]; then
+    echo "ERROR: Invalid MAC address: $2"
+    return 1
+  fi
+  
+  # Check if storage network is configured
+  local base_vlan=$(cluster_config "get" "network_storage_base_vlan")
+  local storage_count=$(cluster_config "get" "network_storage_count")
+  
+  if [[ -z "$base_vlan" ]] || [[ -z "$storage_count" ]]; then
+    echo "ERROR: Storage network not initialized"
+    return 1
+  fi
+  
+  # Validate storage index
+  if [[ "$storage_index" -ge "$storage_count" ]]; then
+    echo "ERROR: Storage network index $storage_index not configured (only 0-$((storage_count-1)) available)"
+    return 1
+  fi
+  
+  # Calculate VLAN ID
+  local vlan_id=$((base_vlan + storage_index))
+  
+  # Check if this VLAN is configured
+  local subnet=$(cluster_config "get" "network_storage_vlan${vlan_id}_subnet")
+  if [[ -z "$subnet" ]]; then
+    echo "ERROR: VLAN $vlan_id not configured"
+    return 1
+  fi
+  
+  # Check if already allocated
+  local existing_ip=$(host_config "$source_mac" "get" "storage${storage_index}_ip")
+  if [[ -n "$existing_ip" ]]; then
+    # Return existing allocation
+    local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
+    local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
+    local mtu=$(cluster_config "get" "network_storage_mtu")
+    
+    hps_log "info" "Returning existing storage allocation for $source_mac: $existing_ip"
+    echo "${vlan_id}:${existing_ip}:${netmask}:${gateway}:${mtu}"
+    return 0
+  fi
+  
+  # Get network configuration
+  local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
+  local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
+  local mtu=$(cluster_config "get" "network_storage_mtu")
+  
+    
+  # Extract network prefix
+  local ip_prefix=$(network_subnet_to_prefix "$subnet")
+  if [[ $? -ne 0 ]] || [[ -z "$ip_prefix" ]]; then
+    echo "ERROR: Failed to parse subnet $subnet"
+    return 1
+  fi
+  
+  # Build new IP
+  new_ip="${ip_prefix}.${ip_offset}"
+
+  
+  # Find used IPs - fixed to properly scan all hosts
+  local used_ips=()
+  local host_dir="/srv/hps-config/clusters/$(readlink /srv/hps-config/clusters/active-cluster)/hosts"
+  
+  if [[ -d "$host_dir" ]]; then
+    for host_file in "$host_dir"/*; do
+      [[ -f "$host_file" ]] || continue
+      local stored_ip=$(grep "^storage${storage_index}_ip=" "$host_file" 2>/dev/null | cut -d= -f2-)
+      [[ -n "$stored_ip" ]] && used_ips+=("$stored_ip")
+    done
+  fi
+  
+  # Find next available IP (starting at .100)
+  local ip_offset=100
+  local new_ip
+  while [[ $ip_offset -lt 250 ]]; do
+    new_ip="${ip_prefix}.${ip_offset}"
+    
+    # Check if IP is already used
+    local ip_used=0
+    for used in "${used_ips[@]}"; do
+      if [[ "$used" == "$new_ip" ]]; then
+        ip_used=1
+        break
+      fi
+    done
+    
+    if [[ $ip_used -eq 0 ]]; then
+      # Found available IP
+      break
+    fi
+    
+    ((ip_offset++))
+  done
+  
+  if [[ $ip_offset -ge 250 ]]; then
+    echo "ERROR: No available IPs in storage network $vlan_id"
+    return 1
+  fi
+  
+  # Allocate and store
+  host_config "$source_mac" "set" "storage${storage_index}_vlan" "$vlan_id"
+  host_config "$source_mac" "set" "storage${storage_index}_ip" "$new_ip"
+  
+  # Get hostname from host config
+  local hostname=$(host_config "$source_mac" "get" "hostname")
+  if [[ -z "$hostname" ]]; then
+    # Try to derive from MAC
+    hostname="host-${source_mac//:/-}"
+  fi
+
+  # Get cluster domain instead of storage-specific domain
+  local domain=$(cluster_config "get" "DNS_DOMAIN")
+  domain=${domain:-"local"}
+    
+
+  # Register in DNS
+  # Storage hostname format: hostname-storageN
+  local storage_hostname="${hostname}-storage$((storage_index + 1))"
+  dns_host_add "$new_ip" "$storage_hostname" "$domain"
+  
+  
+  # Also add a CNAME-style entry for the base hostname on storage network
+  dns_host_add "$new_ip" "$hostname" "$domain" "${hostname}-vlan${vlan_id}"
+  
+  hps_log "info" "Allocated $new_ip to $source_mac, DNS: ${storage_hostname}.${domain}"
+  
+  echo "${vlan_id}:${new_ip}:${netmask}:${gateway}:${mtu}"
+  return 0
+}
+
+
 #===============================================================================
 # storage_register_dns
 # --------------------

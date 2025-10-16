@@ -64,6 +64,19 @@ fi
 
 
 
+
+# Command: host_allocate_networks
+if [[ "$cmd" == "host_allocate_networks" ]]; then
+  hps_log info "Allocating networks for remote host"
+  cgi_header_plain
+  storage_index=$(cgi_param get index)
+  result=$(ips_allocate_storage_ip "$storage_index" "$mac")
+  echo "$result"
+  exit 0
+fi
+
+
+
 # Command: Handle a keysafe token request
 if [[ "$cmd" == "keysafe_request_token" ]]; then
     purpose=$(cgi_param get purpose)
