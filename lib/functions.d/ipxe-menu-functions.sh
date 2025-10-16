@@ -319,11 +319,19 @@ ipxe_boot_installer () {
     ipxe_reboot "TCH configured for network boot - rebooting to apply"
     exit
   fi
+# Get the OS identifier for this host type from cluster config
+  local os_key="os_$(echo ${host_type} | tr '[:upper:]' '[:lower:]')"
+  local os_id=$(cluster_config "get" "$os_key")
+  
+  # Get OS parameters from the registry
+  local CPU=$(os_config "$os_id" "get" "arch")
+  local MFR=$(os_config "$os_id" "get" "manufacturer")
+  local OSNAME=$(os_config "$os_id" "get" "name")
+  local OSVER=$(os_config "$os_id" "get" "version")
 
-  local CPU="$(get_host_type_param ${host_type} CPU)"
-  local MFR="$(get_host_type_param ${host_type} MFR)"
-  local OSNAME="$(get_host_type_param ${host_type} OSNAME)"
-  local OSVER="$(get_host_type_param ${host_type} OSVER)"
+  hps_log info "O/S Parameters for $os_id: ${CPU}-${MFR}-${OSNAME}-${OSVER}"
+
+
   local state="$(host_config "$mac" get STATE)"
 
   # check that we are not already installed
