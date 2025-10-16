@@ -133,100 +133,332 @@ build_dhcp_addresses_file() {
   return 0
 }
 
+
 #===============================================================================
-# build_dns_hosts_file
-# --------------------
-# Build DNS hosts file for dnsmasq from cluster configuration.
+# init_dns_hosts_file
+# -------------------
+# Initialize DNS hosts file for dnsmasq if it doesn't exist.
 #
 # Behaviour:
-#   - Gets DNS domain from cluster config
-#   - Gets IPS IP address from cluster config
-#   - Creates DNS entry for IPS with service aliases
-#   - Writes addn-hosts format: IP FQDN hostname [aliases...]
+#   - Checks if dns_hosts file already exists
+#   - If not, creates it with IPS entry
+#   - Gets DNS domain and IPS IP from cluster config
+#   - Adds IPS with standard service aliases using dns_host_add
 #   - Creates parent directory if needed
-#   - Validates all data before writing
 #
 # Output File:
 #   ${HPS_CLUSTER_CONFIG_DIR}/services/dns_hosts
 #
 # Format:
-#   10.99.1.1 ips ntp syslog dhcp dns
+#   10.99.1.1 ips ips.cluster.local ntp syslog dhcp dns
 #
 # Note:
-#   Uses short hostnames only. The expand-hosts directive in dnsmasq.conf
-#   will automatically append the domain to create FQDNs.
-#   Cluster hosts are NOT included in this file to avoid duplication with
-#   DHCP-assigned hostnames. Only the IPS provisioning node is included.
+#   Uses expand-hosts directive in dnsmasq.conf to append domain.
+#   IPS is added with both short and FQDN forms.
 #
 # Returns:
-#   0 on success
+#   0 on success (file created or already exists)
 #   1 on failure (invalid data, write error, missing dependencies)
 #===============================================================================
-build_dns_hosts_file() {
-  local DNS_HOSTS="$(get_path_cluster_services_dir)/dns_hosts"
-  local DNS_HOSTS_TMP="${DNS_HOSTS}.tmp"
+init_dns_hosts_file() {
+  local dns_hosts_file="$(get_path_cluster_services_dir)/dns_hosts"
   
-  hps_log "INFO" "Building DNS hosts file: $DNS_HOSTS"
+  # If file already exists, nothing to do
+  if [[ -f "$dns_hosts_file" ]]; then
+    hps_log debug "DNS hosts file already exists: $dns_hosts_file"
+    return 0
+  fi
+  
+  hps_log info "Initializing DNS hosts file: $dns_hosts_file"
   
   # Create services directory if it doesn't exist
-  if [[ ! -d "$(get_path_cluster_services_dir)" ]]; then
-    if ! mkdir -p "$(get_path_cluster_services_dir)"; then
-      hps_log "ERROR" "Failed to create services directory: $(get_path_cluster_services_dir)"
+  local services_dir
+  services_dir="$(get_path_cluster_services_dir)"
+  if [[ ! -d "$services_dir" ]]; then
+    if ! mkdir -p "$services_dir"; then
+      hps_log error "Failed to create services directory: $services_dir"
       return 1
     fi
   fi
   
-  # Get DNS domain from cluster config
-  local dns_domain
-  dns_domain=$(cluster_config get DNS_DOMAIN)
-  if [[ $? -ne 0 ]] || [[ -z "$dns_domain" ]]; then
-    hps_log "ERROR" "Failed to get DNS_DOMAIN from cluster config"
+  # Create empty file
+  if ! touch "$dns_hosts_file"; then
+    hps_log error "Failed to create DNS hosts file: $dns_hosts_file"
     return 1
   fi
   
-  # Strip quotes from domain
+  # Get DNS domain from cluster config
+  local dns_domain
+  dns_domain=$(cluster_config get DNS_DOMAIN 2>/dev/null)
+  if [[ $? -ne 0 ]] || [[ -z "$dns_domain" ]]; then
+    hps_log error "Failed to get DNS_DOMAIN from cluster config"
+    return 1
+  fi
   dns_domain=$(strip_quotes "$dns_domain")
   
-  # Get IPS IP address
+  # Get IPS IP address (use DHCP_IP as IPS address)
   local ips_ip
-  ips_ip=$(cluster_config get DHCP_IP)
+  ips_ip=$(cluster_config get DHCP_IP 2>/dev/null)
   if [[ $? -ne 0 ]] || [[ -z "$ips_ip" ]]; then
-    hps_log "ERROR" "Failed to get DHCP_IP from cluster config"
+    hps_log error "Failed to get DHCP_IP from cluster config"
     return 1
   fi
   
   # Validate IPS IP
   if ! validate_ip_address "$ips_ip"; then
-    hps_log "ERROR" "Invalid DHCP_IP: $ips_ip"
+    hps_log error "Invalid DHCP_IP: $ips_ip"
     return 1
   fi
-  
-  # Define IPS service aliases
-  local ips_aliases=("ntp" "syslog" "dhcp" "dns")
-  local aliases_string="${ips_aliases[*]}"
-  
-  # Start with empty temp file
-  > "$DNS_HOSTS_TMP"
-  
-  local entry_count=0
   
   # Add IPS entry with service aliases
-  # Format: IP hostname [aliases...]
-  # Note: expand-hosts in dnsmasq will automatically add domain to create FQDN
-  echo "${ips_ip} ips ${aliases_string}" >> "$DNS_HOSTS_TMP"
-  entry_count=$((entry_count + 1))
-  hps_log "DEBUG" "Added IPS entry: ${ips_ip} ips ${aliases_string}"
-  
-  # Move temp file to final location
-  if ! mv "$DNS_HOSTS_TMP" "$DNS_HOSTS"; then
-    hps_log "ERROR" "Failed to write DNS hosts file: $DNS_HOSTS"
-    rm -f "$DNS_HOSTS_TMP"
+  local ips_aliases=("ntp" "syslog" "dhcp" "dns")
+  if ! dns_host_add "$ips_ip" "ips" "$dns_domain" "${ips_aliases[@]}"; then
+    hps_log error "Failed to add IPS entry to DNS hosts file"
     return 1
   fi
   
-  hps_log "INFO" "DNS hosts file created with $entry_count entries"
+  hps_log info "DNS hosts file initialized successfully"
   return 0
 }
+
+#===============================================================================
+# dns_host_add
+# ------------
+# Add or update a host entry in the DNS hosts file.
+#
+# Usage: dns_host_add <ip> <hostname> [domain] [alias1] [alias2] ...
+#
+# Arguments:
+#   $1 - IP address
+#   $2 - hostname (short name)
+#   $3 - domain (optional, for FQDN)
+#   $4+ - aliases (optional)
+#
+# Behaviour:
+#   - Validates IP address
+#   - Validates hostname format
+#   - If entry exists (by IP or hostname), updates it
+#   - If new, appends to file
+#   - Constructs entry: IP hostname [hostname.domain] [aliases...]
+#   - Creates file if doesn't exist
+#
+# Format:
+#   10.99.1.2 tch-001 tch-001.cluster.local
+#   10.99.1.1 ips ips.cluster.local ntp syslog dhcp dns
+#
+# Returns:
+#   0 on success
+#   1 on failure (invalid input, write error)
+#===============================================================================
+dns_host_add() {
+  local ip="$1"
+  local hostname="$2"
+  local domain="${3:-}"
+  shift 3 || shift $#  # Remove first 3 args, or all if less than 3
+  local aliases=("$@")
+  
+  local dns_hosts_file="$(get_path_cluster_services_dir)/dns_hosts"
+  
+  # Validate IP address
+  if [[ -z "$ip" ]] || ! validate_ip_address "$ip"; then
+    hps_log error "dns_host_add: Invalid IP address: $ip"
+    return 1
+  fi
+  
+  # Validate hostname
+  if [[ -z "$hostname" ]] || ! validate_hostname "$hostname"; then
+    hps_log error "dns_host_add: Invalid hostname: $hostname"
+    return 1
+  fi
+  
+  # Ensure file exists
+  if [[ ! -f "$dns_hosts_file" ]]; then
+    local services_dir
+    services_dir="$(dirname "$dns_hosts_file")"
+    mkdir -p "$services_dir" || return 1
+    touch "$dns_hosts_file" || return 1
+  fi
+  
+  # Build entry line
+  local entry="$ip $hostname"
+  
+  # Add FQDN if domain provided
+  if [[ -n "$domain" ]]; then
+    entry="$entry ${hostname}.${domain}"
+  fi
+  
+  # Add aliases
+  if [[ ${#aliases[@]} -gt 0 ]]; then
+    entry="$entry ${aliases[*]}"
+  fi
+  
+  # Check if entry already exists (by IP or hostname)
+  local temp_file="${dns_hosts_file}.tmp"
+  local found=0
+  
+  if [[ -f "$dns_hosts_file" ]]; then
+    while IFS= read -r line; do
+      # Skip comments and empty lines
+      [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]] && continue
+      
+      # Check if this line has our IP or hostname
+      local line_ip line_hostname
+      read -r line_ip line_hostname _ <<< "$line"
+      
+      if [[ "$line_ip" == "$ip" ]] || [[ "$line_hostname" == "$hostname" ]]; then
+        # Replace this line with new entry
+        echo "$entry" >> "$temp_file"
+        found=1
+        hps_log debug "dns_host_add: Updated entry for $hostname ($ip)"
+      else
+        # Keep existing line
+        echo "$line" >> "$temp_file"
+      fi
+    done < "$dns_hosts_file"
+  fi
+  
+  # If not found, append new entry
+  if [[ $found -eq 0 ]]; then
+    echo "$entry" >> "$temp_file"
+    hps_log debug "dns_host_add: Added new entry for $hostname ($ip)"
+  fi
+  
+  # Atomic move
+  if ! mv "$temp_file" "$dns_hosts_file"; then
+    hps_log error "dns_host_add: Failed to write DNS hosts file"
+    rm -f "$temp_file"
+    return 1
+  fi
+  
+  hps_log info "dns_host_add: $hostname ($ip) added/updated"
+  return 0
+}
+
+#===============================================================================
+# dns_host_remove
+# ---------------
+# Remove a host entry from the DNS hosts file.
+#
+# Usage: dns_host_remove <hostname_or_ip>
+#
+# Arguments:
+#   $1 - hostname or IP address to remove
+#
+# Behaviour:
+#   - Searches for entries matching hostname or IP
+#   - Removes matching entries
+#   - Preserves comments and empty lines
+#   - Does nothing if entry not found (not an error)
+#
+# Returns:
+#   0 on success (entry removed or not found)
+#   1 on failure (write error)
+#===============================================================================
+dns_host_remove() {
+  local identifier="$1"
+  local dns_hosts_file="$(get_path_cluster_services_dir)/dns_hosts"
+  
+  if [[ -z "$identifier" ]]; then
+    hps_log error "dns_host_remove: No hostname or IP provided"
+    return 1
+  fi
+  
+  if [[ ! -f "$dns_hosts_file" ]]; then
+    hps_log debug "dns_host_remove: DNS hosts file does not exist"
+    return 0
+  fi
+  
+  local temp_file="${dns_hosts_file}.tmp"
+  local removed=0
+  
+  while IFS= read -r line; do
+    # Keep comments and empty lines
+    if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]]; then
+      echo "$line" >> "$temp_file"
+      continue
+    fi
+    
+    # Check if this line contains our identifier
+    local line_ip line_hostname
+    read -r line_ip line_hostname _ <<< "$line"
+    
+    if [[ "$line_ip" == "$identifier" ]] || [[ "$line_hostname" == "$identifier" ]]; then
+      # Skip this line (remove it)
+      removed=1
+      hps_log debug "dns_host_remove: Removed entry: $line"
+    else
+      # Keep this line
+      echo "$line" >> "$temp_file"
+    fi
+  done < "$dns_hosts_file"
+  
+  # Atomic move
+  if ! mv "$temp_file" "$dns_hosts_file"; then
+    hps_log error "dns_host_remove: Failed to write DNS hosts file"
+    rm -f "$temp_file"
+    return 1
+  fi
+  
+  if [[ $removed -eq 1 ]]; then
+    hps_log info "dns_host_remove: $identifier removed"
+  else
+    hps_log debug "dns_host_remove: $identifier not found (no action taken)"
+  fi
+  
+  return 0
+}
+
+#===============================================================================
+# dns_host_get
+# ------------
+# Get DNS host entry by hostname or IP.
+#
+# Usage: dns_host_get <hostname_or_ip>
+#
+# Arguments:
+#   $1 - hostname or IP address to look up
+#
+# Behaviour:
+#   - Searches dns_hosts file for matching entry
+#   - Returns entire line if found
+#   - Can be used to check if entry exists
+#
+# Output:
+#   Matching line from dns_hosts file, or empty if not found
+#
+# Returns:
+#   0 if entry found (outputs line to stdout)
+#   1 if entry not found or file doesn't exist
+#===============================================================================
+dns_host_get() {
+  local identifier="$1"
+  local dns_hosts_file="$(get_path_cluster_services_dir)/dns_hosts"
+  
+  if [[ -z "$identifier" ]]; then
+    return 1
+  fi
+  
+  if [[ ! -f "$dns_hosts_file" ]]; then
+    return 1
+  fi
+  
+  while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]] && continue
+    
+    # Check if this line contains our identifier
+    local line_ip line_hostname
+    read -r line_ip line_hostname _ <<< "$line"
+    
+    if [[ "$line_ip" == "$identifier" ]] || [[ "$line_hostname" == "$identifier" ]]; then
+      echo "$line"
+      return 0
+    fi
+  done < "$dns_hosts_file"
+  
+  return 1
+}
+
 
 #===============================================================================
 # update_dns_dhcp_files
@@ -259,8 +491,8 @@ update_dns_dhcp_files() {
     dhcp_result=1
   fi
   
-  # Build DNS hosts file
-  if ! build_dns_hosts_file; then
+  # Initialise DNS hosts file
+  if ! init_dns_hosts_file; then
     hps_log "ERROR" "Failed to build DNS hosts file"
     dns_result=1
   fi

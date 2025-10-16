@@ -686,7 +686,7 @@ cluster_config() {
   
   # If cluster name provided, use that cluster's config
   if [[ -n "$cluster" ]]; then
-    cluster_file="${HPS_CONFIG_DIR}/clusters/${cluster}/cluster.conf"
+    cluster_file="$(get_active_cluster_filename)"
     if [[ ! -f "$cluster_file" ]]; then
       # Create if doesn't exist for set operations
       if [[ "$op" == "set" ]]; then
@@ -1129,7 +1129,7 @@ cluster_storage_init_network() {
   local cluster_domain
   
   # Get cluster domain
-  cluster_domain=$(cluster_config "get" "cluster.domain")
+  cluster_domain=$(cluster_config "get" "DNS_DOMAIN")
   if [[ -z "$cluster_domain" ]]; then
     hps_log "error" "Cluster domain not set"
     return 1

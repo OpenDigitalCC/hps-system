@@ -60,6 +60,40 @@ get_active_cluster_hosts_dir () {
 }
 
 
+#:name: get_mac_from_conffile
+#:group: host-management
+#:synopsis: Extract MAC address from a host configuration filename.
+#:usage: get_mac_from_conffile <conf_file_path>
+#:description:
+#  Extracts the MAC address from a host configuration file path.
+#  The MAC is the basename of the file without the .conf extension.
+#:parameters:
+#  conf_file_path - Full path to the configuration file
+#:returns:
+#  0 on success (outputs MAC address to stdout)
+#  1 if filename is invalid or cannot be parsed
+get_mac_from_conffile() {
+  local conf_file="$1"
+  
+  if [[ -z "$conf_file" ]]; then
+    hps_log error "get_mac_from_conffile: No config file provided"
+    return 1
+  fi
+  
+  local mac
+  mac=$(basename "$conf_file" .conf 2>/dev/null)
+  
+  if [[ -z "$mac" ]] || [[ "$mac" == "$conf_file" ]]; then
+    hps_log error "get_mac_from_conffile: Cannot extract MAC from: $conf_file"
+    return 1
+  fi
+  
+  echo "$mac"
+  return 0
+}
+
+
+
 #:name: get_host_conf_filename
 #:group: host-management
 #:synopsis: Get the full path to a host's configuration file.
@@ -536,7 +570,6 @@ host_post_config_hooks() {
 
 
 
-
 #:name: host_config
 #:group: host-management
 #:synopsis: Manage host configuration key-value storage per MAC address.
@@ -544,8 +577,9 @@ host_post_config_hooks() {
 #:description:
 #  Parses and manages host configuration from active cluster hosts directory.
 #  Supports get, exists, equals, and set operations on host configuration keys.
+#  MAC addresses are normalized (colons removed) for filenames.
 #:parameters:
-#  mac     - MAC address of the host (e.g., 52:54:00:9c:4c:24)
+#  mac     - MAC address of the host (e.g., 52:54:00:9c:4c:24 or 5254009c4c24)
 #  command - Operation: get, exists, equals, set
 #  key     - Configuration key name (alphanumeric and underscore)
 #  value   - Value to set (only for 'set' and 'equals' commands)
@@ -576,6 +610,13 @@ host_config() {
     return 1
   fi
   
+  # Normalize MAC address for filename (remove colons, lowercase)
+  local _mac_normalized
+  _mac_normalized=$(normalise_mac "$_host_mac") || {
+    echo "ERROR: Failed to normalize MAC address: $_host_mac" >&2
+    return 1
+  }
+  
   # Get active cluster hosts directory and construct path
   local hosts_dir
   hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
@@ -584,7 +625,7 @@ host_config() {
     return 1
   fi
   
-  local config_file="${hosts_dir}/${_host_mac}.conf"
+  local config_file="${hosts_dir}/${_mac_normalized}.conf"
   
   case "$cmd" in
     get)
@@ -660,11 +701,9 @@ host_config() {
         done
       } > "$config_file" || return 3
       
-      # Log after write completes
+      # Log after write completes (use original MAC format for display)
       hps_log info "[$_host_mac] host_config updated: $key = $value"
       
-      # Call any post-config changes required
-#      host_post_config_hooks "$key" "$value" 2>/dev/null || true
       return 0
       ;;
       
@@ -675,6 +714,115 @@ host_config() {
   esac
 }
 
+#===============================================================================
+# get_host_mac_by_keyvalue
+# -------------------------
+# Find host MAC address by searching for key/value pair
+#
+# Behaviour:
+#   - Searches all host configs for matching key=value
+#   - Returns MAC address (filename) of matching host
+#   - Case-insensitive for both key and value
+#
+# Parameters:
+#   $1: Key to search for (e.g., "hostname", "ip", "storage0_ip")
+#   $2: Value to match
+#
+# Returns:
+#   0 on success (echoes MAC address)
+#   1 if not found
+#
+# Example usage:
+#   mac=$(get_host_mac_by_keyvalue "hostname" "tch-001")
+#   mac=$(get_host_mac_by_keyvalue "ip" "10.99.1.8")
+#   mac=$(get_host_mac_by_keyvalue "storage0_ip" "10.31.0.100")
+#===============================================================================
+get_host_mac_by_keyvalue() {
+  local search_key="${1^^}"  # uppercase for case-insensitive match
+  local search_value="${2,,}"  # lowercase for case-insensitive match
+  
+  if [[ -z "$search_key" ]] || [[ -z "$search_value" ]]; then
+    return 1
+  fi
+  
+  local host_dir="$(get_active_cluster_hosts_dir)"
+  [[ ! -d "$host_dir" ]] && return 1
+  
+  for host_file in "$host_dir"/*.conf; do
+    [[ ! -f "$host_file" ]] && continue
+    
+    # Search for key=value pattern (case-insensitive)
+    while IFS='=' read -r key value; do
+      # Skip comments and empty lines
+      [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
+      
+      # Clean up quotes if present
+      value="${value//\"/}"
+      
+      # Case-insensitive comparison
+      if [[ "${key^^}" == "$search_key" ]] && [[ "${value,,}" == "$search_value" ]]; then
+        # Extract MAC from filename
+        local filename=$(basename "$host_file" .conf)
+        echo "$filename"
+        return 0
+      fi
+    done < "$host_file"
+  done
+  
+  return 1
+}
+
+#===============================================================================
+# get_all_hosts_by_keyvalue
+# --------------------------
+# Find all host MAC addresses matching a key/value pair
+#
+# Behaviour:
+#   - Similar to get_host_mac_by_keyvalue but returns all matches
+#   - Useful for finding all hosts with same property
+#
+# Parameters:
+#   $1: Key to search for
+#   $2: Value to match
+#
+# Returns:
+#   0 if any found (echoes all MACs, one per line)
+#   1 if none found
+#
+# Example usage:
+#   macs=$(get_all_hosts_by_keyvalue "type" "TCH")
+#===============================================================================
+get_all_hosts_by_keyvalue() {
+  local search_key="${1^^}"
+  local search_value="${2,,}"
+  local found=0
+  
+  if [[ -z "$search_key" ]] || [[ -z "$search_value" ]]; then
+    return 1
+  fi
+  
+  local host_dir="$(get_active_cluster_hosts_dir)"
+  [[ ! -d "$host_dir" ]] && return 1
+  
+  for host_file in "$host_dir"/*.conf; do
+    [[ ! -f "$host_file" ]] && continue
+    
+    while IFS='=' read -r key value; do
+      [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
+      
+      value="${value//\"/}"
+      
+      if [[ "${key^^}" == "$search_key" ]] && [[ "${value,,}" == "$search_value" ]]; then
+        local filename=$(basename "$host_file" .conf)
+        echo "$filename"
+        found=1
+        break
+      fi
+    done < "$host_file"
+  done
+  
+  return $((found ? 0 : 1))
+}
 
 
 #:name: has_sch_host

@@ -22,7 +22,7 @@ __guard_source || return
 hps_configure_opensvc_cluster() {
   # Wait for daemon socket (more reliable than process check)
   local i
-  for i in {1..15}; do
+  for i in {1..5}; do
     if [[ -S /var/lib/opensvc/lsnr/http.sock ]] && om cluster status >/dev/null 2>&1; then
       hps_log info "OpenSVC daemon responsive, configuring cluster identity"
       osvc_configure_cluster_identity || {
@@ -33,7 +33,7 @@ hps_configure_opensvc_cluster() {
     sleep 1
   done
   
-  hps_log info "OpenSVC daemon not ready after 15s, skipping cluster configuration"
+  hps_log info "OpenSVC daemon not ready after 5s, skipping configuration"
   return 0
 }
 

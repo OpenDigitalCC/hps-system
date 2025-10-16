@@ -1,109 +1,68 @@
 __guard_source || return
 
-
 #===============================================================================
-# ips_allocate_storage_ip
-# ------------------------
-# Allocate storage IP address for requesting host
+# storage_register_dns
+# --------------------
+# Register all storage network IPs in DNS (simplified version)
 #
 # Behaviour:
-#   - Identifies host by source MAC of request
-#   - Scans all host configs to find used IPs
-#   - Allocates next available IP
-#   - Writes allocation to host_config
-#   - Returns configuration to node
-#
-# Parameters:
-#   $1: Storage network index (0, 1, etc.)
-#   $2: Source MAC (provided by n_ips_command framework)
-#
-# Returns:
-#   Echoes "vlan_id:ip:netmask:gateway:mtu" on success
-#   Echoes "ERROR: message" on failure
+#   - Registers storage IPs with hostname-storageN format
+#   - No subdomain needed since hostname includes storage identifier
 #===============================================================================
-ips_allocate_storage_ip() {
-  local storage_index="${1:-0}"
-  local source_mac="$2"  # Passed by n_ips_command framework
-  
-  source_mac=$(normalise_mac "$source_mac")
-  
-  # Check if already allocated
-  local existing_ip=$(host_config "$source_mac" "get" "storage${storage_index}_ip")
-  if [[ -n "$existing_ip" ]]; then
-    # Return existing allocation
-    local vlan_id=$(host_config "$source_mac" "get" "storage${storage_index}_vlan")
-    local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
-    local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
-    local mtu=$(cluster_config "get" "network_storage_mtu")
-    
-    hps_log "info" "Returning existing storage allocation for $source_mac: $existing_ip"
-    echo "${vlan_id}:${existing_ip}:${netmask}:${gateway}:${mtu}"
-    return 0
-  fi
-  
-  # Get storage network configuration
-  local base_vlan=$(cluster_config "get" "network_storage_base_vlan")
-  local vlan_id=$((base_vlan + storage_index))
-  local subnet=$(cluster_config "get" "network_storage_vlan${vlan_id}_subnet")
-  local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
-  local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
-  local mtu=$(cluster_config "get" "network_storage_mtu")
-  
-  # Extract network prefix
-  local ip_base="${subnet%/*}"
-  local ip_prefix="${ip_base%.*}"
-  
-  # Build list of used IPs for this storage network
-  local used_ips=()
-  local host_dir="/srv/hps-config/clusters/$(readlink /srv/hps-config/clusters/active-cluster)/hosts"
-  
-  # Scan all host configs for used IPs on this storage network
-  for host_file in "$host_dir"/*; do
-    [[ -f "$host_file" ]] || continue
-    local stored_vlan=$(grep "storage${storage_index}_vlan=" "$host_file" 2>/dev/null | cut -d= -f2)
-    if [[ "$stored_vlan" == "$vlan_id" ]]; then
-      local used_ip=$(grep "storage${storage_index}_ip=" "$host_file" 2>/dev/null | cut -d= -f2)
-      [[ -n "$used_ip" ]] && used_ips+=("$used_ip")
-    fi
-  done
-  
-  # Find next available IP (starting at .100)
-  local ip_offset=100
-  local new_ip
-  while [[ $ip_offset -lt 250 ]]; do
-    new_ip="${ip_prefix}.${ip_offset}"
-    
-    # Check if IP is already used
-    local ip_used=0
-    for used in "${used_ips[@]}"; do
-      if [[ "$used" == "$new_ip" ]]; then
-        ip_used=1
-        break
-      fi
-    done
-    
-    if [[ $ip_used -eq 0 ]]; then
-      # Found available IP
-      break
-    fi
-    
-    ((ip_offset++))
-  done
-  
-  if [[ $ip_offset -ge 250 ]]; then
-    echo "ERROR: No available IPs in storage network $vlan_id"
+storage_register_dns() {
+  # Get all hostnames
+  local hostnames=$(get_cluster_host_hostnames)
+  if [[ -z "$hostnames" ]]; then
+    hps_log "warn" "No hosts found to register"
     return 1
   fi
   
-  # Allocate and store
-  host_config "$source_mac" "set" "storage${storage_index}_vlan" "$vlan_id"
-  host_config "$source_mac" "set" "storage${storage_index}_ip" "$new_ip"
+  # Get storage network count
+  local storage_count=$(cluster_config "get" "network_storage_count")
+  if [[ -z "$storage_count" ]]; then
+    hps_log "error" "Storage networks not configured"
+    return 1
+  fi
   
-  hps_log "info" "Allocated storage IP $new_ip on VLAN $vlan_id to $source_mac"
+  # Get cluster domain
+  local cluster_domain=$(cluster_config "get" "DNS_DOMAIN")
+  cluster_domain=${cluster_domain:-"local"}
   
-  echo "${vlan_id}:${new_ip}:${netmask}:${gateway}:${mtu}"
+  # Process each hostname
+  echo "$hostnames" | while read -r hostname; do
+    [[ -z "$hostname" ]] && continue
+    
+    # Use generic lookup function
+    local mac=$(get_host_mac_by_keyvalue "hostname" "$hostname")
+    if [[ -z "$mac" ]]; then
+      hps_log "warn" "No MAC found for hostname $hostname"
+      continue
+    fi
+    
+    # Check each storage network
+    local i
+    for ((i=0; i<storage_count; i++)); do
+      local ip=$(host_config "$mac" "get" "storage${i}_ip")
+      local vlan=$(host_config "$mac" "get" "storage${i}_vlan")
+      
+      if [[ -n "$ip" ]] && [[ -n "$vlan" ]]; then
+        local storage_hostname="${hostname,,}-storage$((i + 1))"
+        
+        # Register with cluster domain, not storage-specific subdomain
+        if ! dns_host_get "$storage_hostname" >/dev/null 2>&1; then
+          dns_host_add "$ip" "$storage_hostname" "$cluster_domain"
+          hps_log "info" "Registered DNS: ${storage_hostname}.${cluster_domain} -> $ip"
+        else
+          hps_log "debug" "DNS already registered: ${storage_hostname}.${cluster_domain}"
+        fi
+      fi
+    done
+  done
+  
   return 0
 }
+
+
 
 #===============================================================================
 # get_network_interfaces
@@ -286,6 +245,117 @@ ip_to_int() {
 int_to_ip() {
   local ip_int="$1"
   echo "$(( (ip_int >> 24) & 255 )).$(( (ip_int >> 16) & 255 )).$(( (ip_int >> 8) & 255 )).$(( ip_int & 255 ))"
+  return 0
+}
+#===============================================================================
+# network_subnet_to_network
+# --------------------------
+# Extract network address from CIDR subnet
+#
+# Behaviour:
+#   - Removes CIDR suffix from subnet
+#   - Returns network address
+#
+# Parameters:
+#   $1: Subnet in CIDR format (e.g., 10.31.1.0/24)
+#
+# Returns:
+#   0 on success (echoes network address)
+#   1 on error
+#
+# Example:
+#   network=$(network_subnet_to_network "10.31.1.0/24")  # Returns: 10.31.1.0
+#===============================================================================
+network_subnet_to_network() {
+  local subnet="$1"
+  
+  if [[ -z "$subnet" ]]; then
+    return 1
+  fi
+  
+  # Remove CIDR suffix
+  local network="${subnet%/*}"
+  
+  if [[ -z "$network" ]]; then
+    return 1
+  fi
+  
+  echo "$network"
+  return 0
+}
+
+#===============================================================================
+# network_ip_to_prefix
+# --------------------
+# Extract network prefix (first 3 octets) from IP address
+#
+# Behaviour:
+#   - Removes last octet from IP
+#   - Returns prefix (first 3 octets)
+#
+# Parameters:
+#   $1: IP address (e.g., 10.31.1.0)
+#
+# Returns:
+#   0 on success (echoes prefix)
+#   1 on error
+#
+# Example:
+#   prefix=$(network_ip_to_prefix "10.31.1.0")  # Returns: 10.31.1
+#===============================================================================
+network_ip_to_prefix() {
+  local ip="$1"
+  
+  if [[ -z "$ip" ]]; then
+    return 1
+  fi
+  
+  # Remove last octet
+  local prefix="${ip%.*}"
+  
+  if [[ -z "$prefix" ]]; then
+    return 1
+  fi
+  
+  echo "$prefix"
+  return 0
+}
+
+#===============================================================================
+# network_subnet_to_prefix
+# ------------------------
+# Extract network prefix from CIDR subnet (combines above functions)
+#
+# Behaviour:
+#   - Removes CIDR suffix and last octet
+#   - Returns network prefix
+#
+# Parameters:
+#   $1: Subnet in CIDR format (e.g., 10.31.1.0/24)
+#
+# Returns:
+#   0 on success (echoes prefix)
+#   1 on error
+#
+# Example:
+#   prefix=$(network_subnet_to_prefix "10.31.1.0/24")  # Returns: 10.31.1
+#===============================================================================
+network_subnet_to_prefix() {
+  local subnet="$1"
+  
+  # Get network address
+  local network=$(network_subnet_to_network "$subnet")
+  if [[ $? -ne 0 ]] || [[ -z "$network" ]]; then
+    return 1
+  fi
+  
+  # Get prefix
+  local prefix=$(network_ip_to_prefix "$network")
+  if [[ $? -ne 0 ]] || [[ -z "$prefix" ]]; then
+    return 1
+  fi
+  
+  echo "$prefix"
   return 0
 }
 
@@ -547,39 +617,6 @@ get_client_mac() {
 }
 
 
-#:name: get_mac_from_conffile
-#:group: host-management
-#:synopsis: Extract MAC address from a host configuration filename.
-#:usage: get_mac_from_conffile <conf_file_path>
-#:description:
-#  Extracts the MAC address from a host configuration file path.
-#  The MAC is the basename of the file without the .conf extension.
-#:parameters:
-#  conf_file_path - Full path to the configuration file
-#:returns:
-#  0 on success (outputs MAC address to stdout)
-#  1 if filename is invalid or cannot be parsed
-get_mac_from_conffile() {
-  local conf_file="$1"
-  
-  if [[ -z "$conf_file" ]]; then
-    hps_log error "get_mac_from_conffile: No config file provided"
-    return 1
-  fi
-  
-  local mac
-  mac=$(basename "$conf_file" .conf 2>/dev/null)
-  
-  if [[ -z "$mac" ]] || [[ "$mac" == "$conf_file" ]]; then
-    hps_log error "get_mac_from_conffile: Cannot extract MAC from: $conf_file"
-    return 1
-  fi
-  
-  echo "$mac"
-  return 0
-}
-
-
 
 #===============================================================================
 # normalise_mac
@@ -621,13 +658,13 @@ normalise_mac() {
 #===============================================================================
 # format_mac_colons
 # -----------------
-# Format a normalized MAC address with colon delimiters.
+# Format a MAC address with colon delimiters.
 #
 # Parameters:
-#   $1 - MAC address (12 hex chars, no delimiters)
+#   $1 - MAC address (with or without colons)
 #
 # Output:
-#   MAC address in format: xx:xx:xx:xx:xx:xx
+#   MAC address in format: xx:xx:xx:xx:xx:xx (lowercase)
 #   Error message to stderr if invalid
 #
 # Returns:
@@ -635,12 +672,24 @@ normalise_mac() {
 #   1 if MAC address format is invalid
 #
 # Example:
-#   format_mac_colons "525400123456"  # outputs: 52:54:00:12:34:56
+#   format_mac_colons "525400123456"           # outputs: 52:54:00:12:34:56
+#   format_mac_colons "52:54:00:12:34:56"      # outputs: 52:54:00:12:34:56
+#   format_mac_colons "52-54-00-12-34-56"      # outputs: 52:54:00:12:34:56
 #===============================================================================
 format_mac_colons() {
   local mac="$1"
   
-  # Validate: must be exactly 12 hex characters
+  if [[ -z "$mac" ]]; then
+    echo "[x] MAC address required" >&2
+    return 1
+  fi
+  
+  # Remove any existing delimiters (colons, dashes, dots)
+  mac="${mac//:/}"
+  mac="${mac//-/}"
+  mac="${mac//./}"
+  
+  # Validate: must be exactly 12 hex characters after removing delimiters
   if [[ ! "$mac" =~ ^[0-9a-fA-F]{12}$ ]]; then
     echo "[x] Invalid MAC address format: $1" >&2
     return 1
@@ -649,7 +698,10 @@ format_mac_colons() {
   # Convert to lowercase and insert colons
   mac="${mac,,}"
   echo "${mac:0:2}:${mac:2:2}:${mac:4:2}:${mac:6:2}:${mac:8:2}:${mac:10:2}"
+  return 0
 }
+
+
 
 #===============================================================================
 # strip_quotes
