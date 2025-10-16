@@ -15,4 +15,5 @@ cat /etc/issue
 
 
 # uncommenting this will disable login
+# this shoudl be generic function, and set depending on cluste r / host config vars
 #n_queue_add n_disable_getty_alpine
