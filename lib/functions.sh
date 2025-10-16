@@ -128,4 +128,4 @@ if declare -f get_active_cluster_file >/dev/null 2>&1; then
   fi
 fi
 
-hps_log info "[HPS] Function library initialisation complete" >&2
+hps_log debug "[HPS] Function library initialisation complete" >&2
