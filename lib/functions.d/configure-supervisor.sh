@@ -89,7 +89,7 @@ EOF
   # --- nginx ---
   *supervisor*append_once "program:nginx" "$(cat <<EOF
 [program:nginx]
-command=/usr/sbin/nginx -g 'daemon off;' -c "${HPS_SERVICE_CONFIG_DIR}/nginx.conf"
+command=/usr/sbin/nginx -g 'daemon off;' -c "$(get_path_cluster_services_dir)/nginx.conf"
 autostart=true
 autorestart=true
 stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
