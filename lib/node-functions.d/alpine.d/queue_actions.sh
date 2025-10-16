@@ -1,4 +1,8 @@
 
+# n_queue_add n_enable_console_output 
+
+# create link to /lib/modules
+n_queue_add n_link_module_dir
 
 # queue package installs
 
