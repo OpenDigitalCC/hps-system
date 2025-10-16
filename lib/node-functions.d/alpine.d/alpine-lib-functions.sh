@@ -1,6 +1,8 @@
 
 
-
+n_link_module_dir () {
+  ln -s /.modloop/modules/6.6.41-0-lts/ /lib/modules/
+}
 
 #===============================================================================
 # n_load_kernel_module
