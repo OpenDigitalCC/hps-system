@@ -94,6 +94,7 @@ default_mtu=$([[ "$current_mtu" == "9000" ]] && echo "y" || echo "n")
 
 # Number of storage networks
 cli_note "Storage networks provide dedicated VLANs for iSCSI traffic"
+cli_note "Each network requires it's own network interface on each host, and switch / vlan configured"
 num_storage_networks=$(cli_prompt "Number of storage networks to configure (1-10)" "$default_count" "^([1-9]|10)$" \
   "Invalid number: must be between 1 and 10")
 
