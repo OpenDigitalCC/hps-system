@@ -9,7 +9,7 @@ __guard_source || return
 #
 # Arguments:
 #   $1 - distro : Distro string format: cpu-mfr-osname-osver
-#   $2 - base   : Base directory (optional, defaults to ${LIB_DIR}/host-scripts.d)
+#   $2 - base   : Base directory (optional, defaults to ${LIB_DIR}/node-functions.d)
 #
 # Search Order:
 #   pre-load.sh (if exists in base directory)
@@ -44,14 +44,13 @@ __guard_source || return
 #===============================================================================
 node_get_functions() {
   local distro="${1:?Usage: node_get_functions <distro> [func_dir]}"
-  local base="${2:-${LIB_DIR:+${LIB_DIR%/}/host-scripts.d}}"
-  base="${base:-/srv/hps-system/lib/host-scripts.d}"
+  local base="${2:-${LIB_DIR:+${LIB_DIR%/}/node-functions.d}}"
+#  base="${base:-/srv/hps-system/lib/node-functions.d}"
   
-  # Get the current profile
+  # Get the current profile if available
   local profile
   if ! profile=$(host_config $mac get HOST_PROFILE 2>/dev/null); then
-    hps_log error "Failed to get HOST_PROFILE from host-config"
-    return 2
+    hps_log warn "No HOST_PROFILE available"
   fi
   
   # Profile might be empty, which is valid
