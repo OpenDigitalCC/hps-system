@@ -1,27 +1,170 @@
+
+#===============================================================================
+# n_network_get_interfaces
+# ------------------------
+# Get all physical network interfaces with detailed information
+#
+# Behaviour:
+#   - Detects all physical ethernet interfaces
+#   - Gets speed, state, driver, PCI info
+#   - Works on Alpine and Rocky (different naming schemes)
+#   - Excludes virtual interfaces (lo, docker, bridges, etc)
+#
+# Returns:
+#   0 always
+#   Outputs interface information to stdout
+#
+# Example usage:
+#   n_network_get_interfaces
+#===============================================================================
+n_network_get_interfaces() {
+  echo "Physical Network Interfaces:"
+  echo "==========================="
+  
+  # Find all network interfaces
+  for iface_path in /sys/class/net/*; do
+    iface=$(basename "$iface_path")
+    
+    # Skip loopback
+    [[ "$iface" == "lo" ]] && continue
+    
+    # Skip if not a physical interface (check if has device symlink)
+    [[ ! -L "$iface_path/device" ]] && continue
+    
+    # Skip bridges, bonds, vlans
+    [[ -d "$iface_path/bridge" ]] && continue
+    [[ -f "$iface_path/bonding/mode" ]] && continue
+    [[ -f "/proc/net/vlan/$iface" ]] && continue
+    
+    echo "Interface: $iface"
+    
+    # Get state
+    local state=$(cat "$iface_path/operstate" 2>/dev/null || echo "unknown")
+    echo "  State: $state"
+    
+    # Get MAC address
+    local mac=$(cat "$iface_path/address" 2>/dev/null || echo "unknown")
+    echo "  MAC: $mac"
+    
+    # Get MTU
+    local mtu=$(cat "$iface_path/mtu" 2>/dev/null || echo "unknown")
+    echo "  MTU: $mtu"
+    
+    # Get speed (if available and link is up)
+    if [[ "$state" == "up" ]] && [[ -r "$iface_path/speed" ]]; then
+      local speed=$(cat "$iface_path/speed" 2>/dev/null || echo "unknown")
+      [[ "$speed" != "unknown" ]] && echo "  Speed: ${speed}Mbps"
+    fi
+    
+    # Get driver
+    if [[ -L "$iface_path/device/driver" ]]; then
+      local driver=$(basename "$(readlink "$iface_path/device/driver")")
+      echo "  Driver: $driver"
+    fi
+    
+    # Get PCI device
+    if [[ -L "$iface_path/device" ]]; then
+      local pci=$(basename "$(readlink "$iface_path/device")")
+      echo "  PCI: $pci"
+    fi
+    
+    # Check for current IPs
+    local ips=$(ip -4 addr show "$iface" 2>/dev/null | grep inet | awk '{print $2}' | tr '\n' ' ')
+    [[ -n "$ips" ]] && echo "  IPv4: $ips"
+    
+    # Check capabilities
+    if [[ -r "$iface_path/device/vendor" ]]; then
+      local vendor=$(cat "$iface_path/device/vendor" 2>/dev/null)
+      [[ "$vendor" == "0x8086" ]] && echo "  Vendor: Intel"
+      [[ "$vendor" == "0x10ec" ]] && echo "  Vendor: Realtek"
+      [[ "$vendor" == "0x14e4" ]] && echo "  Vendor: Broadcom"
+    fi
+    
+    echo
+  done
+}
+
+#===============================================================================
+# n_network_find_interface
+# ------------------------
+# Find suitable network interface for configuration
+#
+# Behaviour:
+#   - Returns first available ethernet interface
+#   - Prefers interfaces that are up
+#   - Works across distros
+#
+# Parameters:
+#   $1: Preferred state (up/down/any) default: any
+#
+# Returns:
+#   0 on success (echoes interface name)
+#   1 if no suitable interface found
+#
+# Example usage:
+#   iface=$(n_network_find_interface "up")
+#===============================================================================
+n_network_find_interface() {
+  local preferred_state="${1:-any}"
+  local found_up=""
+  local found_down=""
+  
+  for iface_path in /sys/class/net/*; do
+    iface=$(basename "$iface_path")
+    
+    # Skip non-physical interfaces
+    [[ "$iface" == "lo" ]] && continue
+    [[ ! -L "$iface_path/device" ]] && continue
+    [[ -d "$iface_path/bridge" ]] && continue
+    [[ -f "$iface_path/bonding/mode" ]] && continue
+    [[ -f "/proc/net/vlan/$iface" ]] && continue
+    
+    local state=$(cat "$iface_path/operstate" 2>/dev/null)
+    
+    if [[ "$state" == "up" ]]; then
+      found_up="$iface"
+      [[ "$preferred_state" != "down" ]] && echo "$iface" && return 0
+    else
+      found_down="$iface"
+      [[ "$preferred_state" == "down" ]] && echo "$iface" && return 0
+    fi
+  done
+  
+  # Return any found interface
+  [[ -n "$found_up" ]] && echo "$found_up" && return 0
+  [[ -n "$found_down" ]] && echo "$found_down" && return 0
+  
+  return 1
+}
+
+
 #===============================================================================
 # n_storage_network_setup
 # ------------------------
-# Setup storage network using IPS allocation
-#
-# Behaviour:
-#   - Requests IP allocation from IPS (MAC detected automatically)
-#   - Configures storage VLAN interface
-#   - Cross-distro compatible (Alpine/Rocky)
+# Setup storage network with auto-detection
 #
 # Parameters:
-#   $1: Physical interface (e.g., eth0)
+#   $1: Physical interface (optional - auto-detects if not specified)
 #   $2: Storage network index (0, 1, etc.)
 #
 # Returns:
 #   0 on success
 #   1 on error
-#
-# Example usage:
-#   n_storage_network_setup eth0 0
 #===============================================================================
 n_storage_network_setup() {
-  local phys_iface="$1"
+  local phys_iface="${1:-}"
   local storage_index="${2:-0}"
+  
+  # Auto-detect interface if not specified
+  if [[ -z "$phys_iface" ]]; then
+    phys_iface=$(n_network_find_interface "up")
+    if [[ -z "$phys_iface" ]]; then
+      n_remote_log "ERROR: No suitable network interface found"
+      return 1
+    fi
+    n_remote_log "Auto-detected interface: $phys_iface"
+  fi
+  
   
   # Request allocation from IPS (no MAC needed)
   n_remote_log "Requesting storage IP allocation from IPS"
@@ -127,10 +270,17 @@ n_vlan_create() {
   local vlan_id="$2"
   local mtu="${3:-1500}"
   
+  # Check required arguments
+  if [[ -z "$phys_iface" ]] || [[ -z "$vlan_id" ]]; then
+    echo "Usage: n_vlan_create <interface> <vlan_id> [mtu]"
+    return 1
+  fi
+  
   if [[ ! -d "/sys/class/net/$phys_iface" ]]; then
     n_remote_log "ERROR: Physical interface $phys_iface not found"
     return 1
   fi
+  
   
   local vlan_iface="${phys_iface}.${vlan_id}"
   
@@ -182,7 +332,13 @@ n_interface_add_ip() {
   local ip_addr="$2"
   local netmask="$3"
   
-  # Convert netmask to CIDR if needed
+  # Check arguments
+  if [[ -z "$iface" ]] || [[ -z "$ip_addr" ]] || [[ -z "$netmask" ]]; then
+    echo "Usage: n_interface_add_ip <interface> <ip> <netmask>"
+    return 1
+  fi
+  
+  # Convert netmask to CIDR
   local cidr
   if [[ "$netmask" =~ ^[0-9]+$ ]]; then
     cidr="$netmask"
@@ -190,9 +346,15 @@ n_interface_add_ip() {
     cidr=$(netmask_to_cidr "$netmask")
   fi
   
+  # Check if IP already exists
+  if ip addr show "$iface" | grep -q "$ip_addr/$cidr"; then
+    n_remote_log "IP $ip_addr/$cidr already exists on $iface"
+    return 0
+  fi
+  
   ip addr add "${ip_addr}/${cidr}" dev "$iface"
-  return $?
 }
+
 
 #===============================================================================
 # n_vlan_status

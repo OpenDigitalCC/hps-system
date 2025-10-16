@@ -2,11 +2,6 @@
 
 mkdir -p /lib/modules
 
-# Debug console output
-exec 2>&1  # Redirect stderr to stdout
-echo "Console test at $(date)" > /dev/console
-echo "Console test at $(date)" > /dev/tty1
-
 
 ## TODO@ This should be more sensible - we can ask IPS for this
 n_get_provisioning_node() {
@@ -451,7 +446,5 @@ n_remote_cluster_variable() {
 
 
 n_remote_log "Starting to load node functions"
-
-n_enable_console_output    # Add this first
 
 
