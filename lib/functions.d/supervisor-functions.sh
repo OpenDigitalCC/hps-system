@@ -3,6 +3,7 @@ __guard_source || return
 create_supervisor_services_config () {
   create_config_nginx
   create_config_dnsmasq
+  create_config_rsyslog
   create_config_opensvc IPS # specify that this is an IPS node
 }
 

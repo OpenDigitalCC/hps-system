@@ -48,7 +48,7 @@ configure_supervisor_services() {
   done
 
   # Helper: append a block once, keyed by program stanza name
-  *supervisor*append_once() {
+  _supervisor_append_once() {
     local stanza="$1"    # e.g. program:nginx
     local block="$2"
     
@@ -76,7 +76,7 @@ configure_supervisor_services() {
   touch ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
   chown nobody:nogroup ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
 
-  *supervisor*append_once "program:dnsmasq" "$(cat <<EOF
+  _supervisor_append_once "program:dnsmasq" "$(cat <<EOF
 [program:dnsmasq]
 command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF} --log-facility=${DNSMASQ_LOG_STDOUT}
 autostart=true
@@ -87,7 +87,7 @@ EOF
 )" || return 3
 
   # --- nginx ---
-  *supervisor*append_once "program:nginx" "$(cat <<EOF
+  _supervisor_append_once "program:nginx" "$(cat <<EOF
 [program:nginx]
 command=/usr/sbin/nginx -g 'daemon off;' -c "$(get_path_cluster_services_dir)/nginx.conf"
 autostart=true
@@ -98,7 +98,7 @@ EOF
 )" || return 3
 
   # --- fcgiwrap ---
-  *supervisor*append_once "program:fcgiwrap" "$(cat <<EOF
+  _supervisor_append_once "program:fcgiwrap" "$(cat <<EOF
 [program:fcgiwrap]
 command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
 umask=002
@@ -109,8 +109,20 @@ stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
 EOF
 )" || return 3
 
+  # --- rsyslogd ---
+  _supervisor_append_once "program:rsyslogd" "$(cat <<EOF
+[program:rsyslogd]
+command=/usr/sbin/rsyslogd -n -f $(get_path_cluster_services_dir)/rsyslog.conf
+autostart=true
+autorestart=true
+stderr_logfile=${HPS_LOG_DIR}/rsyslogd.err.log
+stdout_logfile=${HPS_LOG_DIR}/rsyslogd.out.log
+EOF
+)" || return 3
+
+
   # --- OpenSVC agent ---
-  *supervisor*append_once "program:opensvc" "$(cat <<EOF
+  _supervisor_append_once "program:opensvc" "$(cat <<EOF
 [program:opensvc]
 command=/usr/local/sbin/opensvc-foreground
 autostart=true
