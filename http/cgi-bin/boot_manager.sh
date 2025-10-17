@@ -376,8 +376,8 @@ if [[ "$cmd" == "boot_action" ]]
     INSTALLING)
       hps_log info "Currently installing. Continuing install."
       HTYPE=$(host_config "$mac" get TYPE)
-      hps_log debug "[$mac] Installing TYPE: $HTYPE"
-      ipxe_boot_installer "$HTYPE" ""
+      hps_log debug "Continuing installation - TYPE: $HTYPE"
+      ipxe_boot_installer "$mac" "$HTYPE"
       ;;
 
     ACTIVE)

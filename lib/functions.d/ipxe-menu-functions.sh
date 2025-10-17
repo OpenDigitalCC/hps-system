@@ -124,13 +124,17 @@ handle_menu_item() {
         # Extract type and profile from the match
         HOST_TYPE="${BASH_REMATCH[1]}"
         HOST_PROFILE="${BASH_REMATCH[2]}"
+        # Set HOST_PROFILE
+        if [[ -n "${profile}" ]]; then
+          host_config "$mac" set HOST_PROFILE "${profile}"
+        fi  
         hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
       else
         # No profile suffix, HOST_PROFILE remains empty
         hps_log info "$item Running boot installer for type: '${HOST_TYPE}' (no profile)"
       fi
       
-      ipxe_boot_installer "$mac" "${HOST_TYPE}" "${HOST_PROFILE}"
+      ipxe_boot_installer "$mac" "${HOST_TYPE}"
       ;;
       
     force_install_*)
@@ -315,12 +319,11 @@ ipxe_reboot () {
 }
 
 
-## This function runs once the user selects the install type and profile from the install menu. 
+## This function runs once the user selects the install type from the install menu. 
 # It is the opportunity to configure the host variables
 ipxe_boot_installer () {
   local mac="$1"
   local host_type="$2"
-  local profile="${3:-}"
 
   local arch="$(host_config "$mac" get arch)"
 
@@ -328,10 +331,6 @@ ipxe_boot_installer () {
   # Store OS ID to host config
   host_config "$mac" "set" "os_id" "$os_id"
   host_config "$mac" "set" "TYPE" "$host_type"
-  # Set HOST_PROFILE if profile was selected
-  if [[ -n "${profile}" ]]; then
-    host_config "$mac" set HOST_PROFILE "${profile}"
-  fi  
   
   hps_log info "Installing new host of type $host_type ($arch) with $os_id"
   
