@@ -19,7 +19,9 @@ rootpw --plaintext changeme
 # ------------ Hardening
 
 selinux --enforcing
-#services --enabled=sshd
+
+## TODO: Disable this
+services --enabled=sshd
 
 
 # ------------ Disk / boot
