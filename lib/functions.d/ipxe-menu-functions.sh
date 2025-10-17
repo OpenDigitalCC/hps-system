@@ -1,19 +1,20 @@
 __guard_source || return
 # Define your functions below
 
+CGI_URL="http://\${next-server}/cgi-bin/boot_manager.sh"
+
 ipxe_header () {
 
 # Send pxe header so we don't get a boot failure
 cgi_header_plain
 
 # Set some variables to be used in IPXE scripts
-CGI_URL="http://\${next-server}/cgi-bin/boot_manager.sh"
 TITLE_PREFIX="$(cluster_config get CLUSTER_NAME) \${mac:hexraw} \${net0/ip}:"
 
 cat <<EOF
 #!ipxe
 
-set logmsg ${FUNCNAME[1]} $(cluster_config get CLUSTER_NAME) \${net0/ip}
+set logmsg ${FUNCNAME[1]} $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header sent
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
 echo
@@ -319,9 +320,11 @@ ipxe_boot_installer () {
   local arch="$(host_config "$mac" get arch)"
   
   hps_log info "Installing new host of type $host_type ($arch)"
+  
+  # Assign network addresses and other host config details
   host_network_configure "$mac" "${host_type}"
 
-  # Set HOST_PROFILE if profile was provided
+  # Set HOST_PROFILE if profile was selected
   if [[ -n "${profile}" ]]; then
     host_config "$mac" set HOST_PROFILE "${profile}"
   fi  
@@ -347,16 +350,9 @@ ipxe_boot_installer () {
 
   hps_log debug "os_key: $os_key os_id: $os_id"
  
-  # Get OS parameters from the registry
-  local MFR=$(os_config "$os_id" "get" "manufacturer")
-  local OSNAME=$(os_config "$os_id" "get" "name")
-  local OSVER=$(os_config "$os_id" "get" "version")
-
-  hps_log info "O/S Parameters for $os_id: ${arch}-${MFR}-${OSNAME}-${OSVER}"
-
   local state="$(host_config "$mac" get STATE)"
 
-  # check that we are not already installed
+  # Abort if we not already installed
   if [ "$state" == "INSTALLED" ]
    then
     ipxe_reboot "Host already installed, aborting installation"
@@ -394,45 +390,38 @@ ipxe_boot_installer () {
   fi
 
   # Generate iPXE using HTTP paths
-  local repo_base="http://\${dhcp-server}/distros/${distro_relative}"
+  local boot_server=$(cluster_config get DHCP_IP)
+  local repo_base="http://${boot_server}/distros/${distro_relative}"
+  local kickstart_cmd="http://${boot_server}/cgi-bin/boot_manager.sh?cmd=kickstart"
+  local boot_kernel_args="initrd=initrd.img inst.stage2=${repo_base} rd.live.ram=1 ip=dhcp console=ttyS0,115200n8 inst.ks=${kickstart_cmd}"
+  local boot_kernel_line="$repo_base/${kernel_rel} ${boot_kernel_args}"
+  local boot_initrd_line="${repo_base}/${initrd_rel}"
+  hps_log debug "Preparing PXE Boot for ${os_id} non-interactive installation"
+  hps_log debug "boot_kernel_line: $boot_kernel_line"
 
-  hps_log debug "Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
-
-  ipxe_header
 
   IPXE_BOOT_INSTALL=$(cat <<EOF
 # created at $(date)
 
-# Detect CPU architecture
-#cpuid --ext 29 && set arch x86_64 || set arch i386
-
-set repo_base $repo_base
-set ks ${CGI_URL}?cmd=kickstart
-
-# set kernel_args initrd=initrd.img inst.repo=\${repo_base} ip=dhcp rd.debug rd.live.debug console=ttyS0,115200n8 inst.ks=\${ks}
-set kernel_args initrd=initrd.img inst.repo=\${repo_base} ip=dhcp console=ttyS0,115200n8 inst.ks=\${ks}
-
 # Required to prevent corrupt initrd
 imgfree
 
-kernel \${repo_base}/${kernel_rel} \${kernel_args}
-initrd \${repo_base}/${initrd_rel}
+kernel $boot_kernel_line
+initrd $boot_initrd_line
 
 sleep 2
 boot
-
-#echo Booting image
-#imgstat
-#set logmsg ${FUNCNAME[1]} \${kernel_url} \${kernel_args} \${initrd_url}
-#imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
 EOF
 )
 
   # debug: make file with the ipxe menu
   #echo "${IPXE_BOOT_INSTALL}"  > /tmp/ipxe-boot-install.ipxe
-  host_config "$mac" set STATE INSTALLING
+
+  ipxe_header
+  hps_log info "Installer instruction sent. "
   echo "${IPXE_BOOT_INSTALL}"
+  exit 0
 
 }
 
@@ -616,7 +605,7 @@ ipxe_boot_alpine_tch() {
 
   local kernel_args="initrd=initramfs-lts"
   kernel_args="${kernel_args} console=ttyS0,115200n8"
-  kernel_args="${kernel_args} alpine_repo=http://10.99.1.1/distros/alpine-3.20.2/apks/main"
+  kernel_args="${kernel_args} alpine_repo=http://${gateway}/distros/alpine-3.20.2/apks/main"
 #  kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
   kernel_args="${kernel_args} ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:off"
 #  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol&filename=bootstrap.apkovl.tar.gz"

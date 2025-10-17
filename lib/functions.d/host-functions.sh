@@ -145,7 +145,106 @@ get_host_conf_filename() {
   return 0
 }
 
+#:name: _find_available_ip
+#:group: network
+#:synopsis: Find an available IP address in DHCP range.
+#:usage: _find_available_ip <mac> <dhcp_ip> <dhcp_rangesize>
+#:description:
+#  Scans DHCP range for available IP address.
+#  Skips DHCP server IP and already-assigned IPs.
+#  Preserves current host IP if already assigned.
+#:parameters:
+#  mac            - MAC address of host (to check current IP)
+#  dhcp_ip        - DHCP server IP (start of range)
+#  dhcp_rangesize - Size of DHCP range
+#:returns:
+#  0 on success (outputs IP to stdout)
+#  1 if no available IPs found
+_find_available_ip() {
+  local mac="$1"
+  local dhcp_ip="$2"
+  local dhcp_rangesize="$3"
+  
+  # Get all currently assigned IPs
+  local assigned_ips
+  assigned_ips=$(get_cluster_host_ips 2>/dev/null)
+  
+  # Get current host's IP if it already has one
+  local current_host_ip
+  current_host_ip=$(host_config "$mac" get IP 2>/dev/null) || current_host_ip=""
+  
+  # Convert DHCP start IP to integer
+  local dhcp_start_int
+  dhcp_start_int=$(ip_to_int "$dhcp_ip" 2>/dev/null) || return 1
+  
+  # Scan range for available IP
+  local try_ip
+  for ((i=0; i<dhcp_rangesize; i++)); do
+    try_ip=$(int_to_ip $((dhcp_start_int + i)) 2>/dev/null)
+    [[ -z "$try_ip" ]] && continue
+    
+    # Skip DHCP server IP
+    [[ "$try_ip" == "$dhcp_ip" ]] && continue
+    
+    # Check if IP is in use by another host
+    local ip_in_use=0
+    while IFS= read -r existing_ip; do
+      [[ -z "$existing_ip" ]] && continue
+      if [[ "$existing_ip" == "$try_ip" ]]; then
+        # OK if it's our current IP (reconfiguring)
+        [[ "$current_host_ip" != "$try_ip" ]] && ip_in_use=1
+        break
+      fi
+    done <<< "$assigned_ips"
+    
+    # Found available IP
+    if [[ $ip_in_use -eq 0 ]]; then
+      echo "$try_ip"
+      return 0
+    fi
+  done
+  
+  return 1
+}
 
+#:name: _find_available_hostname
+#:group: network
+#:synopsis: Find available hostname with sequential numbering.
+#:usage: _find_available_hostname <hosttype>
+#:description:
+#  Generates hostname by finding highest existing number for host type
+#  and incrementing. Returns hostname in format: type-NNN (lowercase, zero-padded).
+#:parameters:
+#  hosttype - Host type prefix (e.g., TCH, ROCKY)
+#:returns:
+#  0 on success (outputs hostname to stdout)
+#  1 on failure
+_find_available_hostname() {
+  local hosttype="$1"
+  local hosttype_lower=$(echo "$hosttype" | tr '[:upper:]' '[:lower:]')
+  local next_number=1
+  
+  # Get all existing hostnames of this type
+  local existing_hostnames
+  existing_hostnames=$(get_cluster_host_hostnames "" "$hosttype_lower" 2>/dev/null)
+  
+  # Find highest existing number
+  while IFS= read -r existing_hostname; do
+    [[ -z "$existing_hostname" ]] && continue
+    
+    if [[ "$existing_hostname" =~ ^${hosttype_lower}-([0-9]+)$ ]]; then
+      local num="${BASH_REMATCH[1]}"
+      if [[ -n "$num" ]] && [[ "$num" =~ ^[0-9]+$ ]]; then
+        num=$((10#$num)) || continue
+        [[ $num -ge $next_number ]] && next_number=$((num + 1))
+      fi
+    fi
+  done <<< "$existing_hostnames"
+  
+  # Generate hostname with zero-padding
+  printf "%s-%03d" "$hosttype_lower" "$next_number"
+  return 0
+}
 
 #:name: host_network_configure
 #:group: network
@@ -153,10 +252,8 @@ get_host_conf_filename() {
 #:usage: host_network_configure <mac> <hosttype>
 #:description:
 #  Allocates a unique IP address from the DHCP range and generates
-#  a unique hostname based on host type. Checks existing host configurations
-#  to avoid conflicts. Persists network configuration via host_config.
-#  Hostname is generated in lowercase with zero-padded sequential numbering.
-#  Uses cluster helper functions to safely enumerate existing hosts.
+#  a unique hostname based on host type. Preserves existing network
+#  configuration if already set. Persists configuration via host_config.
 #:parameters:
 #  mac      - MAC address of the host
 #  hosttype - Host type prefix for hostname generation (e.g., TCH, ROCKY)
@@ -171,229 +268,114 @@ host_network_configure() {
   
   # Validate input parameters
   if [[ -z "$macid" ]]; then
-    hps_log error "host_network_configure: MAC address not provided"
+    hps_log error "MAC address not provided"
     return 1
   fi
   
   if [[ -z "$hosttype" ]]; then
-    hps_log error "host_network_configure: Host type not provided"
+    hps_log error "Host type not provided"
     return 1
   fi
   
-  local dhcp_ip dhcp_rangesize network_cidr netmask
+  # Get cluster network configuration
+  local dhcp_ip dhcp_rangesize network_cidr
+  dhcp_ip=$(cluster_config get DHCP_IP 2>/dev/null)
+  dhcp_rangesize=$(cluster_config get DHCP_RANGESIZE 2>/dev/null)
+  network_cidr=$(cluster_config get NETWORK_CIDR 2>/dev/null)
   
-  # Get cluster network configuration with error handling
-  dhcp_ip=$(cluster_config get DHCP_IP 2>/dev/null) || dhcp_ip=""
-  dhcp_rangesize=$(cluster_config get DHCP_RANGESIZE 2>/dev/null) || dhcp_rangesize=""
-  network_cidr=$(cluster_config get NETWORK_CIDR 2>/dev/null) || network_cidr=""
-  
-  hps_log debug "Retrieved cluster config - DHCP_IP: $dhcp_ip, RANGESIZE: $dhcp_rangesize, CIDR: $network_cidr"
-  
-  if [[ -z "$dhcp_ip" ]]; then
-    hps_log error "Missing DHCP_IP in cluster config"
+  # Validate cluster config
+  if [[ -z "$dhcp_ip" ]] || [[ -z "$dhcp_rangesize" ]] || [[ -z "$network_cidr" ]]; then
+    hps_log error "Missing required cluster network configuration"
     return 1
   fi
   
-  if [[ -z "$dhcp_rangesize" ]]; then
-    hps_log error "Missing DHCP_RANGESIZE in cluster config"
-    return 1
-  fi
-  
-  if [[ -z "$network_cidr" ]]; then
-    hps_log error "Missing NETWORK_CIDR in cluster config"
-    return 1
-  fi
-  
-  # Validate DHCP IP
   if ! validate_ip_address "$dhcp_ip" 2>/dev/null; then
-    hps_log error "Invalid DHCP_IP in cluster config: $dhcp_ip"
+    hps_log error "Invalid DHCP_IP: $dhcp_ip"
     return 1
   fi
   
-  # Calculate netmask from CIDR (handles both formats)
-  netmask=$(cidr_to_netmask "$network_cidr" 2>/dev/null) || netmask=""
+  # Calculate netmask
+  local netmask
+  netmask=$(cidr_to_netmask "$network_cidr" 2>/dev/null)
   if [[ -z "$netmask" ]]; then
-    hps_log error "Failed to calculate netmask from NETWORK_CIDR: $network_cidr"
+    hps_log error "Failed to calculate netmask from: $network_cidr"
     return 1
   fi
   
-  hps_log debug "Calculated netmask: $netmask"
+  # Check if network config already exists - if so, preserve it
+  local assigned_ip assigned_hostname
+  assigned_ip=$(host_config "$macid" get IP 2>/dev/null)
+  assigned_hostname=$(host_config "$macid" get HOSTNAME 2>/dev/null)
   
-  # Find available IP address within DHCP range
-  local dhcp_start_int
-  dhcp_start_int=$(ip_to_int "$dhcp_ip" 2>/dev/null) || {
-    hps_log error "Failed to convert DHCP_IP to integer: $dhcp_ip"
-    return 1
-  }
-  
-  hps_log debug "DHCP start IP as integer: $dhcp_start_int"
-  
-  # Get all currently assigned IPs using cluster helper
-  local assigned_ips
-  assigned_ips=$(get_cluster_host_ips 2>/dev/null)
-  
-  # Get current host's IP if it already has one
-  local current_host_ip
-  current_host_ip=$(host_config "$macid" get IP 2>/dev/null) || current_host_ip=""
-  
-  local try_ip=""
-  local assigned_ip=""
-  
-  for ((i=0; i<dhcp_rangesize; i++)); do
-    try_ip=$(int_to_ip $((dhcp_start_int + i)) 2>/dev/null)
-    
-    if [[ -z "$try_ip" ]]; then
-      hps_log warning "Failed to convert IP integer to address at offset $i"
-      continue
-    fi
-    
-    # Skip the DHCP server IP itself
-    if [[ "$try_ip" == "$dhcp_ip" ]]; then
-      hps_log debug "Skipping DHCP server IP: $try_ip"
-      continue
-    fi
-    
-    # Check if this IP is already assigned to another host
-    local ip_in_use=0
-    local existing_ip
-    
-    while IFS= read -r existing_ip; do
-      [[ -z "$existing_ip" ]] && continue
-      if [[ "$existing_ip" == "$try_ip" ]]; then
-        # If it's assigned to current host, that's OK (we're reconfiguring)
-        if [[ "$current_host_ip" != "$try_ip" ]]; then
-          ip_in_use=1
-        fi
-        break
-      fi
-    done <<< "$assigned_ips"
-    
-    # Found an available IP
-    if [[ $ip_in_use -eq 0 ]]; then
-      assigned_ip="$try_ip"
-      hps_log debug "Found available IP: $assigned_ip at offset $i"
-      break
-    fi
-  done
-  
+  # Allocate IP if not already set
   if [[ -z "$assigned_ip" ]]; then
-    hps_log error "No available IPs in DHCP range ${dhcp_ip} (size: ${dhcp_rangesize})"
-    return 1
-  fi
-  
-  # Validate assigned IP
-  if ! validate_ip_address "$assigned_ip" 2>/dev/null; then
-    hps_log error "Generated invalid IP address: $assigned_ip"
-    return 1
-  fi
-  
-  # Find available hostname with sequential numbering
-  local hostname=""
-  local hosttype_lower=$(echo "$hosttype" | tr '[:upper:]' '[:lower:]')
-  local next_number=1
-  
-  hps_log debug "Finding available hostname for type: $hosttype_lower"
-  
-  # Get all existing hostnames of this type using cluster helper
-  local existing_hostnames
-  existing_hostnames=$(get_cluster_host_hostnames "" "$hosttype_lower" 2>/dev/null)
-  
-  # Find the highest existing number for this host type
-  local existing_hostname
-  while IFS= read -r existing_hostname; do
-    [[ -z "$existing_hostname" ]] && continue
+    hps_log debug "No existing IP, allocating new one"
+    assigned_ip=$(_find_available_ip "$macid" "$dhcp_ip" "$dhcp_rangesize")
     
-    hps_log debug "Checking existing hostname: $existing_hostname"
+    if [[ -z "$assigned_ip" ]]; then
+      hps_log error "No available IPs in DHCP range"
+      return 1
+    fi
     
-    # Check if hostname matches our pattern (case-insensitive)
-    if [[ "$existing_hostname" =~ ^${hosttype_lower}-([0-9]+)$ ]]; then
-      local num="${BASH_REMATCH[1]}"
-      # Remove leading zeros for comparison
-      if [[ -n "$num" ]] && [[ "$num" =~ ^[0-9]+$ ]]; then
-        num=$((10#$num)) || continue
-        if [[ $num -ge $next_number ]]; then
-          next_number=$((num + 1))
-          hps_log debug "Updated next_number to: $next_number"
-        fi
-      fi
+    if ! validate_ip_address "$assigned_ip" 2>/dev/null; then
+      hps_log error "Generated invalid IP: $assigned_ip"
+      return 1
     fi
-  done <<< "$existing_hostnames"
-  
-  hps_log debug "Analyzed existing hostnames, next_number: $next_number"
-  
-  # Generate hostname with zero-padded number (3 digits)
-  hostname=$(printf "%s-%03d" "$hosttype_lower" "$next_number" 2>/dev/null)
-  
-  if [[ -z "$hostname" ]]; then
-    hps_log error "Failed to generate hostname using printf"
-    return 1
+    
+    hps_log info "Allocated IP: $assigned_ip"
+  else
+    hps_log debug "Preserving existing IP: $assigned_ip"
   fi
   
-  hps_log debug "Generated hostname: $hostname"
-  
-  # Validate generated hostname
-  if ! validate_hostname "$hostname" 2>/dev/null; then
-    hps_log error "Generated invalid hostname: $hostname"
-    return 1
-  fi
-  
-  # Double-check hostname isn't already in use
-  local hostname_exists=0
-  local check_hostname
-  
-  existing_hostnames=$(get_cluster_host_hostnames "" "" 2>/dev/null)
-  while IFS= read -r check_hostname; do
-    [[ -z "$check_hostname" ]] && continue
-    if [[ "$check_hostname" == "$hostname" ]]; then
-      hostname_exists=1
-      break
+  # Allocate hostname if not already set
+  if [[ -z "$assigned_hostname" ]]; then
+    hps_log debug "No existing hostname, generating new one"
+    assigned_hostname=$(_find_available_hostname "$hosttype")
+    
+    if [[ -z "$assigned_hostname" ]]; then
+      hps_log error "Failed to generate hostname"
+      return 1
     fi
-  done <<< "$existing_hostnames"
-  
-  if [[ $hostname_exists -eq 1 ]]; then
-    hps_log error "Generated hostname ${hostname} already exists (race condition?)"
-    return 1
+    
+    if ! validate_hostname "$assigned_hostname" 2>/dev/null; then
+      hps_log error "Generated invalid hostname: $assigned_hostname"
+      return 1
+    fi
+    
+    hps_log info "Generated hostname: $assigned_hostname"
+  else
+    hps_log debug "Preserving existing hostname: $assigned_hostname"
   fi
   
-  if [[ -z "$hostname" ]]; then
-    hps_log error "Failed to generate unique hostname for type: ${hosttype}"
-    return 1
-  fi
-  
-  hps_log debug "About to set host config for MAC: $macid"
-  
-  # Assign configuration to host
+  # Write configuration (only updates changed values)
   host_config "$macid" set IP "$assigned_ip" || {
-    hps_log error "Failed to set IP for MAC: $macid"
+    hps_log error "Failed to set IP"
     return 1
   }
   
   host_config "$macid" set NETMASK "$netmask" || {
-    hps_log error "Failed to set NETMASK for MAC: $macid"
+    hps_log error "Failed to set NETMASK"
     return 1
   }
   
-  host_config "$macid" set HOSTNAME "$hostname" || {
-    hps_log error "Failed to set HOSTNAME for MAC: $macid"
+  host_config "$macid" set HOSTNAME "$assigned_hostname" || {
+    hps_log error "Failed to set HOSTNAME"
     return 1
   }
   
   host_config "$macid" set TYPE "$hosttype" || {
-    hps_log error "Failed to set TYPE for MAC: $macid"
+    hps_log error "Failed to set TYPE"
     return 1
   }
   
   host_config "$macid" set STATE "CONFIGURED" || {
-    hps_log error "Failed to set STATE for MAC: $macid"
+    hps_log error "Failed to set STATE"
     return 1
   }
   
-  hps_log info "Assigned IP: $assigned_ip to MAC: $macid"
-  hps_log info "Assigned Hostname: $hostname to MAC: $macid"
-  
+  hps_log info "Network configuration complete for $macid: $assigned_hostname ($assigned_ip)"
   return 0
 }
-
 
 
 #:name: host_config_delete

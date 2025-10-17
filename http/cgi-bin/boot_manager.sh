@@ -63,8 +63,6 @@ if [[ "$cmd" == "get_tch_apkovol" ]]; then
 fi
 
 
-
-
 # Command: host_allocate_networks
 if [[ "$cmd" == "host_allocate_networks" ]]; then
   hps_log info "Allocating networks for remote host"
@@ -74,7 +72,6 @@ if [[ "$cmd" == "host_allocate_networks" ]]; then
   echo "$result"
   exit 0
 fi
-
 
 
 # Command: Handle a keysafe token request
@@ -102,6 +99,20 @@ if [[ "$cmd" == "get_alpine_bootstrap" ]]; then
     cgi_fail "Failed to generate bootstrap: get_alpine_bootstrap exited nonzero"
   fi
   exit 0
+fi
+
+
+
+# Command: Network bootstrap via kickstart
+if [[ "$cmd" == "kickstart" ]]; then
+  hosttype="$(host_config "$mac" get TYPE)"
+  if [[ -z "${hosttype:-}" ]]; then
+    cgi_auto_fail "Param hosttype is required for kickstart"
+  fi
+  hps_log info "Kickstart - Configuring host $hosttype"
+#  host_network_configure "$mac" "$hosttype"
+  generate_ks "$mac" "$hosttype"
+  exit
 fi
 
 
@@ -252,18 +263,6 @@ if [[ "$cmd" == "log_message" ]]
   exit
 fi
 
-
-# Command: Network bootstrap via kickstart
-if [[ "$cmd" == "kickstart" ]]; then
-  hosttype="$(host_config "$mac" get TYPE)"
-  if [[ -z "${hosttype:-}" ]]; then
-    cgi_auto_fail "Param hosttype is required for kickstart"
-  fi
-  hps_log info "Kickstart - Configuring host $hosttype"
-  host_network_configure "$mac" "$hosttype"
-  generate_ks "$mac" "$hosttype"
-  exit
-fi
 
 # Command: Determine current state
 if [[ "$cmd" == "determine_state" ]]; then
