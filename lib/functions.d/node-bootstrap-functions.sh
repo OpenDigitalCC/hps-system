@@ -14,21 +14,18 @@ create_bootstrap_core_lib() {
 
   # relay IPS core functions
 
+  echo "# HPS Bootstrap Library"
+  echo "# Relaying HPS functions"
+
   declare -f hps_check_bash_syntax
   declare -f hps_debug_function_load
   declare -f hps_safe_eval
   declare -f hps_source_with_debug
 
-  # Send custom node functions
 
   cat <<'LIBEOF'
-#!/bin/bash
-#===============================================================================
-# HPS Bootstrap Library
-# --------------------
-# Core functions for HPS node bootstrap and initialization.
-# This file is deployed to nodes and persists across reboots.
-#===============================================================================
+
+# Core functions for HPS node bootstrap and initialisation
 
 # URL encoding function
 hps_url_encode() {
@@ -74,15 +71,15 @@ hps_get_provisioning_node() {
 }
 
 hps_fetch_node_functions() {
-  local gateway distro url
+  local ips_address distro url
   
-  gateway="$(hps_get_provisioning_node)" || {
+  ips_address="$(hps_get_provisioning_node)" || {
     echo "[HPS] ERROR: Could not determine provisioning node" >&2
     return 1
   }
   
   distro="$(hps_get_distro_string)"
-  url="http://${gateway}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=$(hps_url_encode "$distro")"
+  url="http://${ips_address}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=$(hps_url_encode "$distro")"
   
   # Fetch functions without evaluating
   local response

@@ -81,37 +81,6 @@ if [[ "$cmd" == "keysafe_request_token" ]]; then
 fi
 
 
-# this and associated functions in tch-build.sh are redundant AFAIK
-# Command: Get alpine bootstrap 
-if [[ "$cmd" == "get_alpine_bootstrap" ]]; then
-  cgi_header_plain
-  hps_log info "Generating Alpine bootstrap"
-  
-  stage="initramfs"
-  if cgi_param exists stage; then
-    stage="$(cgi_param get stage)"
-  fi
-  
-  if ! get_alpine_bootstrap "$stage" ; then
-    cgi_fail "Failed to generate bootstrap: get_alpine_bootstrap exited nonzero"
-  fi
-  exit 0
-fi
-
-
-
-# Command: Network bootstrap via kickstart
-if [[ "$cmd" == "kickstart" ]]; then
-  hosttype="$(host_config "$mac" get TYPE)"
-  if [[ -z "${hosttype:-}" ]]; then
-    cgi_auto_fail "Param hosttype is required for kickstart"
-  fi
-  hps_log info "Kickstart - Configuring host $hosttype"
-#  host_network_configure "$mac" "$hosttype"
-  generate_ks "$mac" "$hosttype"
-  exit
-fi
-
 
 # Command: set status
 if [[ "$cmd" == "set_status" ]]
@@ -292,6 +261,47 @@ if [[ "$cmd" == "config_host" ]]; then
 fi
 
 
+# this and associated functions in tch-build.sh are redundant AFAIK
+# Command: Get alpine bootstrap 
+if [[ "$cmd" == "x_get_alpine_bootstrap" ]]; then
+  cgi_header_plain
+  hps_log info "Generating Alpine bootstrap"
+  
+  stage="initramfs"
+  if cgi_param exists stage; then
+    stage="$(cgi_param get stage)"
+  fi
+  
+  if ! get_alpine_bootstrap "$stage" ; then
+    cgi_fail "Failed to generate bootstrap: get_alpine_bootstrap exited nonzero"
+  fi
+  exit 0
+fi
+
+
+
+# Command: Network bootstrap via kickstart
+if [[ "$cmd" == "kickstart" ]]; then
+  hosttype="$(host_config "$mac" get TYPE)"
+  if [[ -z "${hosttype:-}" ]]; then
+    cgi_auto_fail "Param hosttype is required for kickstart"
+  fi
+  hps_log info "Kickstart - Configuring host $hosttype"
+#  host_network_configure "$mac" "$hosttype"
+  generate_ks "$mac" "$hosttype"
+  exit
+fi
+
+
+# Command: Get the bootstrap functions, which allow the fullfunction lib to be downloaded
+if [[ "$cmd" == "node_get_bootstrap_functions" ]]; then
+  cgi_header_plain
+  hps_log info "Streaming create_bootstrap_core_lib"
+  # Stream the lib
+  create_bootstrap_core_lib
+  exit 0
+fi
+
 
 # Command: get the node function library appropriate for this distro
 if [[ "$cmd" == "node_get_functions" ]]; then
@@ -318,6 +328,9 @@ if [[ "$cmd" == "node_get_functions" ]]; then
   
   exit 0
 fi
+
+
+
 
 
 

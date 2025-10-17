@@ -402,9 +402,22 @@ ipxe_boot_installer () {
   local boot_server=$(cluster_config get DHCP_IP)
   local repo_base="http://${boot_server}/distros/${repo_path}"
   local kickstart_cmd="http://${boot_server}/cgi-bin/boot_manager.sh?cmd=kickstart"
-  local boot_kernel_args="initrd=initrd.img inst.stage2=${repo_base} rd.live.ram=1 ip=dhcp console=ttyS0,115200n8 inst.ks=${kickstart_cmd}"
-  local boot_kernel_line="$repo_base/${kernel_rel} ${boot_kernel_args}"
+
+  local boot_kernel_line="$repo_base/${kernel_rel}"
+  local boot_kernel_line="${boot_kernel_line} initrd=initrd.img" 
+  local boot_kernel_line="${boot_kernel_line} inst.stage2=${repo_base}"
+  local boot_kernel_line="${boot_kernel_line} rd.live.ram=1"
+  local boot_kernel_line="${boot_kernel_line} ip=dhcp console=ttyS0,115200n8"
+  local boot_kernel_line="${boot_kernel_line} inst.ks=${kickstart_cmd}"
+  # In your boot kernel line generation, add:
+  local boot_kernel_line="${boot_kernel_line} inst.text"  # Force text mode
+  local boot_kernel_line="${boot_kernel_line} inst.syslog=10.99.1.1:514"
+#  local boot_kernel_line="${boot_kernel_line} inst.vnc"   # Enable VNC for debugging
+#  local boot_kernel_line="${boot_kernel_line} rd.debug"   # Enable debug logging
+#  local boot_kernel_line="${boot_kernel_line} inst.loglevel=debug"  # Anaconda debug
+
   local boot_initrd_line="${repo_base}/${initrd_rel}"
+
   hps_log debug "Preparing PXE Boot for ${os_id} non-interactive installation"
   hps_log debug "boot_kernel_line: $boot_kernel_line"
 
