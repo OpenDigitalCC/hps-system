@@ -6,50 +6,82 @@
 # support using colon delimiter format: <arch>:<name>:<version>
 #===============================================================================
 
+#===============================================================================
+# get_os_name_version
+# -------------------
+# Extract name and version from OS ID, without architecture.
+#
+# Arguments:
+#   $1: OS ID (e.g., "x86_64:alpine:3.20")
+#   $2: Format (optional): "colon" (default) or "underscore"
+#
+# Returns:
+#   Name and version (e.g., "alpine:3.20" or "alpine_3.20")
+#
+# Example usage:
+#   name_ver=$(get_os_name_version "x86_64:alpine:3.20")           # alpine:3.20
+#   name_ver=$(get_os_name_version "x86_64:alpine:3.20" underscore) # alpine_3.20
+#
+#===============================================================================
+get_os_name_version() {
+  local os_id="$1"
+  local format="${2:-colon}"
+  
+  # Strip architecture prefix (everything before first colon)
+  local name_version="${os_id#*:}"
+  
+  # Apply format if requested
+  if [[ "$format" == "underscore" ]]; then
+    name_version="${name_version//:/_}"
+  fi
+  
+  echo "$name_version"
+}
+
 
 #===============================================================================
 # get_distro_base_path
 # --------------------
-# Get the base path for a distribution, handling colon delimiters.
+# Get the base path for a distribution, using configured repo_path.
 #
 # Behaviour:
-#   - Converts OS ID to filesystem-safe path
-#   - Handles both new (colon) and legacy formats
+#   - Uses repo_path from os_config if available
+#   - Falls back to converting OS ID if repo_path not set
 #   - Returns consistent paths for mounting, HTTP, and filesystem access
 #
 # Arguments:
-#   $1: OS identifier (e.g., "x86_64:rocky:10.0") or legacy DISTRO_STRING
+#   $1: OS identifier (e.g., "x86_64:rocky:10")
 #   $2: Path type (optional): "mount", "http", "relative" (default: "mount")
 #
 # Returns:
 #   Path string appropriate for the requested type
 #
-# Example usage:
-#   mount_path=$(get_distro_base_path "x86_64:rocky:10.0")
-#   http_path=$(get_distro_base_path "x86_64:rocky:10.0" "http")
-#   rel_path=$(get_distro_base_path "x86_64:rocky:10.0" "relative")
-#
 #===============================================================================
 get_distro_base_path() {
   local os_id="$1"
   local path_type="${2:-mount}"
-  local safe_id=""
+  local repo_path=""
   
-  # Convert colons to underscores for filesystem safety
-  safe_id="${os_id//:/_}"
+  # Try to get configured repo path
+  if os_config "$os_id" "exists"; then
+    repo_path=$(os_config "$os_id" "get" "repo_path" 2>/dev/null)
+  fi
+  
+  # Fall back to converting OS ID if no repo_path
+  if [[ -z "$repo_path" ]]; then
+    # Legacy conversion
+    repo_path="${os_id//:/_}"
+  fi
   
   case "$path_type" in
     mount)
-      # Full filesystem path for mounting
-      echo "${HPS_DISTROS_DIR}/${safe_id}"
+      echo "${HPS_DISTROS_DIR}/${repo_path}"
       ;;
     http)
-      # HTTP path without server (for use in URLs)
-      echo "/distros/${safe_id}"
+      echo "/distros/${repo_path}"
       ;;
     relative)
-      # Just the safe directory name
-      echo "${safe_id}"
+      echo "${repo_path}"
       ;;
     *)
       hps_log error "[get_distro_base_path] Unknown path type: $path_type"
@@ -57,6 +89,7 @@ get_distro_base_path() {
       ;;
   esac
 }
+
 
 #===============================================================================
 # get_distro_url

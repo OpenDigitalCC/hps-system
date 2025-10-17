@@ -68,17 +68,18 @@ check_available_space() {
 
 
 
+
 #===============================================================================
 # validate_alpine_repository
 # --------------------------
 # Check if Alpine repository is complete and ready for TCH boot
 #
 # Arguments:
-#   $1 - alpine_version : Alpine version (optional, auto-detects if not provided)
-#   $2 - repo_name      : "main" or "community" (optional, defaults to "main")
+#   $1 - os_id : OS identifier (e.g., "x86_64:alpine:3.20")
+#   $2 - repo_name : "main" or "community" (optional, defaults to "main")
 #
 # Behaviour:
-#   - Auto-detects Alpine version from distros directory if not provided
+#   - Uses os_config to get repository path
 #   - Checks if repository directory exists
 #   - Validates APKINDEX.tar.gz exists and is readable
 #   - Counts .apk packages in repository
@@ -90,27 +91,19 @@ check_available_space() {
 #   1 if repository missing or incomplete
 #===============================================================================
 validate_alpine_repository() {
-  local alpine_version="${1:-}"
+  local os_id="${1:-}"
   local repo_name="${2:-main}"
   
-  if [[ -z "$HPS_DISTROS_DIR" ]]; then
-    hps_log error "validate_alpine_repository: HPS_DISTROS_DIR not set"
+  if [[ -z "$os_id" ]]; then
+    hps_log error "validate_alpine_repository: OS ID required"
     return 1
   fi
   
-  # Auto-detect Alpine version if not provided
-  if [[ -z "$alpine_version" ]]; then
-    alpine_version=$(get_latest_alpine_version)
-    if [[ -z "$alpine_version" ]]; then
-      hps_log error "Could not determine Alpine version"
-      return 1
-    fi
-    hps_log debug "Auto-detected Alpine version: ${alpine_version}"
-  fi
+  # Get the mount path for this OS
+  local mount_path=$(get_distro_base_path "$os_id" "mount")
+  local repo_dir="${mount_path}/apks/${repo_name}/x86_64"
   
-  local repo_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
-  
-  hps_log debug "Validating Alpine repository: ${repo_dir}"
+  hps_log debug "Validating Alpine repository: ${repo_dir} for $os_id"
   
   # Check directory exists
   if [[ ! -d "$repo_dir" ]]; then
@@ -152,6 +145,8 @@ validate_alpine_repository() {
   hps_log info "Repository validated: ${repo_name} has ${pkg_count} packages"
   return 0
 }
+
+
 
 #===============================================================================
 # sync_alpine_repository

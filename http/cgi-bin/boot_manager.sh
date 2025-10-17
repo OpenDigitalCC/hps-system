@@ -26,14 +26,11 @@ fi
 
 # Condition: is this fresh boot?
 if [[ "$cmd" == "init" ]]; then
-  hps_log info "[$mac] iPXE Initialisation requested from DHCP"
+  hps_log info "[$mac] iPXE Initialisation requested from DHCP client"
   
   # Check if this is a network boot host
   # Use 'get' with a default value or handle the case where key doesn't exist
   state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
-  
-  # Log the retrieved state for debugging
-  hps_log debug "Retrieved STATE for MAC ${mac}: '${state}'"
   
   # Check for network boot state
   if [[ "${state}" == "NETWORK_BOOT" ]]; then
@@ -340,13 +337,14 @@ if [[ "$cmd" == "boot_action" ]]
  then
   hps_log info "Host wants to know what to do next"
   ARCH="$(cgi_param get arch)"
-  [[ -n "$ARCH" ]] && host_config "$mac" "set" "arch" "$ARCH"
+
+
   if host_config_exists "$mac"
    then
-    hps_log info "Found config"
+    hps_log info "Found config for $mac"
    else
     hps_log info "No config found, initialising"
-    host_initialise_config "$mac"
+    host_initialise_config "$mac" "$ARCH"
   fi
   state="$(host_config "$mac" get STATE)"
   hps_log info "STATE: $state"

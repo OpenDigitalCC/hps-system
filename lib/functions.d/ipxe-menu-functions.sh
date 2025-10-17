@@ -14,7 +14,7 @@ TITLE_PREFIX="$(cluster_config get CLUSTER_NAME) \${mac:hexraw} \${net0/ip}:"
 cat <<EOF
 #!ipxe
 
-set logmsg ${FUNCNAME[1]} $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header sent
+set logmsg $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header requested by ${FUNCNAME[1]}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 
 echo
@@ -130,7 +130,7 @@ handle_menu_item() {
         hps_log info "$item Running boot installer for type: '${HOST_TYPE}' (no profile)"
       fi
       
-      ipxe_boot_installer "${HOST_TYPE}" "${HOST_PROFILE}"
+      ipxe_boot_installer "$mac" "${HOST_TYPE}" "${HOST_PROFILE}"
       ;;
       
     force_install_*)
@@ -155,7 +155,7 @@ handle_menu_item() {
 
 
 ipxe_init () {
-  # This menu is delivered if the cluster is configured and we don't know who the host is yet as we don't yet have the MAC
+  # This menu is delivered if the cluster is configured and we don't know who the host is yet
   ipxe_header
   cat <<EOF
 # Detect architecture
@@ -244,9 +244,9 @@ choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
 set logmsg ${FUNCNAME[1]} Menu selected: \${selection}
-imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
+imgfetch --name log ${CGI_URL}?cmd=log_message&message=\${logmsg} || echo Log failed
 
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=\${selection}
 
 EOF
 
@@ -314,20 +314,29 @@ ipxe_reboot () {
   echo "reboot"
 }
 
-ipxe_boot_installer () {
-  local host_type=$1
-  local profile="${2:-}"
-  local arch="$(host_config "$mac" get arch)"
-  
-  hps_log info "Installing new host of type $host_type ($arch)"
-  
-  # Assign network addresses and other host config details
-  host_network_configure "$mac" "${host_type}"
 
+## This function runs once the user selects the install type and profile from the install menu. 
+# It is the opportunity to configure the host variables
+ipxe_boot_installer () {
+  local mac="$1"
+  local host_type="$2"
+  local profile="${3:-}"
+
+  local arch="$(host_config "$mac" get arch)"
+
+  local os_id=$(get_host_os_id "$mac")  # Determines from cluster config
+  # Store OS ID to host config
+  host_config "$mac" "set" "os_id" "$os_id"
+  host_config "$mac" "set" "TYPE" "$host_type"
   # Set HOST_PROFILE if profile was selected
   if [[ -n "${profile}" ]]; then
     host_config "$mac" set HOST_PROFILE "${profile}"
   fi  
+  
+  hps_log info "Installing new host of type $host_type ($arch) with $os_id"
+  
+  # Assign network addresses and other host config details
+  host_network_configure "$mac"
 
   # TCH are thin, so the only option is to network boot  
   if [[ "${host_type}" == "TCH" ]]; then
@@ -377,7 +386,8 @@ ipxe_boot_installer () {
   mount_distro_iso "$os_id"
 
   # Get paths
-  local distro_relative=$(get_distro_base_path "$os_id" "relative")
+  local repo_path=$(os_config "$os_id" "get" "repo_path")
+  
   local distro_mount=$(get_distro_base_path "$os_id" "mount")
 
   # Check files exist using mount path
@@ -391,7 +401,7 @@ ipxe_boot_installer () {
 
   # Generate iPXE using HTTP paths
   local boot_server=$(cluster_config get DHCP_IP)
-  local repo_base="http://${boot_server}/distros/${distro_relative}"
+  local repo_base="http://${boot_server}/distros/${repo_path}"
   local kickstart_cmd="http://${boot_server}/cgi-bin/boot_manager.sh?cmd=kickstart"
   local boot_kernel_args="initrd=initrd.img inst.stage2=${repo_base} rd.live.ram=1 ip=dhcp console=ttyS0,115200n8 inst.ks=${kickstart_cmd}"
   local boot_kernel_line="$repo_base/${kernel_rel} ${boot_kernel_args}"
@@ -409,7 +419,7 @@ imgfree
 kernel $boot_kernel_line
 initrd $boot_initrd_line
 
-sleep 2
+sleep 1
 boot
 
 EOF
@@ -565,8 +575,9 @@ ipxe_network_boot() {
   case "$host_type" in
     TCH)
       # Validate Alpine repository before attempting boot
-      if ! validate_alpine_repository; then
-        local alpine_version=$(get_latest_alpine_version)
+      os_id=$(get_host_os_id "$mac")
+      if ! validate_alpine_repository "$os_id" "main" ; then
+        local alpine_version="$(get_host_os_version "$mac")"
         hps_log error "Alpine repository validation failed for TCH boot"
         ipxe_cgi_fail "Alpine ${alpine_version} repository not ready. Run: sync_alpine_repository \"${alpine_version}\" \"main\""
         return 1
@@ -581,9 +592,9 @@ ipxe_network_boot() {
 
 
 ipxe_boot_alpine_tch() {
-  local alpine_version=$(get_latest_alpine_version)
+  local alpine_version="$(get_host_os_version "$mac")"
   local client_ip=$(host_config "$mac" get IP)
-  local gateway=$(cluster_config get DHCP_IP)
+  local ips_address=$(cluster_config get DHCP_IP)
   local network_cidr=$(cluster_config get NETWORK_CIDR)
   local hostname=$(host_config "$mac" get HOSTNAME)
   
@@ -591,36 +602,44 @@ ipxe_boot_alpine_tch() {
   local prefix_len="${network_cidr##*/}"
   local netmask=$(cidr_to_netmask "$prefix_len")
   
-  local apkovl_file="alpine-${alpine_version}/tch-bootstrap.apkovl.tar.gz"
+  local repo_path=$(get_distro_base_path "$os_id" "relative")
+  local download_base="http://${ips_address}/distros/${repo_path}"
+
+  local apkovl_file="tch-bootstrap.apkovl.tar.gz"
   local apkovl_file_disk="${HPS_DISTROS_DIR}/${apkovl_file}"
-  local apkvol_file_url="http://${gateway}/distros/${apkovl_file}"
+  local apkvol_file_url="${download_base}/${apkovl_file}"
   
-  # Only regenerate if missing
+  local os_id=$(get_host_os_id "$mac")
+  local distro_path=$(get_os_name_version "$(host_config "$mac" "get" "os_id")" "underscore")
+
+  # Generate apk overlay if missing
   if [[ ! -f "${apkovl_file_disk}" ]]; then
     hps_log info "Generating Alpine apkovl for version $alpine_version"
     tch_apkovol_create "${apkovl_file_disk}"
   fi
-  
+
   hps_log debug "Booting Alpine TCH version $alpine_version with static IP: $client_ip"
 
-  local kernel_args="initrd=initramfs-lts"
-  kernel_args="${kernel_args} console=ttyS0,115200n8"
-  kernel_args="${kernel_args} alpine_repo=http://${gateway}/distros/alpine-3.20.2/apks/main"
-#  kernel_args="${kernel_args} modloop=http://${gateway}/distros/alpine-${alpine_version}/boot/modloop-lts"
-  kernel_args="${kernel_args} ip=${client_ip}::${gateway}:${netmask}:${hostname}:eth0:off"
-#  kernel_args="${kernel_args} apkovl=http://${gateway}/cgi-bin/boot_manager.sh?cmd=get_tch_apkovol&filename=bootstrap.apkovl.tar.gz"
-  kernel_args="${kernel_args} apkovl=${apkvol_file_url}"
+  local boot_kernel_args="initrd=initramfs-lts"
+  boot_kernel_args="${boot_kernel_args} console=ttyS0,115200n8"
+  boot_kernel_args="${boot_kernel_args} alpine_repo=${download_base}/apks/main"
+  boot_kernel_args="${boot_kernel_args} ip=${client_ip}::${ips_address}:${netmask}:${hostname}:eth0:off"
+  boot_kernel_args="${boot_kernel_args} apkovl=${apkvol_file_url}"
+
+  local kernel_rel="boot/vmlinuz-lts"
+  local initrd_rel="boot/initramfs-lts"
   
+  local boot_kernel_line="${download_base}/${kernel_rel} ${boot_kernel_args}"
+  local boot_initrd_line="${download_base}/${initrd_rel}"
+
   ipxe_header
   cat <<EOF
 # Alpine TCH Boot - created at $(date)
-set kernel_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/vmlinuz-lts
-set initrd_url http://\${dhcp-server}/distros/alpine-${alpine_version}/boot/initramfs-lts
-set kernel_args ${kernel_args}
 imgfree
-kernel \${kernel_url} \${kernel_args}
-initrd \${initrd_url}
+kernel $boot_kernel_line
+initrd $boot_initrd_line
 boot
+
 EOF
 }
 

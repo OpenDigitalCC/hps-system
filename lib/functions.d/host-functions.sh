@@ -2,6 +2,99 @@ __guard_source || return
 # Define your functions below
 
 
+#===============================================================================
+# get_host_os_id
+# ---------------
+# Get the configured OS identifier for a host based on MAC address.
+#
+# Behaviour:
+#   - Looks up host type and architecture from host config
+#   - Returns the appropriate OS ID from cluster config
+#   - Falls back through architecture-specific → generic → error
+#
+# Arguments:
+#   $1: MAC address
+#
+# Returns:
+#   OS identifier string (e.g., "x86_64:alpine:3.20")
+#   Empty string if not found
+#
+# Example usage:
+#   os_id=$(get_host_os_id "00:11:22:33:44:55")
+#
+#===============================================================================
+get_host_os_id() {
+  local mac="$1"
+  
+  # Get host info
+  local host_type=$(host_config "$mac" "get" "TYPE")
+  local arch=$(host_config "$mac" "get" "arch")
+  
+  # Validate we have required info
+  if [[ -z "$host_type" ]]; then
+    hps_log error "[get_host_os_id] No host type found for $mac"
+    return 1
+  fi
+  
+  # Default to x86_64 if no arch specified
+  [[ -z "$arch" ]] && arch="x86_64"
+  
+  # Build the cluster config key
+  local os_key="os_$(echo $host_type | tr '[:upper:]' '[:lower:]')_${arch}"
+  local os_id=$(cluster_config "get" "$os_key")
+  
+  # Fallback to non-architecture-specific if not found
+  if [[ -z "$os_id" ]]; then
+    os_key="os_$(echo $host_type | tr '[:upper:]' '[:lower:]')"
+    os_id=$(cluster_config "get" "$os_key")
+    
+    # If found non-arch specific, prepend architecture
+    if [[ -n "$os_id" ]] && [[ "$os_id" != *:* ]]; then
+      os_id="${arch}:${os_id}"
+    fi
+  fi
+  
+  if [[ -z "$os_id" ]]; then
+    hps_log error "[get_host_os_id] No OS configured for $host_type/$arch"
+    return 1
+  fi
+  
+  # Verify the OS exists in registry
+  if ! os_config "$os_id" "exists"; then
+    hps_log error "[get_host_os_id] OS '$os_id' not found in registry"
+    return 1
+  fi
+  
+  echo "$os_id"
+  return 0
+}
+
+#===============================================================================
+# get_host_os_version
+# --------------------
+# Get just the version string for a host's configured OS.
+#
+# Arguments:
+#   $1: MAC address
+#
+# Returns:
+#   Version string (e.g., "3.20" or "10")
+#
+# Example usage:
+#   version=$(get_host_os_version "00:11:22:33:44:55")
+#
+#===============================================================================
+get_host_os_version() {
+  local mac="$1"
+  local os_id=$(get_host_os_id "$mac")
+  
+  [[ -z "$os_id" ]] && return 1
+  
+  os_config "$os_id" "get" "version"
+}
+
+
+
 #:name: host_initialise_config
 #:group: host-management
 #:synopsis: Initialize a new host configuration file.
@@ -17,6 +110,7 @@ __guard_source || return
 #  1 if MAC not provided or initialization fails
 host_initialise_config() {
   local mac="$1"
+  local arch="$2"
   
   # Validate MAC address is provided
   if [[ -z "$mac" ]]; then
@@ -48,8 +142,10 @@ host_initialise_config() {
     return 1
   fi
   
-  local config_file="${hosts_dir}/${mac}.conf"
-  hps_log info "Initialised host config: $config_file"
+  if ! host_config "$mac" set arch "$arch"; then
+    hps_log error "host_initialise_config: Failed to set arch for MAC: $mac"
+    return 1
+  fi
   
   return 0
 }
@@ -262,7 +358,8 @@ _find_available_hostname() {
 #  1 if configuration fails or no available IPs/hostnames
 host_network_configure() {
   local macid="$1"
-  local hosttype="$2"
+
+  local hosttype=$(host_config "$macid" get TYPE 2>/dev/null)
   
   hps_log debug "host_network_configure called with MAC: $macid, TYPE: $hosttype"
   
