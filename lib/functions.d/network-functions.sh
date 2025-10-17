@@ -89,6 +89,8 @@ ips_allocate_storage_ip() {
     return 1
   fi
   
+  # Find next available IP (starting at .100)
+  local ip_offset=100
   # Build new IP
   new_ip="${ip_prefix}.${ip_offset}"
 
@@ -105,8 +107,6 @@ ips_allocate_storage_ip() {
     done
   fi
   
-  # Find next available IP (starting at .100)
-  local ip_offset=100
   local new_ip
   while [[ $ip_offset -lt 250 ]]; do
     new_ip="${ip_prefix}.${ip_offset}"
