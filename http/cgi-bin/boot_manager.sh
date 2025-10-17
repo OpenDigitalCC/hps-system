@@ -255,10 +255,10 @@ fi
 
 # Command: Network bootstrap via kickstart
 if [[ "$cmd" == "kickstart" ]]; then
-  if ! cgi_param exists hosttype; then
+  hosttype="$(host_config "$mac" get TYPE)"
+  if [[ -z "${hosttype:-}" ]]; then
     cgi_auto_fail "Param hosttype is required for kickstart"
   fi
-  hosttype="$(cgi_param get hosttype)"
   hps_log info "Kickstart - Configuring host $hosttype"
   host_network_configure "$mac" "$hosttype"
   generate_ks "$mac" "$hosttype"
@@ -340,6 +340,8 @@ fi
 if [[ "$cmd" == "boot_action" ]]
  then
   hps_log info "Host wants to know what to do next"
+  ARCH="$(cgi_param get arch)"
+  [[ -n "$ARCH" ]] && host_config "$mac" "set" "arch" "$ARCH"
   if host_config_exists "$mac"
    then
     hps_log info "Found config"

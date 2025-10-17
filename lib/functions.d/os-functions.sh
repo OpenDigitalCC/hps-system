@@ -1,5 +1,40 @@
 __guard_source || return
 
+
+#===============================================================================
+# _get_os_conf_path
+# -----------------
+# Internal helper function to get the OS config file path.
+#
+# Behaviour:
+#   - Returns the test file path if OS_CONFIG_TEST_FILE is set
+#
+# Returns:
+#   Path to the OS config file
+#
+# Example usage:
+#   local os_conf=$(_get_os_conf_path)
+#
+#===============================================================================
+_get_os_conf_path() {
+  echo "${HPS_CONFIG_BASE}/os.conf"
+}
+
+
+#!/bin/bash
+#===============================================================================
+# OS Configuration Registry Core Functions
+# ----------------------------------------
+# Manages OS configurations for HPS system in INI format.
+# Supports architecture-specific OS entries using colon delimiter.
+#
+# Format: <arch>:<name>:<version>
+# Example: x86_64:rocky:10.0
+#
+# File location: /srv/hps-config/os.conf
+#===============================================================================
+
+
 #===============================================================================
 # os_config
 # ---------
@@ -12,7 +47,7 @@ __guard_source || return
 #   - undefine: removes an entire OS section or a specific key
 #
 # Arguments:
-#   $1: OS identifier (section name, e.g., "rocky-10")
+#   $1: OS identifier (section name, e.g., "x86_64:rocky:10.0")
 #   $2: Operation (get, set, exists, undefine)
 #   $3: Key name (for get/set/undefine operations)
 #   $4: Value (for set operation only)
@@ -22,11 +57,11 @@ __guard_source || return
 #   1 on error or not found
 #
 # Example usage:
-#   os_config "rocky-10" "get" "status"
-#   os_config "rocky-10" "set" "status" "prod"
-#   os_config "rocky-10" "exists"
-#   os_config "rocky-10" "undefine" "status"
-#   os_config "rocky-10" "undefine"
+#   os_config "x86_64:rocky:10.0" "get" "status"
+#   os_config "x86_64:rocky:10.0" "set" "status" "prod"
+#   os_config "x86_64:rocky:10.0" "exists"
+#   os_config "x86_64:rocky:10.0" "undefine" "status"
+#   os_config "x86_64:rocky:10.0" "undefine"
 #
 #===============================================================================
 os_config() {
@@ -59,11 +94,6 @@ os_config() {
   esac
 }
 
-_get_os_conf_path() {
-  echo "${HPS_CONFIG_BASE}/os.conf"
-}
-
-
 #===============================================================================
 # os_config_get
 # -------------
@@ -72,6 +102,7 @@ _get_os_conf_path() {
 # Behaviour:
 #   - Reads the INI file and extracts the value for the given section and key
 #   - Outputs the value to stdout
+#   - Handles OS IDs with colon delimiters (arch:name:version)
 #
 # Arguments:
 #   $1: OS identifier (section name)
@@ -81,7 +112,7 @@ _get_os_conf_path() {
 #   0 if found, 1 if not found
 #
 # Example usage:
-#   status=$(os_config_get "rocky-10" "status")
+#   status=$(os_config_get "x86_64:rocky:10.0" "status")
 #
 #===============================================================================
 os_config_get() {
@@ -135,6 +166,7 @@ os_config_get() {
 #   - Updates existing key or adds new key in the section
 #   - Creates section if it doesn't exist
 #   - Preserves comments and formatting
+#   - Handles OS IDs with colon delimiters (arch:name:version)
 #
 # Arguments:
 #   $1: OS identifier (section name)
@@ -145,7 +177,7 @@ os_config_get() {
 #   0 on success, 1 on error
 #
 # Example usage:
-#   os_config_set "rocky-10" "status" "prod"
+#   os_config_set "x86_64:rocky:10.0" "status" "prod"
 #
 #===============================================================================
 os_config_set() {
@@ -225,6 +257,7 @@ os_config_set() {
 #
 # Behaviour:
 #   - Searches for the section header in the INI file
+#   - Handles OS IDs with colon delimiters (arch:name:version)
 #
 # Arguments:
 #   $1: OS identifier (section name)
@@ -233,8 +266,8 @@ os_config_set() {
 #   0 if exists, 1 if not found
 #
 # Example usage:
-#   if os_config_exists "rocky-10"; then
-#     echo "Rocky 10 is configured"
+#   if os_config_exists "x86_64:rocky:10.0"; then
+#     echo "Rocky 10 for x86_64 is configured"
 #   fi
 #
 #===============================================================================
@@ -244,7 +277,8 @@ os_config_exists() {
   
   [[ ! -f "$os_conf" ]] && return 1
   
-  grep -q "^\[${os_id}\]" "$os_conf"
+  # Use grep with fixed string to avoid regex issues with colons
+  grep -qF "[${os_id}]" "$os_conf"
   return $?
 }
 
@@ -265,7 +299,7 @@ os_config_exists() {
 #   0 on success, 1 on error
 #
 # Example usage:
-#   os_config_undefine_key "rocky-10" "min_ram_gb"
+#   os_config_undefine_key "x86_64:rocky:10.0" "min_ram_gb"
 #
 #===============================================================================
 os_config_undefine_key() {
@@ -323,7 +357,7 @@ os_config_undefine_key() {
 #   0 on success, 1 on error
 #
 # Example usage:
-#   os_config_undefine_section "rocky-9-legacy"
+#   os_config_undefine_section "x86_64:rocky:9.3"
 #
 #===============================================================================
 os_config_undefine_section() {
@@ -357,7 +391,3 @@ os_config_undefine_section() {
   mv "$temp_file" "$os_conf"
   return 0
 }
-
-
-
-

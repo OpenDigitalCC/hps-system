@@ -79,40 +79,274 @@ check_latest_version() {
       ;;
   esac
 }
+
+
+
+#===============================================================================
+# mount_distro_iso
+# ----------------
+# Mount distribution ISO using OS registry configuration.
+#
+# Behaviour:
+#   - Handles new colon-delimited OS IDs (arch:name:version)
+#   - Looks up ISO filename from os_config
+#   - Falls back to constructed filename if not specified
+#   - Mounts ISO if not already mounted
+#   - Handles various error conditions gracefully
+#
+# Arguments:
+#   $1: OS identifier (e.g., "x86_64:rocky:10.0") or legacy DISTRO_STRING
+#
+# Returns:
+#   0 on success
+#   1 if ISO not found or mount fails
+#
+# Example usage:
+#   mount_distro_iso "x86_64:rocky:10.0"
+#   mount_distro_iso "x86_64-linux-rockylinux-10"  # legacy support
+#
+#===============================================================================
 mount_distro_iso() {
-  local DISTRO_STRING="$1"
-  local iso_path="${HPS_DISTROS_DIR}/iso/${DISTRO_STRING}.iso"
-  local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
-
+  local os_id_or_distro="$1"
+  local iso_filename=""
+  local mount_point=""
+  
+  # Validate input
+  if [[ -z "$os_id_or_distro" ]]; then
+    hps_log error "No OS identifier provided"
+    return 1
+  fi
+  
+  # Check if this is an OS identifier from os_config
+  if os_config "$os_id_or_distro" "exists"; then
+    # Get ISO filename from os_config
+    iso_filename=$(os_config "$os_id_or_distro" "get" "iso_filename" 2>/dev/null)
+    
+    # If no iso_filename specified, construct from components
+    if [[ -z "$iso_filename" ]]; then
+      local arch=$(os_config "$os_id_or_distro" "get" "arch")
+      local mfr=$(os_config "$os_id_or_distro" "get" "manufacturer")
+      local name=$(os_config "$os_id_or_distro" "get" "name")
+      local version=$(os_config "$os_id_or_distro" "get" "version")
+      local version_full=$(os_config "$os_id_or_distro" "get" "version_full" 2>/dev/null)
+      
+      # Try to construct the ISO filename
+      if [[ -n "$version_full" ]]; then
+        iso_filename="${arch}-${mfr}-${name}-${version_full}.iso"
+      else
+        iso_filename="${arch}-${mfr}-${name}-${version}.iso"
+      fi
+    fi
+    
+    # Mount point uses the OS ID with colons replaced by underscores
+    # to avoid filesystem issues
+    mount_point="${HPS_DISTROS_DIR}/${os_id_or_distro//:/_}"
+  else
+    # Legacy support: assume it's a DISTRO_STRING
+    hps_log warning "Using legacy DISTRO_STRING format: $os_id_or_distro"
+    iso_filename="${os_id_or_distro}.iso"
+    mount_point="${HPS_DISTROS_DIR}/${os_id_or_distro}"
+  fi
+  
+  local iso_path="${HPS_DISTROS_DIR}/iso/${iso_filename}"
+  
+  # Check if ISO exists
   if [[ ! -f "$iso_path" ]]; then
-    hps_log info "[mount_distro_iso] ISO not found: $iso_path"
+    # If constructed filename doesn't exist, try without .iso extension
+    local iso_base="${iso_filename%.iso}"
+    
+    # Try to find a matching ISO with glob
+    local found_iso=""
+    for iso in "${HPS_DISTROS_DIR}/iso/${iso_base}"*.iso; do
+      if [[ -f "$iso" ]]; then
+        found_iso="$iso"
+        hps_log info "Found ISO: $found_iso"
+        iso_path="$found_iso"
+        break
+      fi
+    done
+    
+    if [[ -z "$found_iso" ]]; then
+      hps_log error "ISO not found: $iso_path"
+      return 1
+    fi
+  fi
+  
+  # Verify ISO file is readable
+  if [[ ! -r "$iso_path" ]]; then
+    hps_log error "ISO not readable: $iso_path"
     return 1
   fi
-
-  if mountpoint -q "$mount_point"; then
-    hps_log info "[mount_distro_iso] Already mounted: $mount_point"
+  
+  # Check if already mounted
+  if mountpoint -q "$mount_point" 2>/dev/null; then
+    hps_log info "Already mounted: $mount_point"
     return 0
   fi
-
-  mkdir -p "$mount_point"
-  hps_log info "[mount_distro_iso] Mounting $iso_path to $mount_point"
-  mount -o loop "$iso_path" "$mount_point" >/dev/null 2>&1
+  
+  # Create mount point if it doesn't exist
+  if [[ ! -d "$mount_point" ]]; then
+    hps_log debug "Creating mount point: $mount_point"
+    mkdir -p "$mount_point"
+    if [[ ! -d "$mount_point" ]]; then
+      hps_log error "Failed to create mount point: $mount_point"
+      return 1
+    fi
+  fi
+  
+  # Check if mount point is empty (required for mounting)
+  if [[ -d "$mount_point" ]] && [[ -n "$(ls -A "$mount_point" 2>/dev/null)" ]]; then
+    hps_log warning "Mount point not empty: $mount_point"
+    # Check if it's a broken mount
+    if ! mountpoint -q "$mount_point" 2>/dev/null; then
+      hps_log info "Cleaning non-mounted directory"
+      # Create backup just in case
+      local backup_dir="${mount_point}.backup.$(date +%s)"
+      mv "$mount_point" "$backup_dir"
+      mkdir -p "$mount_point"
+    fi
+  fi
+  
+  hps_log info "Mounting $iso_path to $mount_point"
+  
+  # Check for loop device availability first
+  if ! losetup -f >/dev/null 2>&1; then
+    hps_log error "No loop devices available"
+    
+    # Try to create loop device
+    if [[ ! -e /dev/loop0 ]]; then
+      mknod /dev/loop0 b 7 0 2>/dev/null || true
+    fi
+    
+    # Check again
+    if ! losetup -f >/dev/null 2>&1; then
+      hps_log error "Cannot create loop devices - missing kernel support?"
+      rmdir "$mount_point" 2>/dev/null
+      return 1
+    fi
+  fi
+  
+  # Try mounting with explicit options
+  local mount_output
+  mount_output=$(mount -t iso9660 -o loop,ro "$iso_path" "$mount_point" 2>&1)
+  local mount_result=$?
+  
+  if [[ $mount_result -ne 0 ]]; then
+    # Try without specifying filesystem type
+    mount_output=$(mount -o loop,ro "$iso_path" "$mount_point" 2>&1)
+    mount_result=$?
+  fi
+  
+  if [[ $mount_result -ne 0 ]]; then
+    hps_log error "Mount failed: $mount_output"
+    # Clean up empty directory
+    rmdir "$mount_point" 2>/dev/null
+    return 1
+  fi
+  
+  # Verify mount succeeded
+  if ! mountpoint -q "$mount_point" 2>/dev/null; then
+    hps_log error "Mount verification failed for $mount_point"
+    return 1
+  fi
+  
+  # Quick content verification
+  local content_check=$(ls "$mount_point" 2>/dev/null | wc -l)
+  if [[ $content_check -eq 0 ]]; then
+    hps_log error "Mounted but no content visible in $mount_point"
+    umount "$mount_point" 2>/dev/null
+    return 1
+  fi
+  
+  hps_log info "Successfully mounted $iso_path (contains $content_check items)"
+  return 0
 }
+
+#===============================================================================
+# unmount_distro_iso
+# ------------------
+# Unmount distribution ISO.
+#
+# Behaviour:
+#   - Handles new colon-delimited OS IDs (arch:name:version)
+#   - Unmounts the ISO if currently mounted
+#   - Handles busy mount points gracefully
+#
+# Arguments:
+#   $1: OS identifier (e.g., "x86_64:rocky:10.0") or mount path
+#
+# Returns:
+#   0 on success or if not mounted
+#   1 on unmount failure
+#
+# Example usage:
+#   unmount_distro_iso "x86_64:rocky:10.0"
+#   unmount_distro_iso "/srv/hps-resources/distros/x86_64_rocky_10.0"
+#
+#===============================================================================
 unmount_distro_iso() {
-  local DISTRO_STRING="$1"
-  local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
-
-  if ! mountpoint -q "$mount_point"; then
-    hps_log info "[unmount_distro_iso] Not mounted: $mount_point"
+  local os_id_or_path="$1"
+  local mount_point=""
+  
+  # Determine mount point
+  if [[ "$os_id_or_path" =~ ^/ ]]; then
+    # Absolute path provided
+    mount_point="$os_id_or_path"
+  elif os_config "$os_id_or_path" "exists"; then
+    # OS identifier provided - convert colons to underscores for filesystem
+    mount_point="${HPS_DISTROS_DIR}/${os_id_or_path//:/_}"
+  else
+    # Legacy DISTRO_STRING
+    mount_point="${HPS_DISTROS_DIR}/${os_id_or_path}"
+  fi
+  
+  # Check if mounted
+  if ! mountpoint -q "$mount_point" 2>/dev/null; then
+    hps_log debug "Not mounted: $mount_point"
     return 0
   fi
-
-  hps_log info "[unmount_distro_iso] Unmounting $mount_point"
-  umount "$mount_point" >/dev/null 2>&1 || {
-    hps_log info "[unmount_distro_iso] Failed to unmount $mount_point"
-    return 1
-  }
+  
+  hps_log info "Unmounting $mount_point"
+  
+  # Try normal unmount
+  if umount "$mount_point" 2>/dev/null; then
+    hps_log info "Successfully unmounted $mount_point"
+    rmdir "$mount_point" 2>/dev/null  # Remove if empty
+    return 0
+  fi
+  
+  # Try lazy unmount if normal fails
+  hps_log warning "Normal unmount failed, trying lazy unmount"
+  if umount -l "$mount_point" 2>/dev/null; then
+    hps_log info "Lazy unmount successful"
+    return 0
+  fi
+  
+  hps_log error "Failed to unmount $mount_point"
+  return 1
 }
+
+#===============================================================================
+# get_mount_point_for_os
+# -----------------------
+# Get the mount point path for a given OS identifier.
+#
+# Arguments:
+#   $1: OS identifier (e.g., "x86_64:rocky:10.0")
+#
+# Returns:
+#   Mount point path
+#
+# Example:
+#   mount_point=$(get_mount_point_for_os "x86_64:rocky:10.0")
+#
+#===============================================================================
+get_mount_point_for_os() {
+  local os_id="$1"
+  # Convert colons to underscores for filesystem compatibility
+  echo "${HPS_DISTROS_DIR}/${os_id//:/_}"
+}
+
 
 
 update_distro_iso() {

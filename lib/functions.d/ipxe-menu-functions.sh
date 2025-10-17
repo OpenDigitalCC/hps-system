@@ -157,8 +157,22 @@ ipxe_init () {
   # This menu is delivered if the cluster is configured and we don't know who the host is yet as we don't yet have the MAC
   ipxe_header
   cat <<EOF
+# Detect architecture
+echo Detected architecture: \${buildarch}
+echo CPU architecture: \${cpuarch}
+echo Platform: \${platform}
 
-set config_url ${CGI_URL}?mac=\${mac:hexraw}&cmd=boot_action
+# Set normalized architecture variable
+# iPXE uses different naming than Linux
+set arch unknown
+iseq \${buildarch} x86_64 && set arch x86_64 ||
+iseq \${buildarch} i386 && set arch x86_64 ||
+iseq \${buildarch} arm64 && set arch aarch64 ||
+iseq \${buildarch} aarch64 && set arch aarch64 ||
+
+echo Normalized architecture: \${arch}
+
+set config_url ${CGI_URL}?arch=\${arch}&cmd=boot_action
 echo Requesting: \${config_url}
 
 ## If we can find a config, load it (replaces this iPXE config)
@@ -219,7 +233,6 @@ item install_TCH  > No profile (Default)
 item install_TCH_KVM  > Profile: KVM virtualisation
 item install_TCH_DOCKER  > Profile: Docker host
 item install_TCH_BUILD  > Profile: Build tools for packaging
-
 
 item --gap Install Storage Cluster Host
 item install_SCH  > No profile (Default)
@@ -303,15 +316,17 @@ ipxe_reboot () {
 ipxe_boot_installer () {
   local host_type=$1
   local profile="${2:-}"
+  local arch="$(host_config "$mac" get arch)"
   
-  hps_log info "Installing new host of type $host_type"
+  hps_log info "Installing new host of type $host_type ($arch)"
   host_network_configure "$mac" "${host_type}"
 
   # Set HOST_PROFILE if profile was provided
   if [[ -n "${profile}" ]]; then
     host_config "$mac" set HOST_PROFILE "${profile}"
   fi  
-  
+
+  # TCH are thin, so the only option is to network boot  
   if [[ "${host_type}" == "TCH" ]]; then
     # TCH: Set state and reboot for network boot preparation
     hps_log info "Setting up TCH for network boot"
@@ -319,18 +334,25 @@ ipxe_boot_installer () {
     ipxe_reboot "TCH configured for network boot - rebooting to apply"
     exit
   fi
-# Get the OS identifier for this host type from cluster config
-  local os_key="os_$(echo ${host_type} | tr '[:upper:]' '[:lower:]')"
-  local os_id=$(cluster_config "get" "$os_key")
-  
+
+  # Select OS based on architecture and host type
+  # First try architecture-specific config
+  os_key="os_$(echo ${host_type} | tr '[:upper:]' '[:lower:]')_${arch}"
+  os_id=$(cluster_config "get" "$os_key")
+
+  # Fallback to any OS for this arch/type
+  if [[ -z "$os_id" ]]; then
+    os_id=$(os_config_select "$arch" "$host_type")
+  fi
+
+  hps_log debug "os_key: $os_key os_id: $os_id"
+ 
   # Get OS parameters from the registry
-  local CPU=$(os_config "$os_id" "get" "arch")
   local MFR=$(os_config "$os_id" "get" "manufacturer")
   local OSNAME=$(os_config "$os_id" "get" "name")
   local OSVER=$(os_config "$os_id" "get" "version")
 
-  hps_log info "O/S Parameters for $os_id: ${CPU}-${MFR}-${OSNAME}-${OSVER}"
-
+  hps_log info "O/S Parameters for $os_id: ${arch}-${MFR}-${OSNAME}-${OSVER}"
 
   local state="$(host_config "$mac" get STATE)"
 
@@ -340,49 +362,63 @@ ipxe_boot_installer () {
     ipxe_reboot "Host already installed, aborting installation"
   fi
 
-  DIST_PATH="$HPS_DISTROS_DIR/${CPU}-${MFR}-${OSNAME}-${OSVER}"
-  DIST_URL="distros/${CPU}-${MFR}-${OSNAME}-${OSVER}"
+  # Define file locations based on OS type
+  local os_name=$(os_config "$os_id" "get" "name")
+  case "$os_name" in
+    rocky|rockylinux|alma|almalinux)
+      local kernel_rel="images/pxeboot/vmlinuz"
+      local initrd_rel="images/pxeboot/initrd.img"
+      ;;
+    alpine)
+      local kernel_rel="boot/vmlinuz-lts"
+      local initrd_rel="boot/initramfs-lts"
+      ;;
+    *)
+      ipxe_cgi_fail "Unknown OS type: $os_name"
+      ;;
+  esac
 
+  mount_distro_iso "$os_id"
 
-  case "${OSNAME}" in
-    rockylinux)
+  # Get paths
+  local distro_relative=$(get_distro_base_path "$os_id" "relative")
+  local distro_mount=$(get_distro_base_path "$os_id" "mount")
 
-    mount_distro_iso "${CPU}-${MFR}-${OSNAME}-${OSVER}"
-    KERNEL_FILE=images/pxeboot/vmlinuz
-    INITRD_FILE=images/pxeboot/initrd.img
+  # Check files exist using mount path
+  if [[ ! -f "${distro_mount}/${kernel_rel}" ]]; then
+    ipxe_cgi_fail "Kernel not found: ${distro_mount}/${kernel_rel} for $host_type/$arch"
+  fi
 
-    # check that the file exists
-    if [ ! -f $DIST_PATH/${KERNEL_FILE} ]
-     then
-      ipxe_cgi_fail "$DIST_PATH/${KERNEL_FILE} doesn't exist for type $host_type"
-    fi
+  if [[ ! -f "${distro_mount}/${initrd_rel}" ]]; then
+    ipxe_cgi_fail "Initrd not found: ${distro_mount}/${initrd_rel} for $host_type/$arch"
+  fi
 
-    hps_log debug "Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
+  # Generate iPXE using HTTP paths
+  local repo_base="http://\${dhcp-server}/distros/${distro_relative}"
+
+  hps_log debug "Preparing PXE Boot for ${OSNAME} ${OSVER} non-interactive installation"
+
   ipxe_header
+
   IPXE_BOOT_INSTALL=$(cat <<EOF
 # created at $(date)
 
 # Detect CPU architecture
-cpuid --ext 29 && set arch x86_64 || set arch i386
+#cpuid --ext 29 && set arch x86_64 || set arch i386
 
-set diststring \${arch}-${MFR}-${OSNAME}-${OSVER}
-set repo_base http://\${dhcp-server}/distros/\${diststring}
+set repo_base $repo_base
+set ks ${CGI_URL}?cmd=kickstart
 
-set kernel_url \${repo_base}/${KERNEL_FILE}
-set initrd_url \${repo_base}/${INITRD_FILE}
-set repo_url \${repo_base}
-set ks ${CGI_URL}?cmd=kickstart&mac=\${mac:hexraw}&hosttype=${host_type}
-
-# set kernel_args initrd=initrd.img inst.repo=\${repo_url} ip=dhcp rd.debug rd.live.debug console=ttyS0,115200n8 inst.ks=\${ks}
-set kernel_args initrd=initrd.img inst.repo=\${repo_url} ip=dhcp console=ttyS0,115200n8 inst.ks=\${ks}
+# set kernel_args initrd=initrd.img inst.repo=\${repo_base} ip=dhcp rd.debug rd.live.debug console=ttyS0,115200n8 inst.ks=\${ks}
+set kernel_args initrd=initrd.img inst.repo=\${repo_base} ip=dhcp console=ttyS0,115200n8 inst.ks=\${ks}
 
 # Required to prevent corrupt initrd
 imgfree
 
-kernel \${kernel_url} \${kernel_args}
-initrd \${initrd_url}
+kernel \${repo_base}/${kernel_rel} \${kernel_args}
+initrd \${repo_base}/${initrd_rel}
 
-sleep 10
+sleep 2
 boot
 
 #echo Booting image
@@ -397,15 +433,7 @@ EOF
   #echo "${IPXE_BOOT_INSTALL}"  > /tmp/ipxe-boot-install.ipxe
   host_config "$mac" set STATE INSTALLING
   echo "${IPXE_BOOT_INSTALL}"
-  ;;
-  
-  debian)
-    ipxe_cgi_fail "No Debian config yet"
-  ;;
-  *)
-    ipxe_cgi_fail "No configuration for ${CPU}-${MFR}-${OSNAME}-${OSVER}"
-  ;;
-esac
+
 }
 
 
