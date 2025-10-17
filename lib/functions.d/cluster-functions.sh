@@ -805,34 +805,41 @@ get_host_type_param() {
   echo "${ref[$key]}"
 }
 
-
+#:name: cluster_has_installed_sch
+#:group: cluster
+#:synopsis: Check if cluster has any SCH hosts with STATE=INSTALLED.
+#:usage: cluster_has_installed_sch
+#:description:
+#  Checks if at least one SCH (Storage/Compute Host) in the active cluster
+#  has STATE set to INSTALLED. Uses cluster helper functions for enumeration.
+#:returns:
+#  0 if at least one installed SCH host exists
+#  1 if no installed SCH hosts found
 cluster_has_installed_sch() {
-  local config_dir="${HPS_HOST_CONFIG_DIR}"
-  local config_file
-  local type state
-
-  for config_file in "$config_dir"/*.conf; do
-    [[ -f "$config_file" ]] || continue
-
-    type=""
-    state=""
-
-    while IFS='=' read -r key val; do
-      key="${key//[$'\r\n']}"
-      val="${val%\"}"; val="${val#\"}"
-      case "$key" in
-        TYPE) type="$val" ;;
-        STATE) state="$val" ;;
-      esac
-    done < "$config_file"
-
-    if [[ "$type" == "SCH" && "$state" == "INSTALLED" ]]; then
-      return 0
+  local mac
+  
+  # Get all hosts in cluster
+  while IFS= read -r mac; do
+    [[ -z "$mac" ]] && continue
+    
+    # Check if this host is TYPE=SCH
+    local host_type
+    host_type=$(host_config "$mac" get TYPE 2>/dev/null)
+    [[ "$host_type" != "SCH" ]] && continue
+    
+    # Check if STATE=INSTALLED
+    local host_state
+    host_state=$(host_config "$mac" get STATE 2>/dev/null)
+    if [[ "$host_state" == "INSTALLED" ]]; then
+      return 0  # Found at least one installed SCH
     fi
-  done
-
-  return 1
+  done < <(list_cluster_hosts)
+  
+  return 1  # No installed SCH hosts found
 }
+
+
+
 
 ## Interactive functions
 
