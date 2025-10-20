@@ -140,9 +140,11 @@ rsync
 %post --nochroot --log=/root/ks-post.log 
 
 
+echo "loading functions from IPS"
+curl -fsSL "http://10.99.1.1/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/tmp/remote_functions.sh
+source /tmp/remote_functions.sh
+hps_load_node_functions
 
-# load remote functions
-curl -fsSL "http://10.99.1.1/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions"  | bash
 
 ## the below functions can be deleted when verified that they are loaded from above
 
@@ -151,7 +153,12 @@ n_remote_log "Entering POST stage"
 chroot /mnt/sysimage /bin/bash <<EOF
 
 # Now in mounted sysimage
-curl -fsSL "http://10.99.1.1/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions"  | bash
+echo "loading functions from IPS"
+curl -fsSL "http://10.99.1.1/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/tmp/remote_functions.sh
+source /tmp/remote_functions.sh
+hps_load_node_functions
+
+
 
 ## the below functions can be deleted when verified that they are loaded from above
 
