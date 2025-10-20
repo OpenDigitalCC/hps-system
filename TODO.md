@@ -4,6 +4,178 @@
 List of requirements and ideas not yet implemented
 
 
+
+Write quickstart
+
+Hardware
+
+Very minimal for test / dev:
+
+Laptop / test computer
+
+- docker and KVM on 1 PC
+
+Minimal useful operation
+
+Desktop PC's, Raspberry Pi's
+
+- Storage host - 50GB disk
+- Compute host - 16GB RAM, 4 cores
+
+
+
+HPS
+
+- identify IPS location
+- requirements:
+  - sysadmin caps
+  - idelly dedicated network / vlan
+  - docker-compose
+  - git
+  - space 5GB per O/S
+  - logging space
+- install docker & git
+- clone / copy hps-container
+- start: docker-compose up -d
+- when ready (cloned hps-system):
+  - run cluster-configure
+  - set basics
+- plug in net
+
+
+UI
+- report statuses of boot, systems etc
+- self-check results, lest performed
+- O/S age, if updates available locally or remotely
+- load, health status
+- performance
+- availablilty
+
+Security
+- add authenticate() to each call, and verify authorty before doing anything
+
+IPS replication
+- clone IPS to diffent physical hosts, swithc between which is live
+- take care to manage config file writes, for example, lock whilst migrating, and somehow rediretc nay writes to new live, or reject and expect far end to retry
+
+
+Folder structure
+
+Node/host scripts and profiles
+reconstruct folders to be 
+- /arch-os_tag/
+  - packages.list
+  - <profiles>/
+    - packages.list
+  - install-scripts/
+  - tests
+
+Repo
+- separate repo clone function
+- use either live repos or take repo c;lone of full O/S
+- locally the installer will introsepct all packages for any configured profile/os, and copy to local cache
+- so IPS only has required packages, and has all required packages 
+  - auto parse packages for deps and pull down
+- augmented with local packages
+- public repo -> local clone ->
+              -> IPS packages -> installer
+- this minimises IPS size, dosent replicate 90% of unused packages from the repo, and integrity checks all required packages are available, for each o/s version
+- full clone option for each O/S means that the repo clone can download full versions for full off-line development
+  - yet IPS has subset
+  - o/s has data on local repos
+
+O/S support
+- Add Debian
+- Raspberry Pi arch support
+
+
+management interface
+- creeate boot progile for management display
+  - boots up with graphichal touch interfaces
+  - allows view of network in real time
+  - shows build of netwokr plus hosts configured but not running
+  
+iPXE / boot improvements
+- reduce boot manager usage, by sending sub-opts to ipxe, which cn then configure directly, when host is configured already - see https://gitlab.isc.org/isc-projects/kea/-/issues/2366#note_284084
+- IPXE Audit
+  - get as much data on the booted host as possible
+  - create IPXE audir-report fiunction to send this to IPS, to log in to the host config
+  - arch is already sent, record other data:
+
+${manufacturer}      # System manufacturer (e.g., "Dell Inc.")
+${product}          # Product name (e.g., "PowerEdge R640")
+${serial}           # System serial number
+${asset}            # Asset tag (if set)
+${uuid}             # System UUID
+${platform}         # Platform type (e.g., "pcbios" or "efi")
+${arch}             # Architecture (e.g., "x86_64")
+${buildarch}        # iPXE build architecture
+${version}          # iPXE version
+
+${memsize}          # Total memory in MB
+${cpuvendor}        # CPU vendor (Intel/AMD)
+${cpuidver}         # CPUID version info
+# Note: Detailed CPU info requires CPUID command
+
+# Using pciscan command
+pciscan
+${pci/<bus>:<dev>.<fn>/vendor}   # Vendor ID
+${pci/<bus>:<dev>.<fn>/device}   # Device ID
+
+${smbios/manufacturer}        # System manufacturer
+${smbios/product}            # Product name
+${smbios/serial}             # Serial number
+${smbios/uuid}               # UUID
+${smbios/version}            # Version
+${smbios/sku}                # SKU number
+${smbios/family}             # Product family
+${smbios/bios-vendor}        # BIOS vendor
+${smbios/bios-version}       # BIOS version
+${smbios/baseboard-manufacturer}  # Motherboard manufacturer
+${smbios/baseboard-product}       # Motherboard model
+
+example implementation:
+#!ipxe
+echo Gathering system information...
+set mac ${net0/mac}
+set serial ${serial:uristring}
+set uuid ${uuid}
+set manufacturer ${manufacturer:uristring}
+set product ${product:uristring}
+set arch ${arch}
+set platform ${platform}
+set unixtime ${unixtime}
+
+Send to IPS:
+chain http://${next-server}/cgi-bin/boot_manager.sh?cmd=host_audit&serial=${serial}&uuid=${uuid}&time=${unixtime}
+
+Make host_hardware_hash
+if hash changed since last boot, warn, show side by side diffences, log what changed
+  
+  
+
+syslog
+- log to one file
+- logging both from internal looging per host and syslogging
+- remote host can ask if syslog working by sending ley and asking if the key was logged, and if so, swithc to justs syslof, as it is much more efficient than bot manager for logging
+- catch trigger commands, calling notifications
+- library of triggers, and what to do - alert or other action, such as email
+- create boot sessions, log messages with the boot session ID for each running system, so messages can be grouped - based on hostname and boot time hash - keep short
+  - boot_time=$(date +%s); session_hash=$(echo "${hostname}:${boot_time}" | sha256sum | cut -c1-6); echo $session_hash
+   - With 50 active sessions: 0.007% chance of collision
+
+supervisor imprvements
+- break out service configs, to their own functions, better create a supervisor-fragment creation function, send it the args, to make it easier to add new services
+
+logrotate service
+- install to supervisord
+
+self-tests
+- IPS once started runs test suite to ensure all systems and functions working, reports back when done, logs results
+- Hosts have tests so when booted, verify that they are fit for purpose
+- retests can be carried out periodically, to make sure that integrity remains
+- integrity tests can also check for what is not expected, like hashes of file system etc, to make sure nothing added or modified
+
 - Make-docs 
   - skip functions that no longer exist
   - create section docs as compiled sections, sp only merge existing in to sectiondoc, plus header
