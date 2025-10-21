@@ -184,7 +184,14 @@ For any host withut full audit, boot to temp image, get full hardware audit, and
 - use DNSMasq to detect current state, sed client stright to the command, skipping ipxe logic
 
 
+
+
 ### OpenSVC / om
+
+
+Requires manual install on IPS: root@docker-01:/# dpkg -i /srv/hps-resources/packages/downloads/opensvc-server_3.0.0~alpha96.0.g36e4abf6+deb13_amd64.deb 
+
+
 
 #### instead of scripts, call functions:
 
@@ -241,6 +248,12 @@ The format chosen is:
 iqn.<yyyy-mm>.<cluster-name>:<host-name>.<volume-name>
 
 For example: iqn.2025-09.test-1:sch-001.vda
+
+
+
+
+
+
 
 
 ## Refactoring of scripts and libraries
