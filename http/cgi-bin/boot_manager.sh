@@ -261,6 +261,23 @@ if [[ "$cmd" == "config_host" ]]; then
 fi
 
 
+# Command: host audit collection (generic)
+if [[ "$cmd" == "host_audit" ]]; then
+  if ! cgi_param exists data; then
+    cgi_header_plain
+    cgi_auto_fail "Param data is required for command $cmd"
+  else
+    host_audit="$(cgi_param get data)"
+    # Pass to processing function
+    hps_log debug "Calling: process_host_audit: ${host_audit} "
+    
+    process_host_audit "$mac" "${host_audit}"
+#    cgi_header_plain
+  fi
+  exit
+fi
+
+
 # this and associated functions in tch-build.sh are redundant AFAIK
 # Command: Get alpine bootstrap 
 if [[ "$cmd" == "x_get_alpine_bootstrap" ]]; then

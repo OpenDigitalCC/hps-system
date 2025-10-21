@@ -16,12 +16,17 @@ cat <<EOF
 
 set logmsg $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header requested by ${FUNCNAME[1]}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
+#imgfree
 
 echo
 echo Connected to cluster $(cluster_config get CLUSTER_NAME)
 echo Client IP: \${client_ip} MAC address: \${mac:hexraw}
 echo
+
 EOF
+
+ipxe_host_audit_include
+
 }
 
 
@@ -40,6 +45,65 @@ ipxe_cgi_fail () {
   exit
 }
 
+
+
+ipxe_host_audit_include () {
+
+# No header sent as this is an include to be used inside other functions
+
+hps_log debug "Loading iPXE  audit"
+
+cat <<EOF
+
+
+#!ipxe
+# System audit with validation
+isset \${manufacturer} && set mfg \${manufacturer:uristring} || set mfg UNKNOWN
+isset \${product} && set prod \${product:uristring} || set prod UNKNOWN  
+isset \${serial} && set ser \${serial:uristring} || set ser NONE
+isset \${memsize} && set mem \${memsize} || set mem 0
+isset \${buildarch} && set buildarch \${buildarch} || set buildarch UNKNOWN
+isset \${platform} && set plat \${platform} || set plat UNKNOWN
+
+set audit_data mfg=\${mfg}|prod=\${prod}|ser=\${ser}|mem=\${mem}|buildarch=\${buildarch}|plat=\${plat}
+imgfetch --name audit ${CGI_URL}?cmd=host_audit&prefix=host&data=\${audit_data:uristring} || echo Audit failed
+
+set net_data ip=\${net0/ip}|gw=\${net0/gateway}|dns=\${net0/dns}|dhcp=\${net0/dhcp-server}
+imgfetch --name netinfo ${CGI_URL}?cmd=host_audit&prefix=net&data=\${net_data:uristring} || echo Network failed
+
+
+
+# SMBIOS data - check if valid before sending
+#isset \${smbios/bios-vendor} && iseq \${smbios/bios-vendor} \${smbios/bios-vendor} && set bios_v \${smbios/bios-vendor:uristring} || set bios_v NOTFOUND
+#isset \${smbios/bios-version} && iseq \${smbios/bios-version} \${smbios/bios-version} && set bios_ver \${smbios/bios-version:uristring} || set bios_ver NOTFOUND
+#isset \${smbios/baseboard-manufacturer} && iseq \${smbios/baseboard-manufacturer} \${smbios/baseboard-manufacturer} && set board_mfg \${smbios/baseboard-manufacturer:uristring} || set board_mfg NOTFOUND
+
+set smbios_data bios_vendor=\${bios_v}|bios_ver=\${bios_ver}|board_mfg=\${board_mfg}
+imgfetch --name smbios ${CGI_URL}?cmd=host_audit&prefix=smbios&data=\${smbios_data:uristring} || echo SMBIOS failed
+
+
+set audit_data mfg=\${manufacturer:uristring}|prod=\${product:uristring}|ser=\${serial:uristring}|mem=\${memsize}|buildarch=\${buildarch}|plat=\${platform}
+imgfetch --name audit ${CGI_URL}?cmd=host_audit&prefix=audit&data=\${audit_data:uristring} || echo Audit failed
+
+#imgfree
+
+# Example 2: SMBIOS data
+#set smbios_data bios_vendor=\${smbios/bios-vendor:uristring}|bios_ver=\${smbios/bios-version:uristring}|board_mfg=\${smbios/baseboard-manufacturer:uristring}
+#imgfetch --name smbios ${CGI_URL}?cmd=host_audit&prefix=smbios&data=\${smbios_data:uristring} || echo SMBIOS failed
+
+#imgfree
+
+# Example 3: PCI devices
+#pciscan
+#set pci_data 0:1f.0=\${pci/0:1f.0/vendor}.\${pci/0:1f.0/device}|0:00.0=\${pci/0:00.0/vendor}.\${pci/0:00.0/device}
+#imgfetch --name pci ${CGI_URL}?cmd=host_audit&prefix=pci&data=\${pci_data:uristring} || echo PCI failed
+
+#imgfree
+
+EOF
+
+
+}
 
 
 ipxe_boot_from_disk () {
@@ -155,6 +219,7 @@ handle_menu_item() {
       ipxe_cgi_fail "Unknown menu item: $item"
       ;;
   esac
+
 }
 
 
@@ -348,7 +413,7 @@ ipxe_boot_installer () {
 
   # Select OS based on architecture and host type
   # First try architecture-specific config
-  os_key="os_$(echo ${host_type} | tr '[:upper:]' '[:lower:]')_${arch}"
+  os_key="os_$(echo ${host_type} | tr '[:upper:]' '[:lower:]')_\${arch}"
   os_id=$(cluster_config "get" "$os_key")
 
   # Fallback to any OS for this arch/type
@@ -464,8 +529,8 @@ item --gap IP: ${net0/ip}
 item --gap Hostname: ${hostname}
 item --gap Platform: ${platform} (${buildarch})
 item --gap UUID: ${uuid}
-item --gap Serial: ${serial}
-item --gap Product: ${product}
+item --gap Serial: \${serial}
+item --gap Product: \${product}
 item --gap
 item init_menu    < Back to initialisation menu
 item --gap

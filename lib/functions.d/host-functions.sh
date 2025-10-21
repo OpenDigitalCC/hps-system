@@ -2,6 +2,85 @@ __guard_source || return
 # Define your functions below
 
 
+
+
+#===============================================================================
+# process_host_audit
+# -----------------
+# Process generic host data received from iPXE.
+#
+# Parameters:
+#   $1 - MAC address of the host
+#   $2 - Data string (pipe-delimited key=value pairs)
+#   $3 - Prefix for host config keys (default: "host")
+#
+# Returns:
+#   0 on success
+#
+#===============================================================================
+process_host_audit() {
+  local mac="$1"
+  local encoded_data="$2"
+  local prefix="${3:-host}"
+  
+  # URL decode
+  local data="${encoded_data//+/ }"
+  data=$(printf '%b' "${data//%/\\x}")
+  
+  hps_log debug "Processing decoded data: ${data}"
+  
+  # Create temp file for all operations
+  local temp_file="/tmp/audit_${mac//:/}_$$"
+  > "$temp_file"
+  
+  # Process fields - NO function calls inside the loop
+  echo "$data" | sed 's/|/\n/g' | while IFS= read -r field; do
+  if [[ "$field" =~ ^([^=]+)=(.*)$ ]]; then
+    local key="${BASH_REMATCH[1]}"
+    local value="${BASH_REMATCH[2]}"
+  
+    # URL decode the individual value
+    value="${value//+/ }"
+    value=$(printf '%b' "${value//%/\\x}")
+      
+      # Sanitize key
+      local safe_key=$(echo "$key" | tr ':. ' '_')
+      
+      # Check for invalid data
+      if [[ "$value" =~ [[:cntrl:]] ]] || [[ "$value" == *"FFFFFF"* ]]; then
+        value="INVALID_DATA"
+      fi
+      
+      # Write to file instead of calling any functions
+      echo "${prefix}_${safe_key}=${value}" >> "$temp_file"
+    fi
+  done
+  
+  # Now process the temp file outside the pipe
+  if [[ -f "$temp_file" ]] && [[ -s "$temp_file" ]]; then
+    while IFS='=' read -r key value; do
+      # Now we can safely call functions
+      host_config "$mac" "set" "$key" "$value"
+      hps_log debug "Stored: $key = $value"
+    done < "$temp_file"
+    
+    local field_count=$(wc -l < "$temp_file")
+    rm -f "$temp_file"
+  else
+    local field_count=0
+  fi
+  
+  # Store metadata
+  host_config "$mac" "set" "${prefix}_timestamp" "$(date +%s)"
+  host_config "$mac" "set" "${prefix}_count" "$field_count"
+  
+  hps_log info "Host data collection '${prefix}' completed for ${mac}: ${field_count} fields"
+  return 0
+}
+
+
+
+
 #===============================================================================
 # get_host_os_id
 # ---------------
