@@ -33,7 +33,7 @@ n_build_opensvc_package() {
     local alpine_version=""
     local om3_version=""
     local keep_build=0
-    local source_dir="/srv/hps-resources/packages/src/opensvc-om3"
+    local source_dir="$(get_src_dir)"
     
     # Parse command line arguments
     while [ $# -gt 0 ]; do
@@ -653,7 +653,7 @@ fi
 # Clone or update the opensvc/om3 source repository.
 #
 # Behaviour:
-#   - Target directory: /srv/hps-resources/packages/src/opensvc-om3/
+#   - Target directory: $(get_src_dir)/
 #   - If directory exists and is valid git repo: fetch updates and tags
 #   - If directory doesn't exist: attempt to clone from GitHub
 #   - If clone fails (air-gapped): create directory and instruct user
@@ -669,7 +669,7 @@ fi
 #   1 on failure (requires manual intervention)
 #===============================================================================
 n_clone_or_update_opensvc_source() {
-    local source_dir="/srv/hps-resources/packages/src/opensvc-om3"
+    local source_dir="$(get_src_dir)"
     local repo_url="https://github.com/opensvc/om3"
     
     echo "Managing opensvc/om3 source repository..."
@@ -797,7 +797,7 @@ fi
 #   1 if tag doesn't exist or checkout fails
 #===============================================================================
 n_select_opensvc_version() {
-    local source_dir="/srv/hps-resources/packages/src/opensvc-om3"
+    local source_dir="$(get_src_dir)"
     local requested_tag="$1"
     local selected_tag=""
     
@@ -883,7 +883,7 @@ fi
 #
 # Behaviour:
 #   - Creates temporary build directory: /tmp/opensvc-build-$$
-#   - Copies source tree from /srv/hps-resources/packages/src/opensvc-om3/
+#   - Copies source tree from $(get_src_dir)/
 #   - Sets up Go build environment for static compilation
 #   - Exports build directory path for other functions
 #
@@ -899,7 +899,7 @@ fi
 #   1 if source directory missing, copy fails, or OPENSVC_VERSION not set
 #===============================================================================
 n_prepare_build_directory() {
-    local source_dir="/srv/hps-resources/packages/src/opensvc-om3"
+    local source_dir="$(get_src_dir)"
     
     # Check that version is set
     if [ -z "$OPENSVC_VERSION" ]; then
@@ -1092,7 +1092,7 @@ fi
 #===============================================================================
 n_check_go_version_compatibility() {
     local git_tag="$1"
-    local source_dir="/srv/hps-resources/packages/src/opensvc-om3"
+    local source_dir="$(get_src_dir)"
     
     if [ -z "$git_tag" ]; then
         echo "Error: No git tag specified"
