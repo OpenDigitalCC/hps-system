@@ -41,19 +41,7 @@ source ./05-install-utils.sh
 source ./10-build_opensvc.sh
 #n_install_base_services \
 
-run_function_list \
-n_check_build_dependencies \
-n_setup_build_user \
-n_build_opensvc_package \
-n_build_apk_packages \
-n_create_apk_package_structure \
-n_clone_or_update_opensvc_source \
-n_select_opensvc_version \
-n_prepare_build_directory \
-n_build_opensvc_binaries \
-n_check_go_version_compatibility
-
-
+run_function_list n_build_opensvc_package
 
 
 

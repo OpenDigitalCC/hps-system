@@ -310,9 +310,8 @@ n_build_apk_packages() {
     # abuild checksum also has root check, run with checksum generation
     abuild -P ${packages_dir} -F checksum 2>&1 || echo "  (checksum generation skipped or failed, continuing...)"
     
-    
+    echo "  Generating keys"
     abuild-keygen -a -n
-    
     
     
     echo "  Building package..."
@@ -343,7 +342,6 @@ n_build_apk_packages() {
     # Find and report built packages
     echo "Locating built packages..."
     
-    
     if [ ! -d "$packages_dir" ]; then
         echo "Error: Package directory not found: $packages_dir"
         return 1
@@ -352,12 +350,9 @@ n_build_apk_packages() {
     # Transform version for package filename (underscore format)
     local apk_version="${OPENSVC_VERSION/-/_}"
     
-    local server_pkg="$packages_dir/opensvc-server-${apk_version}-r0.apk"
-    local client_pkg="$packages_dir/opensvc-client-${apk_version}-r0.apk"
-    
-    n_remote_log "Server: $server_pkg"
-    n_remote_log "Client: $client_pkg"
-    
+    local server_pkg="$packages_dir/workdir/x86_64/opensvc-server-${apk_version}-r0.apk"
+    local client_pkg="$packages_dir/workdir/x86_64/opensvc-client-${apk_version}-r0.apk"
+       
     # Verify packages were created
     if [ ! -f "$server_pkg" ]; then
         echo "Error: Server package not found at: $server_pkg"
@@ -368,9 +363,6 @@ n_build_apk_packages() {
         echo "Error: Client package not found at: $client_pkg"
         return 1
     fi
-    
-    echo "Built packages found in: $packages_dir"
-    echo ""
     
     # Report package information
     local server_size=$(ls -lh "$server_pkg" | awk '{print $5}')
@@ -393,7 +385,7 @@ n_build_apk_packages() {
         return 1
     }
     
-    echo "  Packages copied successfully"
+    echo "  Packages copied successfully to $OPENSVC_PACKAGE_BASE_DIR"
     
     echo ""
     echo "APK package build completed successfully"
@@ -476,7 +468,7 @@ n_create_apk_package_structure() {
     fi
     
     local package_base_dir="$(get_dst_dir)/x86_64-alpine-linux-${alpine_version}"
-    local work_dir="$package_base_dir/work"
+    local work_dir="$(get_dst_dir)/workdir"
     
     echo "Creating APK package structure..."
     echo "  Version: $OPENSVC_VERSION"
