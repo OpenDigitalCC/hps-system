@@ -310,7 +310,7 @@ if [[ "$cmd" == "node_get_functions" ]]; then
   
   # Log and generate function library
   hps_log info "Node requests function lib for $DISTRO"
-  node_get_functions "${DISTRO}"
+  node_build_functions "${DISTRO}"
   
   exit 0
 fi

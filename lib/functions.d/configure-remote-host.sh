@@ -2,7 +2,7 @@ __guard_source || return
 
 
 #===============================================================================
-# node_get_functions
+# node_build_functions
 # ------------------
 # Concatenate host-side functions for a distro string and emit to stdout
 # with support for profile-specific functions.
@@ -42,8 +42,8 @@ __guard_source || return
 #   1 if distro parameter missing
 #   2 if host-config command fails
 #===============================================================================
-node_get_functions() {
-  local distro="${1:?Usage: node_get_functions <distro> [func_dir]}"
+node_build_functions() {
+  local distro="${1:?Usage: node_build_functions <distro> [func_dir]}"
   local base="${2:-${LIB_DIR:+${LIB_DIR%/}/node-functions.d}}"
 #  base="${base:-/srv/hps-system/lib/node-functions.d}"
   
