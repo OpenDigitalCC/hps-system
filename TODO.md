@@ -3,26 +3,15 @@
 
 List of requirements and ideas not yet implemented
 
-
-
 Write quickstart
-
 Hardware
-
 Very minimal for test / dev:
-
 Laptop / test computer
-
 - docker and KVM on 1 PC
-
 Minimal useful operation
-
 Desktop PC's, Raspberry Pi's
-
 - Storage host - 50GB disk
 - Compute host - 16GB RAM, 4 cores
-
-
 
 HPS
 
@@ -57,7 +46,6 @@ Security
 IPS replication
 - clone IPS to diffent physical hosts, swithc between which is live
 - take care to manage config file writes, for example, lock whilst migrating, and somehow rediretc nay writes to new live, or reject and expect far end to retry
-
 
 Folder structure
 
@@ -97,62 +85,11 @@ management interface
   
 iPXE / boot improvements
 - reduce boot manager usage, by sending sub-opts to ipxe, which cn then configure directly, when host is configured already - see https://gitlab.isc.org/isc-projects/kea/-/issues/2366#note_284084
-- IPXE Audit
-  - get as much data on the booted host as possible
-  - create IPXE audir-report fiunction to send this to IPS, to log in to the host config
-  - arch is already sent, record other data:
-
-${manufacturer}      # System manufacturer (e.g., "Dell Inc.")
-${product}          # Product name (e.g., "PowerEdge R640")
-${serial}           # System serial number
-${asset}            # Asset tag (if set)
-${uuid}             # System UUID
-${platform}         # Platform type (e.g., "pcbios" or "efi")
-${arch}             # Architecture (e.g., "x86_64")
-${buildarch}        # iPXE build architecture
-${version}          # iPXE version
-
-${memsize}          # Total memory in MB
-${cpuvendor}        # CPU vendor (Intel/AMD)
-${cpuidver}         # CPUID version info
-# Note: Detailed CPU info requires CPUID command
-
-# Using pciscan command
-pciscan
-${pci/<bus>:<dev>.<fn>/vendor}   # Vendor ID
-${pci/<bus>:<dev>.<fn>/device}   # Device ID
-
-${smbios/manufacturer}        # System manufacturer
-${smbios/product}            # Product name
-${smbios/serial}             # Serial number
-${smbios/uuid}               # UUID
-${smbios/version}            # Version
-${smbios/sku}                # SKU number
-${smbios/family}             # Product family
-${smbios/bios-vendor}        # BIOS vendor
-${smbios/bios-version}       # BIOS version
-${smbios/baseboard-manufacturer}  # Motherboard manufacturer
-${smbios/baseboard-product}       # Motherboard model
-
-example implementation:
-#!ipxe
-echo Gathering system information...
-set mac ${net0/mac}
-set serial ${serial:uristring}
-set uuid ${uuid}
-set manufacturer ${manufacturer:uristring}
-set product ${product:uristring}
-set arch ${arch}
-set platform ${platform}
-set unixtime ${unixtime}
-
-Send to IPS:
-chain http://${next-server}/cgi-bin/boot_manager.sh?cmd=host_audit&serial=${serial}&uuid=${uuid}&time=${unixtime}
-
+- iPXE Audit
+  - Compile full iPXE version to include pciscan and other functions
 Make host_hardware_hash
 if hash changed since last boot, warn, show side by side diffences, log what changed
-  
-  
+
 
 syslog
 - log to one file
@@ -237,6 +174,14 @@ At diskless runtime
   - From Diskless, Send om message to expand the zvol for each disk in a mirror
   - get commands to rescan the md PV with pvresize, then lvextend --resizefs for the volume
 
+
+## Boot audit
+
+For any host withut full audit, boot to temp image, get full hardware audit, and reboot
+- periodically re-audit
+
+## Boot simplification
+- use DNSMasq to detect current state, sed client stright to the command, skipping ipxe logic
 
 
 ### OpenSVC / om
