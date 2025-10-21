@@ -115,8 +115,8 @@ EOF
 command=/usr/sbin/rsyslogd -n -f $(get_path_cluster_services_dir)/rsyslog.conf
 autostart=true
 autorestart=true
-stderr_logfile=${HPS_LOG_DIR}/rsyslogd.err.log
-stdout_logfile=${HPS_LOG_DIR}/rsyslogd.out.log
+stderr_logfile=${HPS_LOG_DIR}/rsyslog.err.log
+stdout_logfile=${HPS_LOG_DIR}/rsyslog.out.log
 EOF
 )" || return 3
 

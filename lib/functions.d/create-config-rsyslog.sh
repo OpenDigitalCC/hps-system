@@ -39,7 +39,7 @@ input(type="imtcp" port="514")
 # Separate logs by hostname and date
 
 template(name="RemoteHostFile" type="string"
-  string="/srv/hps-system/log/rsyslog/remote/%fromhost-ip%/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
+  string="/srv/hps-system/log/rsyslog/%fromhost-ip%/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
 )
 
 # Template for log format - include both IP and hostname
@@ -48,30 +48,29 @@ template(name="RemoteHostFormat" type="string"
 )
 
 
-
 # Rules for remote hosts (not localhost)
-if \$fromhost-ip != "127.0.0.1" then {
+#if \$fromhost-ip != "127.0.0.1" then {
   action(type="omfile" 
     dynaFile="RemoteHostFile"
     template="RemoteHostFormat"
     dirCreateMode="0755"
     fileCreateMode="0644"
-  )
-  stop
-}
+#  )
+#  stop
+#}
 
 
 # Local system logs
-*.info;mail.none;authpriv.none;cron.none   /var/log/messages
-authpriv.*                                 /var/log/secure
-mail.*                                     /var/log/maillog
-cron.*                                     /var/log/cron
+*.info;mail.none;authpriv.none;cron.none   ${RSYSLOG_LOG_DIR}/local/messages
+authpriv.*                                 ${RSYSLOG_LOG_DIR}/local/secure
+mail.*                                     ${RSYSLOG_LOG_DIR}/local/maillog
+cron.*                                     ${RSYSLOG_LOG_DIR}/local/cron
 *.emerg                                    :omusrmsg:*
-local7.*                                   /var/log/boot.log
+local7.*                                   ${RSYSLOG_LOG_DIR}/local/boot.log
 
 # HPS-specific logs
-local0.*                                   ${RSYSLOG_LOG_DIR}/hps-system.log
-local1.*                                   ${RSYSLOG_LOG_DIR}/hps-nodes.log
+local0.*                                   ${RSYSLOG_LOG_DIR}/local/hps-system.log
+local1.*                                   ${RSYSLOG_LOG_DIR}/local/hps-nodes.log
 
 # Log rotation handled externally by logrotate
 
