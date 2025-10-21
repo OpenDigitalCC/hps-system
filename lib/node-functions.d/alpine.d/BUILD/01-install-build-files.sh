@@ -30,6 +30,7 @@ n_check_build_dependencies() {
         "make"
         "abuild"
         "abuild-keygen:abuild"
+        "doas"
     )
     
     local missing_packages=()
@@ -135,20 +136,30 @@ n_setup_build_user() {
         echo "  User already in abuild group"
     fi
     
-    # Generate signing key if it doesn't exist
-    echo "Checking for abuild signing key..."
-    local builder_home=$(eval echo ~$build_user)
+
+# Generate signing key if it doesn't exist
+echo "Checking for abuild signing key..."
+local builder_home=$(eval echo ~$build_user)
+
+if [ ! -f "$builder_home/.abuild/abuild.conf" ]; then
+    echo "  Generating signing key for $build_user..."
+    # Generate keys without trying to install them
+    su - "$build_user" -c "abuild-keygen -n" || {
+        echo "Error: Failed to generate signing key"
+        return 1
+    }
     
-    if [ ! -f "$builder_home/.abuild/abuild.conf" ]; then
-        echo "  Generating signing key for $build_user..."
-        su - "$build_user" -c "abuild-keygen -a -i -n" || {
-            echo "Error: Failed to generate signing key"
-            return 1
-        }
-        echo "  Signing key generated successfully"
-    else
-        echo "  Signing key already exists"
-    fi
+    # Copy the public key(s) to /etc/apk/keys/ as root
+    echo "  Installing public key(s) to /etc/apk/keys/..."
+    cp "$builder_home"/.abuild/*.pub /etc/apk/keys/ || {
+        echo "Error: Failed to copy public key to /etc/apk/keys/"
+        return 1
+    }
+    
+    echo "  Signing key generated and installed successfully"
+else
+    echo "  Signing key already exists"
+fi
     
     # Set up package directory ownership
     echo "Configuring package directory permissions..."

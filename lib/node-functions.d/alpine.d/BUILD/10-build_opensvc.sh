@@ -72,22 +72,7 @@ n_build_opensvc_package() {
     echo "OpenSVC Alpine APK Package Builder"
     echo "========================================"
     echo ""
-    
-    # Step 0: Check abuild root restriction
-    echo "Step 0: Checking abuild configuration..."
-    if grep -q "^\s*\[.*forceroot.*\].*die.*Do not run abuild as root" /usr/bin/abuild 2>/dev/null; then
-        echo "Error: abuild has root restriction enabled"
-        echo ""
-        echo "This script requires abuild to allow root execution."
-        echo "Run the following command to patch abuild:"
-        echo ""
-        echo "  sed -i '2919s/^/# /' /usr/bin/abuild"
-        echo ""
-        echo "To restore later: mv /usr/bin/abuild.orig /usr/bin/abuild"
-        return 1
-    fi
-    echo "  abuild configuration: OK"
-    echo ""
+
     
     # Step 1: Check network connectivity
     echo "Step 1: Checking network connectivity..."
@@ -274,7 +259,11 @@ fi
 #   1 on failure
 #===============================================================================
 n_build_apk_packages() {
-    
+  
+    local packages_dir="$(get_dst_dir)"
+    mkdir -p $packages_dir
+
+
     # Check required environment variables
     if [ -z "$OPENSVC_SERVER_PKG_DIR" ]; then
         echo "Error: OPENSVC_SERVER_PKG_DIR not set"
@@ -319,11 +308,16 @@ n_build_apk_packages() {
     
     echo "  Generating checksums..."
     # abuild checksum also has root check, run with checksum generation
-    abuild checksum 2>&1 || echo "  (checksum generation skipped or failed, continuing...)"
+    abuild -P ${packages_dir} -F checksum 2>&1 || echo "  (checksum generation skipped or failed, continuing...)"
+    
+    
+    abuild-keygen -a -n
+    
+    
     
     echo "  Building package..."
     # Run abuild, ignore exit code since index creation may fail but package is built
-    abuild -d -K -r 2>&1 || true
+    abuild -P ${packages_dir} -F -d -K -r 2>&1 || true
     
     echo "  opensvc-server package built successfully"
     echo ""
@@ -337,11 +331,11 @@ n_build_apk_packages() {
     
     echo "  Generating checksums..."
     # abuild checksum also has root check, run with checksum generation
-    abuild checksum 2>&1 || echo "  (checksum generation skipped or failed, continuing...)"
+    abuild -P ${packages_dir} -F checksum 2>&1 || echo "  (checksum generation skipped or failed, continuing...)"
     
     echo "  Building package..."
     # Run abuild, ignore exit code since index creation may fail but package is built
-    abuild -d -K -r 2>&1 || true
+    abuild  -P ${packages_dir}  -F -d -K -r 2>&1 || true
     
     echo "  opensvc-client package built successfully"
     echo ""
@@ -349,8 +343,6 @@ n_build_apk_packages() {
     # Find and report built packages
     echo "Locating built packages..."
     
-    local home_dir=$(eval echo ~$(whoami))
-    local packages_dir="$home_dir/packages/work/x86_64"
     
     if [ ! -d "$packages_dir" ]; then
         echo "Error: Package directory not found: $packages_dir"
@@ -362,6 +354,9 @@ n_build_apk_packages() {
     
     local server_pkg="$packages_dir/opensvc-server-${apk_version}-r0.apk"
     local client_pkg="$packages_dir/opensvc-client-${apk_version}-r0.apk"
+    
+    n_remote_log "Server: $server_pkg"
+    n_remote_log "Client: $client_pkg"
     
     # Verify packages were created
     if [ ! -f "$server_pkg" ]; then
@@ -480,7 +475,7 @@ n_create_apk_package_structure() {
         alpine_version="3.20"
     fi
     
-    local package_base_dir="/srv/hps-resources/packages/x86_64-alpine-linux-${alpine_version}"
+    local package_base_dir="$(get_dst_dir)/x86_64-alpine-linux-${alpine_version}"
     local work_dir="$package_base_dir/work"
     
     echo "Creating APK package structure..."
