@@ -3,8 +3,22 @@
 
 
 # WARNING: changes to the build requires tch_apkovol_create to run, to recreate the apkvol
-# so if any functions changed here, move the file (probably /srv/hps-resources/distros/alpine-3.20.2/tch-base.apkovl.tar.gz) so it gets recreeated
+# so if any functions changed here, move the file so it gets recreeated
 # or run tch_apkovol_create /srv/hps-resources/distros/alpine-3.20.2/tch-base.apkovl.tar.gz
+
+
+get_tch_apkovl_filename () {
+  echo "tch-bootstrap.apkovl.tar.gz"
+}
+
+get_tch_apkovl_filepath () {
+  if [[ -z "$os_id" ]]; then
+    hps_log error "os_id required"
+    return 1
+  fi
+  echo "$(_get_distro_dir)/$(os_config "$os_id" "get" "repo_path")/$(get_tch_apkovl_filename)"
+}
+
 
 #===============================================================================
 # tch_apkovol_create
@@ -59,9 +73,9 @@ tch_apkovol_create() {
     hps_log warn "NAME_SERVER not configured, using gateway IP for DNS"
     nameserver="$ips_address"
   fi
-  
+
+  local download_base="http://${ips_address}/$(get_distro_base_path "$os_id" http)"  
   local repo_path=$(get_distro_base_path "$os_id" "relative")
-  download_base="http://${ips_address}/distros/${repo_path}"
 
   hps_log debug "Apkovl config: Alpine version: ${alpine_version}, IPS: ${ips_address}, DNS: ${nameserver} download_base: $download_base"
   

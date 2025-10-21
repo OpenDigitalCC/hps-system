@@ -69,7 +69,7 @@ http {
     # ISO trees (multiple distros/versions)
     location /distros/ {
       autoindex on;
-      alias ${HPS_DISTROS_DIR}/;
+      alias $(_get_distro_dir)/;
     }
 
     # Local package repo (multiple distros/versions)

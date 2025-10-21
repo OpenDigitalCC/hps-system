@@ -1,11 +1,10 @@
 __guard_source || return
 
 
+
 #===============================================================================
 # Alpine Repository Management Functions
 #===============================================================================
-
-
 
 
 #===============================================================================
@@ -197,8 +196,8 @@ sync_alpine_repository() {
     return 1
   fi
   
-  if [[ -z "$HPS_DISTROS_DIR" ]]; then
-    hps_log error "sync_alpine_repository: HPS_DISTROS_DIR not set"
+  if [[ -z "$(_get_distro_dir)" ]]; then
+    hps_log error "sync_alpine_repository: distro dir not set"
     return 1
   fi
   
@@ -270,8 +269,7 @@ sync_alpine_repository() {
   esac
   # After successful sync
   if [[ "$sync_mode" == "main" ]]; then
-    local apkovl_path="${HPS_DISTROS_DIR}/alpine-${alpine_version}/tch-bootstrap.apkovl.tar.gz"
-    tch_apkovol_create "$apkovl_path"
+    tch_apkovol_create "$(get_tch_apkovl_filepath)"
   fi
 
 }
@@ -305,8 +303,9 @@ sync_alpine_repo_arch() {
   local mirror_version="$2"
   local repo_name="$3"
   local arch="${4:-x86_64}"
-  
-  local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/${arch}"
+
+#TODO: Update with os_config values
+  local dest_dir="$(_get_distro_dir)/alpine-${alpine_version}/apks/${repo_name}/${arch}"
   local http_mirror="http://dl-cdn.alpinelinux.org/alpine/${mirror_version}/${repo_name}/${arch}/"
   
   hps_log info "Syncing ${repo_name} repository (${arch}) to ${dest_dir}"
@@ -413,7 +412,7 @@ sync_alpine_packages() {
   shift 3
   local package_names=("$@")
   
-  local dest_dir="${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64"
+  local dest_dir="$(_get_distro_dir)/alpine-${alpine_version}/apks/${repo_name}/x86_64"
   local temp_dir=$(mktemp -d)
   
   hps_log info "Syncing packages: ${package_names[*]}"

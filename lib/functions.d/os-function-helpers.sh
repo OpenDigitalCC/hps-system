@@ -6,6 +6,16 @@
 # support using colon delimiter format: <arch>:<name>:<version>
 #===============================================================================
 
+
+
+
+_get_distro_dir () {
+  echo "${HPS_DISTROS_DIR}"
+}
+
+
+
+
 #===============================================================================
 # get_os_name_version
 # -------------------
@@ -62,20 +72,22 @@ get_distro_base_path() {
   local path_type="${2:-mount}"
   local repo_path=""
   
+  if [ -z "$os_id" ] ; then
+    hps_log error "no O/S ID specified"
+    return 1
+  fi
+
   # Try to get configured repo path
   if os_config "$os_id" "exists"; then
     repo_path=$(os_config "$os_id" "get" "repo_path" 2>/dev/null)
+   else
+    hps_log error "O/S $os_id does not have a repo_path set"
+    return 1
   fi
-  
-  # Fall back to converting OS ID if no repo_path
-  if [[ -z "$repo_path" ]]; then
-    # Legacy conversion
-    repo_path="${os_id//:/_}"
-  fi
-  
+
   case "$path_type" in
     mount)
-      echo "${HPS_DISTROS_DIR}/${repo_path}"
+      echo "$(_get_distro_dir)/${repo_path}"
       ;;
     http)
       echo "/distros/${repo_path}"
@@ -84,7 +96,7 @@ get_distro_base_path() {
       echo "${repo_path}"
       ;;
     *)
-      hps_log error "[get_distro_base_path] Unknown path type: $path_type"
+      hps_log error "Unknown path type: $path_type"
       return 1
       ;;
   esac

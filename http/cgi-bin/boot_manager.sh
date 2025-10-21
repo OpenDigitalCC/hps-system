@@ -24,33 +24,6 @@ else
   cmd="$(cgi_param get cmd)"
 fi
 
-# Condition: is this fresh boot?
-if [[ "$cmd" == "init" ]]; then
-  hps_log info "[$mac] iPXE Initialisation requested from DHCP client"
-  
-  # Check if this is a network boot host
-  # Use 'get' with a default value or handle the case where key doesn't exist
-  state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
-  
-  # Check for network boot state
-  if [[ "${state}" == "NETWORK_BOOT" ]]; then
-    hps_log info "Network boot requested for MAC ${mac} (STATE=${state})"
-    ipxe_network_boot "$mac"
-    exit 0
-  fi
-  
-  # Any other state value (including empty/undefined)
-  if [[ -n "${state}" ]]; then
-    hps_log info "Host MAC ${mac} has STATE=${state}, running standard init"
-  else
-    hps_log info "Host MAC ${mac} has no STATE defined, running standard init"
-  fi
-  
-  ipxe_init
-  exit 0
-fi
-
-
 
 # Command: Get TCH apkovol
 if [[ "$cmd" == "get_tch_apkovol" ]]; then
@@ -158,8 +131,6 @@ if [[ "$cmd" == "host_variable" ]]; then
 fi
 
 
-
-
 # --- Command: get or set cluster variables (receiver side) ---
 # cmd=cluster_variable&name=<name>[&value=<value>]
 # - Requires: name
@@ -264,13 +235,11 @@ fi
 # Command: host audit collection (generic)
 if [[ "$cmd" == "host_audit" ]]; then
   if ! cgi_param exists data; then
-    cgi_header_plain
     cgi_auto_fail "Param data is required for command $cmd"
   else
     host_audit="$(cgi_param get data)"
     # Pass to processing function
     hps_log debug "Calling: process_host_audit: ${host_audit} "
-    
     process_host_audit "$mac" "${host_audit}"
 #    cgi_header_plain
   fi
@@ -347,10 +316,6 @@ if [[ "$cmd" == "node_get_functions" ]]; then
 fi
 
 
-
-
-
-
 # Command: Generate an opensvc conf
 if [[ "$cmd" == "generate_opensvc_conf" ]]; then
   hps_log info "Request to generate opensvc.conf"
@@ -360,14 +325,16 @@ if [[ "$cmd" == "generate_opensvc_conf" ]]; then
 fi
 
 
-# ----------------------
+# ---------------------- Router  based on state
 
-# Router: Decide what to do next
-if [[ "$cmd" == "boot_action" ]]
- then
-  hps_log info "Host wants to know what to do next"
-  ARCH="$(cgi_param get arch)"
 
+# Condition: is this fresh boot?
+# this is the link passed from dhcp - all hosts start here
+if [[ "$cmd" == "init" ]]; then
+  hps_log info "[$mac] iPXE Initialisation requested from DHCP client"
+
+# hard-coded for now until we can audit to detect running arch
+  ARCH="x86_64"
 
   if host_config_exists "$mac"
    then
@@ -376,10 +343,17 @@ if [[ "$cmd" == "boot_action" ]]
     hps_log info "No config found, initialising"
     host_initialise_config "$mac" "$ARCH"
   fi
-  state="$(host_config "$mac" get STATE)"
+
+  state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
   hps_log info "STATE: $state"
 
   case "$state" in
+  
+    NETWORK_BOOT)
+      hps_log info "Network boot requested for MAC ${mac} (STATE=${state})"
+      ipxe_network_boot "$mac"
+      ;;  
+  
     UNCONFIGURED)
       hps_log info "Unconfigured — offering install options."
       ipxe_configure_main_menu
@@ -420,7 +394,7 @@ if [[ "$cmd" == "boot_action" ]]
 #      hps_log info "Reinstall requested. Returning to install menu."
 #      ipxe_host_install_menu
       host_config "$mac" set STATE UNCONFIGURED
-      ipxe_init
+      ipxe_reboot "Unconfiguring host and rebooting"
       ;;
 
     FAILED)

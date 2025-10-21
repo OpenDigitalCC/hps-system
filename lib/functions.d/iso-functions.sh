@@ -1,17 +1,8 @@
 __guard_source || return
 
-#TODO: this should be set at cluster-config time, selecting for each host type which is required, then use cluster_config to get the values
-# ${CPU}-${MFR}-${OSNAME}-${OSVER}
-# x86_64 linux rockylinux 9.3
 
-
-get_iso_path() {
-  if [[ -n "${HPS_DISTROS_DIR:-}" && -d "$HPS_DISTROS_DIR" ]]; then
-    echo "$HPS_DISTROS_DIR/iso"
-  else
-    echo "[x] HPS_DISTROS_DIR is not set or not a directory." >&2
-    return 1
-  fi
+_get_iso_path() {
+  echo "$(_get_distro_dir)/iso"
 }
 
 
@@ -24,7 +15,7 @@ list_local_iso() {
 
   local 
 
-  local iso_dir="$(get_iso_path)"
+  local iso_dir="$(_get_iso_path)"
   local pattern="${cpu}-${mfr}-${osname}"
   [[ -n "$osver" ]] && pattern="${pattern}-${osver}"
 
@@ -107,69 +98,33 @@ check_latest_version() {
 #
 #===============================================================================
 mount_distro_iso() {
-  local os_id_or_distro="$1"
+  local os_id="$1"
   local iso_filename=""
   local mount_point=""
   
   # Validate input
-  if [[ -z "$os_id_or_distro" ]]; then
+  if [[ -z "$os_id" ]]; then
     hps_log error "No OS identifier provided"
     return 1
   fi
-  
-  # Check if this is an OS identifier from os_config
-  if os_config "$os_id_or_distro" "exists"; then
-    # Get ISO filename from os_config
-    iso_filename=$(os_config "$os_id_or_distro" "get" "iso_filename" 2>/dev/null)
-    
-    # If no iso_filename specified, construct from components
-    if [[ -z "$iso_filename" ]]; then
-      local arch=$(os_config "$os_id_or_distro" "get" "arch")
-      local mfr=$(os_config "$os_id_or_distro" "get" "manufacturer")
-      local name=$(os_config "$os_id_or_distro" "get" "name")
-      local version=$(os_config "$os_id_or_distro" "get" "version")
-      local version_full=$(os_config "$os_id_or_distro" "get" "version_full" 2>/dev/null)
-      
-      # Try to construct the ISO filename
-      if [[ -n "$version_full" ]]; then
-        iso_filename="${arch}-${mfr}-${name}-${version_full}.iso"
-      else
-        iso_filename="${arch}-${mfr}-${name}-${version}.iso"
-      fi
-    fi
-    
-    # Mount point uses the OS ID with colons replaced by underscores
-    # to avoid filesystem issues
-    mount_point="${HPS_DISTROS_DIR}/${os_id_or_distro//:/_}"
-  else
-    # Legacy support: assume it's a DISTRO_STRING
-    hps_log warning "Using legacy DISTRO_STRING format: $os_id_or_distro"
-    iso_filename="${os_id_or_distro}.iso"
-    mount_point="${HPS_DISTROS_DIR}/${os_id_or_distro}"
+
+  if ! os_config "$os_id" exists ; then
+    hps_log error "O/S $os_id is not valid or does not exist"
+    return 1
   fi
   
-  local iso_path="${HPS_DISTROS_DIR}/iso/${iso_filename}"
+  # Get ISO filename from os_config
+  iso_filename=$(os_config "$os_id" "get" "iso_filename" 2>/dev/null)
+
+  # Mount point uses the OS ID with colons replaced by underscores
+  # to avoid filesystem issues
+  mount_point="$(get_distro_base_path "$os_id")"
+  local iso_path="$(_get_iso_path)/${iso_filename}"
   
   # Check if ISO exists
   if [[ ! -f "$iso_path" ]]; then
-    # If constructed filename doesn't exist, try without .iso extension
-    local iso_base="${iso_filename%.iso}"
-    
-    # Try to find a matching ISO with glob
-    local found_iso=""
-    for iso in "${HPS_DISTROS_DIR}/iso/${iso_base}"*.iso; do
-      if [[ -f "$iso" ]]; then
-        found_iso="$iso"
-        hps_log info "Found ISO: $found_iso"
-        iso_path="$found_iso"
-        break
-      fi
-    done
-    
-    if [[ -z "$found_iso" ]]; then
-      hps_log error "ISO not found: $iso_path"
-      return 1
-    fi
+    hps_log error "ISO not found: $iso_path"
+    return 1
   fi
   
   # Verify ISO file is readable
@@ -209,23 +164,16 @@ mount_distro_iso() {
   
   hps_log info "Mounting $iso_path to $mount_point"
   
-  # Check for loop device availability first
-  if ! losetup -f >/dev/null 2>&1; then
-    hps_log error "No loop devices available"
-    
-    # Try to create loop device
-    if [[ ! -e /dev/loop0 ]]; then
-      mknod /dev/loop0 b 7 0 2>/dev/null || true
-    fi
-    
-    # Check again
-    if ! losetup -f >/dev/null 2>&1; then
-      hps_log error "Cannot create loop devices - missing kernel support?"
-      rmdir "$mount_point" 2>/dev/null
-      return 1
-    fi
+  # Create loop devices if they don't exist
+  if [ ! -b /dev/loop0 ]; then
+    hps_log warn "No loop devices available"
+    for i in {0..7}; do
+      mknod -m 0660 /dev/loop$i b 7 $i 2>/dev/null || true
+      chown root:disk /dev/loop$i 2>/dev/null || true
+    done
   fi
-  
+
+
   # Try mounting with explicit options
   local mount_output
   mount_output=$(mount -t iso9660 -o loop,ro "$iso_path" "$mount_point" 2>&1)
@@ -281,7 +229,6 @@ mount_distro_iso() {
 #
 # Example usage:
 #   unmount_distro_iso "x86_64:rocky:10.0"
-#   unmount_distro_iso "/srv/hps-resources/distros/x86_64_rocky_10.0"
 #
 #===============================================================================
 unmount_distro_iso() {
@@ -294,10 +241,10 @@ unmount_distro_iso() {
     mount_point="$os_id_or_path"
   elif os_config "$os_id_or_path" "exists"; then
     # OS identifier provided - convert colons to underscores for filesystem
-    mount_point="${HPS_DISTROS_DIR}/${os_id_or_path//:/_}"
+    mount_point="$(_get_distro_dir)/${os_id_or_path//:/_}"
   else
     # Legacy DISTRO_STRING
-    mount_point="${HPS_DISTROS_DIR}/${os_id_or_path}"
+    mount_point="$(_get_distro_dir)/${os_id_or_path}"
   fi
   
   # Check if mounted
@@ -344,15 +291,15 @@ unmount_distro_iso() {
 get_mount_point_for_os() {
   local os_id="$1"
   # Convert colons to underscores for filesystem compatibility
-  echo "${HPS_DISTROS_DIR}/${os_id//:/_}"
+  echo "$(_get_distro_dir)/${os_id//:/_}"
 }
 
 
 
 update_distro_iso() {
   local DISTRO_STRING="$1"
-  local iso_path="${HPS_DISTROS_DIR}/iso/${DISTRO_STRING}.iso"
-  local mount_point="${HPS_DISTROS_DIR}/${DISTRO_STRING}"
+  local iso_path="$(_get_distro_dir)/iso/${DISTRO_STRING}.iso"
+  local mount_point="$(_get_distro_dir)/${DISTRO_STRING}"
 
   if [[ -z "$DISTRO_STRING" ]]; then
     echo "Usage: update_distro_iso <CPU>-<MFR>-<OSNAME>-<OSVER>"
@@ -397,7 +344,7 @@ download_iso() {
   local mfr="$2"
   local osname="$3"
   local osver="$4"
-  local iso_dir="$(get_iso_path)"
+  local iso_dir="$(_get_iso_path)"
   local base_url=""
   local filename=""
   local iso_url=""
@@ -440,9 +387,9 @@ extract_iso_for_pxe() {
   local mfr="$2"
   local osname="$3"
   local osver="$4"
-  local iso_dir="$(get_iso_path)"
+  local iso_dir="$(_get_iso_path)"
   local iso_file="${iso_dir}/${cpu}-${mfr}-${osname}-${osver}.iso"
-  local extract_dir="${HPS_DISTROS_DIR}/${cpu}-${mfr}-${osname}-${osver}"
+  local extract_dir="$(_get_distro_dir)/${cpu}-${mfr}-${osname}-${osver}"
 
   if [[ ! -f "$iso_file" ]]; then
     echo "[x] ISO not found: $iso_file" >&2
@@ -470,7 +417,7 @@ verify_checksum_signature() {
   local mfr="$2"
   local osname="$3"
   local osver="$4"
-  local iso_dir="${HPS_DISTROS_DIR:-/srv/hps-resources/distros}"
+  local iso_dir="$(_get_distro_dir)"
   local iso_file="${iso_dir}/${cpu}-${mfr}-${osname}-${osver}.iso"
 
   if [[ ! -f "$iso_file" ]]; then
@@ -558,7 +505,7 @@ check_and_download_latest_rocky() {
   local arch="x86_64"
   local iso_pattern="minimal"
 
-  local target_base="${HPS_DISTROS_DIR}/iso"
+  local target_base="$(_get_distro_dir)/iso"
   mkdir -p "$target_base"
 
   echo "[*] Checking for latest Rocky Linux ${arch} ISO..."
@@ -602,7 +549,7 @@ extract_rocky_iso_for_pxe() {
   local MFR="linux"
   local OSNAME=rockylinux
   local OSVER="$version"
-  local extract_dir="${HPS_DISTROS_DIR}/${CPU}-${MFR}-${OSNAME}/${OSVER}"
+  local extract_dir="$(_get_distro_dir)/${CPU}-${MFR}-${OSNAME}/${OSVER}"
 
   echo "[*] Extracting Rocky Linux ISO for PXE to: $extract_dir"
   mkdir -p "$extract_dir"
@@ -628,7 +575,7 @@ verify_rocky_checksum_signature() {
   local version="$1"
   local arch="x86_64"
   local base_url="https://download.rockylinux.org/pub/rocky/${version}/${arch}/iso/"
-  local target_dir="${HPS_DISTROS_DIR}/rocky"
+  local target_dir="$(_get_distro_dir)/rocky"
   local checksum_path="${target_dir}/CHECKSUM"
   local sig_path="${checksum_path}.sig"
 

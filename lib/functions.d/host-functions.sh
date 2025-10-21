@@ -22,7 +22,9 @@ process_host_audit() {
   local mac="$1"
   local encoded_data="$2"
   local prefix="${3:-host}"
-  
+  # send ipxe header
+  ipxe_header
+    
   # URL decode
   local data="${encoded_data//+/ }"
   data=$(printf '%b' "${data//%/\\x}")
@@ -193,7 +195,7 @@ host_initialise_config() {
   
   # Validate MAC address is provided
   if [[ -z "$mac" ]]; then
-    hps_log error "host_initialise_config: MAC address not provided"
+    hps_log error "MAC address not provided"
     return 1
   fi
   
@@ -202,27 +204,27 @@ host_initialise_config() {
   hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
   
   if [[ -z "$hosts_dir" ]]; then
-    hps_log error "host_initialise_config: Cannot determine active cluster hosts directory"
+    hps_log error "Cannot determine active cluster hosts directory"
     return 1
   fi
   
   # Ensure the hosts directory exists
   if [[ ! -d "$hosts_dir" ]]; then
     if ! mkdir -p "$hosts_dir" 2>/dev/null; then
-      hps_log error "host_initialise_config: Failed to create hosts directory: $hosts_dir"
+      hps_log error "Failed to create hosts directory: $hosts_dir"
       return 1
     fi
-    hps_log debug "host_initialise_config: Created hosts directory: $hosts_dir"
+    hps_log debug "Created hosts directory: $hosts_dir"
   fi
   
   # Set initial state using host_config (which will create the file)
   if ! host_config "$mac" set STATE "UNCONFIGURED"; then
-    hps_log error "host_initialise_config: Failed to set initial state for MAC: $mac"
+    hps_log error "Failed to set initial state for MAC: $mac"
     return 1
   fi
   
   if ! host_config "$mac" set arch "$arch"; then
-    hps_log error "host_initialise_config: Failed to set arch for MAC: $mac"
+    hps_log error "Failed to set arch for MAC: $mac"
     return 1
   fi
   
@@ -458,7 +460,9 @@ host_network_configure() {
   dhcp_ip=$(cluster_config get DHCP_IP 2>/dev/null)
   dhcp_rangesize=$(cluster_config get DHCP_RANGESIZE 2>/dev/null)
   network_cidr=$(cluster_config get NETWORK_CIDR 2>/dev/null)
-  
+
+  hps_log debug "Configuring with network $network_cidr"
+
   # Validate cluster config
   if [[ -z "$dhcp_ip" ]] || [[ -z "$dhcp_rangesize" ]] || [[ -z "$network_cidr" ]]; then
     hps_log error "Missing required cluster network configuration"
@@ -477,12 +481,24 @@ host_network_configure() {
     hps_log error "Failed to calculate netmask from: $network_cidr"
     return 1
   fi
+
   
   # Check if network config already exists - if so, preserve it
   local assigned_ip assigned_hostname
-  assigned_ip=$(host_config "$macid" get IP 2>/dev/null)
-  assigned_hostname=$(host_config "$macid" get HOSTNAME 2>/dev/null)
+    # Check if IP already exists before trying to get it
+  if host_config "$macid" exists IP; then
+    assigned_ip=$(host_config "$macid" get IP 2>/dev/null)
+  else
+    assigned_ip=""
+  fi
   
+  # Check if HOSTNAME already exists before trying to get it
+  if host_config "$macid" exists HOSTNAME; then
+    assigned_hostname=$(host_config "$macid" get HOSTNAME 2>/dev/null)
+  else
+    assigned_hostname=""
+  fi
+
   # Allocate IP if not already set
   if [[ -z "$assigned_ip" ]]; then
     hps_log debug "No existing IP, allocating new one"

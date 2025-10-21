@@ -4,31 +4,21 @@ __guard_source || return
 CGI_URL="http://\${next-server}/cgi-bin/boot_manager.sh"
 
 ipxe_header () {
-
 # Send pxe header so we don't get a boot failure
 cgi_header_plain
-
 # Set some variables to be used in IPXE scripts
 TITLE_PREFIX="$(cluster_config get CLUSTER_NAME) \${mac:hexraw} \${net0/ip}:"
-
 cat <<EOF
 #!ipxe
-
 set logmsg $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header requested by ${FUNCNAME[1]}
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
-#imgfree
-
 echo
-echo Connected to cluster $(cluster_config get CLUSTER_NAME)
+echo Connected to cluster $(cluster_config get CLUSTER_NAME) 
 echo Client IP: \${client_ip} MAC address: \${mac:hexraw}
+echo "Function: ${FUNCNAME[1]}"
 echo
-
 EOF
-
-ipxe_host_audit_include
-
 }
-
 
 ipxe_cgi_fail () {
   # IPXE failure message
@@ -44,67 +34,6 @@ ipxe_cgi_fail () {
   echo "reboot"
   exit
 }
-
-
-
-ipxe_host_audit_include () {
-
-# No header sent as this is an include to be used inside other functions
-
-hps_log debug "Loading iPXE  audit"
-
-cat <<EOF
-
-
-#!ipxe
-# System audit with validation
-isset \${manufacturer} && set mfg \${manufacturer:uristring} || set mfg UNKNOWN
-isset \${product} && set prod \${product:uristring} || set prod UNKNOWN  
-isset \${serial} && set ser \${serial:uristring} || set ser NONE
-isset \${memsize} && set mem \${memsize} || set mem 0
-isset \${buildarch} && set buildarch \${buildarch} || set buildarch UNKNOWN
-isset \${platform} && set plat \${platform} || set plat UNKNOWN
-
-set audit_data mfg=\${mfg}|prod=\${prod}|ser=\${ser}|mem=\${mem}|buildarch=\${buildarch}|plat=\${plat}
-imgfetch --name audit ${CGI_URL}?cmd=host_audit&prefix=host&data=\${audit_data:uristring} || echo Audit failed
-
-set net_data ip=\${net0/ip}|gw=\${net0/gateway}|dns=\${net0/dns}|dhcp=\${net0/dhcp-server}
-imgfetch --name netinfo ${CGI_URL}?cmd=host_audit&prefix=net&data=\${net_data:uristring} || echo Network failed
-
-
-
-# SMBIOS data - check if valid before sending
-#isset \${smbios/bios-vendor} && iseq \${smbios/bios-vendor} \${smbios/bios-vendor} && set bios_v \${smbios/bios-vendor:uristring} || set bios_v NOTFOUND
-#isset \${smbios/bios-version} && iseq \${smbios/bios-version} \${smbios/bios-version} && set bios_ver \${smbios/bios-version:uristring} || set bios_ver NOTFOUND
-#isset \${smbios/baseboard-manufacturer} && iseq \${smbios/baseboard-manufacturer} \${smbios/baseboard-manufacturer} && set board_mfg \${smbios/baseboard-manufacturer:uristring} || set board_mfg NOTFOUND
-
-set smbios_data bios_vendor=\${bios_v}|bios_ver=\${bios_ver}|board_mfg=\${board_mfg}
-imgfetch --name smbios ${CGI_URL}?cmd=host_audit&prefix=smbios&data=\${smbios_data:uristring} || echo SMBIOS failed
-
-
-set audit_data mfg=\${manufacturer:uristring}|prod=\${product:uristring}|ser=\${serial:uristring}|mem=\${memsize}|buildarch=\${buildarch}|plat=\${platform}
-imgfetch --name audit ${CGI_URL}?cmd=host_audit&prefix=audit&data=\${audit_data:uristring} || echo Audit failed
-
-#imgfree
-
-# Example 2: SMBIOS data
-#set smbios_data bios_vendor=\${smbios/bios-vendor:uristring}|bios_ver=\${smbios/bios-version:uristring}|board_mfg=\${smbios/baseboard-manufacturer:uristring}
-#imgfetch --name smbios ${CGI_URL}?cmd=host_audit&prefix=smbios&data=\${smbios_data:uristring} || echo SMBIOS failed
-
-#imgfree
-
-# Example 3: PCI devices
-#pciscan
-#set pci_data 0:1f.0=\${pci/0:1f.0/vendor}.\${pci/0:1f.0/device}|0:00.0=\${pci/0:00.0/vendor}.\${pci/0:00.0/device}
-#imgfetch --name pci ${CGI_URL}?cmd=host_audit&prefix=pci&data=\${pci_data:uristring} || echo PCI failed
-
-#imgfree
-
-EOF
-
-
-}
-
 
 ipxe_boot_from_disk () {
   # Boot from local disk via bios by exiting the iPXE stack
@@ -219,49 +148,10 @@ handle_menu_item() {
       ipxe_cgi_fail "Unknown menu item: $item"
       ;;
   esac
-
 }
 
 
-ipxe_init () {
-  # This menu is delivered if the cluster is configured and we don't know who the host is yet
-  ipxe_header
-  cat <<EOF
-# Detect architecture
-echo Detected architecture: \${buildarch}
-echo CPU architecture: \${cpuarch}
-echo Platform: \${platform}
-
-# Set normalized architecture variable
-# iPXE uses different naming than Linux
-set arch unknown
-iseq \${buildarch} x86_64 && set arch x86_64 ||
-iseq \${buildarch} i386 && set arch x86_64 ||
-iseq \${buildarch} arm64 && set arch aarch64 ||
-iseq \${buildarch} aarch64 && set arch aarch64 ||
-
-echo Normalized architecture: \${arch}
-
-set config_url ${CGI_URL}?arch=\${arch}&cmd=boot_action
-echo Requesting: \${config_url}
-
-## If we can find a config, load it (replaces this iPXE config)
-imgfetch --name config \${config_url} 
-#|| goto no_host_config
-imgload config
-imgstat
-imgexec config
-
-# If there is no config - this should never happen as the boot manager will create it
-#:no_host_config
-#echo No host config found for MAC \${mac:hexraw} at \${config_url}
-#sleep 10
-#reboot
-
-EOF
-}
-
-
+#TODO: this is redundant now
 ipxe_host_install_sch () {
   # Run this to present menu to install SCH
   ipxe_header
@@ -283,14 +173,12 @@ choose action
 set logmsg "Menu selected: \${action}"
 imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
 chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${action}
-
 EOF
-
 }
+
 
 ipxe_host_install_menu () {
 ipxe_header
-
 cat <<EOF
 menu ${TITLE_PREFIX} Select installation option:
 item --gap What would you like to configure \${mac:hexraw} as?
@@ -299,15 +187,17 @@ item init_menu    < Back to initialisation menu
 item --gap 
 
 item --gap Install Thin Compute Host
-item install_TCH  > No profile (Default)
+item install_TCH  > Default profile
 item install_TCH_KVM  > Profile: KVM virtualisation
 item install_TCH_DOCKER  > Profile: Docker host
 item install_TCH_BUILD  > Profile: Build tools for packaging
 
+item --gap 
 item --gap Install Storage Cluster Host
-item install_SCH  > No profile (Default)
+item install_SCH  > Default profile
+item --gap 
 item --gap Install Disaster Recovery Host
-item install_DRH  > No profile (Default)
+item install_DRH  > Default profile
 
 choose selection && goto HANDLE_MENU
 
@@ -325,10 +215,11 @@ ipxe_configure_main_menu () {
 
 # This menu is delivered if the cluster is configured, but the host is not
 # Main menu, if we are not configured
-
 hps_log debug "Delivering configure menu"
-
 ipxe_header
+
+# run iPXE audit
+ipxe_host_audit_include
 
 if [[ "$(host_config "$mac" get FORCE_INSTALL)" == "YES" ]]; then
   FI_MENU="item force_install_off Disable forced installation"
@@ -337,7 +228,6 @@ else
   FI_MENU="item force_install_on  Enable Forced installation, overwriting current O/S on next boot"
   hps_log debug "Forced install not set"
 fi
-
 
 cat <<EOF
 
@@ -390,15 +280,14 @@ ipxe_boot_installer () {
   local mac="$1"
   local host_type="$2"
 
-  local arch="$(host_config "$mac" get arch)"
-
-  local os_id=$(get_host_os_id "$mac")  # Determines from cluster config
-  # Store OS ID to host config
-  host_config "$mac" "set" "os_id" "$os_id"
   host_config "$mac" "set" "TYPE" "$host_type"
-  
+
+  local arch="$(host_config "$mac" get arch)"
+  local os_id=$(get_host_os_id "$mac")  # Determines from cluster config
+  host_config "$mac" "set" "os_id" "$os_id"
+
   hps_log info "Installing new host of type $host_type ($arch) with $os_id"
-  
+
   # Assign network addresses and other host config details
   host_network_configure "$mac"
 
@@ -413,30 +302,49 @@ ipxe_boot_installer () {
 
   # Select OS based on architecture and host type
   # First try architecture-specific config
-  os_key="os_$(echo ${host_type} | tr '[:upper:]' '[:lower:]')_\${arch}"
+  local lc_type=$(echo ${host_type} | tr '[:upper:]' '[:lower:]')
+  os_key="os_${lc_type}_${arch}"
   os_id=$(cluster_config "get" "$os_key")
 
   # Fallback to any OS for this arch/type
   if [[ -z "$os_id" ]]; then
-    os_id=$(os_config_select "$arch" "$host_type")
+    os_id=$(os_config_select "$arch" "$lc_type")
   fi
 
   hps_log debug "os_key: $os_key os_id: $os_id"
  
   local state="$(host_config "$mac" get STATE)"
 
-  # Abort if we not already installed
+  # Last check - Abort if we are already installed
   if [ "$state" == "INSTALLED" ]
    then
     ipxe_reboot "Host already installed, aborting installation"
   fi
 
-  # Define file locations based on OS type
   local os_name=$(os_config "$os_id" "get" "name")
+  local boot_server=$(cluster_config get DHCP_IP)
+  local distro_mount=$(get_distro_base_path "$os_id" "mount")
+  local repo_base="http://${boot_server}/$(get_distro_base_path $os_id http)"
+
+  # Define file locations based on OS type
   case "$os_name" in
     rocky|rockylinux|alma|almalinux)
       local kernel_rel="images/pxeboot/vmlinuz"
       local initrd_rel="images/pxeboot/initrd.img"
+      # Generate iPXE using HTTP paths
+      local kickstart_cmd="http://${boot_server}/cgi-bin/boot_manager.sh?cmd=kickstart"
+      local boot_kernel_line="$repo_base/${kernel_rel}"
+      local boot_kernel_line="${boot_kernel_line} initrd=initrd.img" 
+      local boot_kernel_line="${boot_kernel_line} inst.stage2=${repo_base}"
+      local boot_kernel_line="${boot_kernel_line} rd.live.ram=1"
+      local boot_kernel_line="${boot_kernel_line} ip=dhcp console=ttyS0,115200n8"
+      local boot_kernel_line="${boot_kernel_line} inst.ks=${kickstart_cmd}"
+      local boot_kernel_line="${boot_kernel_line} inst.text"  # Force text mode
+      local boot_kernel_line="${boot_kernel_line} inst.syslog=ips:514"
+#  local boot_kernel_line="${boot_kernel_line} inst.vnc"   # Enable VNC for debugging
+#  local boot_kernel_line="${boot_kernel_line} rd.debug"   # Enable debug logging
+#  local boot_kernel_line="${boot_kernel_line} inst.loglevel=debug"  # Anaconda debug
+      local boot_initrd_line="${repo_base}/${initrd_rel}"
       ;;
     alpine)
       local kernel_rel="boot/vmlinuz-lts"
@@ -449,11 +357,6 @@ ipxe_boot_installer () {
 
   mount_distro_iso "$os_id"
 
-  # Get paths
-  local repo_path=$(os_config "$os_id" "get" "repo_path")
-  
-  local distro_mount=$(get_distro_base_path "$os_id" "mount")
-
   # Check files exist using mount path
   if [[ ! -f "${distro_mount}/${kernel_rel}" ]]; then
     ipxe_cgi_fail "Kernel not found: ${distro_mount}/${kernel_rel} for $host_type/$arch"
@@ -463,55 +366,160 @@ ipxe_boot_installer () {
     ipxe_cgi_fail "Initrd not found: ${distro_mount}/${initrd_rel} for $host_type/$arch"
   fi
 
-  # Generate iPXE using HTTP paths
-  local boot_server=$(cluster_config get DHCP_IP)
-  local repo_base="http://${boot_server}/distros/${repo_path}"
-  local kickstart_cmd="http://${boot_server}/cgi-bin/boot_manager.sh?cmd=kickstart"
-
-  local boot_kernel_line="$repo_base/${kernel_rel}"
-  local boot_kernel_line="${boot_kernel_line} initrd=initrd.img" 
-  local boot_kernel_line="${boot_kernel_line} inst.stage2=${repo_base}"
-  local boot_kernel_line="${boot_kernel_line} rd.live.ram=1"
-  local boot_kernel_line="${boot_kernel_line} ip=dhcp console=ttyS0,115200n8"
-  local boot_kernel_line="${boot_kernel_line} inst.ks=${kickstart_cmd}"
-  # In your boot kernel line generation, add:
-  local boot_kernel_line="${boot_kernel_line} inst.text"  # Force text mode
-  local boot_kernel_line="${boot_kernel_line} inst.syslog=10.99.1.1:514"
-#  local boot_kernel_line="${boot_kernel_line} inst.vnc"   # Enable VNC for debugging
-#  local boot_kernel_line="${boot_kernel_line} rd.debug"   # Enable debug logging
-#  local boot_kernel_line="${boot_kernel_line} inst.loglevel=debug"  # Anaconda debug
-
-  local boot_initrd_line="${repo_base}/${initrd_rel}"
 
   hps_log debug "Preparing PXE Boot for ${os_id} non-interactive installation"
   hps_log debug "boot_kernel_line: $boot_kernel_line"
 
+  hps_log info "Installer instruction sent. "
+  _do_pxe_boot "$boot_kernel_line" "$boot_initrd_line"
+}
 
+
+ipxe_network_boot() {
+  local host_type=$(host_config "$mac" get TYPE)
+  hps_log debug "Booting host of type ${host_type}"
+  
+  case "$host_type" in
+    TCH)
+      # Validate Alpine repository before attempting boot
+      os_id=$(get_host_os_id "$mac")
+      if ! validate_alpine_repository "$os_id" "main" ; then
+        local alpine_version="$(get_host_os_version "$mac")"
+        hps_log error "Alpine repository validation failed for TCH boot"
+        ipxe_cgi_fail "Alpine ${alpine_version} repository not ready. Run: sync_alpine_repository \"${alpine_version}\" \"main\""
+        return 1
+      fi
+      ipxe_boot_alpine_tch
+      ;;
+    *)
+      ipxe_cgi_fail "Network boot not supported for host type: $host_type"
+      ;;
+  esac
+}
+
+
+ipxe_boot_alpine_tch() {
+  local alpine_version="$(get_host_os_version "$mac")"
+
+  local client_ip=$(host_config "$mac" get IP)
+  local ips_address=$(cluster_config get DHCP_IP)
+  local network_cidr=$(cluster_config get NETWORK_CIDR)
+  local hostname=$(host_config "$mac" get HOSTNAME)
+
+  # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
+  local prefix_len="${network_cidr##*/}"
+  local netmask=$(cidr_to_netmask "$prefix_len")
+
+  local download_base="http://${ips_address}/$(get_distro_base_path "$os_id" http)"
+
+  local os_id=$(get_host_os_id "$mac")
+
+  apkovl_file_disk="$(get_tch_apkovl_filepath)"
+  # Generate apk overlay if missing
+  if [[ ! -f "${apkovl_file_disk}" ]]; then
+    hps_log info "Generating Alpine apkovl for version $alpine_version"
+    tch_apkovol_create "${apkovl_file_disk}"
+  fi
+
+  hps_log debug "Configuring TCH version $alpine_version with static IP: $client_ip"
+
+  local boot_kernel_args="initrd=initramfs-lts"
+  boot_kernel_args="${boot_kernel_args} console=ttyS0,115200n8"
+  boot_kernel_args="${boot_kernel_args} alpine_repo=${download_base}/apks/main"
+  boot_kernel_args="${boot_kernel_args} ip=${client_ip}::${ips_address}:${netmask}:${hostname}:eth0:off"
+  boot_kernel_args="${boot_kernel_args} apkovl=$download_base/$(get_tch_apkovl_filename)"
+
+  local kernel_rel="boot/vmlinuz-lts"
+  local initrd_rel="boot/initramfs-lts"
+  
+  local boot_kernel_line="${download_base}/${kernel_rel} ${boot_kernel_args}"
+  local boot_initrd_line="${download_base}/${initrd_rel}"
+
+  _do_pxe_boot "$boot_kernel_line" "$boot_initrd_line"
+}
+
+
+_do_pxe_boot () {
+  local kernel="$1"
+  local initrd="$2"
+  # Validate required parameters
+  if [[ -z "$kernel" ]] || [[ -z "$initrd" ]]; then
+   hps_log error "Both kernel and initrd parameters are required"
+    return 1
+  fi
+  hps_log info "Sending iPXE boot kernel and initrd"
+  hps_log debug "kernel: $kernel"
+  hps_log debug "initrd: $initrd"
+
+  ipxe_header
   IPXE_BOOT_INSTALL=$(cat <<EOF
 # created at $(date)
 
 # Required to prevent corrupt initrd
 imgfree
 
-kernel $boot_kernel_line
-initrd $boot_initrd_line
+kernel $kernel
+initrd $initrd
 
 sleep 1
 boot
 
 EOF
-)
-
-  # debug: make file with the ipxe menu
-  #echo "${IPXE_BOOT_INSTALL}"  > /tmp/ipxe-boot-install.ipxe
-
-  ipxe_header
-  hps_log info "Installer instruction sent. "
+  )
   echo "${IPXE_BOOT_INSTALL}"
-  exit 0
-
+  hps_log debug "Files sent"
 }
 
+
+
+
+
+ipxe_host_audit_include () {
+
+# No header sent as this is an include to be used inside other functions
+
+hps_log debug "Loading iPXE  audit"
+
+cat <<EOF
+
+
+# System audit with validation
+isset \${manufacturer} && set mfg \${manufacturer:uristring} || set mfg UNKNOWN
+isset \${product} && set prod \${product:uristring} || set prod UNKNOWN  
+isset \${serial} && set ser \${serial:uristring} || set ser NONE
+isset \${memsize} && set mem \${memsize} || set mem 0
+isset \${buildarch} && set buildarch \${buildarch} || set buildarch UNKNOWN
+isset \${platform} && set plat \${platform} || set plat UNKNOWN
+
+set audit_data mfg=\${mfg}|prod=\${prod}|ser=\${ser}|mem=\${mem}|buildarch=\${buildarch}|plat=\${plat}
+imgfetch --name audit ${CGI_URL}?cmd=host_audit&prefix=host&data=\${audit_data:uristring} || echo Audit failed
+
+set net_data ip=\${net0/ip}|gw=\${net0/gateway}|dns=\${net0/dns}|dhcp=\${net0/dhcp-server}
+imgfetch --name netinfo ${CGI_URL}?cmd=host_audit&prefix=net&data=\${net_data:uristring} || echo Network failed
+
+
+# SMBIOS data - check if valid before sending
+#isset \${smbios/bios-vendor} && iseq \${smbios/bios-vendor} \${smbios/bios-vendor} && set bios_v \${smbios/bios-vendor:uristring} || set bios_v NOTFOUND
+#isset \${smbios/bios-version} && iseq \${smbios/bios-version} \${smbios/bios-version} && set bios_ver \${smbios/bios-version:uristring} || set bios_ver NOTFOUND
+#isset \${smbios/baseboard-manufacturer} && iseq \${smbios/baseboard-manufacturer} \${smbios/baseboard-manufacturer} && set board_mfg \${smbios/baseboard-manufacturer:uristring} || set board_mfg NOTFOUND
+
+set smbios_data bios_vendor=\${bios_v}|bios_ver=\${bios_ver}|board_mfg=\${board_mfg}
+imgfetch --name smbios ${CGI_URL}?cmd=host_audit&prefix=smbios&data=\${smbios_data:uristring} || echo SMBIOS failed
+
+set audit_data mfg=\${manufacturer:uristring}|prod=\${product:uristring}|ser=\${serial:uristring}|mem=\${memsize}|buildarch=\${buildarch}|plat=\${platform}
+imgfetch --name audit ${CGI_URL}?cmd=host_audit&prefix=audit&data=\${audit_data:uristring} || echo Audit failed
+
+# Example 2: SMBIOS data
+#set smbios_data bios_vendor=\${smbios/bios-vendor:uristring}|bios_ver=\${smbios/bios-version:uristring}|board_mfg=\${smbios/baseboard-manufacturer:uristring}
+#imgfetch --name smbios ${CGI_URL}?cmd=host_audit&prefix=smbios&data=\${smbios_data:uristring} || echo SMBIOS failed
+
+# Example 3: PCI devices
+#pciscan
+#set pci_data 0:1f.0=\${pci/0:1f.0/vendor}.\${pci/0:1f.0/device}|0:00.0=\${pci/0:00.0/vendor}.\${pci/0:00.0/device}
+#imgfetch --name pci ${CGI_URL}?cmd=host_audit&prefix=pci&data=\${pci_data:uristring} || echo PCI failed
+
+EOF
+}
 
 
 
@@ -644,85 +652,6 @@ EOF
       ;;
   esac
 }
-
-ipxe_network_boot() {
-  local host_type=$(host_config "$mac" get TYPE)
-  hps_log debug "Booting host of type ${host_type}"
-  
-  case "$host_type" in
-    TCH)
-      # Validate Alpine repository before attempting boot
-      os_id=$(get_host_os_id "$mac")
-      if ! validate_alpine_repository "$os_id" "main" ; then
-        local alpine_version="$(get_host_os_version "$mac")"
-        hps_log error "Alpine repository validation failed for TCH boot"
-        ipxe_cgi_fail "Alpine ${alpine_version} repository not ready. Run: sync_alpine_repository \"${alpine_version}\" \"main\""
-        return 1
-      fi
-      ipxe_boot_alpine_tch
-      ;;
-    *)
-      ipxe_cgi_fail "Network boot not supported for host type: $host_type"
-      ;;
-  esac
-}
-
-
-ipxe_boot_alpine_tch() {
-  local alpine_version="$(get_host_os_version "$mac")"
-  local client_ip=$(host_config "$mac" get IP)
-  local ips_address=$(cluster_config get DHCP_IP)
-  local network_cidr=$(cluster_config get NETWORK_CIDR)
-  local hostname=$(host_config "$mac" get HOSTNAME)
-  
-  # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
-  local prefix_len="${network_cidr##*/}"
-  local netmask=$(cidr_to_netmask "$prefix_len")
-  
-  local repo_path=$(get_distro_base_path "$os_id" "relative")
-  local download_base="http://${ips_address}/distros/${repo_path}"
-
-  local apkovl_file="tch-bootstrap.apkovl.tar.gz"
-  local apkovl_file_disk="${HPS_DISTROS_DIR}/${apkovl_file}"
-  local apkvol_file_url="${download_base}/${apkovl_file}"
-  
-  local os_id=$(get_host_os_id "$mac")
-  local distro_path=$(get_os_name_version "$(host_config "$mac" "get" "os_id")" "underscore")
-
-  # Generate apk overlay if missing
-  if [[ ! -f "${apkovl_file_disk}" ]]; then
-    hps_log info "Generating Alpine apkovl for version $alpine_version"
-    tch_apkovol_create "${apkovl_file_disk}"
-  fi
-
-  hps_log debug "Booting Alpine TCH version $alpine_version with static IP: $client_ip"
-
-  local boot_kernel_args="initrd=initramfs-lts"
-  boot_kernel_args="${boot_kernel_args} console=ttyS0,115200n8"
-  boot_kernel_args="${boot_kernel_args} alpine_repo=${download_base}/apks/main"
-  boot_kernel_args="${boot_kernel_args} ip=${client_ip}::${ips_address}:${netmask}:${hostname}:eth0:off"
-  boot_kernel_args="${boot_kernel_args} apkovl=${apkvol_file_url}"
-
-  local kernel_rel="boot/vmlinuz-lts"
-  local initrd_rel="boot/initramfs-lts"
-  
-  local boot_kernel_line="${download_base}/${kernel_rel} ${boot_kernel_args}"
-  local boot_initrd_line="${download_base}/${initrd_rel}"
-
-  ipxe_header
-  cat <<EOF
-# Alpine TCH Boot - created at $(date)
-imgfree
-kernel $boot_kernel_line
-initrd $boot_initrd_line
-boot
-
-EOF
-}
-
-
-
-
 
 
 
