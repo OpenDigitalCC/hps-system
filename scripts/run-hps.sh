@@ -4,11 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 HPS_CONFIG="${SCRIPT_DIR}/../../hps-config/hps.conf"
 
+
 while [[ ! -r "$HPS_CONFIG" ]]; do
   echo "$0 Warning: File '$HPS_CONFIG' is not readable - Initialising config"
   "$SCRIPT_DIR/hps-initialise.sh"
   sleep 5
 done
+
+
 
 echo "[✓] File '$HPS_CONFIG' is available. Continuing..."
 
