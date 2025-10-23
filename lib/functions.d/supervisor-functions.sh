@@ -1,6 +1,7 @@
 __guard_source || return
 
 create_supervisor_services_config () {
+  _set_ips_hostname
   create_config_nginx
   create_config_dnsmasq
   create_config_rsyslog

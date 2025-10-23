@@ -5,6 +5,24 @@ __guard_source || return
 
 #TODO: Move config to CLUSTER_SERVICES_DIR
 
+# Install OpenSVC
+
+
+_osvc_create_hb_secrets () {
+  hps_log debug "Creating heartbeat secrets"
+  # Create heartbeat secret object
+#  om system/sec/hb create
+
+  # Generate a random secret for heartbeat authentication
+#  HB_SECRET=$(openssl rand -hex 32)
+
+  # Add the secret to the object
+#  om system/sec/hb key add --name secret --value "$HB_SECRET"
+
+  # Verify it was created
+#  om system/sec/hb key ls
+}
+
 
 #===============================================================================
 # hps_configure_opensvc_cluster
@@ -264,6 +282,11 @@ osvc_bootstrap_cluster_on_ips() {
     return 1
   }
   
+#  om cluster set --kw "hb#1.addr=$(get_ips_address)" || {
+#    hps_log error "[opensvc] Failed to set hb address"
+#    return 1
+#  }
+  
   # Get or generate cluster secret
   local cluster_secret
   cluster_secret="$(cluster_config get OPENSVC_CLUSTER_SECRET 2>/dev/null || true)"
@@ -314,12 +337,10 @@ _ini_get_agent_nodename() {
 #:group: opensvc
 #:synopsis: Set an OpenSVC v3 key using om config set key=value
 #:usage: _osvc_kv_set key value
-_osvc_kv_set() {
+_xosvc_kv_set() {
   local k="${1:?key}" v="${2:?value}"
   om config set "${k}=${v}"
 }
-
-
 
 
 #:name: _osvc_kv_set
@@ -462,6 +483,32 @@ osvc_apply_identity_from_hps() {
   fi
 }
 
+
+osvc_process_commands() {
+  local cmd="$1"
+  
+  # Validate command parameter
+  if [[ -z "$cmd" ]]; then
+    hps_log error "No command specified"
+    return 1
+  fi
+  
+  case "$cmd" in 
+    get_auth_token)
+      osvc_get_auth_token
+      ;;
+    *)
+      hps_log error "Unknown command: $cmd"
+      return 1
+      ;;
+  esac
+}
+
+
+osvc_get_auth_token () {
+# TODO: add --subject calling hostname
+  echo $(om daemon auth --duration 30s --role join)
+}
 
 
 
