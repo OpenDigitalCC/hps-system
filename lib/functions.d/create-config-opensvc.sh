@@ -4,6 +4,56 @@ __guard_source || return
 
 #TODO: Move config to CLUSTER_SERVICES_DIR
 
+#:name: ensure_opensvc_installed
+#:group: opensvc
+#:synopsis: Ensure OpenSVC (om) is installed and functional.
+#:usage: ensure_opensvc_installed
+#:description:
+#  Checks if 'om' command exists and is executable.
+#  If not found or not working, calls ips_install_opensvc to install it.
+#  Verifies installation was successful before returning.
+#  Loop-safe: only attempts installation once.
+#:returns:
+#  0 if om is available and working
+#  1 if installation fails or om still not working after install
+ensure_opensvc_installed() {
+  local installed=0
+  
+  # Check if om exists and is executable
+  if command -v om >/dev/null 2>&1; then
+    # Test that om actually runs
+    if om version >/dev/null 2>&1; then
+      hps_log debug "OpenSVC already installed and working"
+      return 0
+    else
+      hps_log warning "om command found but not functional"
+    fi
+  else
+    hps_log info "OpenSVC not found, installing..."
+  fi
+  
+  # Install OpenSVC
+  if ! ips_install_opensvc; then
+    hps_log error "Failed to install OpenSVC"
+    return 1
+  fi
+  
+  # Verify installation succeeded
+  if ! command -v om >/dev/null 2>&1; then
+    hps_log error "OpenSVC installation completed but om command still not found"
+    return 1
+  fi
+  
+  # Test that it actually works
+  if ! om version >/dev/null 2>&1; then
+    hps_log error "OpenSVC installed but om command not functional"
+    return 1
+  fi
+  
+  hps_log info "OpenSVC installed and verified successfully"
+  return 0
+}
+
 
 ## HPS Functions
 
@@ -31,7 +81,13 @@ __guard_source || return
 #   - Only prepares files for when supervisord starts the service
 create_config_opensvc() {
   local ips_role="${1:-}"
-
+  
+  # Ensure OpenSVC is installed
+  ips_install_opensvc
+  if ! ensure_opensvc_installed; then
+    echo "Cannot proceed without OpenSVC"
+    exit 1
+  fi
   local conf_dir="/etc/opensvc"
   local conf_file="${conf_dir}/opensvc.conf"
   local log_dir="/var/log/opensvc"
@@ -100,7 +156,9 @@ create_config_opensvc() {
 
   # Apply node/cluster identity (v3)
   osvc_apply_identity_from_hps || true
-
+  
+  # create heartbeat secrets
+  _osvc_create_hb_secrets
   hps_log info "wrote ${conf_file} for role: ${ips_role} - key policy enforced"
 }
 
