@@ -3,8 +3,11 @@
 
 List of requirements and ideas not yet implemented
 
+HPS - software defined infrastructure based on von Neumann with controller 
+
 Write quickstart
-Hardware
+
+Hardware prep
 Very minimal for test / dev:
 Laptop / test computer
 - docker and KVM on 1 PC
@@ -12,10 +15,16 @@ Minimal useful operation
 Desktop PC's, Raspberry Pi's
 - Storage host - 50GB disk
 - Compute host - 16GB RAM, 4 cores
+Network
+- MTU Jubo frames?
+- Multicast?
+
+For each step - action - things to do
+Output - what to expect
 
 HPS
 
-- identify IPS location
+- identify IPS host
 - requirements:
   - sysadmin caps
   - idelly dedicated network / vlan
@@ -181,16 +190,14 @@ For any host withut full audit, boot to temp image, get full hardware audit, and
 - periodically re-audit
 
 ## Boot simplification
-- use DNSMasq to detect current state, sed client stright to the command, skipping ipxe logic
+- use DNSMasq to detect current state, send client stright to the command, skipping ipxe logic
 
 
 
 
 ### OpenSVC / om
 
-
-Requires manual install on IPS: root@docker-01:/# dpkg -i /srv/hps-resources/packages/downloads/opensvc-server_3.0.0~alpha96.0.g36e4abf6+deb13_amd64.deb 
-
+- Requires manual install on IPS: root@docker-01:/# dpkg -i /srv/hps-resources/packages/downloads/opensvc-server_3.0.0~alpha96.0.g36e4abf6+deb13_amd64.deb 
 
 
 #### instead of scripts, call functions:
@@ -232,9 +239,6 @@ om svc set -s iscsi-manager \
 
 om svc provision -s iscsi-manager --wait
 
-Automate SCH joining the HPS OpenSVC cluster
-
-
 
 Implementation of IQN is not fully compliant with the RFC 3720/3721 IQN naming standard (iqn.yyyy-mm.naming-authority:unique-nameiqn.yyyy-mm.naming-authority:unique-name) as a reverse domain name is not used (unless the cluster happens to be a reverse domain name).
 
@@ -248,11 +252,6 @@ The format chosen is:
 iqn.<yyyy-mm>.<cluster-name>:<host-name>.<volume-name>
 
 For example: iqn.2025-09.test-1:sch-001.vda
-
-
-
-
-
 
 
 
