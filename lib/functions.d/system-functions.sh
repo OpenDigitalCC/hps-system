@@ -1,6 +1,21 @@
 __guard_source || return
 # Define your functions below
 
+hps_services_stop() {
+  supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" stop all
+}
+
+hps_services_start() {
+  _supervisor_pre_start
+  hps_log info "$(supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" start all)"
+}
+
+hps_services_restart() {
+  _supervisor_pre_start
+  hps_log info "$(supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" restart all)"
+}
+
+
 make_timestamp() {
   date -u '+%Y-%m-%d %H:%M:%S UTC'
 }
@@ -139,29 +154,6 @@ printf 'pid:%s user:%s host:%s' "$$" "$user" "$host"
 }
 
 
-hps_services_start() {
-  configure_supervisor_services
-  reload_supervisor_config
-  supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" start all
-  hps_services_post_start
-}
-
-hps_services_stop() {
-  supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" stop all
-}
-
-hps_services_restart() {
-  configure_supervisor_services
-  create_supervisor_services_config
-  reload_supervisor_config
-  hps_log info "$(supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf" restart all)"
-  hps_services_post_start
-}
-
-hps_services_post_start () {
-  # Configure OpenSVC cluster if applicable
-  hps_configure_opensvc_cluster
-}
 
 get_path_cluster_services_dir () {
   echo "$(get_active_cluster_dir)/services"

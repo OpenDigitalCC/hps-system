@@ -511,7 +511,7 @@ update_dns_dhcp_files() {
   fi
   
   # Reload dnsmasq to pick up new configuration
-  reload_supervisor_services dnsmasq
+  supervisor_reload_services dnsmasq
   
   hps_log "INFO" "DNS/DHCP file update completed successfully"
   return 0

@@ -1,24 +1,40 @@
 __guard_source || return
 
-create_supervisor_services_config () {
+# Get all services ready to start
+supervisor_prepare_services () {
   _set_ips_hostname
   create_config_nginx
   create_config_dnsmasq
   create_config_rsyslog
-  create_config_opensvc IPS # specify that this is an IPS node
+  osvc_prepare_cluster
 }
 
-reload_supervisor_config () {
+# at initial containwer start, subsequent supervisor starts or restarts, prepare the services
+_supervisor_pre_start () {
+  supervisor_configure_core_config
+  supervisor_configure_core_services
+  supervisor_prepare_services
+  supervisor_reload_core_config
+}
+
+
+# Functions to run straight after supervisor has started
+_supervisor_post_start () {
+  osvc_configure_cluster
+}
+
+
+supervisor_reload_core_config () {
   local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
   hps_log info "Reread: $(supervisorctl -c "$SUPERVISORD_CONF" reread) $?"
   hps_log info "Update: $(supervisorctl -c "$SUPERVISORD_CONF" update) $?"
 }
 
 
-#:name: reload_supervisor_services
+#:name: supervisor_reload_services
 #:group: supervisor
 #:synopsis: Send HUP signal to supervisor services (all or specific service).
-#:usage: reload_supervisor_services [service_name]
+#:usage: supervisor_reload_services [service_name]
 #:description:
 #  Sends HUP signal to reload supervisor-managed services.
 #  If no argument provided, signals all services.
@@ -30,7 +46,7 @@ reload_supervisor_config () {
 #  0 on success
 #  1 if SUPERVISORD_CONF is not set or file doesn't exist
 #  2 if supervisorctl command fails
-reload_supervisor_services() {
+supervisor_reload_services() {
   local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
   local service_name="${1:-}"
   

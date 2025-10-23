@@ -411,23 +411,3 @@ hps_log() {
 
 
 
-ips_install_opensvc () {
-# Verify presence, install, fix deps, and sanity-check 'om'
-echo $PWD
-# Check the .deb exists and is non-empty
-OSVC_DEB="$(ls -t $HPS_PACKAGES_DIR/opensvc/*.deb | head -n 1)"
-
-echo "OSVC_DEB: $OSVC_DEB"
-test -s $OSVC_DEB || { echo >&2 "ERROR: $OSVC_DEB missing or empty"; exit 1; };
-# Install; resolve any missing deps from Debian repos
-apt-get update; 
-apt-get install -y --no-install-recommends $OSVC_DEB || apt-get -f install -y; 
-rm -rf /var/lib/apt/lists/*; 
-# Sanity check: ensure 'om' is available and prints a version
-if ! command -v om >/dev/null 2>&1; then 
-  echo >&2 "ERROR: 'om' command not found after installing OpenSVC"; exit 1; 
-fi; 
-
-}
-
-

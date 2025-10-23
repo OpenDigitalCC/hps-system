@@ -1,10 +1,14 @@
 __guard_source || return
 
 
-#:name: configure_supervisor_services
+get_path_supervisord_conf () {
+  echo "$(get_path_cluster_services_dir)/supervisord.conf"
+}
+
+#:name: supervisor_configure_core_services
 #:group: supervisor
 #:synopsis: Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, and OpenSVC agent.
-#:usage: configure_supervisor_services
+#:usage: supervisor_configure_core_services
 #:description:
 #  Writes $(get_path_cluster_services_dir)/supervisord.conf with dnsmasq, nginx,
 #  fcgiwrap, and OpenSVC agent programs. Logs are written to ${HPS_LOG_DIR}.
@@ -15,11 +19,11 @@ __guard_source || return
 #  1 if core configuration creation fails
 #  2 if directory creation fails
 #  3 if configuration file write fails
-configure_supervisor_services() {
+supervisor_configure_core_services() {
   # Ensure the core header and defaults exist
   local SUPERVISORD_CONF
-  SUPERVISORD_CONF="$(configure_supervisor_core)" || {
-    hps_log error "Failed to create supervisor core configuration"
+  SUPERVISORD_CONF="$(get_path_supervisord_conf)" || {
+    hps_log error "Failed to get supervisor core configuration"
     return 1
   }
 
@@ -83,6 +87,7 @@ autostart=true
 autorestart=true
 stderr_logfile=${DNSMASQ_LOG_STDERR}
 stdout_logfile=${DNSMASQ_LOG_STDOUT}
+
 EOF
 )" || return 3
 
@@ -94,6 +99,7 @@ autostart=true
 autorestart=true
 stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
 stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
+
 EOF
 )" || return 3
 
@@ -106,6 +112,7 @@ autostart=true
 autorestart=true
 stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
 stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
+
 EOF
 )" || return 3
 
@@ -117,14 +124,19 @@ autostart=true
 autorestart=true
 stderr_logfile=${HPS_LOG_DIR}/rsyslog.err.log
 stdout_logfile=${HPS_LOG_DIR}/rsyslog.out.log
+
 EOF
 )" || return 3
 
 
   # --- OpenSVC agent ---
+  
+install_opensvc_foreground_wrapper
+
   _supervisor_append_once "program:opensvc" "$(cat <<EOF
 [program:opensvc]
-command=/usr/local/sbin/opensvc-foreground
+#command=/usr/local/sbin/opensvc-foreground
+command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _opensvc_foreground_wrapper'
 autostart=true
 autorestart=true
 startsecs=2
@@ -135,8 +147,24 @@ environment=HOME="/root"
 directory=/
 stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
 stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
+
 EOF
 )" || return 3
+
+  # --- Event listner to run post_start
+  _supervisor_append_once "eventlistener:post_start_config" "$(cat <<EOF
+[eventlistener:post_start_config]
+command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _supervisor_post_start'
+events=PROCESS_STATE_RUNNING
+buffer_size=100
+autostart=true
+autorestart=unexpected
+stdout_logfile=${HPS_LOG_DIR}/supervisor-post-start.log
+stderr_logfile=${HPS_LOG_DIR}/supervisor-post-start.err
+
+EOF
+)" || return 3
+
 
   # Final validation: verify the file exists and is readable
   if [[ ! -f "${SUPERVISORD_CONF}" ]] || [[ ! -r "${SUPERVISORD_CONF}" ]]; then
@@ -148,15 +176,13 @@ EOF
   return 0
 }
 
-get_path_supervisord_conf () {
-  echo "$(get_path_cluster_services_dir)/supervisord.conf"
-}
 
 
-#:name: configure_supervisor_core
+
+#:name: supervisor_configure_core_config
 #:group: supervisor
 #:synopsis: Write the base supervisord.conf using ${HPS_LOG_DIR} for all logs.
-#:usage: configure_supervisor_core
+#:usage: supervisor_configure_core_config
 #:description:
 #  Generates $(get_path_cluster_services_dir)/supervisord.conf core sections and sets:
 #    - logfile=${HPS_LOG_DIR}/supervisord.log
@@ -169,7 +195,7 @@ get_path_supervisord_conf () {
 #  2 if directory creation fails
 #  3 if configuration file write fails
 #  4 if configuration file validation fails
-configure_supervisor_core() {
+supervisor_configure_core_config() {
   # Validate required environment variables
   if [[ -z "$(get_path_cluster_services_dir)" ]]; then
     hps_log error "Cannot locate cluster services dir"
@@ -272,9 +298,7 @@ EOF
   done
 
   hps_log info "Supervisor core config generated successfully at: ${SUPERVISORD_CONF}"
-  
-  # Output the config path to stdout for capturing by callers
-  echo "${SUPERVISORD_CONF}"
+
   return 0
 }
 

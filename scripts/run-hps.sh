@@ -17,7 +17,7 @@ echo "[✓] File '$HPS_CONFIG' is available. Continuing..."
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/functions.sh"
 
-SUPERVISORD_CONF=$(configure_supervisor_core)
+SUPERVISORD_CONF=$(get_path_supervisord_conf)
 
 echo "[✓] hps started and initialised."
 
@@ -25,9 +25,8 @@ if cluster_file=$(get_active_cluster_filename 2>/dev/null)
  then
   if [[ -f "$cluster_file" ]]
    then
-    echo "[INFO] Active cluster found: $cluster_file, creating services"
-    configure_supervisor_services
-    create_supervisor_services_config
+    echo "[INFO] Active cluster found: $cluster_file, initialising services"
+    _supervisor_pre_start
   fi
  else
   echo "[INFO] No active cluster configured — continuing without starting services"
