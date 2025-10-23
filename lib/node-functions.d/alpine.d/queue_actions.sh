@@ -4,7 +4,7 @@
 n_queue_add "rc-service modloop status || rc-service modloop start"
 
 # create link to /lib/modules
-n_queue_add n_link_module_dir
+#n_queue_add n_link_module_dir
 
 # queue package installs
 
@@ -36,5 +36,9 @@ n_queue_add n_force_start_services
 n_queue_add n_install_apk_packages_from_ips opensvc-server opensvc-client
 
 n_queue_add n_configure_syslog
+
+n_queue_add n_osvc_start
+n_queue_add n_initialise_opensvc_cluster
+
 
 
