@@ -1,5 +1,12 @@
 
 
+
+_set_ips_hostname () {
+  IPS_HOSTNAME="ips.$(cluster_config get DNS_DOMAIN)"
+  hostname "$IPS_HOSTNAME"
+  echo "$IPS_HOSTNAME" > /etc/hostname
+}
+
 #===============================================================================
 # build_dhcp_addresses_file
 # -------------------------

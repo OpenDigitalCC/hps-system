@@ -45,7 +45,6 @@ __guard_source || return
 node_build_functions() {
   local distro="${1:?Usage: node_build_functions <distro> [func_dir]}"
   local base="${2:-${LIB_DIR:+${LIB_DIR%/}/node-functions.d}}"
-#  base="${base:-/srv/hps-system/lib/node-functions.d}"
   
   # Get the current profile if available
   local profile
