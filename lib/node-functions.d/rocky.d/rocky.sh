@@ -1,5 +1,17 @@
 
 build_zfs_source() {
+
+
+
+
+#n_remote_log "[+] Building ZFS via DKMS..."
+#dkms autoinstall
+#modprobe zfs
+#dnf install -y epel-release
+#dnf install -y https://zfsonlinux.org/epel/zfs-release.el9_$(uname -r).noarch.rpm
+#dnf install -y kernel-devel zfs targetcli python3-rtslib python3-configshell
+
+
   remote_log "Starting build_zfs_source for Rocky"
 
   local gateway src_base_url index_url src_file index_file src_url src_archive build_dir
