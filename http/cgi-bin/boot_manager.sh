@@ -50,7 +50,15 @@ if [[ "$cmd" == "keysafe_request_token" ]]; then
     token=$(keysafe_handle_token_request "$mac" "$purpose")
     cgi_header_plain
     echo "$token"
-    exit 0  # <- ADD THIS
+    exit 0
+fi
+
+if [[ "$cmd" == "osvc_cmd" ]]; then
+  #TODO: add param validation
+  osvc_cmd=$(cgi_param get osvc_cmd)
+  cgi_header_plain
+  osvc_process_commands "${osvc_cmd}"
+  exit 0
 fi
 
 
@@ -311,7 +319,6 @@ if [[ "$cmd" == "node_get_functions" ]]; then
   # Log and generate function library
   hps_log info "Node requests function lib for $DISTRO"
   node_build_functions "${DISTRO}"
-  
   exit 0
 fi
 
