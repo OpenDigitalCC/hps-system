@@ -85,8 +85,10 @@ supervisor_configure_core_services() {
 command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF} --log-facility=${DNSMASQ_LOG_STDOUT}
 autostart=true
 autorestart=true
-stderr_logfile=${DNSMASQ_LOG_STDERR}
-stdout_logfile=${DNSMASQ_LOG_STDOUT}
+stdout_logfile=syslog
+stderr_logfile=syslog
+#stderr_logfile=${DNSMASQ_LOG_STDERR}
+#stdout_logfile=${DNSMASQ_LOG_STDOUT}
 
 EOF
 )" || return 3
@@ -97,8 +99,10 @@ EOF
 command=/usr/sbin/nginx -g 'daemon off;' -c "$(get_path_cluster_services_dir)/nginx.conf"
 autostart=true
 autorestart=true
-stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
-stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
+stdout_logfile=syslog
+stderr_logfile=syslog
+#stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
+#stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
 
 EOF
 )" || return 3
@@ -110,8 +114,10 @@ command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -
 umask=002
 autostart=true
 autorestart=true
-stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
-stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
+stdout_logfile=syslog
+stderr_logfile=syslog
+#stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
+#stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
 
 EOF
 )" || return 3
@@ -122,8 +128,10 @@ EOF
 command=/usr/sbin/rsyslogd -n -f $(get_path_cluster_services_dir)/rsyslog.conf
 autostart=true
 autorestart=true
-stderr_logfile=${HPS_LOG_DIR}/rsyslog.err.log
-stdout_logfile=${HPS_LOG_DIR}/rsyslog.out.log
+stderr_logfile=${HPS_LOG_DIR}/rsyslog/rsyslog.err.log
+stdout_logfile=${HPS_LOG_DIR}/rsyslog/rsyslog.out.log
+stdout_events_enabled=true
+stderr_events_enabled=true
 
 EOF
 )" || return 3
@@ -145,8 +153,10 @@ stopsignal=TERM
 user=root
 environment=HOME="/root"
 directory=/
-stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
-stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
+stdout_logfile=syslog
+stderr_logfile=syslog
+#stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
+#stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
 
 EOF
 )" || return 3
@@ -159,8 +169,10 @@ events=PROCESS_STATE_RUNNING
 buffer_size=100
 autostart=true
 autorestart=unexpected
-stdout_logfile=${HPS_LOG_DIR}/supervisor-post-start.log
-stderr_logfile=${HPS_LOG_DIR}/supervisor-post-start.err
+stdout_logfile=syslog
+stderr_logfile=syslog
+#stdout_logfile=${HPS_LOG_DIR}/supervisor-post-start.log
+#stderr_logfile=${HPS_LOG_DIR}/supervisor-post-start.err
 
 EOF
 )" || return 3
@@ -256,12 +268,14 @@ nodaemon=true
 logfile=${HPS_LOG_DIR}/supervisord.log
 pidfile=/var/run/supervisord.pid
 childlogdir=${SUPERVISOR_CHILD_LOG_DIR}
+logfile_maxbytes=10000
 loglevel=info
 identifier=supervisor
 minfds=1024
 minprocs=200
 user=root
 strip_ansi=false
+syslog=true
 EOF
   then
     hps_log error "Failed to write supervisor core configuration to: ${SUPERVISORD_CONF}"

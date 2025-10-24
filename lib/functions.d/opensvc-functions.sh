@@ -37,6 +37,29 @@ osvc_prepare_cluster() {
 
 
 
+osvc_create_services () {
+  local config_updates=()
+  config_updates+=("cluster.name=${cluster_name}")
+
+  # Apply all configuration updates at once
+  if ! _osvc_config_update "${config_updates[@]}"; then
+    hps_log error "Failed to configure OpenSVC cluster"
+    return 1
+  fi
+
+om svc create iscsi-manager
+om iscsi-manager edit
+om iscsi-manager set --kw app#iscsi_manager.type=forking 
+om iscsi-manager set --kw  app#iscsi_manager.start="/srv/scripts/lio start" 
+om iscsi-manager set --kw app#iscsi_manager.stop="/srv/scripts/lio stop" 
+om iscsi-manager set --kw app#iscsi_manager.check="/srv/scripts/lio check"
+om iscsi-manager provision
+om iscsi-manager start 
+
+
+}
+
+
 osvc_configure_cluster() {
 
   # Wait for daemon socket to be ready

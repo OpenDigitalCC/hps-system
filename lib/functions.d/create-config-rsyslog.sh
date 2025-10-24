@@ -17,11 +17,14 @@ cat > "${RSYSLOG_CONF}" <<EOF
 #===============================================================================
 # rsyslog.conf - Basic configuration for HPS centralized logging
 #===============================================================================
-
 # Global directives
 global(
   workDirectory="${RSYSLOG_LOG_DIR}"
 )
+
+# Set default file permissions (a+r)
+\$FileCreateMode 0644
+\$DirCreateMode 0755
 
 # Load required modules
 module(load="imudp")    # UDP syslog reception
@@ -35,33 +38,52 @@ input(type="imudp" port="514")
 # Provide TCP syslog reception
 input(type="imtcp" port="514")
 
-# Templates for remote host logging
-# Separate logs by hostname and date
 
-template(name="RemoteHostFile" type="string"
-  string="/srv/hps-system/log/rsyslog/%fromhost-ip%/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
-)
+## # Template for log format
 
-# Template for log format - include both IP and hostname
-template(name="RemoteHostFormat" type="string"
+# Template for all log formatting - include both IP and hostname
+template(name="HPSLogFormat" type="string"
   string="%TIMESTAMP% %fromhost-ip% [%HOSTNAME%] %syslogtag% %msg%\n"
 )
 
 
-# Local system logs
-*.info;mail.none;authpriv.none;cron.none   ${RSYSLOG_LOG_DIR}/local/messages
-authpriv.*                                 ${RSYSLOG_LOG_DIR}/local/secure
-mail.*                                     ${RSYSLOG_LOG_DIR}/local/maillog
-cron.*                                     ${RSYSLOG_LOG_DIR}/local/cron
-*.emerg                                    :omusrmsg:*
-local7.*                                   ${RSYSLOG_LOG_DIR}/local/boot.log
+## # Templates for file formats
 
-# HPS-specific logs
-local0.*                                   ${RSYSLOG_LOG_DIR}/local/hps-system.log
-local1.*                                   ${RSYSLOG_LOG_DIR}/local/hps-nodes.log
+# Template for local IPS logs
+template(name="IPSLogFile" type="string"
+  string="${RSYSLOG_LOG_DIR}/ips/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
+)
 
-# Log rotation handled externally by logrotate
+# Template for remote host logs
+template(name="RemoteLogFile" type="string"
+  string="${RSYSLOG_LOG_DIR}/%fromhost-ip%/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
+)
 
+# Log by program name
+template(name="IPSServiceLogFile" type="string"
+  string="${RSYSLOG_LOG_DIR}/ips/%programname%-%\$YEAR%-%\$MONTH%-%\$DAY%.log"
+)
+
+
+## # Log message routing
+
+# Route marked program logs to separate file
+if \$programname == "nginx" then {
+  *.* action(type="omfile" dynaFile="IPSServiceLogFile" template="HPSLogFormat")
+  stop
+}
+
+# Route all local logs to ips/* with the same format
+if \$fromhost-ip == "127.0.0.1" then {
+  *.* action(type="omfile" dynaFile="IPSLogFile" template="HPSLogFormat")
+  stop
+}
+
+# Route all remote logs to from-ip/* with the same format
+if \$fromhost-ip != "127.0.0.1" then {
+  *.* action(type="omfile" dynaFile="RemoteLogFile" template="HPSLogFormat")
+  stop
+}
 
 EOF
   hps_log info "[OK] rsyslog config generated at: ${RSYSLOG_CONF}"

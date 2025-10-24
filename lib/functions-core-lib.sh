@@ -355,6 +355,8 @@ hps_source_with_debug() {
 
 __guard_source || return
 
+
+
 #:name: hps_log
 #:group: logging
 #:synopsis: Log messages to syslog and file with context information.
@@ -363,6 +365,8 @@ __guard_source || return
 #  Logs messages with timestamp, level, function name, and origin context.
 #  If the current host has a configured hostname, displays hostname instead of origin tag.
 #  URL-decodes messages and detects client type (script/ipxe/cli).
+#  If rsyslog is running, uses logger only; otherwise writes directly to file.
+#  Maps log levels to syslog priorities (invalid levels default to info).
 #:parameters:
 #  level   - Log level (info, warn, error, debug)
 #  message - Message to log (will be URL-decoded)
@@ -375,6 +379,19 @@ hps_log() {
   local logfile="${HPS_LOG_DIR}/hps-system.log"
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
+  
+  # Map HPS log levels to syslog priorities
+  local syslog_priority
+  case "$level" in
+    ERROR)   syslog_priority="err"     ;;
+    WARN)    syslog_priority="warning" ;;
+    INFO)    syslog_priority="info"    ;;
+    DEBUG)   syslog_priority="debug"   ;;
+    *)       
+      syslog_priority="info"
+      level="INFO"  # Normalize display level
+      ;;
+  esac
   
   # URL decode function
   url_decode() {
@@ -398,16 +415,34 @@ hps_log() {
   local msg
   msg="[$origin_id] [$level] [${FUNCNAME[1]}] ($(detect_client_type)) $(url_decode "$raw_msg")"
   
-  # Send to syslog
-  logger -t "$ident" -p "local0.${level,,}" "$msg"
-  
-  # Write to file if possible
-  if [[ -w "$logfile" || ( ! -e "$logfile" && -w "$(dirname "$logfile")" ) ]]; then
-    echo "[${ts}] $msg" >> "$logfile"
-  else
-    logger -t "$ident" -p "user.err" "Failed to write to $logfile"
+  # Check if rsyslog is running (check various possible process names)
+  local rsyslog_running=false
+  if pgrep -x "rsyslogd" >/dev/null 2>&1 || \
+     pgrep -f "/usr/sbin/rsyslogd" >/dev/null 2>&1 || \
+     [[ -S /dev/log ]]; then
+    rsyslog_running=true
   fi
+  
+  # If rsyslog is running, only use logger (rsyslog will handle file writing)
+  if [[ "$rsyslog_running" == "true" ]]; then
+    logger -t "$ident" -p "local0.${syslog_priority}" "$msg"
+  else
+    # No rsyslog - write directly to file and try logger anyway
+    logger -t "$ident" -p "local0.${syslog_priority}" "$msg" 2>/dev/null || true
+    
+    if [[ -w "$logfile" || ( ! -e "$logfile" && -w "$(dirname "$logfile")" ) ]]; then
+      echo "[${ts}] $msg" >> "$logfile"
+    else
+      # If we can't write to file and rsyslog isn't running, at least try stderr
+      echo "[${ts}] $msg" >&2
+    fi
+  fi
+  
+  return 0
 }
+
+
+
 
 
 
