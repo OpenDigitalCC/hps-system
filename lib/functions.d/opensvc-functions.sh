@@ -43,9 +43,9 @@ osvc_configure_cluster() {
   _osvc_wait_for_sock
 
   # Enforce single cluster agent key policy
-  if ! _osvc_cluster_agent_key; then
-    return $?
-  fi
+#  if ! _osvc_cluster_agent_key; then
+#    return $?
+#  fi
 
   # Verify daemon is responsive
   if ! om cluster status >/dev/null 2>&1; then
@@ -74,12 +74,12 @@ osvc_configure_cluster() {
   
   config_updates+=("cluster.name=${cluster_name}")
   config_updates+=("node.name=${osvc_nodename}")
-  config_updates+=("hb#1.type=${hb_type}")
+#  config_updates+=("hb#1.type=${hb_type}")
   
   # Handle cluster secret
   local cluster_secret
   cluster_secret="$(_osvc_cluster_secrets)" || return 1
-  config_updates+=("cluster.secret=${cluster_secret}")
+#  config_updates+=("cluster.secret=${cluster_secret}")
   
   # Apply all configuration updates at once
   if ! _osvc_config_update "${config_updates[@]}"; then
@@ -88,7 +88,7 @@ osvc_configure_cluster() {
   fi
   
   # Create heartbeat secrets
-  _osvc_create_hb_secrets || hps_log warning "Failed to create heartbeat secrets"
+#  _osvc_create_hb_secrets || hps_log warning "Failed to create heartbeat secrets"
   
   # Verify configuration was applied
   if ! om cluster status >/dev/null 2>&1; then

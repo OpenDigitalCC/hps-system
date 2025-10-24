@@ -77,7 +77,7 @@ _opensvc_foreground_wrapper () {
   # Run the v3 daemon in foreground so a supervisor can manage it if desired.
   # Filter the noisy journald error lines from stderr; keep everything else.
   # Agent also writes its own file log as configured in /etc/opensvc/opensvc.conf.
-  exec /usr/bin/om daemon run 
+  exec /usr/bin/om daemon run | logger -t om -p local0.info
   #\
    # 1>>"${LOGDIR}/opensvc.out.log" \
     #2> >(stdbuf -o0 awk '!/zerolog: could not write event: write unixgram .*journal\/socket/' >> "${LOGDIR}/opensvc.err.log")
