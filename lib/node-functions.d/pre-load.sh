@@ -325,6 +325,8 @@ n_remote_log() {
   return 0
 }
 
+
+
 #===============================================================================
 # n_remote_host_variable
 # ----------------------
@@ -342,6 +344,7 @@ n_remote_log() {
 #   - GET: When called with only name, retrieves the variable value
 #   - SET: When called with name and value, sets the variable
 #   - Uses host_variable command on IPS
+#   - Checks response for "not found" errors
 #   - Logs errors to IPS via n_remote_log
 #
 # Dependencies:
@@ -354,7 +357,8 @@ n_remote_log() {
 #
 # Returns:
 #   0 on success
-#   Exit code from n_ips_command on failure (1-3)
+#   4 if variable not found (GET operation)
+#   Exit code from n_ips_command on other failures (1-3)
 #===============================================================================
 n_remote_host_variable() {
   local name="${1:?Usage: n_remote_host_variable <name> [<value>]}"
@@ -372,16 +376,26 @@ n_remote_host_variable() {
     exit_code=$?
   fi
   
-  if [[ $exit_code -eq 0 ]]; then
-    # Success - output result
-    echo "$result"
-    return 0
-  else
-    # Log error
+  # Check if n_ips_command itself failed
+  if [[ $exit_code -ne 0 ]]; then
     local operation=$([[ -n "$value" ]] && echo "set" || echo "get")
     n_remote_log "Failed to $operation host variable '$name': $N_IPS_COMMAND_LAST_ERROR"
     return $exit_code
   fi
+  
+  # Check response content for errors (workaround until proper HTTP codes)
+  if [[ "$result" =~ "Key '".*"' not found" ]]; then
+    # Variable not found - this is an error for GET operations
+    if [[ -z "$value" ]]; then
+      # GET operation - variable doesn't exist
+      n_remote_log "Host variable '$name' not found"
+      return 4  # Custom error code for "not found"
+    fi
+  fi
+  
+  # Success - output result
+  echo "$result"
+  return 0
 }
 
 #===============================================================================
@@ -401,6 +415,7 @@ n_remote_host_variable() {
 #   - GET: When called with only name, retrieves the variable value
 #   - SET: When called with name and value, sets the variable
 #   - Uses cluster_variable command on IPS
+#   - Checks response for "not found" errors
 #   - Logs errors to IPS via n_remote_log
 #
 # Dependencies:
@@ -413,7 +428,8 @@ n_remote_host_variable() {
 #
 # Returns:
 #   0 on success
-#   Exit code from n_ips_command on failure (1-3)
+#   4 if variable not found (GET operation)
+#   Exit code from n_ips_command on other failures (1-3)
 #===============================================================================
 n_remote_cluster_variable() {
   local name="${1:?Usage: n_remote_cluster_variable <name> [<value>]}"
@@ -431,17 +447,28 @@ n_remote_cluster_variable() {
     exit_code=$?
   fi
   
-  if [[ $exit_code -eq 0 ]]; then
-    # Success - output result
-    echo "$result"
-    return 0
-  else
-    # Log error
+  # Check if n_ips_command itself failed
+  if [[ $exit_code -ne 0 ]]; then
     local operation=$([[ $# -ge 2 ]] && echo "set" || echo "get")
     n_remote_log "Failed to $operation cluster variable '$name': $N_IPS_COMMAND_LAST_ERROR"
     return $exit_code
   fi
+  
+  # Check response content for errors (workaround until proper HTTP codes)
+  if [[ "$result" =~ "Key '".*"' not found" ]]; then
+    # Variable not found - this is an error for GET operations
+    if [[ $# -lt 2 ]]; then
+      # GET operation - variable doesn't exist
+      n_remote_log "Cluster variable '$name' not found"
+      return 4  # Custom error code for "not found"
+    fi
+  fi
+  
+  # Success - output result
+  echo "$result"
+  return 0
 }
+
 
 
 
