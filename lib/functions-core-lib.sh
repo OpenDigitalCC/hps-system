@@ -399,7 +399,7 @@ hps_log() {
   msg="[$origin_id] [$level] [${FUNCNAME[1]}] ($(detect_client_type)) $(url_decode "$raw_msg")"
   
   # Send to syslog
-  logger -t "$ident" -p "user.${level,,}" "$msg"
+  logger -t "$ident" -p "local0.${level,,}" "$msg"
   
   # Write to file if possible
   if [[ -w "$logfile" || ( ! -e "$logfile" && -w "$(dirname "$logfile")" ) ]]; then

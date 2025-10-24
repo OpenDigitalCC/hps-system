@@ -26,6 +26,60 @@ _is_tty() {
 }
 
 #===============================================================================
+# exec_wrapper
+# ------------
+# Execute a command with error logging on failure, preserving stdout.
+#
+# Behaviour:
+#   - Executes the command passed as $1 (including any arguments)
+#   - Preserves stdout for normal operation
+#   - Captures stderr and command status
+#   - On non-zero exit, logs the command and any stderr via hps_log error
+#   - Returns the same exit code as the executed command
+#
+# Parameters:
+#   $1 - Command to execute (including arguments)
+#
+# Returns:
+#   Exit code of the executed command
+#
+# Example usage:
+#   exec_wrapper "ls -la /nonexistent"
+#   result=$(exec_wrapper "cat /etc/hostname")
+#   exec_wrapper "grep something file.txt" | wc -l
+#
+#===============================================================================
+exec_wrapper() {
+  local cmd="$1"
+  local stderr_file
+  local rv
+  
+  # Create temp file for stderr
+  stderr_file=$(mktemp)
+  
+  # Execute command, preserve stdout, capture stderr
+  eval "$cmd" 2>"$stderr_file"
+  rv=$?
+  
+  # If command failed, log error
+  if [[ $rv -ne 0 ]]; then
+    local stderr_output
+    stderr_output=$(<"$stderr_file")
+    
+    hps_log error "Command failed: $cmd"
+    hps_log error "Exit code: $rv"
+    [[ -n "$stderr_output" ]] && hps_log error "Error output: $stderr_output"
+  fi
+  
+  # Cleanup
+  rm -f "$stderr_file"
+  
+  # Return the original command's exit code
+  return $rv
+}
+
+
+#===============================================================================
 # download_file
 # -------------
 # Generic file download function with resume capability and verification

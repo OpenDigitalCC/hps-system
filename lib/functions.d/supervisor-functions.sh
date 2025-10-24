@@ -1,20 +1,21 @@
 __guard_source || return
 
-# Get all services ready to start
-supervisor_prepare_services () {
-  _set_ips_hostname
-  create_config_nginx
-  create_config_dnsmasq
-  create_config_rsyslog
-  osvc_prepare_cluster
-}
-
 # at initial containwer start, subsequent supervisor starts or restarts, prepare the services
 _supervisor_pre_start () {
   supervisor_configure_core_config
   supervisor_configure_core_services
   supervisor_prepare_services
   supervisor_reload_core_config
+}
+
+# Get all services ready to start
+supervisor_prepare_services () {
+  _set_ips_hostname
+  create_config_nginx
+  create_config_dnsmasq
+  update_dns_dhcp_files
+  create_config_rsyslog
+  osvc_prepare_cluster
 }
 
 

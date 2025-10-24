@@ -1,5 +1,54 @@
 
 
+#===============================================================================
+# update_dns_dhcp_files
+# ---------------------
+# Orchestrator function to rebuild both DNS and DHCP configuration files.
+#
+# Behaviour:
+#   - Calls build_dhcp_addresses_file to create DHCP reservations
+#   - Calls build_dns_hosts_file to create DNS hosts file
+#   - Both files are written atomically (temp file then move)
+#   - Logs all operations
+#
+# Returns:
+#   0 if both files created successfully
+#   1 if either file creation fails
+#
+# Note:
+#   After calling this function, dnsmasq should be reloaded to pick up
+#   the new configuration files.
+#===============================================================================
+update_dns_dhcp_files() {
+  hps_log "INFO" "Updating DNS and DHCP configuration files"
+  
+  local dhcp_result=0
+  local dns_result=0
+  
+  # Build DHCP addresses file
+  if ! build_dhcp_addresses_file; then
+    hps_log "ERROR" "Failed to build DHCP addresses file"
+    dhcp_result=1
+  fi
+  
+  # Initialise DNS hosts file
+  if ! init_dns_hosts_file; then
+    hps_log "ERROR" "Failed to build DNS hosts file"
+    dns_result=1
+  fi
+  
+  # Return failure if either failed
+  if [[ $dhcp_result -ne 0 ]] || [[ $dns_result -ne 0 ]]; then
+    hps_log "ERROR" "DNS/DHCP file update completed with errors"
+    return 1
+  fi
+
+  # update local resolv.conf
+  _ips_resolv_conf_update
+
+  hps_log "INFO" "DNS/DHCP file update completed successfully"
+  return 0
+}
 
 _set_ips_hostname () {
   IPS_HOSTNAME="ips.$(cluster_config get DNS_DOMAIN)"
@@ -144,10 +193,9 @@ build_dhcp_addresses_file() {
 #===============================================================================
 # init_dns_hosts_file
 # -------------------
-# Initialize DNS hosts file for dnsmasq if it doesn't exist.
+# Initialize DNS hosts file for dnsmasq 
 #
 # Behaviour:
-#   - Checks if dns_hosts file already exists
 #   - If not, creates it with IPS entry
 #   - Gets DNS domain and IPS IP from cluster config
 #   - Adds IPS with standard service aliases using dns_host_add
@@ -169,12 +217,6 @@ build_dhcp_addresses_file() {
 #===============================================================================
 init_dns_hosts_file() {
   local dns_hosts_file="$(get_path_cluster_services_dir)/dns_hosts"
-  
-  # If file already exists, nothing to do
-  if [[ -f "$dns_hosts_file" ]]; then
-    hps_log debug "DNS hosts file already exists: $dns_hosts_file"
-    return 0
-  fi
   
   hps_log info "Initializing DNS hosts file: $dns_hosts_file"
   
@@ -268,13 +310,13 @@ dns_host_add() {
   
   # Validate IP address
   if [[ -z "$ip" ]] || ! validate_ip_address "$ip"; then
-    hps_log error "dns_host_add: Invalid IP address: $ip"
+    hps_log error "Invalid IP address: $ip"
     return 1
   fi
   
   # Validate hostname
   if [[ -z "$hostname" ]] || ! validate_hostname "$hostname"; then
-    hps_log error "dns_host_add: Invalid hostname: $hostname"
+    hps_log error "Invalid hostname: $hostname"
     return 1
   fi
   
@@ -316,7 +358,7 @@ dns_host_add() {
         # Replace this line with new entry
         echo "$entry" >> "$temp_file"
         found=1
-        hps_log debug "dns_host_add: Updated entry for $hostname ($ip)"
+        hps_log debug "Updated entry for $hostname ($ip)"
       else
         # Keep existing line
         echo "$line" >> "$temp_file"
@@ -327,17 +369,18 @@ dns_host_add() {
   # If not found, append new entry
   if [[ $found -eq 0 ]]; then
     echo "$entry" >> "$temp_file"
-    hps_log debug "dns_host_add: Added new entry for $hostname ($ip)"
+    hps_log debug "Added new entry for $hostname ($ip)"
   fi
   
   # Atomic move
   if ! mv "$temp_file" "$dns_hosts_file"; then
-    hps_log error "dns_host_add: Failed to write DNS hosts file"
+    hps_log error "Failed to write DNS hosts file"
     rm -f "$temp_file"
     return 1
   fi
-  
-  hps_log info "dns_host_add: $hostname ($ip) added/updated"
+  # send HUP to dnsmasq - as inplace writes don't trigger inotify (and not even sure we have inotify)
+  supervisor_reload_services dnsmasq
+  hps_log info "$hostname ($ip) added/updated"
   return 0
 }
 
@@ -467,52 +510,28 @@ dns_host_get() {
 }
 
 
-#===============================================================================
-# update_dns_dhcp_files
-# ---------------------
-# Orchestrator function to rebuild both DNS and DHCP configuration files.
 #
-# Behaviour:
-#   - Calls build_dhcp_addresses_file to create DHCP reservations
-#   - Calls build_dns_hosts_file to create DNS hosts file
-#   - Both files are written atomically (temp file then move)
-#   - Logs all operations
-#
-# Returns:
-#   0 if both files created successfully
-#   1 if either file creation fails
-#
-# Note:
-#   After calling this function, dnsmasq should be reloaded to pick up
-#   the new configuration files.
-#===============================================================================
-update_dns_dhcp_files() {
-  hps_log "INFO" "Updating DNS and DHCP configuration files"
+_ips_resolv_conf_update () {
+
+  local ips_ip dns_domain
   
-  local dhcp_result=0
-  local dns_result=0
-  
-  # Build DHCP addresses file
-  if ! build_dhcp_addresses_file; then
-    hps_log "ERROR" "Failed to build DHCP addresses file"
-    dhcp_result=1
-  fi
-  
-  # Initialise DNS hosts file
-  if ! init_dns_hosts_file; then
-    hps_log "ERROR" "Failed to build DNS hosts file"
-    dns_result=1
-  fi
-  
-  # Return failure if either failed
-  if [[ $dhcp_result -ne 0 ]] || [[ $dns_result -ne 0 ]]; then
-    hps_log "ERROR" "DNS/DHCP file update completed with errors"
+  ips_ip=$(get_ips_address) || {
+    hps_log error "Failed to get IPS address"
     return 1
-  fi
+  }
   
-  # Reload dnsmasq to pick up new configuration
-  supervisor_reload_services dnsmasq
+  dns_domain=$(cluster_config get DNS_DOMAIN) || {
+    hps_log error "Failed to get DNS_DOMAIN from cluster config"
+    return 1
+  }
   
-  hps_log "INFO" "DNS/DHCP file update completed successfully"
+  cat > /etc/resolv.conf <<EOF
+nameserver ${ips_ip}
+search ${dns_domain}
+EOF
+  
+  hps_log info "Created /etc/resolv.conf with nameserver ${ips_ip} and search ${dns_domain}"
   return 0
 }
+
+
