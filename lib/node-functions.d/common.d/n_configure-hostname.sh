@@ -130,7 +130,6 @@ EOF
     
     n_remote_log "Created /etc/hosts with hostname: ${hostname}, FQDN: ${fqdn}, IP: ${ip}"
     
-    echo "Hostname and hosts file configured successfully"
-    n_remote_log "n_set_hostname_and_hosts completed successfully"
+    n_remote_log "Completed successfully"
     return 0
 }

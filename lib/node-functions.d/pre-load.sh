@@ -246,9 +246,8 @@ n_ips_command() {
   local curl_exit
   
   # Execute POST request with separate capture of HTTP code
-  # Using -w to get HTTP code, -s for silent, -S to show errors
-  # Redirect stderr to capture curl errors silently
-  response=$(curl -sS -w "\n%{http_code}" -X POST "$url" 2>&1)
+  # Use a unique delimiter instead of newline
+  response=$(curl -sS -w "HTTPCODE:%{http_code}" -X POST "$url" 2>&1)
   curl_exit=$?
   
   # Check if curl itself failed
@@ -258,10 +257,15 @@ n_ips_command() {
     return 2
   fi
   
-  # Extract HTTP code from last line
-  http_code=$(echo "$response" | tail -n1)
-  # Remove HTTP code from response
-  response=$(echo "$response" | sed '$d')
+  # Extract HTTP code using the delimiter
+  if [[ "$response" =~ HTTPCODE:([0-9]+)$ ]]; then
+    http_code="${BASH_REMATCH[1]}"
+    # Remove the HTTP code marker from response
+    response="${response%HTTPCODE:*}"
+  else
+    N_IPS_COMMAND_LAST_ERROR="Failed to extract HTTP code from response"
+    return 2
+  fi
   
   # Check HTTP response code
   if [[ "$http_code" =~ ^[45][0-9][0-9]$ ]]; then
@@ -277,8 +281,10 @@ n_ips_command() {
     return 3
   fi
   
-  # Success - output response to stdout
-  echo "$response"
+  # Success - output response to stdout (without trailing newline if empty)
+  if [[ -n "$response" ]]; then
+    echo "$response"
+  fi
   return 0
 }
 
@@ -288,18 +294,24 @@ n_ips_command() {
 # Send log messages from remote nodes to the provisioning node's logging system.
 #
 # Usage:
-#   n_remote_log "message text"
+#   n_remote_log "message text" [method]
+#   echo "message" | n_remote_log [method]
+#   command 2>&1 | n_remote_log [method]
 #
 # Parameters:
-#   $1 - Log message to send (required)
+#   $1 - Log message to send (optional if piped)
+#   $2 - Method: "syslog", "ips", or "auto" (default: "auto")
+#        auto = try syslog first, fallback to ips
 #
 # Behaviour:
+#   - Accepts input from argument or stdin
+#   - Uses specified logging method or auto-detects best option
 #   - Retrieves the calling function name from bash call stack
-#   - Sends log_message command to IPS with message and function context
 #   - Outputs any errors to stdout for visibility
 #
 # Dependencies:
-#   - n_ips_command function must be available
+#   - logger command (for syslog method)
+#   - n_ips_command function (for ips method)
 #
 # Output:
 #   Success: No output
@@ -307,23 +319,72 @@ n_ips_command() {
 #
 # Returns:
 #   0 on success
-#   Exit code from n_ips_command on failure (1-3)
+#   Non-zero on failure
 #===============================================================================
 n_remote_log() {
-  local message="${1:?Usage: n_remote_log <message>}"
+  local message=""
   local function="${FUNCNAME[1]}"
+  local method="${2:-auto}"
   
-  if ! n_ips_command "log_message" "message=${message}" "function=${function}"; then
-    # Output error info to stdout
-    echo "n_remote_log: $N_IPS_COMMAND_LAST_ERROR"
-    if [[ -n "$N_IPS_COMMAND_LAST_RESPONSE" ]]; then
-      echo "Server response: $N_IPS_COMMAND_LAST_RESPONSE"
-    fi
-    return $?
+  # If we have arguments, use them
+  if [[ $# -gt 0 ]] && [[ ! -t 0 ]]; then
+    # Piped input with method argument
+    method="${1:-auto}"
+  elif [[ $# -gt 0 ]]; then
+    # Direct message
+    message="$1"
+    method="${2:-auto}"
+  fi
+  
+  # Determine logging method
+  local use_method=""
+  case "$method" in
+    syslog)
+      if command -v logger >/dev/null 2>&1 && pgrep syslogd >/dev/null 2>&1; then
+        use_method="syslog"
+      else
+        use_method="ips"
+      fi
+      ;;
+    ips) use_method="ips" ;;
+    *) # auto
+      if command -v logger >/dev/null 2>&1 && pgrep syslogd >/dev/null 2>&1; then
+        use_method="syslog"
+      else
+        use_method="ips"
+      fi
+      ;;
+  esac
+  
+  # Process input
+  if [[ -n "$message" ]]; then
+    # Direct message - process as before
+    while IFS= read -r line; do
+      if [[ -n "$line" ]]; then
+        if [[ "$use_method" == "syslog" ]]; then
+          logger -t "hps[${function}]" "$line"
+        else
+          n_ips_command "log_message" "message=${line}" "function=${function}" >/dev/null
+        fi
+      fi
+    done <<< "$message"
+  else
+    # Piped input - process line by line without buffering
+    while IFS= read -r line; do
+      if [[ -n "$line" ]]; then
+        if [[ "$use_method" == "syslog" ]]; then
+          logger -t "hps[${function}]" "$line"
+        else
+          n_ips_command "log_message" "message=${line}" "function=${function}" >/dev/null
+        fi
+      fi
+    done
   fi
   
   return 0
 }
+
+
 
 
 
@@ -396,6 +457,77 @@ n_remote_host_variable() {
   # Success - output result
   echo "$result"
   return 0
+}
+
+xn_remote_log() {
+  local message=""
+  local method="auto"
+  local function="${FUNCNAME[1]}"
+  
+  # Parse arguments based on input type
+  if [[ ! -t 0 ]]; then
+    # Input from pipe
+    message=$(cat)
+    method="${1:-auto}"
+  else
+    # Input from arguments
+    if [[ $# -eq 0 ]]; then
+      echo "Usage: n_remote_log <message> [method] or echo message | n_remote_log [method]" >&2
+      return 1
+    fi
+    message="$1"
+    method="${2:-auto}"
+  fi
+  
+  # Handle empty message
+  if [[ -z "$message" ]]; then
+    return 0
+  fi
+  
+  # Determine logging method
+  local use_method=""
+  case "$method" in
+    syslog)
+      if command -v logger >/dev/null 2>&1 && pgrep syslogd >/dev/null 2>&1; then
+        use_method="syslog"
+      else
+        echo "n_remote_log: syslog requested but not available, using ips" >&2
+        use_method="ips"
+      fi
+      ;;
+    ips)
+      use_method="ips"
+      ;;
+    auto|*)
+      if command -v logger >/dev/null 2>&1 && pgrep syslogd >/dev/null 2>&1; then
+        use_method="syslog"
+      else
+        use_method="ips"
+      fi
+      ;;
+  esac
+  
+  # Send messages
+  local line
+  local failed=0
+  
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then
+      if [[ "$use_method" == "syslog" ]]; then
+        # Use local syslog
+        logger -t "hps[${function}]" "$line"
+      else
+        # Use remote IPS logging
+        if ! n_ips_command "log_message" "message=${line}" "function=${function}"; then
+          echo "n_remote_log: $N_IPS_COMMAND_LAST_ERROR"
+          n_console_message "$N_IPS_COMMAND_LAST_ERROR"
+          failed=1
+        fi
+      fi
+    fi
+  done <<< "$message"
+  
+  return $failed
 }
 
 #===============================================================================

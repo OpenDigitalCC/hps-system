@@ -1,5 +1,34 @@
 
 
+
+n_start_modloop () {
+  rc-service modloop status || rc-service modloop start
+}
+
+
+
+n_start_base_services() {
+  n_remote_log "Starting base system services..."
+  
+  local services=(
+    "hwdrivers"    # Hardware drivers
+    "modloop"      # Kernel modules
+    "fsck"         # Filesystem check
+    "root"         # Root filesystem
+    "localmount"   # Local filesystems
+    "hostname"     # System hostname
+  )
+  
+  for service in "${services[@]}"; do
+    if ! rc-service "$service" status >/dev/null 2>&1; then
+      n_remote_log "Starting $service..."
+      rc-service "$service" start || n_remote_log "WARNING: Failed to start $service"
+    fi
+  done
+  
+  return 0
+}
+
 #===============================================================================
 # n_load_kernel_module
 # --------------------
