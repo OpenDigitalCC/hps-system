@@ -4,7 +4,8 @@
 n_osvc_start () {
   n_remote_log "Starting OpenSVC"
   n_osvc_create_config_file
-  om daemon start
+  setsid om daemon run 2>&1 | logger -t opensvc &
+#  om daemon start
   n_osvc_wait_for_socket
 
 }
@@ -26,7 +27,7 @@ n_initialise_opensvc_cluster() {
   local hb_type
   hb_type="$(n_remote_cluster_variable OSVC_HB_TYPE 2>/dev/null || true)"
   
-  om cluster set --kw "hb#1.type=${hb_type}" || return 1
+#  om cluster set --kw "hb#1.type=${hb_type}" || return 1
 #  om cluster set --kw "hb#1.addr=$(get_ips_address)" || return 1
 
   #om cluster set --kw "name=$osvc_node_name"
@@ -74,6 +75,9 @@ n_opensvc_join () {
   if ! om cluster join --token "$osvc_token" --node "$osvc_node" --timeout 2s --debug; then
    n_remote_log  "Failed to join cluster"
    return 1
+  else
+   n_remote_log "Joined cluster"
+   n_remote_host_variable cluster_joined "$(date +%s)"
  fi
 }
 
