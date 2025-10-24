@@ -48,18 +48,6 @@ template(name="RemoteHostFormat" type="string"
 )
 
 
-# Rules for remote hosts (not localhost)
-#if \$fromhost-ip != "127.0.0.1" then {
-  action(type="omfile" 
-    dynaFile="RemoteHostFile"
-    template="RemoteHostFormat"
-    dirCreateMode="0755"
-    fileCreateMode="0644"
-#  )
-#  stop
-#}
-
-
 # Local system logs
 *.info;mail.none;authpriv.none;cron.none   ${RSYSLOG_LOG_DIR}/local/messages
 authpriv.*                                 ${RSYSLOG_LOG_DIR}/local/secure
@@ -77,7 +65,7 @@ local1.*                                   ${RSYSLOG_LOG_DIR}/local/hps-nodes.lo
 
 EOF
   hps_log info "[OK] rsyslog config generated at: ${RSYSLOG_CONF}"
-  
+
 }
 
 
