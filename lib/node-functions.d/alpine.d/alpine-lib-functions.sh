@@ -1,9 +1,5 @@
 
 
-n_link_module_dir () {
-  ln -s /.modloop/modules/6.6.41-0-lts/ /lib/modules/
-}
-
 #===============================================================================
 # n_load_kernel_module
 # --------------------
@@ -226,6 +222,7 @@ EOF
 
 
 
+
 #===============================================================================
 # n_install_apk_packages_from_ips
 # --------------------------------
@@ -239,6 +236,7 @@ EOF
 #   - Determines IPS gateway address
 #   - Fetches package list from IPS repository via HTTP
 #   - Matches requested package names to available .apk files
+#   - Selects latest version when multiple matches exist
 #   - Downloads each package to /tmp
 #   - Installs using apk add --allow-untrusted
 #   - Cleans up downloaded packages after installation
@@ -256,125 +254,175 @@ EOF
 #   2 on installation failure
 #===============================================================================
 n_install_apk_packages_from_ips() {
-    local package_names=("$@")
-    
-    if [[ ${#package_names[@]} -eq 0 ]]; then
-        echo "Error: No package names provided"
-        echo "Usage: n_install_apk_packages_from_ips <package_name> [package_name...]"
-        n_remote_log "APK install called without package names"
-        return 1
-    fi
-    
-    # Get IPS gateway address
-    local ips_gateway
-    ips_gateway=$(n_get_provisioning_node) || {
-        echo "Error: Could not determine IPS gateway address"
-        n_remote_log "Failed to determine IPS gateway for APK installation"
-        return 1
-    }
-    
-    local repo_url="http://${ips_gateway}/packages/alpine-repo/x86_64"
-    local temp_dir="/tmp/apk-install-$$"
-    
-    echo "Installing APK packages from IPS..."
-    echo "  IPS: ${ips_gateway}"
-    echo "  Repository: ${repo_url}"
-    echo "  Packages: ${package_names[*]}"
-    echo ""
-    
-    n_remote_log "Starting APK installation: ${package_names[*]}"
-    
-    # Create temp directory
-    mkdir -p "$temp_dir" || {
-        echo "Error: Failed to create temporary directory"
-        n_remote_log "Failed to create temp directory ${temp_dir}"
-        return 2
-    }
-    
-    # Fetch directory listing from IPS
-    echo "Fetching package list from IPS..."
-    local listing_file="${temp_dir}/listing.html"
-    
-    if ! curl -sf "${repo_url}/" > "$listing_file"; then
-        echo "Error: Failed to fetch package list from ${repo_url}"
-        n_remote_log "Failed to fetch package list from ${repo_url}"
-        rm -rf "$temp_dir"
-        return 2
-    fi
-    
-    # Extract .apk filenames from HTML listing
-    local available_packages
-    available_packages=$(grep -o 'href="[^"]*\.apk"' "$listing_file" | cut -d'"' -f2)
-    
-    if [[ -z "$available_packages" ]]; then
-        echo "Error: No packages found in repository"
-        n_remote_log "No APK packages found in repository ${repo_url}"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    local pkg_count=$(echo "$available_packages" | wc -l)
-    echo "Available packages: ${pkg_count}"
-    echo ""
-    n_remote_log "Found ${pkg_count} packages in repository"
-    
-    # Match and download requested packages
-    local -a packages_to_install=()
-    local missing_packages=()
-    
-    for pkg_name in "${package_names[@]}"; do
-        # Find matching package file (matches pkg_name-*.apk)
-        local pkg_file=$(echo "$available_packages" | grep "^${pkg_name}-[0-9]" | head -1)
-        
-        if [[ -z "$pkg_file" ]]; then
-            missing_packages+=("$pkg_name")
-            n_remote_log "Package not found: ${pkg_name}"
-            continue
-        fi
-        
-        echo "Downloading: ${pkg_file}"
-        if curl -sf -o "${temp_dir}/${pkg_file}" "${repo_url}/${pkg_file}"; then
-            packages_to_install+=("${temp_dir}/${pkg_file}")
-            n_remote_log "Downloaded: ${pkg_file}"
-        else
-            echo "Error: Failed to download ${pkg_file}"
-            n_remote_log "Download failed: ${pkg_file}"
-            missing_packages+=("$pkg_name")
-        fi
-    done
-    
-    # Check for missing packages
-    if [[ ${#missing_packages[@]} -gt 0 ]]; then
-        echo ""
-        echo "Error: Some packages not found:"
-        printf '  %s\n' "${missing_packages[@]}"
-        n_remote_log "Missing packages: ${missing_packages[*]}"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    # Install packages
-    echo ""
-    echo "Installing ${#packages_to_install[@]} packages..."
-    n_remote_log "Installing ${#packages_to_install[@]} APK packages"
-    
-    # Use --force-non-repository for diskless/data Alpine systems
-    if ! apk add --allow-untrusted --force-non-repository "${packages_to_install[@]}"; then
-        echo "Error: Package installation failed"
-        n_remote_log "APK installation failed for packages: ${package_names[*]}"
-        rm -rf "$temp_dir"
-        return 2
-    fi
-    
-    # Cleanup
+  local package_names=("$@")
+  
+  if [[ ${#package_names[@]} -eq 0 ]]; then
+    echo "Error: No package names provided"
+    echo "Usage: n_install_apk_packages_from_ips <package_name> [package_name...]"
+    n_remote_log "APK install called without package names"
+    return 1
+  fi
+  
+  # Get IPS gateway address
+  local ips_gateway
+  ips_gateway=$(n_get_provisioning_node) || {
+    echo "Error: Could not determine IPS gateway address"
+    n_remote_log "Failed to determine IPS gateway for APK installation"
+    return 1
+  }
+  
+  local repo_url="http://${ips_gateway}/packages/alpine-repo/x86_64"
+  local temp_dir="/tmp/apk-install-$$"
+  
+  echo "Installing APK packages from IPS..."
+  echo "  IPS: ${ips_gateway}"
+  echo "  Repository: ${repo_url}"
+  echo "  Packages: ${package_names[*]}"
+  echo ""
+  
+  n_remote_log "Starting APK installation: ${package_names[*]}"
+  
+  # Create temp directory
+  mkdir -p "$temp_dir" || {
+    echo "Error: Failed to create temporary directory"
+    n_remote_log "Failed to create temp directory ${temp_dir}"
+    return 2
+  }
+  
+  # Fetch directory listing from IPS
+  echo "Fetching package list from IPS..."
+  local listing_file="${temp_dir}/listing.html"
+  
+  if ! curl -sf "${repo_url}/" > "$listing_file"; then
+    echo "Error: Failed to fetch package list from ${repo_url}"
+    n_remote_log "Failed to fetch package list from ${repo_url}"
     rm -rf "$temp_dir"
+    return 2
+  fi
+  
+  # Extract .apk filenames from HTML listing
+  local available_packages
+  available_packages=$(grep -o 'href="[^"]*\.apk"' "$listing_file" | cut -d'"' -f2)
+  
+  if [[ -z "$available_packages" ]]; then
+    echo "Error: No packages found in repository"
+    n_remote_log "No APK packages found in repository ${repo_url}"
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  
+  local pkg_count=$(echo "$available_packages" | wc -l)
+  echo "Available packages: ${pkg_count}"
+  echo ""
+  n_remote_log "Found ${pkg_count} packages in repository"
+  
+  # Function to extract version from APK filename
+  # Example: opensvc-server-3.0.8-r0.apk -> 3.0.8-r0
+  _extract_apk_version() {
+    local filename="$1"
+    local pkg_name="$2"
+    # Remove package name prefix and .apk suffix
+    echo "${filename#${pkg_name}-}" | sed 's/\.apk$//'
+  }
+  
+  # Function to find latest version of a package
+  _find_latest_apk() {
+    local pkg_name="$1"
+    local candidates
     
-    echo ""
-    echo "Successfully installed packages:"
-    printf '  %s\n' "${package_names[@]}"
+    # Find all matching packages
+    candidates=$(echo "$available_packages" | grep "^${pkg_name}-[0-9]")
     
-    n_remote_log "Successfully installed APK packages: ${package_names[*]}"
+    if [[ -z "$candidates" ]]; then
+      return 1
+    fi
     
+    # Sort by version and get the latest
+    # APK versions are typically: version-rN (e.g., 3.0.8-r0)
+    local latest=""
+    local latest_version=""
+    
+    while IFS= read -r candidate; do
+      if [[ -n "$candidate" ]]; then
+        local version
+        version=$(_extract_apk_version "$candidate" "$pkg_name")
+        
+        if [[ -z "$latest" ]]; then
+          latest="$candidate"
+          latest_version="$version"
+        else
+          # Compare versions using apk's version comparison logic
+          # Higher version sorts later with 'sort -V'
+          if echo -e "${version}\n${latest_version}" | sort -V | tail -1 | grep -q "^${version}$"; then
+            latest="$candidate"
+            latest_version="$version"
+          fi
+        fi
+      fi
+    done <<< "$candidates"
+    
+    echo "$latest"
     return 0
+  }
+  
+  # Match and download requested packages
+  local -a packages_to_install=()
+  local missing_packages=()
+  
+  for pkg_name in "${package_names[@]}"; do
+    # Find latest version of package
+    local pkg_file
+    pkg_file=$(_find_latest_apk "$pkg_name")
+    
+    if [[ -z "$pkg_file" ]]; then
+      missing_packages+=("$pkg_name")
+      n_remote_log "Package not found: ${pkg_name}"
+      continue
+    fi
+    
+    echo "Downloading: ${pkg_file} (latest version)"
+    if curl -sf -o "${temp_dir}/${pkg_file}" "${repo_url}/${pkg_file}"; then
+      packages_to_install+=("${temp_dir}/${pkg_file}")
+      n_remote_log "Downloaded: ${pkg_file}"
+    else
+      echo "Error: Failed to download ${pkg_file}"
+      n_remote_log "Download failed: ${pkg_file}"
+      missing_packages+=("$pkg_name")
+    fi
+  done
+  
+  # Check for missing packages
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    echo ""
+    echo "Error: Some packages not found:"
+    printf '  %s\n' "${missing_packages[@]}"
+    n_remote_log "Missing packages: ${missing_packages[*]}"
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  
+  # Install packages
+  echo ""
+  echo "Installing ${#packages_to_install[@]} packages..."
+  n_remote_log "Installing ${#packages_to_install[@]} APK packages"
+  
+  # Use --force-non-repository for diskless/data Alpine systems
+  if ! apk add --allow-untrusted --force-non-repository "${packages_to_install[@]}"; then
+    echo "Error: Package installation failed"
+    n_remote_log "APK installation failed for packages: ${package_names[*]}"
+    rm -rf "$temp_dir"
+    return 2
+  fi
+  
+  # Cleanup
+  rm -rf "$temp_dir"
+  
+  echo ""
+  echo "Successfully installed packages:"
+  printf '  %s\n' "${package_names[@]}"
+  
+  n_remote_log "Successfully installed APK packages: ${package_names[*]}"
+  
+  return 0
 }
 
