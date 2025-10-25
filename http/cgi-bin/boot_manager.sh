@@ -323,6 +323,9 @@ if [[ "$cmd" == "node_get_functions" ]]; then
 fi
 
 
+
+
+## TODO: deprecated?
 # Command: Generate an opensvc conf
 if [[ "$cmd" == "generate_opensvc_conf" ]]; then
   hps_log info "Request to generate opensvc.conf"
