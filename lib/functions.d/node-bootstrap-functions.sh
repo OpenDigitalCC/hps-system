@@ -21,7 +21,8 @@ create_bootstrap_core_lib() {
   declare -f hps_debug_function_load
   declare -f hps_safe_eval
   declare -f hps_source_with_debug
-
+  
+  echo "# Relay complete"
 
   cat <<'LIBEOF'
 

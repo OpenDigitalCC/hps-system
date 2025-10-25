@@ -143,6 +143,10 @@ node_build_functions() {
       echo
     done
   done
+
+# relay functions  # Relay OpenSVC task functions prefixed with o_
+  echo # === Relay OpenSVC o_ functions ===
+  declare -f | awk '/^o_[a-zA-Z_]+ \(\)/, /^}/'
   
   # Load post-load.sh last if it exists (for executing collected functions)
   local post_load="${base}/post-load.sh"
