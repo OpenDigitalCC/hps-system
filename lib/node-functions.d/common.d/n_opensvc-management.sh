@@ -24,7 +24,7 @@ n_initialise_opensvc_cluster() {
 #  n_osvc_wait_for_socket
 
   local cluster_name="$(n_remote_cluster_variable CLUSTER_NAME)"
-  local osvc_node_name="$(n_remote_host_variable HOSTNAME).$(n_remote_cluster_variable DNS_DOMAIN)"
+  local osvc_node_name="$(n_remote_host_variable HOSTNAME)"
 
   n_remote_log "Initialising $osvc_node_name on OpenSVC cluster $cluster_name"
 
@@ -52,7 +52,7 @@ n_initialise_opensvc_cluster() {
 
 
 n_opensvc_join() {
-  local osvc_node="ips.$(n_remote_cluster_variable DNS_DOMAIN)"
+  local osvc_node="ips"
   local osvc_token="$(n_ips_command osvc_cmd "osvc_cmd=get_auth_token")"
   n_remote_log "Joining cluster node: $osvc_node"
   if ! om cluster join --token "$osvc_token" --node "$osvc_node" --timeout 4s --debug; then

@@ -2,7 +2,6 @@ __guard_source || return
 
 ## HPS Functions
 
-
 #TODO: Move config to CLUSTER_SERVICES_DIR
 
 osvc_prepare_cluster() {
@@ -77,7 +76,7 @@ osvc_configure_cluster() {
   fi
   
   # Set IPS node identity
-  local osvc_nodename="ips.$(cluster_config get DNS_DOMAIN)"
+  local osvc_nodename="ips"
   
   # Get cluster configuration
   local cluster_name

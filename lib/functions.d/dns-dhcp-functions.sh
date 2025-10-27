@@ -51,7 +51,7 @@ update_dns_dhcp_files() {
 }
 
 _set_ips_hostname () {
-  IPS_HOSTNAME="ips.$(cluster_config get DNS_DOMAIN)"
+  IPS_HOSTNAME="ips"
   hostname "$IPS_HOSTNAME"
   echo "$IPS_HOSTNAME" > /etc/hostname
 }

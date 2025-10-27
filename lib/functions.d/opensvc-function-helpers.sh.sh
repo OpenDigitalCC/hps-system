@@ -127,7 +127,7 @@ _osvc_setup_directories() {
 #
 # Behaviour:
 #   - Generates opensvc.conf with agent nodename
-#   - Nodename format: ips.<DNS_DOMAIN>
+#   - Nodename format: ips
 #   - Creates atomic replacement with backup
 #   - Sets proper permissions (644, root:root)
 #
@@ -163,7 +163,7 @@ _osvc_create_conf() {
   # Write minimal config
   cat > "${tmp}" <<EOF
 [agent]
-nodename = ips.${dns_domain}
+nodename = ips
 EOF
 
   # Atomic move
