@@ -240,6 +240,25 @@ om svc set -s iscsi-manager \
 om svc provision -s iscsi-manager --wait
 
 
+root@dev2n1:~/dev/om3# om restarts config show --section task#envfunc
+[task#envfunc]
+command = . /tmp/functions.sh && envfunc
+
+root@dev2n1:~/dev/om3# cat /tmp/functions.sh
+envfunc() {
+    /usr/bin/env
+}
+
+root@dev2n1:~/dev/om3# om restarts config show --section task#env
+[task#env]
+command = /usr/bin/env
+
+root@dev2n1:~/dev/om3# om restarts run --rid task#env --node=\*
+OBJECT    NODE    SID                                   
+restarts  dev2n1  847b0b13-0e1b-4237-bc0b-90330ccf0dd5  
+restarts  dev2n3  a878ea67-3636-488e-aec6-15177fd9fbc0  
+restarts  dev2n2  8eb2f65b-752b-4e61-a1e2-a7f31c7f9879 
+
 Implementation of IQN is not fully compliant with the RFC 3720/3721 IQN naming standard (iqn.yyyy-mm.naming-authority:unique-nameiqn.yyyy-mm.naming-authority:unique-name) as a reverse domain name is not used (unless the cluster happens to be a reverse domain name).
 
 The main compliance issue is that the naming authority part must be a reversed DNS name, not just a cluster or arbitrary name. The unique name section after the colon can contain host and volume names as in the example.
