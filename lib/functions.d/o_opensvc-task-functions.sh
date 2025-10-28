@@ -1,35 +1,6 @@
 
-
 # Note that these functions exist on IPS and also relayed to nodes
 
-
-o_opensvc_task_test() {
-  local msg="${1:-default_message}"
-  local host=$(hostname)
-  local timestamp=$(date '+%Y-%m-%d_%H:%M:%S')
-  logger -t TEST "EXEC_TEST: host=${host} time=${timestamp} msg=${msg} pid=$$"
-  o_log info "EXEC_TEST: host=${host} time=${timestamp} msg=${msg} pid=$$"
-  return 0
-}
-EOF
-
-o_opensvc_task_exec() {
-  o_opensvc_task_test "task_executed_via_opensvc"
-}
-
-
-# Function to delete OpenSVC services
-o_service_delete() {
-  local service_path="$1"
-  if [ -z "$service_path" ]; then
-    echo "Usage: o_service_delete <service_path>"
-    return 1
-  fi
-  
-  echo "Deleting service: $service_path"
-  om "$service_path" delete --force
-  return $?
-}
 
 #===============================================================================
 # o_node_test_logger_ips
@@ -50,481 +21,358 @@ o_node_test_logger_ips() {
   return 0
 }
 
-#===============================================================================
-# o_task_function_create
-# ----------------------
-# Create an OpenSVC task that executes an HPS function.
-# Works on both IPS and nodes.
-#
-# Arguments:
-#   $1 - location (ips or node)
-#   $2 - type (e.g., storage, monitoring)
-#   $3 - function name to execute
-#   $4 - service name (optional, defaults to "<location>/<type>")
-#
-# Behaviour:
-#   - Creates an OpenSVC service if it doesn't exist
-#   - Adds a task named after the function
-#   - For IPS: sources /srv/hps-system/lib/functions.sh
-#   - For nodes: sources bootstrap and loads node functions
-#   - Uses bash shell explicitly
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#
-# Example usage:
-#   o_task_function_create ips storage hps_storage_check
-#   o_task_function_create node monitoring n_check_memory
-#
-#===============================================================================
-o_task_function_create() {
-  local location="$1"
-  local type="$2"
-  local function_name="$3"
-  local service_name="${4:-${location}-${type}}"
-  
-  if [ -z "$location" ] || [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_function_create <ips|node> <type> <function_name> [service_name]"
-    return 1
-  fi
-  
-  # Validate location
-  if [ "$location" != "ips" ] && [ "$location" != "node" ]; then
-    echo "ERROR: Location must be 'ips' or 'node'"
-    return 1
-  fi
-  
-  # Create the service path - use system namespace for production, test for testing
-  local namespace="${HPS_OPENSVC_NAMESPACE:-test}"
-  local service_path="${namespace}/svc/${service_name}"
-  
-  # Build the command based on location
-  local cmd
-  if [ "$location" = "ips" ]; then
-    cmd="/bin/bash -c '. /srv/hps-system/lib/functions.sh && ${function_name}'"
-  else
-    cmd="/bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_load_node_functions && ${function_name}'"
-  fi
-  
-  # Create service (ignore if already exists)
-  om "${service_path}" create 2>/dev/null || true
-  
-  # Small delay to ensure service is ready
-  sleep 0.5
-  
-  # Create the task
-  om "${service_path}" set --kw "task#${function_name}.command=${cmd}"
-  
-  if [ $? -eq 0 ]; then
-    echo "Created ${location} task '${function_name}' in service '${service_path}'"
-    return 0
-  else
-    echo "ERROR: Failed to create ${location} task '${function_name}' in service '${service_path}'"
-    return 1
-  fi
-}
+
+# --------# -
 
 #===============================================================================
-# o_task_function_run
-# -------------------
-# Run an OpenSVC task that was created for an HPS function.
-# Works on both IPS and nodes.
-#
-# Arguments:
-#   $1 - location (ips or node)
-#   $2 - type (e.g., storage, monitoring)
-#   $3 - function name to run
-#   $4 - service name (optional, defaults to "<location>/<type>")
-#
-# Behaviour:
-#   - Runs the specified task in the OpenSVC service
-#   - Outputs the result
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#
-# Example usage:
-#   o_task_function_run ips storage hps_storage_check
-#   o_task_function_run node monitoring n_check_memory
-#
-#===============================================================================
-o_task_function_run() {
-  local location="$1"
-  local type="$2"
-  local function_name="$3"
-  local service_name="${4:-${location}/${type}}"
-  
-  if [ -z "$location" ] || [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_function_run <ips|node> <type> <function_name> [service_name]"
-    return 1
-  fi
-  
-  # Create the service path
-  local service_path="test/svc/${service_name}"
-  
-  # Run the task
-  om "${service_path}" run --rid "task#${function_name}"
-  
-  return $?
-}
-
-#===============================================================================
-# o_task_function_create_with_params
-# ----------------------------------
-# Create an OpenSVC task that executes an HPS function with parameters.
-# Works on both IPS and nodes.
-#
-# Arguments:
-#   $1 - location (ips or node)
-#   $2 - type (e.g., storage, monitoring)
-#   $3 - function name to execute
-#   $4 - parameters to pass to the function
-#   $5 - service name (optional, defaults to "<location>/<type>")
-#
-# Behaviour:
-#   - Creates an OpenSVC service if it doesn't exist
-#   - Adds a task named after the function
-#   - Task sources appropriate functions and executes with parameters
-#   - Uses bash shell explicitly
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#
-# Example usage:
-#   o_task_function_create_with_params ips storage hps_storage_check "sda 1024"
-#   o_task_function_create_with_params node monitoring n_check_load "5 10"
-#
-#===============================================================================
-o_task_function_create_with_params() {
-  local location="$1"
-  local type="$2"
-  local function_name="$3"
-  local params="$4"
-  local service_name="${5:-${location}/${type}}"
-  
-  if [ -z "$location" ] || [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_function_create_with_params <ips|node> <type> <function_name> <params> [service_name]"
-    return 1
-  fi
-  
-  # Validate location
-  if [ "$location" != "ips" ] && [ "$location" != "node" ]; then
-    echo "ERROR: Location must be 'ips' or 'node'"
-    return 1
-  fi
-  
-  # Create the service path
-  local service_path="test/svc/${service_name}"
-  
-  # Build the command based on location
-  local cmd
-  if [ "$location" = "ips" ]; then
-    cmd="/bin/bash -c '. /srv/hps-system/lib/functions.sh && ${function_name} ${params}'"
-  else
-    cmd="/bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_load_node_functions && ${function_name} ${params}'"
-  fi
-  
-  # Create service (ignore if already exists)
-  om "${service_path}" create 2>/dev/null || true
-  
-  # Small delay to ensure service is ready
-  sleep 0.5
-  
-  # Create the task with parameters
-  om "${service_path}" set --kw "task#${function_name}.command=${cmd}"
-  
-  if [ $? -eq 0 ]; then
-    echo "Created ${location} task '${function_name}' with params '${params}' in service '${service_path}'"
-    return 0
-  else
-    echo "ERROR: Failed to create ${location} task '${function_name}' in service '${service_path}'"
-    return 1
-  fi
-}
-
-#===============================================================================
-# o_log
-# -----
-# Agnostic logging function that works on both IPS and nodes.
-#
-# Arguments:
-#   $1 - log level (info, warn, error)
-#   $2 - message
-#
-# Behaviour:
-#   - On IPS: uses hps_log if available
-#   - On nodes: uses n_remote_log if available
-#   - Falls back to logger if neither is available
-#
-# Returns:
-#   0 on success
-#
-# Example usage:
-#   o_log info "Task completed successfully"
-#   o_log error "Failed to execute task"
-#
-#===============================================================================
-o_log() {
-  local level="$1"
-  local message="$2"
-  
-  # Try hps_log first (IPS)
-  if command -v hps_log >/dev/null 2>&1; then
-    hps_log "$level" "$message"
-  # Try n_remote_log (node)
-  elif command -v n_remote_log >/dev/null 2>&1; then
-    n_remote_log "[$level] $message"
-  # Fall back to logger
-  else
-    logger -t "opensvc" "[$level] $message"
-  fi
-}
-
-#===============================================================================
-# o_test_params
+# o_task_create
 # -------------
-# Test function for parameter demonstration that works on both IPS and nodes.
+# Create or update a task resource in an OpenSVC service.
 #
-# Arguments:
-#   Any number of parameters
+# Usage:
+#   o_task_create <service_name> <task_id> <command> <nodes>
+#
+# Parameters:
+#   service_name - Service name (e.g., "storage", "healthcheck", "system")
+#   task_id      - Task resource ID (e.g., "check_capacity", "vm_start")
+#   command      - The command to execute (spaces allowed, no quotes needed)
+#   nodes        - Space-separated node list or "all" for all cluster nodes
+#
+# Behavior:
+#   - Creates service if it doesn't exist (with orchestrate=no)
+#   - Adds new task or updates existing task using om config update
+#   - Preserves all existing tasks and service ID
+#   - Unfreezes and clears error states
+#   - Service ready for o_task_run
 #
 # Returns:
 #   0 on success
+#   1 on failure
 #
 # Example usage:
-#   o_test_params param1 param2 param3
+#   o_task_create "storage" "check_capacity" "df -h" "tch-001 tch-002"
+#   o_task_create "healthcheck" "ping_test" "ping -c 1 8.8.8.8" "all"
+#   o_task_create "system" "reboot_node" "reboot" "tch-001"
 #
 #===============================================================================
-o_test_params() {
-  o_log info "Function: o_test_params"
-  o_log info "Number of parameters: $#"
-  o_log info "Parameters: $*"
+o_task_create() {
+  local service_name="$1"
+  local task_id="$2"
+  local command="$3"
+  local nodes="$4"
   
-  local count=1
-  for param in "$@"; do
-    o_log info "  Param $count: $param"
-    ((count++))
-  done
+  # Validate parameters
+  if [ -z "$service_name" ] || [ -z "$task_id" ] || [ -z "$command" ] || [ -z "$nodes" ]; then
+    o_log "o_task_create: missing required parameters" "err"
+    return 1
+  fi
   
+  # Check for unsupported quote characters in command
+  if echo "$command" | grep -q '["]'; then
+    o_log "o_task_create: command contains unsupported quote characters. Use commands without quotes (e.g., 'echo Task1' not 'echo \"Task 1\"')" "err"
+    return 1
+  fi
+  
+  # Expand "all" to actual node list
+  if [ "$nodes" = "all" ]; then
+    nodes="ips tch-001 tch-002"
+  fi
+  
+  # Check if service exists
+  if om "$service_name" print config >/dev/null 2>&1; then
+    o_log "Service $service_name exists, will update task" "info"
+  else
+    # Create new service
+    o_log "Creating new service $service_name" "info"
+    if ! om "$service_name" create --kw nodes="$nodes" --kw orchestrate=no >/dev/null 2>&1; then
+      o_log "Failed to create service $service_name" "err"
+      return 1
+    fi
+    # Wait for service to be registered by daemon
+    sleep 2
+  fi
+  
+  # Add or update task using config update
+  o_log "Adding/updating task $task_id in service $service_name" "info"
+  if ! om "$service_name" config update --set "task#${task_id}.command=${command}" >/dev/null 2>&1; then
+    o_log "Failed to add/update task $task_id" "err"
+    return 1
+  fi
+  
+  # Unfreeze and clear error states
+  o_log "Unfreezing service $service_name" "info"
+  om "$service_name" unfreeze >/dev/null 2>&1
+  
+  o_log "Clearing error states for service $service_name" "info"
+  om "$service_name" clear >/dev/null 2>&1
+  
+  o_log "Task $task_id created/updated in service $service_name" "info"
   return 0
 }
+
+
+
+#!/bin/bash
+
+#===============================================================================
+# o_task_delete
+# -------------
+# Delete a task from a service, or delete an entire service.
+#
+# Usage:
+#   o_task_delete <service_name> [task_id]
+#
+# Parameters:
+#   service_name - Service name (required)
+#   task_id      - Specific task to delete (optional, if omitted deletes service)
+#
+# Behavior:
+#   - If task_id provided: Removes only that task using om config update --delete
+#   - If task_id omitted: Deletes entire service (abort, purge, delete)
+#   - Uses aggressive cleanup (abort + purge) to force service removal
+#   - Empty services are preserved when deleting last task
+#
+# Returns:
+#   0 on success
+#   1 on failure (task/service doesn't exist)
+#
+# Example usage:
+#   o_task_delete "storage" "check_capacity"    # Delete one task
+#   o_task_delete "testservice"                 # Delete entire service
+#
+#===============================================================================
+o_task_delete() {
+  local service_name="$1"
+  local task_id="$2"
+  
+  # Validate service name
+  if [ -z "$service_name" ]; then
+    o_log "o_task_delete: service_name is required" "err"
+    return 1
+  fi
+  
+  # Check if service exists
+  if ! om "$service_name" print config >/dev/null 2>&1; then
+    o_log "Service $service_name does not exist" "warning"
+    return 1
+  fi
+  
+  # Delete entire service if no task_id provided
+  if [ -z "$task_id" ]; then
+    o_log "Deleting entire service $service_name" "info"
+    
+    # Abort any running operations
+    o_log "Aborting any operations on $service_name" "info"
+    om "$service_name" abort >/dev/null 2>&1
+    
+    sleep 2
+    
+    # Purge (unprovision and delete)
+    o_log "Purging service $service_name" "info"
+    om "$service_name" purge >/dev/null 2>&1
+    
+    sleep 2
+    
+    # Final delete to ensure config is removed
+    o_log "Deleting service $service_name" "info"
+    if om "$service_name" delete >/dev/null 2>&1; then
+      o_log "Service $service_name deleted successfully" "info"
+      return 0
+    else
+      # Check if service is actually gone
+      if ! om "$service_name" print config >/dev/null 2>&1; then
+        o_log "Service $service_name deleted successfully" "info"
+        return 0
+      else
+        o_log "Failed to delete service $service_name" "err"
+        return 1
+      fi
+    fi
+  fi
+  
+  # Delete specific task
+  o_log "Deleting task $task_id from service $service_name" "info"
+  
+  # Check if task exists
+  local task_exists
+  task_exists=$(om "$service_name" print config | grep -E "^\[task#${task_id}\]")
+  
+  if [ -z "$task_exists" ]; then
+    o_log "Task $task_id does not exist in service $service_name" "warning"
+    return 1
+  fi
+  
+  # Delete task using config update
+  if om "$service_name" config update --delete "task#${task_id}" >/dev/null 2>&1; then
+    o_log "Task $task_id deleted from service $service_name" "info"
+    return 0
+  else
+    o_log "Failed to delete task $task_id from service $service_name" "err"
+    return 1
+  fi
+}
+
 
 #===============================================================================
 # o_task_list
 # -----------
-# List tasks in a service.
+# List all OpenSVC services and their tasks.
 #
-# Arguments:
-#   $1 - location (ips or node)
-#   $2 - type (e.g., storage, monitoring)
-#   $3 - service name (optional, defaults to "<location>/<type>")
+# Usage:
+#   o_task_list [service_name]
+#
+# Parameters:
+#   service_name - (optional) Specific service to list. If omitted, lists all.
+#
+# Behavior:
+#   - Lists services with their orchestration settings and tasks
+#   - Shows task commands for each service
+#   - If service_name provided, shows only that service
 #
 # Returns:
 #   0 on success
 #   1 on failure
 #
 # Example usage:
-#   o_task_list ips storage
-#   o_task_list node monitoring
+#   o_task_list
+#   o_task_list storage
 #
 #===============================================================================
 o_task_list() {
-  local location="$1"
-  local type="$2"
-  local service_name="${3:-${location}-${type}}"
-  local namespace="${HPS_OPENSVC_NAMESPACE:-test}"
-  local service_path="${namespace}/svc/${service_name}"
+  local service_name="$1"
   
-  echo "Tasks in service: ${service_path}"
-  om "${service_path}" print config --rid 'task#*' 2>/dev/null || echo "Service not found"
-}
-
-#===============================================================================
-# o_task_run_on_nodes
-# -------------------
-# Run a task on multiple nodes (called from IPS).
-#
-# Arguments:
-#   $1 - type (e.g., storage, monitoring)
-#   $2 - function name
-#   $3 - node selector (optional, defaults to all nodes)
-#
-# Behaviour:
-#   - Uses OpenSVC to run the task on selected nodes
-#   - Task must already exist in node/<type> service
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#
-# Example usage:
-#   o_task_run_on_nodes monitoring n_check_memory
-#   o_task_run_on_nodes storage n_check_disk "@nodes"
-#
-#===============================================================================
-o_task_run_on_nodes() {
-  local type="$1"
-  local function_name="$2"
-  local node_selector="${3:-}"  # Empty means current node
-  
-  if [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_run_on_nodes <type> <function_name> [node_selector]"
-    return 1
-  fi
-  
-  local namespace="${HPS_OPENSVC_NAMESPACE:-test}"
-  local service_path="${namespace}/svc/node-${type}"
-  
-  # Run on nodes
-  if [ -z "$node_selector" ]; then
-    # Run on current node
-    om "${service_path}" run --rid "task#${function_name}"
-  else
-    # Run on specified nodes
-    om "${service_path}" run --rid "task#${function_name}" --node "${node_selector}"
-  fi
-  
-  return $?
-}
-
-#===============================================================================
-# o_task_deploy_to_node
-# ---------------------
-# Deploy a task configuration to a specific node from IPS.
-# This creates the service and task on the target node.
-#
-# Arguments:
-#   $1 - node name (e.g., tch-001)
-#   $2 - type (e.g., storage, monitoring)
-#   $3 - function name to execute
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#
-# Example usage:
-#   o_task_deploy_to_node tch-001 monitoring o_node_test_logger
-#
-#===============================================================================
-o_task_deploy_to_node() {
-  local node="$1"
-  local type="$2"
-  local function_name="$3"
-  
-  if [ -z "$node" ] || [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_deploy_to_node <node> <type> <function_name>"
-    return 1
-  fi
-  
-  local namespace="${HPS_OPENSVC_NAMESPACE:-test}"
-  local service_name="node-${type}"
-  local service_path="${namespace}/svc/${service_name}"
-  
-  # Create the service on the specific node
-  echo "Creating service on node ${node}..."
-  om "${service_path}" create --node "${node}"
-  
-  # Set the task configuration on that node
-  echo "Configuring task on node ${node}..."
-  om "${service_path}" set \
-    --node "${node}" \
-    --kw "task#${function_name}.command=/bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_load_node_functions && ${function_name}'"
-  
-  if [ $? -eq 0 ]; then
-    echo "Task '${function_name}' deployed to node '${node}'"
-    return 0
-  else
-    echo "ERROR: Failed to deploy task to node '${node}'"
-    return 1
-  fi
-}
-
-#===============================================================================
-# o_task_run_on_node
-# ------------------
-# Run a task on a specific node.
-#
-# Arguments:
-#   $1 - node name
-#   $2 - type (e.g., storage, monitoring)  
-#   $3 - function name
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#
-# Example usage:
-#   o_task_run_on_node tch-001 monitoring o_node_test_logger
-#
-#===============================================================================
-o_task_run_on_node() {
-  local node="$1"
-  local type="$2"
-  local function_name="$3"
-  
-  if [ -z "$node" ] || [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_run_on_node <node> <type> <function_name>"
-    return 1
-  fi
-  
-  local namespace="${HPS_OPENSVC_NAMESPACE:-test}"
-  local service_path="${namespace}/svc/node-${type}"
-  
-  echo "Running task '${function_name}' on node '${node}'..."
-  om "${service_path}" run --rid "task#${function_name}" --node "${node}"
-  
-  return $?
-}
-
-#===============================================================================
-# o_task_deploy_to_all_nodes
-# --------------------------
-# Deploy a task to all compute nodes (excluding IPS).
-#
-# Arguments:
-#   $1 - type (e.g., storage, monitoring)
-#   $2 - function name
-#
-# Returns:
-#   0 on success
-#   1 on any failure
-#
-# Example usage:
-#   o_task_deploy_to_all_nodes monitoring o_node_test_logger
-#
-#===============================================================================
-o_task_deploy_to_all_nodes() {
-  local type="$1"
-  local function_name="$2"
-  
-  if [ -z "$type" ] || [ -z "$function_name" ]; then
-    echo "ERROR: Usage: o_task_deploy_to_all_nodes <type> <function_name>"
-    return 1
-  fi
-  
-  local failed=0
-  
-  # Get all nodes and deploy to each (except IPS)
-  for node in $(om node list | grep -v "^ips"); do
-    echo "Deploying to node: ${node}"
-    if o_task_deploy_to_node "${node}" "${type}" "${function_name}"; then
-      echo "  ✓ Success"
-    else
-      echo "  ✗ Failed"
-      ((failed++))
+  # Get list of services
+  local services
+  if [ -n "$service_name" ]; then
+    # Check if specific service exists
+    if ! om "$service_name" print config >/dev/null 2>&1; then
+      o_log "Service $service_name not found" "err"
+      return 1
     fi
-  done
-  
-  if [ $failed -eq 0 ]; then
-    echo "All deployments successful"
-    return 0
+    services="$service_name"
   else
-    echo "${failed} deployments failed"
+    # Get all services
+    services=$(om svc list 2>/dev/null | grep -v "^OBJECT" | awk '{print $1}')
+    
+    if [ -z "$services" ]; then
+      echo "No services found"
+      return 0
+    fi
+  fi
+  
+  echo "Services:"
+  
+  # Process each service
+  while IFS= read -r svc; do
+    [ -z "$svc" ] && continue
+    
+    # Get service configuration
+    local config
+    config=$(om "$svc" print config 2>/dev/null)
+    
+    if [ -z "$config" ]; then
+      continue
+    fi
+    
+    # Extract service details
+    local orchestrate
+    orchestrate=$(echo "$config" | grep "^orchestrate = " | sed 's/^orchestrate = //' | tr '\n' ' ' | xargs)
+    
+    local nodes
+    nodes=$(echo "$config" | grep "^nodes = " | sed 's/^nodes = //' | tr '\n' ' ' | xargs)
+    
+    # Get task list
+    local tasks
+    tasks=$(echo "$config" | grep -E "^\[task#" | sed 's/\[//;s/\]//')
+    
+    # Skip services with no tasks
+    if [ -z "$tasks" ]; then
+      continue
+    fi
+    
+    # Print service header
+    echo "  $svc (orchestrate=${orchestrate:-none}, nodes=${nodes:-none})"
+    
+    # Print each task
+    while IFS= read -r task; do
+      [ -z "$task" ] && continue
+      
+      # Get task command
+      local task_cmd
+      task_cmd=$(om "$svc" print config --section "$task" 2>/dev/null | grep "^command = " | sed 's/^command = //')
+      
+      if [ -n "$task_cmd" ]; then
+        echo "    - $task: $task_cmd"
+      fi
+    done <<< "$tasks"
+    
+    echo ""
+  done <<< "$services"
+  
+  return 0
+}
+
+
+#===============================================================================
+# o_log
+# -----
+# Log messages to syslog with priority levels for OpenSVC operations.
+#
+# Usage:
+#   o_log <message> [priority]
+#
+# Parameters:
+#   message  - The log message string (required)
+#   priority - Syslog priority: err, warning, info, debug (optional, default: info)
+#   facility - Syslog facility (optional, default: user)
+#
+# Returns:
+#   0 on success
+#   1 on failure
+#
+# Example usage:
+#   o_log "Task started successfully" "info"
+#   o_log "Connection failed" "err"
+#   o_log "Low disk space" "warning"
+#   o_log "Task completed"
+#   o_log "Critical error" "err" "local0"
+#
+#===============================================================================
+o_log() {
+  local message="$1"
+  local priority="${2:-info}"
+  local facility="${3:-user}"
+  local tag="opensvc"
+  
+  # Validate message parameter
+  if [ -z "$message" ]; then
+    logger -t "$tag" -p user.err "o_log called with empty message"
     return 1
   fi
+  
+  # Validate priority parameter
+  case "$priority" in
+    err|warning|info|debug)
+      ;;
+    *)
+      logger -t "$tag" -p user.warning "o_log: invalid priority '$priority', using 'info'"
+      priority="info"
+      ;;
+  esac
+  
+  # Validate facility parameter
+  case "$facility" in
+    user|local0|local1|local2|local3|local4|local5|local6|local7|daemon|auth|syslog)
+      ;;
+    *)
+      logger -t "$tag" -p user.warning "o_log: invalid facility '$facility', using 'user'"
+      facility="user"
+      ;;
+  esac
+  
+  # Log the message
+  logger -t "$tag" -p "${facility}.${priority}" "$message"
+  return $?
 }
 
 

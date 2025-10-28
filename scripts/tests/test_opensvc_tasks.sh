@@ -1,83 +1,72 @@
 #!/bin/bash
 
 #===============================================================================
-# o_node_test_logger
+# test_o_task_create
 # ------------------
-# Test function that logs information about where it's running.
-# Designed to verify task execution on nodes.
+# Test the o_task_create function.
 #
-# Behaviour:
-#   - Logs hostname, date, and any parameters passed
-#   - Uses o_log for agnostic logging
-#   - Includes process ID to track execution
-#
-# Returns:
-#   0 on success
-#
-# Example usage:
-#   o_node_test_logger
-#   o_node_test_logger "custom message"
+# Usage:
+#   ./test_o_task_create.sh
 #
 #===============================================================================
-o_node_test_logger() {
-  local custom_msg="${1:-No custom message}"
-  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-  
-  # Log using the agnostic logging function
-  o_log info "NODE_TASK_TEST: Running on host: $(hostname)"
-  o_log info "NODE_TASK_TEST: Timestamp: ${timestamp}"
-  o_log info "NODE_TASK_TEST: Process ID: $$"
-  o_log info "NODE_TASK_TEST: Custom message: ${custom_msg}"
-  
-  # Also use logger directly to ensure visibility
-  logger -t "node_task_test" "Executed on $(hostname) at ${timestamp}, PID: $$, MSG: ${custom_msg}"
-  
-  return 0
-}
 
-#===============================================================================
-# Test script to demonstrate IPS creating and running node tasks
-#===============================================================================
+source /srv/hps-system/lib/functions.sh 
 
-echo "=== Node Task Execution Test ==="
-echo
+echo "=== Testing o_task_create function ==="
+echo ""
 
-# Step 1: Create the task on IPS
-echo "1. Creating node task from IPS..."
-if o_task_function_create node monitoring o_node_test_logger; then
-  echo "   ✓ Task created successfully"
-else
-  echo "   ✗ Failed to create task"
-  exit 1
-fi
+# Test 1: Create a new service with one task
+echo "Test 1: Create new service 'testservice' with task 'test1'"
+o_task_create "testservice" "test1" 'logger -t TASK_TEST "Test1 executed on $(hostname -s)"' "all"
+echo "Return code: $?"
+echo ""
 
-# Step 2: Verify task configuration
-echo
-echo "2. Verifying task configuration..."
-o_task_list node monitoring
+# Wait for deployment
+sleep 3
 
-# Step 3: Run the task on nodes
-echo
-echo "3. Running task on all nodes..."
-if o_task_run_on_nodes monitoring o_node_test_logger; then
-  echo "   ✓ Task execution command sent"
-else
-  echo "   ✗ Failed to run task on nodes"
-fi
+# Verify service was created
+echo "Verifying service configuration:"
+om testservice print config
+echo ""
 
-# Step 4: Create and run a task with parameters
-echo
-echo "4. Creating task with parameters..."
-if o_task_function_create_with_params node monitoring o_node_test_logger "Test from IPS at $(date)"; then
-  echo "   ✓ Parameterized task created"
-fi
+# Test 2: Add a second task to existing service
+echo "Test 2: Add second task 'test2' to testservice"
+o_task_create "testservice" "test2" 'logger -t TASK_TEST "Test2 executed on $(hostname -s)"' "all"
+echo "Return code: $?"
+echo ""
 
-echo
-echo "5. Running parameterized task on nodes..."
-o_task_run_on_nodes monitoring o_node_test_logger
+sleep 2
 
-echo
-echo "=== Test Complete ==="
-echo "Check logs on nodes for NODE_TASK_TEST entries"
-echo "On nodes, check: journalctl -t node_task_test -n 10"
-echo "Or HPS logs for entries with NODE_TASK_TEST"
+# Verify both tasks exist
+echo "Verifying both tasks exist:"
+om testservice print config
+echo ""
+
+# Test 3: Update existing task
+echo "Test 3: Update task 'test1' with new command"
+o_task_create "testservice" "test1" 'logger -t TASK_TEST "Test1 UPDATED on $(hostname -s)"' "all"
+echo "Return code: $?"
+echo ""
+
+sleep 2
+
+# Verify update
+echo "Verifying task was updated:"
+om testservice print config
+echo ""
+
+# Test 4: Run the tasks to verify they work
+echo "Test 4: Running tasks to verify execution"
+echo "Running test1..."
+om testservice run --rid task#test1 --node ips
+sleep 2
+
+echo "Running test2..."
+om testservice run --rid task#test2 --node ips
+sleep 2
+
+echo ""
+echo "=== Tests complete ==="
+echo "Check logs with: grep TASK_TEST /srv/hps-system/log/rsyslog/*/$(date +%Y-%m-%d)*"
+echo ""
+echo "Cleanup: om testservice delete"
