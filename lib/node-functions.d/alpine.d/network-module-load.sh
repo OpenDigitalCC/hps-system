@@ -158,6 +158,7 @@ n_auto_load_network_modules() {
     "r8169"      # Realtek
     "virtio_net" # Virtual machines
     "vmxnet3"    # VMware
+    "tun"       # Tunnel
   )
   
   n_remote_log "[NET] Checking common network modules..."
