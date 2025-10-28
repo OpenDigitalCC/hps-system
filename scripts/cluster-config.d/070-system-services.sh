@@ -18,7 +18,7 @@ fi
 # Get current values with DHCP IP as fallback default
 current_syslog=$(config_get_value "SYSLOG_SERVER" "$dhcp_ip")
 current_dns=$(config_get_value "NAME_SERVER" "$dhcp_ip")
-current_ntp=$(config_get_value "TIME_SERVER" "$dhcp_ip")
+current_ntp=$(config_get_value "NTP_SERVER" "$dhcp_ip")
 
 cli_note "The DHCP server IP ($dhcp_ip) can provide syslog, DNS, and NTP services"
 
