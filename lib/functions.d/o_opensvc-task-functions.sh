@@ -84,7 +84,7 @@ o_task_create() {
   else
     # Create new service
     o_log "Creating new service $service_name" "info"
-    if ! om "$service_name" create --kw nodes="$nodes" --kw orchestrate=no >/dev/null 2>&1; then
+    if ! om "$service_name" create --kw nodes="$nodes" --kw orchestrate=ha >/dev/null 2>&1; then
       o_log "Failed to create service $service_name" "err"
       return 1
     fi
@@ -112,7 +112,122 @@ o_task_create() {
 
 
 
-#!/bin/bash
+
+
+#===============================================================================
+# o_task_run
+# ----------
+# Execute a task resource across OpenSVC service instances.
+#
+# Usage:
+#   o_task_run <service_name> <task_id> [node]
+#
+# Parameters:
+#   service_name - Service name (required)
+#   task_id      - Task resource ID (required)
+#   node         - Target node or "all" for all instances (optional, default: all)
+#
+# Behavior:
+#   - Validates service and task exist
+#   - If node specified (not "all"), validates instance exists on that node
+#   - Executes task on target node(s) synchronously
+#   - Logs execution start, output, and completion
+#   - Returns after task completion
+#
+# Returns:
+#   0 on successful task execution
+#   1 if service doesn't exist
+#   2 if task doesn't exist in service
+#   3 if specified node doesn't have service instance
+#   5 if om run command fails
+#
+# Example usage:
+#   o_task_run "storage" "check_capacity"
+#   o_task_run "storage" "check_capacity" "sch-001"
+#   o_task_run "healthcheck" "ping_test" "all"
+#
+#===============================================================================
+o_task_run() {
+  local service_name="$1"
+  local task_id="$2"
+  local node="${3:-all}"
+  
+  # Validate parameters
+  if [ -z "$service_name" ] || [ -z "$task_id" ]; then
+    o_log "o_task_run: service_name and task_id are required" "err"
+    return 1
+  fi
+  
+  # Check if service exists
+  if ! om "$service_name" print config >/dev/null 2>&1; then
+    o_log "o_task_run: service $service_name does not exist" "err"
+    return 1
+  fi
+  
+  # Check if task exists in service
+  if ! om "$service_name" print config | grep -q "^\[task#${task_id}\]"; then
+    o_log "o_task_run: task $task_id does not exist in service $service_name" "err"
+    return 2
+  fi
+  
+  # If specific node requested, validate instance exists
+  if [ "$node" != "all" ]; then
+    if ! om "$service_name" instance ls 2>/dev/null | grep -q "^${service_name}.*${node}"; then
+      o_log "o_task_run: service $service_name has no instance on node $node" "err"
+      return 3
+    fi
+  fi
+  
+  # Build om command
+  local om_cmd="om $service_name run --rid task#${task_id}"
+  
+  if [ "$node" != "all" ]; then
+    om_cmd="$om_cmd --node $node"
+  fi
+  
+  # Log execution start
+  local target_desc="all nodes"
+  if [ "$node" != "all" ]; then
+    target_desc="node $node"
+  fi
+  o_log "Executing task $task_id from service $service_name on $target_desc" "info"
+  
+  # Execute task and capture output
+  local start_time=$(date +%s)
+  local output
+  local exit_code
+  
+  output=$(eval "$om_cmd" 2>&1)
+  exit_code=$?
+  
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+  
+  # Log output
+  if [ -n "$output" ]; then
+    while IFS= read -r line; do
+      if echo "$line" | grep -qE "ERR|WRN|Error|error"; then
+        o_log "task $task_id: $line" "warning"
+      else
+        o_log "task $task_id: $line" "debug"
+      fi
+    done <<< "$output"
+  fi
+  
+  # Log completion
+  if [ $exit_code -eq 0 ]; then
+    o_log "Task $task_id completed successfully on $target_desc (duration: ${duration}s)" "info"
+    return 0
+  else
+    o_log "Task $task_id failed on $target_desc with exit code $exit_code (duration: ${duration}s)" "err"
+    return 5
+  fi
+}
+
+
+
+
+
 
 #===============================================================================
 # o_task_delete
