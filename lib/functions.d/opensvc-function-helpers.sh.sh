@@ -65,22 +65,16 @@ EOF
   hps_log info "[opensvc] Installed wrapper: ${target}"
 }
 
-
+_osvc_setup_directories
 
 _opensvc_foreground_wrapper () {
   # Use HPS log dir if provided, fallback otherwise.
   LOGDIR="${HPS_LOG_DIR:-/srv/hps-system/log}"
 
-  # Preflight: required directories (ok if already exist)
-  mkdir -p /run/opensvc /var/log/opensvc /var/lib/opensvc "${LOGDIR}"
 
   # Run the v3 daemon in foreground so a supervisor can manage it if desired.
-  # Filter the noisy journald error lines from stderr; keep everything else.
-  # Agent also writes its own file log as configured in /etc/opensvc/opensvc.conf.
   exec /usr/bin/om daemon run | logger -t om -p local0.info
   #\
-   # 1>>"${LOGDIR}/opensvc.out.log" \
-    #2> >(stdbuf -o0 awk '!/zerolog: could not write event: write unixgram .*journal\/socket/' >> "${LOGDIR}/opensvc.err.log")
 
 }
 
@@ -504,9 +498,13 @@ osvc_process_commands() {
 }
 
 
+
+# Get an auth token from OpenSVC. Short-lived 
+# so that it is only used in this atomic operation
+# the joining client must use it straight away.
 _osvc_get_auth_token () {
 # TODO: add --subject calling hostname
-  echo $(om daemon auth --duration 30s --role join)
+  echo $(om daemon auth --duration 15s --role join)
 }
 
 
