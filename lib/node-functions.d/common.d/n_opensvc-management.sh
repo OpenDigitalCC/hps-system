@@ -1,19 +1,15 @@
 
 ## NODE Functions
+
+
 #
 n_osvc_start() {
-
   # prevent the default rc from running
   rc-update del opensvc-server default
   n_remote_log "Starting OpenSVC"
   nohup sh -c 'om daemon run 2>&1 | logger -t opensvc -p daemon.debug' >/dev/null 2>&1 &
-#  _n_launch_osvc &
   n_osvc_wait_for_socket
   n_remote_log "OpenSVC daemon started (logging to syslog)"
-}
-
-_n_launch_osvc () {
-  om daemon run 2>&1 | logger -t opensvc -p daemon.debug
 }
 
 
@@ -51,6 +47,8 @@ n_initialise_opensvc_cluster() {
 }
 
 
+
+# Collect token from IPS, use straight away as it is short-lived
 n_opensvc_join() {
   local osvc_node="ips"
   local osvc_token="$(n_ips_command osvc_cmd "osvc_cmd=get_auth_token")"
