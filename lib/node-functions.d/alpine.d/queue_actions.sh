@@ -3,6 +3,10 @@
 
 n_queue_add n_start_modloop
 
+
+# create and mount chroups fs
+n_queue_add n_create_cgroups
+
 # Get networking running correctly
 n_queue_add n_configure_minimal_networking
 
@@ -11,6 +15,9 @@ n_queue_add n_force_network_started
 
 # get hostnames etc running
 n_queue_add n_set_hostname_and_hosts
+
+# Set clock
+n_queue_add n_setup_ntp
 
 # Start base services - required for syslog etc
 n_queue_add n_start_base_services
@@ -41,4 +48,8 @@ n_queue_add n_initialise_opensvc_cluster
 
 # set up reboot trap/log
 n_queue_add n_configure_reboot_logging
+
+n_queue_add n_configure_ips_profile
+
+
 

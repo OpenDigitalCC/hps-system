@@ -6,6 +6,119 @@ n_start_modloop () {
 }
 
 
+#===============================================================================
+# n_setup_ntp
+# -----------
+# Configure NTP time synchronization using busybox.
+#
+# Usage:
+#   n_setup_ntp
+#
+# Behaviour:
+#   - Retrieves TIME_SERVER from cluster configuration
+#   - Configures /etc/conf.d/ntpd with the specified NTP server
+#   - Falls back to pool.ntp.org if TIME_SERVER is not set
+#
+# Dependencies:
+#   - n_remote_cluster_variable function
+#   - ntpd package installed
+#
+# Returns:
+#   0 on success
+#   1 on failure
+#
+# Example usage:
+#   n_setup_ntp
+#
+#===============================================================================
+n_setup_ntp() {
+  local ntp_server
+  local ntpd_conf="/etc/conf.d/ntpd"
+  
+  n_remote_log "Configuring NTP time synchronization..."
+  
+  # Get NTP server from cluster config
+  ntp_server=$(n_remote_cluster_variable NTP_SERVER)
+  
+  # Fall back to default if not set
+  if [[ -z "${ntp_server}" ]]; then
+    ntp_server="pool.ntp.org"
+    n_remote_log "TIME_SERVER not set, using default: ${ntp_server}"
+  else
+    n_remote_log "Using TIME_SERVER: ${ntp_server}"
+  fi
+  
+  # Create ntpd configuration
+  cat > "${ntpd_conf}" <<EOF
+# By default ntpd runs as a client. Add -l to run as a server on port 123.
+NTPD_OPTS="-N -p ${ntp_server}"
+EOF
+  
+  if [[ ! -f "${ntpd_conf}" ]]; then
+    n_remote_log "ERROR: Failed to create ${ntpd_conf}"
+    return 1
+  fi
+  
+  n_remote_log "NTP configured successfully with server: ${ntp_server}"
+  return 0
+}
+
+
+#===============================================================================
+# n_configure_ips_profile
+# -----------------------
+# Create profile.d script to set up HPS environment for login shells.
+#
+# Usage:
+#   n_configure_ips_profile
+#
+# Behaviour:
+#   - Creates /etc/profile.d/hps-env.sh
+#   - Sets TERM to xterm
+#   - Sources HPS bootstrap library
+#   - Loads node functions
+#
+# Dependencies:
+#   - /usr/local/lib/hps-bootstrap-lib.sh must exist
+#
+# Returns:
+#   0 on success
+#   1 on failure
+#===============================================================================
+n_configure_ips_profile() {
+  local profile_script="/etc/profile.d/hps-env.sh"
+  
+  n_remote_log "Creating HPS profile script: ${profile_script}"
+  
+  # Create profile.d directory if it doesn't exist
+  mkdir -p /etc/profile.d
+  
+  cat > "${profile_script}" <<'EOF'
+#!/bin/bash
+# HPS environment setup for login shells
+
+# Set terminal type
+export TERM=xterm
+
+# Source HPS functions if available
+if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
+    . /usr/local/lib/hps-bootstrap-lib.sh
+    hps_load_node_functions
+fi
+EOF
+  
+  # Make executable
+  chmod +x "${profile_script}"
+  
+  if [[ ! -x "${profile_script}" ]]; then
+    n_remote_log "ERROR: Failed to create profile script"
+    return 1
+  fi
+  
+  n_remote_log "Profile script created successfully"
+  return 0
+}
+
 
 n_start_base_services() {
   n_remote_log "Starting base system services..."
@@ -25,6 +138,74 @@ n_start_base_services() {
       rc-service "$service" start || n_remote_log "WARNING: Failed to start $service"
     fi
   done
+  
+  return 0
+}
+
+
+#===============================================================================
+# n_create_cgroups
+# ----------------
+# Mount and configure cgroups v2 filesystem.
+#
+# Usage:
+#   n_create_cgroups
+#
+# Behaviour:
+#   - Checks if cgroup2 is already mounted on /sys/fs/cgroup
+#   - Mounts cgroup2 filesystem if not present
+#   - Verifies successful mount
+#   - Adds fstab entry for persistence across reboots
+#
+# Dependencies:
+#   - cgroup2 support in kernel
+#   - mount command available
+#
+# Returns:
+#   0 on success
+#   1 on mount failure
+#   2 on fstab update failure
+#
+# Example usage:
+#   n_create_cgroups
+#
+#===============================================================================
+n_create_cgroups() {
+  n_remote_log "Configuring cgroups v2..."
+  
+  # Check if cgroup2 is already mounted
+  if ! mount | grep -q "cgroup2 on /sys/fs/cgroup"; then
+    n_remote_log "Mounting cgroup2 filesystem on /sys/fs/cgroup"
+    
+    if ! mount -t cgroup2 none /sys/fs/cgroup; then
+      n_remote_log "ERROR: Failed to mount cgroup2"
+      return 1
+    fi
+  else
+    n_remote_log "cgroup2 already mounted"
+  fi
+  
+  # Verify mount succeeded
+  if ! mount | grep -q cgroup; then
+    n_remote_log "ERROR: cgroup2 mount verification failed"
+    return 1
+  fi
+  
+  n_remote_log "cgroup2 mounted successfully"
+  
+  # Add to fstab for persistence if not already present
+  if ! grep -q "cgroup2" /etc/fstab; then
+    n_remote_log "Adding cgroup2 to /etc/fstab for persistence"
+    
+    if ! echo "none /sys/fs/cgroup cgroup2 defaults 0 0" >> /etc/fstab; then
+      n_remote_log "ERROR: Failed to update /etc/fstab"
+      return 2
+    fi
+    
+    n_remote_log "fstab updated successfully"
+  else
+    n_remote_log "cgroup2 already present in /etc/fstab"
+  fi
   
   return 0
 }
