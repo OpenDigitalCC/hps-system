@@ -24,6 +24,8 @@ o_node_test_logger_ips() {
 
 # --------# -
 
+
+
 #===============================================================================
 # o_task_create
 # -------------
@@ -35,15 +37,23 @@ o_node_test_logger_ips() {
 # Parameters:
 #   service_name - Service name (e.g., "storage", "healthcheck", "system")
 #   task_id      - Task resource ID (e.g., "check_capacity", "vm_start")
-#   command      - The command to execute (spaces allowed, no quotes needed)
-#   nodes        - Space-separated node list or "all" for all cluster nodes
+#   command      - Shell command to execute (NO QUOTES - use `echo Task1` not `echo "Task 1"`)
+#   nodes        - Space-separated list or "all" (expands to: ips tch-001 tch-002)
 #
 # Behavior:
-#   - Creates service if it doesn't exist (with orchestrate=no)
-#   - Adds new task or updates existing task using om config update
+#   - Creates service if it doesn't exist (with orchestrate=ha)
+#   - Adds new task or updates existing task
+#   - Uses atomic operation (no race condition)
+#   - Validates commands don't contain quote characters
 #   - Preserves all existing tasks and service ID
 #   - Unfreezes and clears error states
 #   - Service ready for o_task_run
+#
+# Important Notes:
+#   - Commands CANNOT contain double quote characters (OpenSVC limitation)
+#   - For complex commands with quotes/pipes/redirects, use: /bin/sh -c 'command'
+#   - Variable expansion must be escaped: \$(hostname) not $(hostname)
+#   - Service names must use hyphens, not underscores (RFC952 compliance)
 #
 # Returns:
 #   0 on success
@@ -52,7 +62,7 @@ o_node_test_logger_ips() {
 # Example usage:
 #   o_task_create "storage" "check_capacity" "df -h" "tch-001 tch-002"
 #   o_task_create "healthcheck" "ping_test" "ping -c 1 8.8.8.8" "all"
-#   o_task_create "system" "reboot_node" "reboot" "tch-001"
+#   o_task_create "system" "hostname" "/bin/sh -c 'hostname > /tmp/host.txt'" "all"
 #
 #===============================================================================
 o_task_create() {
@@ -81,22 +91,20 @@ o_task_create() {
   # Check if service exists
   if om "$service_name" print config >/dev/null 2>&1; then
     o_log "Service $service_name exists, will update task" "info"
+    
+    # Update existing service - add/update task
+    o_log "Adding/updating task $task_id in service $service_name" "info"
+    if ! om "$service_name" config update --set "task#${task_id}.command=${command}" >/dev/null 2>&1; then
+      o_log "Failed to add/update task $task_id" "err"
+      return 1
+    fi
   else
-    # Create new service
-    o_log "Creating new service $service_name" "info"
-    if ! om "$service_name" create --kw nodes="$nodes" --kw orchestrate=ha >/dev/null 2>&1; then
+    # Create new service with task in single atomic operation
+    o_log "Creating new service $service_name with task $task_id" "info"
+    if ! om "$service_name" create --kw nodes="$nodes" --kw orchestrate=ha --kw "task#${task_id}.command=${command}" >/dev/null 2>&1; then
       o_log "Failed to create service $service_name" "err"
       return 1
     fi
-    # Wait for service to be registered by daemon
-    sleep 2
-  fi
-  
-  # Add or update task using config update
-  o_log "Adding/updating task $task_id in service $service_name" "info"
-  if ! om "$service_name" config update --set "task#${task_id}.command=${command}" >/dev/null 2>&1; then
-    o_log "Failed to add/update task $task_id" "err"
-    return 1
   fi
   
   # Unfreeze and clear error states
@@ -109,9 +117,6 @@ o_task_create() {
   o_log "Task $task_id created/updated in service $service_name" "info"
   return 0
 }
-
-
-
 
 
 #===============================================================================
@@ -226,9 +231,6 @@ o_task_run() {
 
 
 
-
-
-
 #===============================================================================
 # o_task_delete
 # -------------
@@ -243,8 +245,8 @@ o_task_run() {
 #
 # Behavior:
 #   - If task_id provided: Removes only that task using om config update --delete
-#   - If task_id omitted: Deletes entire service (abort, purge, delete)
-#   - Uses aggressive cleanup (abort + purge) to force service removal
+#   - If task_id omitted: Deletes entire service using om purge
+#   - Purge handles unprovision + config removal automatically
 #   - Empty services are preserved when deleting last task
 #
 # Returns:
@@ -276,30 +278,18 @@ o_task_delete() {
   if [ -z "$task_id" ]; then
     o_log "Deleting entire service $service_name" "info"
     
-    # Abort any running operations
-    o_log "Aborting any operations on $service_name" "info"
-    om "$service_name" abort >/dev/null 2>&1
-    
-    sleep 2
-    
-    # Purge (unprovision and delete)
+    # Purge handles unprovision and config deletion
     o_log "Purging service $service_name" "info"
-    om "$service_name" purge >/dev/null 2>&1
-    
-    sleep 2
-    
-    # Final delete to ensure config is removed
-    o_log "Deleting service $service_name" "info"
-    if om "$service_name" delete >/dev/null 2>&1; then
-      o_log "Service $service_name deleted successfully" "info"
+    if om "$service_name" purge >/dev/null 2>&1; then
+      o_log "Service $service_name purged successfully" "info"
       return 0
     else
       # Check if service is actually gone
       if ! om "$service_name" print config >/dev/null 2>&1; then
-        o_log "Service $service_name deleted successfully" "info"
+        o_log "Service $service_name purged successfully" "info"
         return 0
       else
-        o_log "Failed to delete service $service_name" "err"
+        o_log "Failed to purge service $service_name" "err"
         return 1
       fi
     fi
