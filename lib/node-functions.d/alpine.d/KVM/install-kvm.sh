@@ -33,7 +33,9 @@ n_install_kvm() {
         libvirt \
         libvirt-daemon \
         dbus \
-        libvirt-client; then
+        libvirt-client \
+        virt-install \
+        jq; then
         echo "[HPS] ERROR: Failed to install virtualization packages"
         n_remote_log "ERROR: Failed to install virtualization packages"
         n_remote_host_variable "virtualization_status" "install_failed"
@@ -99,7 +101,10 @@ n_install_kvm() {
 }
 
 
-
+n_start_libvirt () {
+  rc-service libvirtd start
+  rc-service virtlogd start
+}
 
 #===============================================================================
 # n_force_start_services

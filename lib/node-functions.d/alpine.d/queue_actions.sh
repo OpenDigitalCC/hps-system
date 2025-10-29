@@ -1,8 +1,8 @@
 
 # n_queue_add n_enable_console_output 
 
+# Set up modloop
 n_queue_add n_start_modloop
-
 
 # create and mount chroups fs
 n_queue_add n_create_cgroups
@@ -16,6 +16,10 @@ n_queue_add n_force_network_started
 # get hostnames etc running
 n_queue_add n_set_hostname_and_hosts
 
+# auto_load_network_modules
+#n_queue_add n_setup_network_modules_alpine
+n_queue_add n_auto_load_network_modules_safe
+
 # Set clock
 n_queue_add n_setup_ntp
 
@@ -25,23 +29,20 @@ n_queue_add n_start_base_services
 # start syslog
 n_queue_add n_configure_syslog
 
-# auto_load_network_modules
-#n_queue_add n_setup_network_modules_alpine
-n_queue_add n_auto_load_network_modules_safe
-
 # configure storage
 n_queue_add n_storage_provision
-
 
 # KVM install
 n_queue_add n_install_kvm
 
 # This starts libvirt and dbus
-n_queue_add n_force_start_services
+n_queue_add n_start_libvirt
+# this is deprecated if the above works
+#n_force_start_services
 
 # queue package installs
 # OpenSVC
-n_queue_add n_install_apk_packages_from_ips opensvc-server opensvc-client virt-install
+n_queue_add n_install_apk_packages_from_ips opensvc-server opensvc-client 
 
 n_queue_add n_osvc_start
 n_queue_add n_initialise_opensvc_cluster
