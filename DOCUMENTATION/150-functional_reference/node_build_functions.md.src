@@ -1,0 +1,47 @@
+### `node_build_functions`
+
+Contained in `lib/functions.d/configure-remote-host.sh`
+
+Function signature: 8fe3b8fb3493b177c8b7627e12acabde2dc6a3c50fd3ec7e8ba5b849d520717f
+
+### Function overview
+
+The `node_build_functions` function is designed to help to build the configuration for a particular `node` for a given `distro`. This script is a part of larger deployment strategy that makes use of a library of pre-defined scripts combined with a build configuration specific to a particular host.
+
+The main purpose of the function is to automate the process of selecting and including various pre-existing scripts that define certain functionality, and build a specific configuration bundle for a particular `distro`. It does so by sweeping through predefined directories and scripts, executes relevant build scripts and increments file count as it includes each file.
+
+### Technical description
+
+**Function Name:**
+`node_build_functions`
+
+**Description:**
+This function explores through directories with `.sh` files to create a configuration bundle for a given `distro`.
+
+**Globals:**
+- `LIB_DIR`: default directory to use for script sourcing.
+
+**Arguments:**
+- `$1`: an identifier for the distro for which to create the function bundle.
+- `$2`: optional base directory to source scripts from. Default value is `LIB_DIR+/node-functions.d`.
+
+**Outputs:** 
+Upon successful execution, this function will print out Logs to STDOUT and debug information.
+
+**Returns:** 
+This function does not explicitly return any value.
+
+**Example Usage:**
+```sh
+node_build_functions ubuntu /home/ubuntu/functions
+```
+
+### Quality and security recommendations
+
+1. Utilize a more comprehensive error handling system. Though the script has basic error handling and logs information, having more specific error handlers will increase the robustness of the script.
+2. Employ a standardized naming convention and file structures for scripts to promote maintainability of the code.
+3. Perform more thorough validation of incoming arguments, including a check for the existence of directories and files.
+4. Carefully manage the assignment and usage of global variables to avoid conflicts and ensure coherence throughout the script's runtime.
+5. Implement a script usage function that can demonstrate the correct use of the function if called incorrectly.
+6. Utilize a consistent logging level throughout all scripts for providing comprehensive debug information for troubleshooting.
+

@@ -1,0 +1,42 @@
+### `_do_pxe_boot `
+
+Contained in `lib/functions.d/ipxe-menu-functions.sh`
+
+Function signature: 9d3b17b8c5e6028b3f883300f98ad204285e605772a5cb88f45cb4606e86740f
+
+### Function Overview
+
+The function `_do_pxe_boot` is designed for initiating a network boot sequence by using iPXE, a leading open-source network boot firmware. It does so by constructing a shell script that iPXE executes to load a kernel and an initramfs image into memory and to boot a system.
+
+### Technical Description
+
+Here is a detailed explanation of the function itself:
+
+- **Name:** `_do_pxe_boot`
+- **Description:** Triggers a network boot sequence using iPXE. The function will first validate the required parameters - kernel and initrd. If both are present, it uses them to create a shell script, else an error message is logged and the function returns 1.
+- **Globals**:
+  - `IPXE_BOOT_INSTALL`: The variable that holds the shell script for iPXE to execute.
+- **Arguments**:
+  - `$1: kernel`: The location of the kernel to be booted.
+  - `$2: initrd`: The location of the initrd image.
+- **Outputs**: 
+  - IPXE script that is ready to be run
+  - Various log outputs depending on the completion of the process
+- **Returns**: 
+  - `0` if the shell script is successfully created
+  - `1` if either parameter is missing
+- **Example usage**:
+  
+  ```bash
+  _do_pxe_boot "/path/to/kernel" "/path/to/initrd"
+  ```
+
+### Quality and Security Recommendations
+
+1. To enhance security, consider authenticating or validating the source of the kernel and initrd images before performing the boot sequence.
+2. It would be beneficial to add error handling for when the `cat` command or `ipxe_header` function fails.
+3. The function doesn't check if the specified kernel and initrd files exist before creating the script. This can lead to boot failures. Consider adding checks for file existence.
+4. For improved portability, consider replacing the bash-specific syntax (like `[[ ]]`) with POSIX compliant alternatives (like `[ ]`).
+5. To increase the quality of the code, add comments detailing what each section of code does.
+6. It would be better to separate the generation of the script into a separate function to improve readability and maintainability.
+

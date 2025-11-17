@@ -1,0 +1,30 @@
+### `n_storage_auto_configure`
+
+Contained in `lib/node-functions.d/common.d/n_network-storage-functions.sh`
+
+Function signature: 55c01e597e7f0411d3ad5dbe517c5de657ce3823e117d7e2336947a6619eb87f
+
+### Function overview
+
+This function, `n_storage_auto_configure`, is designed to automatically setup a storage network on a specified interface or a default one. The function selects the interface, checks its status and, if necessary, brings it up. Then the function tries to acquire an IP address allocation. If it's successful, the function goes on parsing the data, configuring the network interface with the received details. At the end, a log is created indicating that the storage network is ready.
+
+### Technical description
+
+Definition block:
+
+- **Name:** `n_storage_auto_configure`
+- **Description:** This function automatically configures a storage network on a chosen interface.
+- **Globals:** None.
+- **Arguments:** `[ $1: The index of the storage (default is 0), $2: The name of a network interface that overrides the default (default is empty string) ]`
+- **Outputs:** Logs about the status and changes of the storage network configuration process.
+- **Returns:** 0 if the configuration is successful or 1 if there is an error on any step of the configuration.
+- **Example usage:** `n_storage_auto_configure 1 eth0`
+
+### Quality and security recommendations
+
+1. Always check the function's return value to ensure the configuration process was successful.
+2. Protect sensitive log data or redirect logs to a secure location.
+3. Consider implementing timeouts during the IP allocation request to prevent potential delays or hanged processes.
+4. Validate input data for the function to prevent potential security risks.
+5. Consider adding error handling for when `/sys/class/net/$iface/operstate` file doesn't exist.
+
