@@ -2,26 +2,27 @@
 
 Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
-Function signature: 1f7c5adf70ab3b0d8ce1dc04122eff4ae6c8141a95956ef26ee00221876e111c
+Function signature: 661ad0c2e5d0a1e6e7b7ae0750e05f8936edfed9f09540dd8481e0d908852b88
 
-### Function Overview
-The function ipxe_configure_main_menu is used for displaying the main menu options when a host is not configured in a cluster. The function logs and delivers a configuration menu. The menu contains options for a host to install, view configuration, recover from Disaster Recovery Host (DRH), enter rescue shell, boot from local disk, reboot, and set advanced options. Another significant feature is Forced installation which is set by checking global 'FORCE_INSTALL' and can be enabled or disabled from the menu.
+### Function overview
 
-### Technical Description
+This Bash function, `ipxe_configure_main_menu`, is designed to manage the main menu of iPXE (Internet boot firmware). It primarily checks if the host system is properly configured, logging particulars of the configuration and delivering a tailored menu to the user. The function invokes the iPXE header and host audit, checks if forced installation is set, and generates the main menu with various choices based on the particular host configuration. If forced installation is set, it adds an option to disable it, and if it's not set, it adds an option to enable it. The function also logs the selected menu item and sends a request to process that item.
 
-- **Name:** ipxe_configure_main_menu
-- **Description:** This bash function delivers a configuration menu with several options to manage a host that is not configured within a cluster. The options include various actions such as installing, viewing configurations, enabling forced installations, etc.
-- **Globals:** FORCE_INSTALL: An option that forces the installation process on next boot if set to "YES".
-- **Arguments:** None
-- **Outputs:** Outputs the configuration menu to the terminal
-- **Returns:** Doesn't return a value, executes commands based on the user's choice in the menu
-- **Example usage:** This function does not require any arguments. An example of usage would be simply calling the function as `ipxe_configure_main_menu`.
+### Technical description
 
-### Quality and Security Recommendations
+- **Name:** `ipxe_configure_main_menu`
+- **Description:** Configures and manages the main iPXE menu according to the host system configuration.
+- **Globals:** `mac`: used to identify the particular host system. `TITLE_PREFIX`: used in the formation of item title.
+- **Arguments:** `$1`, `$2`: this function does not seem to utilize any incoming arguments.
+- **Outputs:** Outputs iPXE configuration menu to stdout.
+- **Returns:** Does not explicitly return a value. The outcome of the function is primarily via side effects (i.e., printing to stdout and logging)
+- **Example Usage:** `ipxe_configure_main_menu`
 
-1. Ensure that the host config and all command line arguments are properly sanitized to prevent command injection vulnerabilities.
-2. It would be useful to check the statuses of operations like 'host_config' and short circuit the execution of the function, in the event of an error.
-3. Ensure that the logging mechanism in 'hps_log' properly sanitizes and escapes any string input to prevent log injection attacks.
-4. As a quality improvement, among the menu items, 'Recover from Disaster Recovery Host (DRH)' is mentioned as 'NOT YET IMPLEMENTED'. Consider implementing this feature or removing it from the menu to avoid user confusion. 
-5. For enhancing security while fetching the log, handle the failure case with more than just an echo statement. Prompt the user, or retry fetch.
+### Quality and security recommendations
+
+1. The function could benefit from sanitization and further validation of the global variable `$mac` before making use of it to prevent potential injection attacks.
+2. It will be worth checking if `host_config` is returning as expected before making a decision based on its output.
+3. In the absence of function arguments, it should be ensured that the variables being used inside this function, especially if they are globals, are always expected to be available. If not, it might cause unpredictable scenarios.
+4. The options in the menu include potentially dangerous actions like entering a rescue shell, booting from local disk, and rebooting the host. It is essential to ensure these actions are adequately guarded and only allowed to authorized personnel.
+5. Logging should be enhanced. Currently, only the selected menu item is being logged. It would be better to log the host configuration details, who is accessing the menu, and what actions they attempted after accessing.
 

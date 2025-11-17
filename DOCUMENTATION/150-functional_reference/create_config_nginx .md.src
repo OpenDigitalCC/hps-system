@@ -1,40 +1,39 @@
 ### `create_config_nginx `
 
-Contained in `lib/functions.d/create_config_nginx.sh`
+Contained in `lib/functions.d/create-config-nginx.sh`
 
-Function signature: d3d22d399af4c7c80fb8449bf421c864014acf615622669621bd6f5a2999ef5e
+Function signature: b7278dfa14d865f0725cb56191fcc50aadd7039d4a7b5eaf44665de2c2e75027
 
 ### Function overview
 
-The `create_config_nginx` shell function is designed to create and set up a configuration file for the nginx server. It begins by sourcing the active cluster file (if it exists) and defining the path for nginx's configuration file. The function then uses a heredoc (`<<EOF`) to write the server configurations, including worker processes, user and events into the nginx configuration file.
+The `create_config_nginx` function is utilized to create a new configuration for the nginx server. It sources the return value of the `get_active_cluster_filename` function, which should ideally refer to the active cluster filename. After defining the path to the nginx configuration file, it logs that the nginx configuration is being set up. The function then creates a new nginx configuration file with predefined values.
 
 ### Technical description
 
-**Name:** `create_config_nginx`
+**Name**: `create_config_nginx`
+   
+**Description**: The function creates a new nginx configuration using predefined values. The resulting configuration file path is derived from the `get_path_cluster_services_dir` function which is appended with "/nginx.conf".
 
-**Description:** This function creates an nginx configuration file with appropriate server settings.
+**Globals**: [ `get_active_cluster_filename`: Provides the active cluster filename, `get_path_cluster_services_dir`: Provides base directory path, `hps_log`: logs the information ]
 
-**Globals:** There is one global variable that this function interacts with:
-- `HPS_SERVICE_CONFIG_DIR`: The directory in which the nginx configuration file is located.
+**Arguments**: [ None ]
 
-**Arguments:** This function accepts no arguments.
+**Outputs**: This function outputs an nginx configuration file at the path defined by `NGINX_CONF`. The created file includes predefined configuration values.
 
-**Outputs:** This function outputs an `info` level log message about the configuration of nginx server.
+**Returns**: There is no specific return value as the function directly operates and creates the nginx configuration file.
 
-**Returns:** The function doesn't return any explicit value, since its primary task is writing to a file. If this operation is successful, it will implicitly return `0`. Else, it will return whatever error code is thrown by the failing command inside the function.
-
-**Example usage:** 
-
-```bash
+**Example usage**: 
+```
 create_config_nginx
 ```
+The example above will create an nginx configuration file with predefined values.
 
 ### Quality and security recommendations
-1. Implement a feature to validate the nginx configuration file after it's been written. The `nginx -t` command could be used for this.
-2. Consider using strict mode (`set -euo pipefail`) to handle potential errors.
-3. Add descriptive comments to the script for easier understanding and debugging.
-4. Configure the function to accept inputs such as worker_processes, user, worker_connections as arguments so it can be used more flexibly.
-5. Use ShellCheck (or a similar linter tool) to analyze the script for potential issues related to robustness, portability, and maintainability.
-6. Implement error handling. For example, check whether the `HPS_SERVICE_CONFIG_DIR` directory exists before trying to write to it.
-7. Consider encrypting sensitive information that might appear in logs or configuration files.
+
+1. Perform checks: Before sourcing `get_active_cluster_filename`, it's necessary to validate that the function returns a valid, expected file path.
+2. Error Handling: There should be an error-handling mechanism in place if `get_active_cluster_filename` or `get_path_cluster_services_dir` returns unexpected output.
+3. Ensure Privacy: The path stored in `NGINX_CONF` should be protected to prevent unauthorized access.
+4. Check for overwriting: Before overwriting the nginx configuration file, check that it does not already contain custom settings or sensitive data.
+5. Code Readability: The use of global variables reduces code readability as it introduces dependencies on code outside the function. Consider defining them locally or passing them as input arguments.
+6. Use safe `cat` redirect: There are potential risks with overwriting the nginx configuration file using `cat` with `>` redirect. It could be safer and recommended to use the `-n` option if available to prevent overwriting.
 

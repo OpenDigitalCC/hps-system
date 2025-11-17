@@ -1,34 +1,30 @@
 ### `package`
 
-Contained in `lib/host-scripts.d/alpine.d/BUILD/10-build_opensvc.sh`
+Contained in `lib/node-functions.d/alpine.d/BUILD/10-build_opensvc.sh`
 
 Function signature: e4ac394e47db157e04fecc2f4b78c7140347675a65a982269bafad18d69af063
 
 ### Function Overview
 
-This function essentially creates a new directory with the name given by the variable `$pkgdir`. If the directory already exists, the function does nothing. Afterwards, it recursively copies everything from the `/usr` directory of `$startdir` into the newly created or existing `$pkgdir`.
+The `package` function is a simple custom bash function that is used to create a package directory structure and copy contents from a source directory to the newly created package directory.
 
 ### Technical Description
 
-- **Name:** `package()`
-- **Description:** This function is used to create a new directory (if it doesn't already exist) from the `$pkgdir` variable. Then, it copies everything, including all files and subdirectories, from the `/usr` directory of `$startdir` into the newly created `$pkgdir`.
-- **Globals:** [`$pkgdir`: Directory to be created or already exists, `$startdir`: Source directory from where the contents of `/usr` will be copied.]
-- **Arguments:** This function does not take any arguments.
-- **Outputs:** The output is a new directory (if initially non-existent) named as per `$pkgdir` at the current path and copies of all the contents of `/usr` of `$startdir` into `$pkgdir`.
-- **Returns:** Does not return anything.
-- **Example Usage:**
-   ```
-   startdir="/path/to/startdir"
-   pkgdir="package"
-   package
-   ```
-This will create a new directory `package` in the current directory and copy all contents from `/path/to/startdir/usr` into `package/`.
+- **Name**: package
+- **Description**: This function will create a package directory and copy contents of a given path 'startdir' to the package subdirectory 'usr.'
+- **Globals**: 
+    - `pkgdir`: This refers to the name or path of the package directory to be created.
+    - `startdir`: This indicates the source directory whose contents are to be copied to the newly created package directory.
+- **Arguments**: None
+- **Outputs**: The function will output any error or success messages from the `mkdir` and `cp` commands.
+- **Returns**: The function does not return any value.
+- **Example usage**: `package` 
 
 ### Quality and Security Recommendations
 
-1. Validate input parameters: Always check to ensure that the global variables `$pkgdir` and `$startdir` are not empty or invalid.
-2. Avoid overwriting existing files: Add checks to ensure that the current contents of `$pkgdir` directory (if it exists) also should not be overwritten without explicit intention.
-3. Use absolute paths: To avoid any confusion around which directories are being used, consider using absolute paths instead of relative ones.
-4. Error Checking: Implement appropriate error checking to handle failures from `mkdir` and `cp`. The function should not assume that these commands will always succeed.
-5. Use secure copy tools: Consider using secure alternatives to `cp` if copying sensitive data. This could prevent leaking sensitive metadata.
+1. **Input Validation**: Ensure there is validation for the global variables `pkgdir` and `startdir`, as these are user provided paths and can be subject to path traversal and other form of input related attacks.
+2. **Error Handling**: Implement error handling to catch any issues when creating directories or copying files around. This is necessary to prevent any issues such as cyclic file copying or references to non-existent directories.
+3. **Permissions**: Be vigilant about the permissions of the directories and files being created. This could allow for potential unauthorized access if not properly managed.
+4. **Dependencies**: Check the dependencies for `mkdir` and `cp` on the system where this function will run. For portability, these commands are not always available or behave differently on alternative Unix-like systems.
+5. **Documentation**: Comment and document the script properly so that it becomes easy to understand and modify in the future.
 

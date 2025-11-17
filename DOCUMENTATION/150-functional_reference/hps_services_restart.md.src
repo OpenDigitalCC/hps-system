@@ -2,31 +2,27 @@
 
 Contained in `lib/functions.d/system-functions.sh`
 
-Function signature: a6205428f2faad6f9af5847c527a10dd5eced1de31f2f36738b99daede46ce67
+Function signature: ecd142eb37678b0067ceb8a949072b8c63fbafcaead2d1a4a19e660b417d7871
 
 ### Function Overview
 
-The `hps_services_restart` function is part of the bash scripting language and is primarily used for restarting services in a High Performance System (HPS). Its tasks are executed in sequence including arranging supervisor services, creating a supervisor services configuration, reloading the supervisor configuration, logging the restarting process, and executing post-start tasks for the services.
+The `hps_services_restart` function handles the restart of all processes managed by Supervisord in a specific directory. First, it executes the `_supervisor_pre_start` function and then restarts all the supervisor processes. The cluster service directory path is fetched by the `get_path_cluster_services_dir` function.
 
 ### Technical Description
 
-- **Name:** `hps_services_restart`
-- **Description:** This function is responsible for restarting all of the services in an HPS environment. It undertakes several responsibilities including configuring, creating, and reloading supervisor services, logging the whole restart process, and finally triggering post-start functions.
-- **Globals:** No global variables are directly addressed by this function.
-- **Arguments:** This function does not require any arguments.
-- **Outputs:** The function outputs an info log message which includes the results of the `supervisorctl -c "$(get_path_cluster_services_dir)/supervisord.conf"` command, which restarts all services.
-- **Returns:** The function does not explicitly return a value. The outcome of the function depends on the success of restarting all services.
-- **Example usage:** 
-  ```
-  hps_services_restart
-  ```
-
+- **Name**: `hps_services_restart`
+- **Description**: This function is designed to handle the restart of all Supervisord managed processes. It first calls the `_supervisor_pre_start` function to ensure pre-start conditions are met. Then, it uses `supervisorctl` with the restart command to restart all services in the cluster services directory. The path to this directory is obtained using `get_path_cluster_services_dir`.
+- **Globals**: None
+- **Arguments**: None
+- **Outputs**: Outputs the status of the restart command.
+- **Returns**: None
+- **Example usage**: To restart all the services, simply call `hps_services_restart` in the bash shell.
+  
 ### Quality and Security Recommendations
-
-1. Always test this function with non-critical services before applying it to a live cluster to ensure its proper operation.
-2. Guarantee that each of the invoked functions (like `configure_supervisor_services`, `create_supervisor_services_config`, `reload_supervisor_config`, `hps_log`, and `hps_services_post_start`) securely manage exceptions, errors and return statuses.
-3. Ensure that logging is set at an appropriate verbosity level to provide enough detail for troubleshooting any issues that may arise without overcrowding the log files.
-4. Validate user inputs or values loaded from files before utilizing them to prevent potential code injection attacks.
-5. Make sure access permissions are correctly set, to prevent unauthorized access.
-6. Always keep the HPS environment and the related software components updated, as new updates often bring security patches and enhanced performance.
+1. Regularly update Supervisord to patch known security vulnerabilities.
+2. Handle logging effectively to trace any potential issues that may occur during service restart.
+3. Check the return status of the `_supervisor_pre_start` function and handle any pre-start conditions that aren't met.
+4. Validate outputs from the command run using `supervisorctl` to handle any exceptions and restart failures.
+5. Enforce necessary security privileges to ensure that the function cannot be misused for any unintended purposes.
+6. Include error handling measures to help in debugging and to ensure smooth execution.
 

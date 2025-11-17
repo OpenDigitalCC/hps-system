@@ -2,37 +2,47 @@
 
 Contained in `lib/functions.d/repo-functions.sh`
 
-Function signature: b2fb9504a3d2f06000545f9301edac370a296cec8ec2e779dd1d02496acfeafc
+Function signature: 6bb558f1bb3c0d8f2bfa22a90d4d17b85992b271c923c67052d9303ae5abe7c9
 
 ### Function Overview
 
-The function `sync_alpine_packages` is used to synchronize the Alpine software packages. It takes the version of Alpine, the version of the mirror, the name of the repository, and a set of package names as inputs. It locates the desired Alpine packages and their dependencies from the specified repository, downloads them, and finally places all the files at the desired destination. If any issues happen during the process such as failing to create directory, download or extract APKINDEX, or resolve dependencies, the function handles errors and cleans up temporary storage to maintain a safe state.
+The function `sync_alpine_packages` synchronizes packages from the Alpine Linux package repository. Using the Alpine version, mirror version, and repository name provided as input arguments, along with a list of package names, it creates a directory structure, downloads the APKINDEX, and attempts to extract it. If successful, the function iterates through the package names, resolves dependencies, removes duplicates, and downloads each package. The APKINDEX is copied into the created directory structure. The function then cleans up by removing the temporary directory and returns a status notification indicating successful synchronization or an error if any process fails.
 
 ### Technical Description
 
-- **Name:** `sync_alpine_packages`
-- **Description:** This function synchronizes software packages of given package names from specified Alpine Linux mirror and repository.
-- **Globals:**
-  - `HPS_DISTROS_DIR`: The base directory for the distros.
-- **Arguments:**
-  - `$1`: Alpine version.
-  - `$2`: Mirror version.
-  - `$3`: Repo name.
-  - Rest arguments: Package names.
-- **Outputs:** Downloaded packages at `${HPS_DISTROS_DIR}/alpine-${alpine_version}/apks/${repo_name}/x86_64`
-- **Returns:**
-  - 0: On successful completion.
-  - 2: If any error occurred during package synchronization.
-- **Example Usage:** `sync_alpine_packages 3.12 3.12 main bash curl`
+**Name:** sync_alpine_packages
+
+**Description:** This Bash function synchronizes packages from the Alpine Linux package repository. It calls on several other functions in the process, including `_get_distro_dir`, `hps_log`, `resolve_alpine_dependencies`.
+
+**Globals:** None.
+
+**Arguments:** 
+- `$1: alpine_version` - The version of Alpine Linux for which packages are sought.
+- `$2: mirror_version` - The version of the mirror from which packages are downloaded.
+- `$3: repo_name` - The name of the repository housing the desired packages.
+- `$package_names` - An array of package names to be downloaded.
+
+**Outputs:** 
+- Sync logs and error messages.
+- Downloads packages and their dependencies into a created directory structure.
+- Deletes the temporary directory created during operation.
+
+**Returns:** 
+- 2 when an error occurs (e.g., failed to create directory, failed to download or extract APKINDEX, failed to resolve dependencies).
+- 0 indicates successful syncing of packages and dependencies.
+
+**Example Usage:**
+```bash
+sync_alpine_packages "3.12" "v3.12" "main" "gcc" "libc-dev"
+```
 
 ### Quality and Security Recommendations
 
-1. Always check if required arguments are passed before executing the function.
-2. All variables inside the function should be local to avoid potential naming collisions.
-3. Validate user inputs to prevent potential command injection attacks.
-4. Handle all error paths gracefully, such as download failures or file system limitations.
-5. Use more secure methods to download packages, if available, such as HTTPS instead of HTTP.
-6. Consider verifying packages' authenticity and ensuring data integrity through checksums or digital signatures.
-7. Document return codes of a function and their meanings for easier debugging and maintenance.
-8. Cleaning up temporary storage areas is a good practice but also consider a more robust cleanup mechanism in case of unexpected termination.
+1. Consider accepting package names and other inputs through a secured method to avoid command injections.
+2. Instead of using`wget`, consider using `curl` since it has more features and better handling for various situations.
+3. Implement more robust log handling for both success and error cases, including more detailed information about the error (e.g., why download or extraction failed).
+4. Handle failure of `wget` during packages download loop.
+5. Clean temporary directory `$temp_dir` even if a function returns prematurely.
+6. Avoid using explicit paths, and consider using variables instead for better maintainability.
+7. Consider checking if the necessary programs (`wget`, `tar`, etc.) are installed before trying to use them.
 

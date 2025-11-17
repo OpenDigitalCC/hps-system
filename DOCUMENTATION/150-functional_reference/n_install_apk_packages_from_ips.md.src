@@ -1,31 +1,35 @@
 ### `n_install_apk_packages_from_ips`
 
-Contained in `lib/host-scripts.d/alpine.d/install-packages.sh`
+Contained in `lib/node-functions.d/alpine.d/alpine-lib-functions.sh`
 
-Function signature: 38f25d6a4707f41d280cc4eda71c9dc104b5f7d91cc99be723b18ccbd8081c71
+Function signature: 7de0864578a18b141512aa03e6a8f3e844303e8445cf762fc5657adca810602d
 
 ### Function overview
 
-This Bash function `n_install_apk_packages_from_ips()` is used to install apk packages from an IPS server. The function accepts a list of package names as arguments, fetches the corresponding packages from the specified IPS server, and installs them. In the process, it logs various events, such as the start and end of the installation process, any problems encountered during the process, and a log of successfully installed packages.
+This Bash function, `n_install_apk_packages_from_ips`, is specifically designed to automate the process of downloading and installing .apk packages from an IPS (Internet Provider Service). This function takes in an indefinite number of package names as arguments and installs these onto the local system. The process includes the verification of input package names, determination of the IPS gateway address, accessing the APK repository through the IPS gateway, creation of a temporary directory for operation proceedings, extraction of .apk file names, and identification of the package count.
 
 ### Technical description
 
 - **Name:** n_install_apk_packages_from_ips
-- **Description:** This function is responsible for fetching and installing apk packages from an IPS. An error message is thrown when the package list is null. Upon successful execution, it logs the successful installation or any encountered errors.
-- **Globals:** None
-- **Arguments:** (`$@`) an array of package names to be installed.
-- **Outputs:** Various messages and logs that indicate the progress of the operation.
-- **Returns:** 0 if all packages are successfully installed; 1 if no packages are provided or encountered errors during the process; 2 if it fails to create a temporary directory or to install the packages.
-- **Example usage:** `n_install_apk_packages_from_ips package1 package2 package3`
+- **Description:** A Bash function meant to automate the process of downloading and installing .apk packages from an Internet Provider Service (IPS).
+- **Globals:** No globals are used in the function
+- **Arguments:**
+   - $1, $2, [...]: An array of package names to be downloaded and installed from the IPS. Should be at least one.
+- **Outputs:** The function outputs status messages and error messages during its operation, including the IPS gateway, repository and packages, available packages, and failed operations.
+- **Returns:**
+   - Returns 1 if there are no package names provided, if the IPS gateway address couldn't be determined, if no packages are found in the repository.
+   - Returns 2 if the function fails to create a temporary directory or fails to fetch package list from the repository.
+- **Example Usage:** 
+  ```bash
+  n_install_apk_packages_from_ips package1 package2
+  ```
 
 ### Quality and security recommendations
 
-1. The function could be improved by validating the package names before attempting to install. For example, check the package names against a list of available packages and displaying a user-friendly error message for invalid names.
-2. Avoid the use of temporary directories in the root (`/tmp`) directory. This is a commonly used directory and naming conflicts could potentially occur.
-3. Handle edge cases where the IPS gateway cannot be determined.
-4. Currently, an unsuccessful package fetch doesn't cancel the operation. It would be better if the function stopped on the first error encountered, instead of continuing to attempt to fetch other packages.
-5. The curl commands should have better error handling, to deal with cases where the server may be unavailable, slow, or returned an error response.
-6. Implement a rollback feature, where in case of any error during the installation of packages, the changes made should be rolled back to keep the system state consistent.
-7. The function should have better exception handling to capture and handle any errors that are encountered during its execution.
-8. Consider using HTTPS for the repo URL to enhance security.
+1. Ensure proper validation of inputs. In this case, check if the package names provided as arguments are valid, non-malicious, and available in the repository.
+2. Error handling should be efficient. Make sure all possible error scenarios are captured and addressed.
+3. When interacting with an external service, such as fetching data from a URL, always anticipate connectivity issues or unavailability of the service.
+4. The temporary directory should be securely deleted after its use to prevent the possibility of any security vulnerabilities.
+5. The function should adhere to the principle of least privilege, meaning it should not require or misuse more permissions than necessary to achieve its functionality.
+6. Ensure sensitive information, such as an IPS address or repository link, are not exposed or logged inappropriately in your output.
 

@@ -1,35 +1,35 @@
 ### `tch_apkovol_create`
 
-Contained in `lib/functions.d/tch-build.sh`
+Contained in `lib/functions.d/alpine-tch-build.sh`
 
-Function signature: ed1d82a379d9d6afbfe07af535414a6e06f0d874630568ae59ea3561918ad0ec
+Function signature: 278987e8a2b81922b087ae6ecff515d460cb8010d12e8a042eff5b73697444bf
 
-### Function Overview
+### Function overview
 
-`tch_apkovol_create` is a Bash function primarily responsible for collecting configuration details (such as the IP of the gateway and the latest Alpine version) and generating the Alpine apkovl (Alpine Linux package overlay) tarball in the specified output file. The function also handles temporary directory creation for building apkovl components and cleanup actions once the tarball is created. It also manages logging of the operation statuses.
+This function, `tch_apkovol_create()`, creates an APK Vol (Alpine Linux Volume) in a temporary workspace by leveraging the configuration of a cluster along with logs, validations, and custom scripts. A series of components or files like `resolv_conf`, `modloop_setup` and `libs` is built within the temporary workspace. These settings are then packed into a tarball before the temporary workspace is cleaned up. The function is part of a larger framework of configuring and deploying infrastructure on an Alpine Linux Cluster.
 
-### Technical Description
+### Technical description
 
-- **Name:** `tch_apkovol_create`
-- **Description:** Used for collecting configuration details and creating an Alpine apkovl tarball containing essential configuration files and scripts for a target system.
-- **Globals:** None
-- **Arguments:** 
-  - `$1: output_file` – The file path at which to generate the apkovl tarball
-- **Outputs:** Logs informational, error and debug messages related to the progress and status of the Alpine apkovl creation process.
-- **Returns:** 
-  - `0` if the apkovl creation process is successful
-  - `1` if an error is encountered during the process
-- **Example Usage:** 
-  ```bash
-  tch_apkovol_create "/path/to/output/file"
-  ```
+- **Name:** tch_apkovol_create
+- **Description:** Creates an Alpine APK volume (apkovl) using provided configuration, generates necessary Alpine Linux specific files, creates a tarball, and cleans up the temporary workspace afterwards.
+- **Globals:** ['ips_address': stores default gateway IP from the cluster configuration]
+- **Arguments:** ['$1: output_file': Output tarball name (including path)]
+- **Outputs:** Tarball file at the provided location containing a prepared Alpine APK volume (apkovl) comprising various configurations, scripts, and components.
+- **Returns:** 0 if successful, 1 if it encounters any errors in the function workflow.
+- **Example usage:**
+   ```
+   tch_apkovol_create /path/output_file.tar.gz
+   ```
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. Always validate function inputs for proper format and expected data type to prevent unexpected behavior or errors.
-2. Use a more unique naming scheme for temporary directories to reduce the risk of naming collisions.
-3. Implement more granular error handling for the different stages of the apkovl creation process, ensuring the cleanup of any created resources.
-4. Consider better logging for debug, informational and error messages across the function for easier troubleshooting and tracing.
-5. Handle exceptions that might occur when querying configuration settings.
-6. Secure the creation, utilization and deletion of the temporary directory.
+1. Ensure appropriate permission level for the function caller. 
+2. Make all error logs and warnings as explicit as possible to help with debugging.
+3. Ensure that you handle cluster configuration fetching errors appropriately.
+4. Be careful when dealing with IP address information; avoid leaking sensitive data through logs.
+5. Be careful when creating temporary directories via sudo. It may allow an attacker to hijack the directory to gain root access.
+6. Clean up temporary workspace files after usage to ensure that sensitive information isn't left unintentionally.
+7. Validate function parameters and return errors if unusable parameters are provided.
+8. Add a dry-run or simulation mode so you can safely manually test what the function does.
+9. Always check if a command succeeded or not, especially when it's critical, and handle failures appropriately.
 

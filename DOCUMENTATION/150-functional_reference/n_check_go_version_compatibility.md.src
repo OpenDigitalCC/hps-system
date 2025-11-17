@@ -1,42 +1,30 @@
 ### `n_check_go_version_compatibility`
 
-Contained in `lib/host-scripts.d/alpine.d/BUILD/10-build_opensvc.sh`
+Contained in `lib/node-functions.d/alpine.d/BUILD/10-build_opensvc.sh`
 
-Function signature: aeb6eb34265b6239b1da565dd0e2cd2ec192fa90cfc1f26a9ae963bcf59afdc2
+Function signature: 256910e2851d59c378f8e75bc1cc04adab0059a15b36c52bc53b5dcb82e9a2b9
 
-### Function overview
+### Function Overview
 
-The given function, `n_check_go_version_compatibility`, checks if the currently installed Go version is compatible with the Go version requirement specified in a particular git tag of a source repository. The source repository is located at `/srv/hps-resources/packages/src/opensvc-om3` by default. If the installed Go version is lesser than the required version, the function will return an error stating the incompatibility. If no Go version is required or Go isn't installed, corresponding warnings and errors will be returned.
+The function `n_check_go_version_compatibility` checks the compatibility between the installed version of Go and the required version as specified in the Go module file (`go.mod`) of a given repository. Given a git tag, it navigates to the source directory and fetches the necessary version from the `go.mod` file. It also retrieves the installed version of Go for comparison. If the installed version is not below the required one, it declares the two as "Compatible"; otherwise, it returns an error.
 
-### Technical description
+### Technical Description
 
-* **Name**: `n_check_go_version_compatibility`
-* **Description**: This function checks the installed Go version against the required Go version for a specific git tag in a source repository, and reports whether the installed version satisfies the required one.
-* **Globals**: None
-* **Arguments**:
-     - `$1`: Name of the Git tag to check Go version requirement (desc)
-     - `$2`: Not used in the function
-* **Outputs**: Printed statements for errors, warnings or status of compatibility for Go version 
-* **Returns**: 
-  - 1 if there's an error or if installed Go version doesn't meet the required version. 
-  - 0 if installed Go version is sufficient or if required Go version cannot be determined.
-* **Example Usage**:
+- **Name:** `n_check_go_version_compatibility`
+- **Description:** This function checks if the installed Go version is compatible with the version required by the Go project.
+- **Globals:** None.
+- **Arguments:** 
+   - `$1: git_tag`. Represents the specific git tag to be fetched from the repository.
+   - `$2: source_dir`. The directory of the source code.
+- **Outputs:** Prints out the status of Go version compatibility (Required, Installed, and Status) along with specific error or warning messages.
+- **Returns:** The function returns `0` on successful execution and compatible Go versions. It returns `1` in case of errors or incompatible versions.
+- **Example Usage:** `n_check_go_version_compatibility v1.0.0 src/`
 
-```bash
-$ n_check_go_version_compatibility v1.2.3
+### Quality and Security Recommendations
 
-Go version compatibility check:
-  Required: 1.14
-  Installed: 1.16
-  Status: Compatible
-```
-
-### Quality and security recommendations
-
-1. Ensure that the source code directory is a secure location and permissions are correctly set to avoid unauthorized access or modifications.
-2. Use descriptive error messages to allow better debugging and troubleshooting.
-3. Check if the git tag exists before proceeding with the rest of the function to avoid unnecessary operations.
-4. Use secure methods to execute shell commands, to prevent command injection vulnerabilities.
-5. Function relies on local environment's Go installation and source code directory. These dependencies should be documented and managed properly.
-6. The function assumes that Go versions only consist of major and minor versions. This might not be the case always, need to handle sub-minor versions as well.
+1. Validate the inputs, especially the `git_tag` and `source_dir`. Add checks to ensure that they are not empty, null, or potentially harmful content.
+2. Sanitize all output. This will prevent any potential output-related security risks.
+3. Implement logging for debugging purposes. This will help to keep track of any issues that occur during the execution of the function.
+4. Handle all possible edge cases, such as handling a version string that does not follow the expected format. This will prevent the function from behaving unexpectedly.
+5. Consider further improving error handling. At the moment, any warning or error simply prints a message and returns an exit code. It could be useful to throw exceptions in certain cases, to provide more contextual information about the error.
 

@@ -2,31 +2,34 @@
 
 Contained in `lib/functions.d/repo-functions.sh`
 
-Function signature: 1e50c32388b6c1ff2be449bd1f28c57fd1d94b6fd34b27c243dba0e74d19f4e4
+Function signature: ff204afc2f7f40dd88298ae0ef2194944bab69755c11a6e2b90d00e3785cd96c
 
-### Function Overview
-The function `sync_alpine_repo_arch` is designed for synchronizing alpine repositories to a local directory. It uses parameters such as alpine version, mirror version, repository name, and architecture to determine the repository to sync. The destination directory is built using the environmental variable and provided parameters, defaulting to `x86_64` architecture if no other is provided. This function includes numerous error checks such as ensuring the destination directory can be created, and the available disk space is sufficient for downloads.
+### Function overview
+
+The `sync_alpine_repo_arch` function is intended to synchronize an Alpine Linux repository to a local directory. It takes in four parameters - alpine version, mirror version, repository name, and architecture (defaults to 'x86_64' if not provided). The function creates the destination directory, downloads repository files from the specified HTTP mirror, checks available space before each download, and cleans up any partial download in case of insufficient disk space.
 
 ### Technical description
 
-- **Name**: `sync_alpine_repo_arch`
-- **Description**: This function synchronizes an Alpine Linux package repository to a local directory. It retrieves the file list from the repository, checks if there's enough disk space, then uses `wget` to download the packages.
-- **Globals**: [ `HPS_DISTROS_DIR`: The base directory for syncing distros ]
-- **Arguments**: 
-  - [`$1`: Alpine Linux version (e.g., `v3.12`)]
-  - [`$2`: Version of the mirror (e.g., `edge`)]
-  - [`$3`: Name of the package repository (e.g., `main`)]
-  - [`$4`: Architecture (e.g., `x86_64`), optional, default `x86_64`]
-- **Outputs**: Logs info, debug, and error messages. Stores downloaded files in the `dest_dir` defined in the function.
-- **Returns**: `2` if an error occurred that prevented successful function execution, return value of the `validate_apkindex` function otherwise.
-- **Example usage**: `sync_alpine_repo_arch v3.12 edge main x86_64`
+- **Name:** `sync_alpine_repo_arch`
+- **Description:** This function syncs an Alpine Linux repository to a local directory, checking available space before each download and performing cleanups as necessary.
+- **Globals:** Not used in this function.
+- **Arguments:**
+  - `$1`: The alpine version.
+  - `$2`: The mirror version.
+  - `$3`: The repository name.
+  - `$4`: The architecture type; defaults to 'x86_64' if not provided.
+- **Outputs:** The function outputs the number of files found in the repository, logging every 20 downloads along with the available disk space, and the total number of files downloaded.
+- **Returns:** Upon successful execution, the function returns the result of `validate_apkindex` call. In case of an error in creating the destination directory or insufficient disk space, the function exits with code 2.
+- **Example usage:** `sync_alpine_repo_arch v3.9 latest main x86`
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. Enhance error handling: Presently, the function returns `2` when an error occurs, thus doesn't differentiate between failures. It would be beneficial to have unique error codes for the different failure points.
-2. Download verification: After each download, consider adding functionality that verifies the authenticity and integrity of the downloaded files. This not only helps in ensuring that the complete file has been downloaded but also safeguards against any potential security concerns.
-3. User input validation: Validate user inputs earlier in the function to prevent possible misuse, such as directory traversal.
-4. Secure Temporary file handling: Ensure the security of temporary files by setting appropriate permissions and minimizing their lifespan.
-5. Implement error retries: Temporary issues may hamper the download process, therefore implementing reparative measures such as retries with backoff periods could increase reliability.
-6. Insert proper cleanup actions: Even if the function fails at any point, it should clean up any temporary files created during its execution. Implementing a trap for `EXIT` signal could be beneficial for this task.
+1. Use more robust error handling: Currently, the function exits with a return code, but it might be worthwhile to throw exceptions or use a more comprehensive system for signaling error conditions.
+2. Enhance logging: Include further details in the event of an error, such as the mirror version and architecture type on disk space check failure.
+3. Use secure methods to download files: Instead of `wget`, switch to a command that verifies the SSL certificate of the server.
+4. Regularly update the alpine and mirror versions: Ensures the function works with the latest security patches and updates.
+5. Validate downloaded files: Add checksum verification for downloaded files.
+6. Improve disk space check: Increase the frequency of disk space checks or even include a projected space requirements calculation.
+7. Limit download retries: To prevent excessive internet usage, limit the number of retries for file downloads.
+8. Clean up temporary files: Ensure that all temporary files are cleaned up in all potential exit points of the function to avoid littering the file system with temporary files.
 

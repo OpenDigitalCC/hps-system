@@ -2,33 +2,29 @@
 
 Contained in `lib/functions.d/cluster-functions.sh`
 
-Function signature: a26587720047888528793a67b36d48651fe7668e31b2136db1f521752f8ebd7d
+Function signature: fe8eaf471ccdd29f34f50d0dbe88e6d5a67d4d554fa3332f5e695e82244e617f
 
 ### Function overview
-
-The `cluster_storage_init_network` function sets up the initial configuration of a network for a cluster storage. It retrieves the number of storage networks to be configured, validates inputs, and then sets the configurations accordingly. It repeats the process for every storage network configured. It mainly obtains configuration parameters through command line prompts for user input, and logs errors and information to a system log. 
+The function `cluster_storage_init_network` is designed to gather information regarding the configuration of storage networks within a computing cluster. The function accepts and validates from the user a variety of parameters - such as the number of storage networks to configure, the base VLAN ID for the storage networks, the storage subnet base, and whether or not to enable jumbo frames - using the `cli_prompt` function. Once all these values are obtained, the function then proceeds to store these values and configure each storage network based on the provided settings. The function also handles the validation of user input - prompting the user once again for incorrect entries - and provides feedback via system log messages.
 
 ### Technical description
-
-- **Name**: cluster_storage_init_network
-- **Description**: Initializes and configures the settings of the storage network for a cluster.
-- **Globals**: cluster_domain (Contains the domain name of the cluster)
-- **Arguments**: None.
-- **Outputs**: Logs of errors and informational messages regarding the achieved or failed configuration of storage networks.
-- **Returns**:   
-    0 - If the function completes successfully   
-    1 - If an error occurs (such as missing cluster domain or invalid subnet base).
-- **Example Usage**: 
+- **Name**: `cluster_storage_init_network`
+- **Description**: This function is designed to manage the initialization and setting up of storage networks within a computing cluster.
+- **Globals**
+  - **Variables**: `cluster_domain`, `num_storage_networks`, `storage_base_vlan`, `storage_subnet_base`, `storage_subnet_cidr`, `enable_jumbo_frames` - These variables are used to hold the system configuration settings as fetched or calculated by the function.
+- **Arguments**: None. The function does not accept arguments. All values are gathered via user input.
+- **Outputs**: log messages indicating success or failure of initialization.
+- **Returns**: `0` on successful completion, `1` on any error.
+- **Example usage**:
 ```bash
-cluster_storage_init_network
+  cluster_storage_init_network
 ```
 
 ### Quality and security recommendations
 
-1. Avoid relying on a prompt-based system for configuration. This is prone to human error. Instead, use configuration files or automation scripts.
-2. Validate all command-line arguments and network details to prevent malformed inputs.
-3. It's good practice to separate the functions for fetching, verifying and setting each network parameter for better modularization.
-4. It's important to log all errors, warnings, and information for troubleshooting and debugging purposes. However, make sure sensitive information (like IP addresses or domain names) isn't exposed in a readable format.
-5. Implement appropriate error handling to ensure the function fails gracefully when problems occur.
-6. Consider using a more robust system for managing global variables instead of bash local variables to increase data safety and decrease misuse.
+1. As the function involves user input, it is important to validate all the data entered by the user. In this case, the validation is handled by `cli_prompt` function, so it should ensure the provided values follow the specified rules.
+2. Error-handling mechanisms are already present in the function, but they could potentially be expanded to cover more error cases and give more detailed error messages.
+3. Avoid the use of global variables for better code modularity, scalability and testing.
+4. Consider breaking the function down into smaller functions that do one specific job, making the code easier to understand, test and maintain.
+5. Always keep the software and all of its dependencies up to date to protect against known security vulnerabilities.
 

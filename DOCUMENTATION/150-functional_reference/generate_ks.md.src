@@ -2,32 +2,31 @@
 
 Contained in `lib/functions.d/kickstart-functions.sh`
 
-Function signature: b973477b6d7653d80151f03150fadcfc0d8f1f85a77f353025a267d5257c8529
+Function signature: 910fa3a19c946bd39c8eca822d70f1cb6e78c3b1080f83bc731451ec74c98b0f
 
-### Function overview
+### Function Overview
+The `generate_ks` function is primarily designed to support the creation and configuration of a host kickstart for a specified `macid` and `HOST_TYPE`. It retrieves and exports essential variables such as `HOST_IP`, `HOST_NETMASK`, `HOST_NAME`, `HOST_GATEWAY`, `HOST_DNS`, `HOST_TEMPLATE_DIR`, `INSTALLER_TYPE`, `HOST_INSTALL_SCRIPT`, and `HOST_INSTALL_FUNC`. This function also sets the host's state to "INSTALLING" and presents the script offered.
 
-The function `generate_ks()` handles the generation of a kickstart file, used to automate the installation process of an operating system. This function exports different variables containing configuration parameters needed for the OS installation and finally prepares the installation script for rendering.
+### Technical Description
+**Function Definition**
 
-### Technical description
+- **Name:** `generate_ks`
+- **Description:** The function is responsible for generating a kickstart for a specified host.
+- **Globals:** 
+  - `macid`: the macid of the host.
+  - `HOST_TYPE`: the type of the host.
+  - Additional global variables are exported within the function such as `HOST_IP`, `HOST_NETMASK`, `HOST_NAME`, etc.
+- **Arguments:** 
+  - `$1`: the macid of the host.
+  - `$2`: the type of the host.
+- **Outputs:** Outputs logs indicating that the function was called and that a kickstart request is being made.
+- **Returns:** It does not return a value.
+- **Example Usage:** `generate_ks macid123 hostType123`
 
-- **Name:** `generate_ks()`
-- **Description:** This function accepts two parameters. It exports different variables like macid, HOST_TYPE, HOST_NAME, etc., used for host configuration. It uses helper functions like `hps_log()`, `cgi_header_plain()`, `host_config()`, `cluster_config()`, and `script_render_template()` to log information, get and set configurations, and render the installation script respectively.
-- **Globals:** [ macid: first argument, represents MAC ID / Unique Host ID of a host machine, HOST_TYPE: second argument, represents the type of the host machine]
-- **Arguments:** [ $1: MAC ID / Unique Host ID of a host machine, $2: Type of the host machine]
-- **Outputs:** Logs about the function calls and configurations, Along with the final render of the installation script.
-- **Returns:** Does not return any value. However, the function could be interrupted and denote failure with a return of 1.
-- **Example Usage:**
-
-    ```
-    generate_ks "00:0c:29:c0:94:bf" "CentOS"
-    ```
-
-### Quality and security recommendations
-
-1. Avoid usage of global variables as much as possible to reduce side effects and improve function modularity.
-2. Input validation and error handling should be more rigorous. Check for the validity of MAC addresses before using them.
-3. Preferably restrict access to root or privileged users to reduce potential security risks.
-4. Avoid inlining large scripts. Use a separate file to manage large scripts.
-5. Implement a logging mechanism to record errors and important events during installation.
-6. If possible, encrypt sensitive data like IP addresses, hostnames, and other network details.
+### Quality and Security Recommendations
+1. Add validations for the inputs (`macid`, `HOST_TYPE`) to ensure they meet the expected requirements.
+2. Include error handling to manage when expected globals or host configuration details are missing.
+3. Commented sections of the code need to be cleaned up or well-documented to explain why they are there and what potential future use they could have.
+4. Ensure that returned logs do not reveal too much information that could compromise the security of the system.
+5. The script rendering template might need sanitizing to avoid executing harmful commands.
 

@@ -1,32 +1,41 @@
 ### `n_remote_cluster_variable`
 
-Contained in `lib/host-scripts.d/pre-load.sh`
+Contained in `lib/node-functions.d/pre-load.sh`
 
-Function signature: 508394addef239d8b24fec9fbf55cb2cd13174f75881778577137eec6fbeecb8
+Function signature: 5854f511031b80482db5a46d1b8c555332355ba0732b028b2262070ca9ee2f70
 
 ### Function overview
 
-The function `n_remote_cluster_variable` is used to interface with a cluster, specifically to either set or get a variable. The function first checks if there are at least two arguments: the variable name and its value. If the function receives two arguments, it sets the variable with the provided name and value. If only the variable name is provided, it gets the value of the variable with that name. If the operation is successful, the function outputs the result and returns 0. Otherwise, it logs the error and returns the exit code.
+The bash function `n_remote_cluster_variable` is used to set or get a variable on a remote cluster. This function uses `n_ips_command` to perform its operations. This function can set a value for a given name or it can retrieve the value for a given name. If no value is found or if `n_ips_command` fails, it logs the error using `n_remote_log`.
 
 ### Technical description
 
-- **Name**: `n_remote_cluster_variable`
-- **Description**: Sets or retrieves a variable in a cluster depending on the given input arguments. 
-- **Globals**: 
-    - **VAR**: Not applicable; there are no global variables used in this function.
-- **Arguments**: 
-    - **$1**: The name of the variable for which the value is to be retrieved or set.
-    - **$2**: An optional argument which, when present, is the value to be set for the variable.
-- **Outputs**: Echoes the result of the operation if successful, or logs an error message if not.
-- **Returns**: 0 if the operation is successful, returning the exit code otherwise.
-- **Example usage**:
+**Name:** `n_remote_cluster_variable`
 
-        n_remote_cluster_variable "testVariable" "testValue"
+**Description:** 
+This function is designed to set or get a variable value in a remote cluster through a command.
 
-### Quality and Security Recommendations
+**Globals:** None used.
 
-1. There's no validation of input for variables $1 and $2, which could lead to unexpected behaviour or result in a security vulnerability. It's recommended to sanitize and validate the inputs for these variables.
-2. Error messages should be more detailed, including the operation that failed, and if possible, the reason for the failure.
-3. It's always good practice to comment on each block of the function. Proper commenting makes its understanding and debugging easier.
-4. Global constants for error messages could be used to help homogenize the error handling across different functions.
+**Arguments:** 
+- `$1: name`: Name of the variable on the remote cluster.
+- `$2: value`: Value to set for the variable on the remote cluster. This argument is optional.
+
+**Outputs:**
+The function writes to stdout the value of the variable on the remote cluster or logs any error that has occurred during its operations.
+
+**Returns:**
+The function returns 0 if the operations are successful, or exits with `exit_code` if the operations fail. If the attempted operation is a GET but the variable does not exist, it returns a custom error code: 4.
+
+**Example usage:**
+`n_remote_cluster_variable "variable_name" "variable_value"` - Will set the value for the specified variable.
+`n_remote_cluster_variable "variable_name"` - Will get the value for the specified variable. 
+
+### Quality and security recommendations
+
+1. Use a secure way to transfer the variables to the remote cluster in the `n_ips_command`. 
+2. Include better error handling in the case `n_ips_command` is unable to create the necessary http codes. 
+3. To prevent injection, ensure the name and value of the variable is correctly sanitized before being passed to the `n_ips_command`.
+4. It would be advisable to set more descriptive custom error codes to differentiate between different failure modes.
+5. To make the code more maintainable, consider breaking this function into two separate ones - one for setting and one for getting the values.
 

@@ -2,34 +2,30 @@
 
 Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
-Function signature: c73d78c14795c1c7103969e913c3a8552641445fa9ab836f6ca2f3323647ace0
+Function signature: 5160de913f8fd0965c3a8d005175a0f924b2a60e356c1dd2643890b9f70238c4
 
-### Function Overview
+### 1. Function Overview
 
-The `ipxe_boot_installer()` function primarily configures a host for the new network boot installation. It takes two positional arguments, `host_type` and `profile`. If a profile is provided, it sets the `HOST_PROFILE`. If the host type is "TCH", it configures the host for network boot and forces a reboot. Else, it gathers host type parameters, checks if it's already installed, and finally configures the distro path and URL. It then appropriately prepares the distro for PXE Boot based on the OS Name (currently validated for rockylinux) and sets the state as installing.
+The function `ipxe_boot_installer` controls boot installation activities for various host configurations. Based on the type of host, the function configures all the necessary settings including architecture, operating system identification and network interface settings. The function also handles a variety of host types, including a special case for TCH (Thin Compute Hosts). For TCH, the function sets up the necessary state for network boot and requests a reboot to apply this configuration. If the host is already installed, the function aborts the installation, and logs an informative message. Finally, the function remains versatile by handling different operating systems, and takes precautionary measures to ensure that necessary boot files exist before mounting the ISO image and triggering the PXE boot.
 
-### Technical Description
+### 2. Technical Description
+```
+- name: ipxe_boot_installer
+- description: Controls boot installation activities on a variety of host configurations.
+- globals: None.
+- arguments: 
+  - $1: String. Expected to be the MAC address of the computer on the network.
+  - $2: String. Expected to represent the type of the host requiring installation (for example, 'TCH' or other host types). 
+- outputs: Detailed shell logs providing information about the installation process.
+- returns: Nothing. If the function succeeds, it configures the host for booting. In case of an error, an ipxe_cgi_fail message will be thrown and the installation will stop.
+- example usage: `ipxe_boot_installer "00:11:22:33:44:55" "TCH"`
+```
 
-- **function name:** `ipxe_boot_installer()`
-- **description:** Configures a host for network boot installation. Supports rockylinux based distros.
-- **globals:** 
-  - `CPU`: The type of CPU of the host
-  - `MFR`: The manufacturer
-  - `OSNAME`: The name of the operating system 
-  - `OSVER`: The version of the operating system 
-- **arguments:** 
-  - `$1 (host_type)`: The type of host.
-  - `$2 (profile)`: A profile for the host. Optional.
-- **outputs:** Debug/Info log messages, and/or installation configurations. In case of errors, outputs back to invoking client.
-- **returns:** Nothing directly. It can exit the script in case of boots or failures.
-- **example usage:** `ipxe_boot_installer TCH default`
+### 3. Quality and Security Recommendations
 
-### Quality and Security Recommendations
-
-1. Headers should include error handling with proper message propagation; this helps in operations debugging and error handling.  
-2. Key dependencies, like external scripts/functions used, should be documented.
-3. The function does not currently support Debian distros. Future enhancements should cover more distributions for broader usefulness.
-4. Use of local variables can be increased for safer namespace and avoid potential global variable overwrites.
-5. Where possible, function arguments should be sanity checked or validated.
-6. For security purposes, it is strongly recommended to verify the integrity of the distro before execution.
+1. Use more specific and self-explaining variable names for better code readability.
+2. Add validations for inputs: mac and host_type mustn't be empty or in the incorrect format.
+3. For a large script like this one, breaking it down into smaller, more manageable functions can increase maintainability.
+4. With complex conditionals and multiple exit points, consider centralizing logging or error handling to avoid inconsistencies or missed logs/errors.
+5. Implement proper error handling mechanism for all the shell commands used in the script.
 

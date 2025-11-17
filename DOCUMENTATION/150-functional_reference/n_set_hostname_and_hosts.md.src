@@ -1,30 +1,35 @@
 ### `n_set_hostname_and_hosts`
 
-Contained in `lib/host-scripts.d/common.d/configure-hostname.sh`
+Contained in `lib/node-functions.d/common.d/n_configure-hostname.sh`
 
-Function signature: 5c49cc42685037b094c5b80248bbc1340247e3fb87f6b196b2249a61f999550f
+Function signature: 8255b960289d7466a858df5b523666f3aadb4ec9119e95a77dc869ed20c0d837
 
-### Function Overview
-The function `n_set_hostname_and_hosts` is a shell script utility to automate the process of setting the hostname and configuring the hosts file in a linux environment. It fetches the configuration values like hostname, domain, and IP from the function `n_remote_host_variable` and `n_remote_cluster_variable`. It sets the hostname using available methods (via hostnamectl or hostname command). It also creates or updates the file `/etc/hosts` with the appropriate hostname and IP entries.
+### Function overview
 
-### Technical Description
-- **Name:** `n_set_hostname_and_hosts`
-- **Description:** This function sets the hostname, and updates the `/etc/hosts` file in a linux environment.
-- **Globals:** None
-- **Arguments:** No direct arguments, but uses outputs from `n_remote_host_variable` and `n_remote_cluster_variable` functions.
-- **Outputs:** Messages to stdout, writes to /etc/hostname, /etc/hosts and logs via `n_remote_log`.
-- **Returns:** Returns 1 if configuration fetch or validation fails, 2 if hostname change fails, 3 if /etc/hosts creation fails, and 0 on successful execution and completion.
-- **Example usage:**
+This function (`n_set_hostname_and_hosts`) is used to set the hostname and hosts file on a Linux system. First, it retrieves the required values hostname, domain, and IP address. After validation, it constructs the fully qualified domain name (FQDN) and sets the hostname using hostnamectl command for systemd-based systems or the hostname command for non-systemd systems. This function will also attempt to persist the hostname in `/etc/hostname` and `/etc/hosts` file.
 
-    ```bash
-    n_set_hostname_and_hosts
-    ```
+### Technical description
 
-### Quality and Security Recommendations
-1. Security: Restrict the permissions of this script to trusted users only in order to prevent unauthorized modifications of host configuration.
-2. Robustness: Error handling seems to be in place for most of the function calls, further improvements can be made by having a catch-all error trap.
-3. Validation: Additional validations can be added for the hostname, domain and IP values (like length, characters, format, etc.).
-4. Advances: The function can be updated to handle more network configurations and to work on more types of Linux distributions, especially those that may not follow these conventions directly.
-5. Logging: Error logs could include more specific details about which step or validation caused the error for easier troubleshooting.
-6. Code-Reuse: The parts of the code for hostname settings and hosts file configuration, could be further broken down into more modular, re-usable functions.
+Here is a technical description of the function:
+
+```
+- name: n_set_hostname_and_hosts 
+- description: This function sets the hostname and hosts file on a Linux system.
+- globals: None
+- arguments: None
+- outputs: Standard output and Log files if n_remote_log is implemented for logging.
+- returns: 1 if it fails to get a value from n_remote_host_variable or if either hostname or IP value is empty, 2 if setting of hostname fails or if it fails to write to /etc/hostname, and 3 if it fails to create /etc/hosts.
+- example usage: n_set_hostname_and_hosts
+
+```
+
+### Quality and security recommendations
+
+1. Ensure permissions are correctly set for `/etc/hostname` and `/etc/hosts`, potentially limiting writing access to these crucial files to root only.
+2. Handle edge cases where hostname, domain, or IP data is either missing or incorrect.
+3. Use an external configuration management or orchestration system to guarantee the consistency of hostnames across a network.
+4. Regularly audit logs (set by `n_remote_log`) to ensure system's integrity and monitor for failed attempts.
+5. Handle failures and exceptions appropriately, letting the function fail gracefully and provide clear, actionable error messages whenever it returns non-zero.
+6. Regularly update all the command line tools like hostnamectl, hostname used in the function to the latest stable version to protect against known vulnerabilities.
+7. Consider enhancing this function with more advanced features such as IPV6 support.
 

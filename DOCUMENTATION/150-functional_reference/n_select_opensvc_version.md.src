@@ -1,31 +1,28 @@
 ### `n_select_opensvc_version`
 
-Contained in `lib/host-scripts.d/alpine.d/BUILD/10-build_opensvc.sh`
+Contained in `lib/node-functions.d/alpine.d/BUILD/10-build_opensvc.sh`
 
-Function signature: 8d8072d2f9a864f354808032ebcb2f550aff33ca0eefa6db92379b9e2241998e
+Function signature: b573402d59912fdb59cba6e2ba01581fcd285dab17d0e758b64e5aef21731f67
 
-### Function overview
+### Function Overview
 
-This function, `n_select_opensvc_version()`, controls the version of the OpenSVC software by checking out a specified Git tag from a local copy of the OpenSVC source code. If no tag is provided, it defaults to the latest semantic version of the software. 
+The `n_select_opensvc_version()` function is designed to select a specific version of OpenSVC from a local git repository. The function accepts a specific git tag as an argument, which represents the version of OpenSVC to be selected. If no git tag is specified, the function will select the latest version following a semantic versioning (major.minor.patch) pattern in the form of "v*.*.*". The selected version is then checked out from the repository. Environmental variables are set to report the selected version.
 
-### Technical description
+### Technical Description
 
 - **Name:** `n_select_opensvc_version()`
-- **Description:** Checks out a specified Git tag for the source code, defaults to the latest semantic version if no tag is supplied. The function ensures the selected version is valid and the source repository is a valid Git repository.
-- **Globals:** `OPENSVC_GIT_TAG:` The Git tag of OpenSVC being used, `OPENSVC_VERSION:` The version of OpenSVC being used stripped of the leading 'v'
-- **Arguments:** `$1:` The version tag of OpenSVC that the user wants to select
-- **Outputs:** Error messages if the source directory is not existent or if the requested git tag does not exist in the source directory. Also, exports the selected git tag and OpenSVC version globally, and outputs success message if the specified version is successfully chosen.
-- **Returns:** 1 if invalid directory or invalid tag, else 0 after successful execution
-- **Example usage:**
-```bash
-n_select_opensvc_version v2.0.7
-```
+- **Description:** Selects a specific tagged version of OpenSVC from a given local git repository or defaults to the latest semantic versioned tag if no specific tag is provided.
+- **Globals:** `[ OPENSVC_GIT_TAG: The selected git tag, OPENSVC_VERSION: The selected version without the leading 'v' ]`
+- **Arguments:** `[ $1: Git tag string representing the desired OpenSVC version]`
+- **Outputs:** Console messages indicating the function's operations and selected version, logged message of selected version
+- **Returns:** Exits with status code `1` if any error occurs (source directory doesn't exist, invalid git repo, requested tag not existing, or checkout failure); exits with status code `0` on successful version checkout
+- **Example Usage:** `n_select_opensvc_version v2.1.3`
 
-### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. In current form, this script relies on the assumption that any string supplied as $1 will be a valid Git tag. If this is not guaranteed, more comprehensive error checking should be added around this input.
-2. Explicitly declare function scope of all variables to avoid accidental clash with global variables.
-3. Ensure use of quoted variables to prevent word-splitting or globbing issues.
-4. Regularly pull latest updates from the remote repository to make sure local copy is synchronized with the latest version.
-5. Perform periodic repository health check and clean up unused tags to maintain optimal performance.
+1. Be cautious when synchronizing local repositories, which could have potential security implications. 
+2. Ensure correct validation and error handling for non-existent or invalid repositories. Current version might not correctly handle repositories with no commits.
+3. Add more verbose error handling or debugging options to find issues during the checkout process.
+4. Avoid printing sensitive information to the console, including the full path of the source directory which can be considered sensitive information.
+5. One should consider improving function by allowing users to specify versions using major, minor, and patch arguments separately.
 

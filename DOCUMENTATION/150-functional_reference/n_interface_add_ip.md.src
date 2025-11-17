@@ -1,32 +1,33 @@
 ### `n_interface_add_ip`
 
-Contained in `lib/host-scripts.d/common.d/n_network_functions.sh`
+Contained in `lib/node-functions.d/common.d/n_network-functions.sh`
 
-Function signature: 7e40d3cc8158f30bbc3b61ed12b5bdee7c2150fd7411dc6b70f9cb96ed29457e
+Function signature: 6a786746bbd31691fcadd616683c9d48446f70621c619cbce04fff61c3e311ed
 
 ### Function overview
 
-The `n_interface_add_ip` function in Bash is used to add an IP address with an optional netmask to a specified network interface. If the netmask is provided not as a CIDR, the function also converts it to CIDR format.
+This function, `n_interface_add_ip`, is used to add an IP address to a specified network interface. This is a low-level operation typically used in network setup or reconfiguration scripts. The function takes three arguments: the name of the network interface, the IP address to be added, and the netmask. The final argument, the netmask is also converted to CIDR notation as needed. If provided IP address is already assigned to the network interface, the function logs this condition and returns without making changes.
 
 ### Technical description
 
-- **Name:** `n_interface_add_ip`
-- **Description:** This function is used to add an IP address to a network interface. If a netmask is provided not as a CIDR, the function converts it to the CIDR format.
-- **Globals:** [ ]
-- **Arguments:** 
-  - `$1: iface` Network interface to which an IP address will be assigned.
-  - `$2: ip_addr` The IP address to be added to the network interface.
-  - `$3: netmask` The netmask for the IP address to be added. It can be in CIDR or standard netmask format.
-- **Outputs:** The function outputs the return status of the `ip addr add` command.
-- **Returns:** The function returns the exit status of the `ip addr add` command. If the command is successful it returns 0, otherwise, it returns a non-zero status.
-- **Example usage:**
-```bash
-n_interface_add_ip eth0 192.168.1.10 24
-```
+- **name**: `n_interface_add_ip`
+- **description**: Adds an IP address to a specified network interface. The function also converts the provided netmask to CIDR form. 
+- **globals**: None
+- **arguments**: 
+    - `$1`: The network interface to which the IP address will be added. 
+    - `$2`: The IP address to add.
+    - `$3`: The network mask associated with the IP address.
+- **outputs**: Notifies user if the provided IP already exists on the specified interface. 
+- **returns**: 
+    - 1 if invalid arguments are passed.
+    - 0 if the operation is successful or the IP address already exists on the interface.
+- **example usage**: `n_interface_add_ip eth0 192.168.1.2 255.255.255.0`
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. It is recommended to add input validation for arguments to ensure correct values for network interface, IP address and netmask are passed to the function.
-2. To ensure good security practices, you could check that the network interface exists before trying to add an IP address to it.
-3. To ensure the good quality of function, consider the addition to handle error cases and outputs corresponding error messages to standard error for easier troubleshooting.
+1. Ensure to use this function with valid and trusted input only. The function does not sanitize or validate input, therefore, untrusted input could potentially lead to issues.
+2. Return codes should be handled or verified after calling this function to ensure the operation was successful.
+3. Implement error handling to account for potential failure in IP assignment.
+4. The function can potentially accept a CIDR notation netmask as it doesn't perform validation. This could be a useful extension or a potential issue needing to be addressed, depending on your context. If you need to restrict addresses to a traditional 4 octet netmask, you could add a check for this.
+5. Avoid using this function in scripts that don't need to alter network configurations. Using such functions can be a potential security risk.
 

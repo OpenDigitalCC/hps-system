@@ -2,27 +2,30 @@
 
 Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
-Function signature: a9ac642f70b3f86fdb4bd88ce97a68bea7e050b651ec8c852b5184fec386e901
+Function signature: d5e1bf248301e346ba754f03ac2ca1435ca0b1638bc65cb21181f3394453b478
 
-### Function Overview
-The function `handle_menu_item()` is designed to manage various IPXE menu functions for a given machine which is identified by its MAC address. Depending on the provided arguments, the function can initialize the menu, install hosts, recover, display information, configure/unconfigure, reboot, boot locally, reinstall, rescue, install, or force installation. It uses case statements to parse the command and execute different functionality depending on the input it receives.
+### 1. Function overview
 
-### Technical Description
-* **Name**: `handle_menu_item`
-* **Description**: This function handles different functions related to IPXE menus, such as initialising, installing, unconfiguring, rebooting, etc. It uses a case statement to identify the function to be performed.
-* **Globals**: None.
-* **Arguments**: `[ $1: item - the specific ipxe menu command to execute, $2: mac - the MAC address of the machine for which the operations are to be performed ]`
-* **Outputs**: Information related to the status of the execution of the IPXE menu item handled by the function.
-* **Returns**: The function does not return anything. However, it may change the state of the host configuration.
-* **Example Usage**:
-    ```bash
-    handle_menu_item "reboot" "00:0a:95:9d:68:16"
-    ```
-  
-### Quality and Security Recommendations
-1. Enforce input validation not only for `item` but also for `mac` to ensure the inputs provided are in the correct format, improving reliability and preventing potential injection attacks.
-2. Ensure there is a default error or exception handling mechanism in place for cases when an unexpected error occurs during the execution of a command, improving fault tolerance.
-3. Include logging for all important actions and decisions made during the function's execution, providing visibility into its operations and aiding in debugging.
-4. Centralize error messages to facilitate updates and maintain consistency across the application, improving maintainability and user experience.
-5. Enforce least privilege principle by only assigning minimum required permissions to the function (or the user executing the function) to prevent potential misuse and mitigate damage from potential vulnerabilities.
+The `handle_menu_item` function in Bash is used for managing different IPXE (Internet Pre-Boot Execution Environment) menu items. The function itself takes in two arguments: a menu item and a MAC (Media Access Control) address. Depending on the menu item input, the function executes different tasks in an IPXE environment such as initializing the menu, installing hosts, enabling recovery of the DRH (Deployment Runtime Host), showing IPXE information, configuring/deconfiguring hosts, rebooting, local booting, reinstalling, rescuing, running boot installers, and force installing. The function utilizes case statements for handling the different menu items it accepts.
+
+### 2. Technical description
+
+- **Name:** `handle_menu_item`
+- **Description:** Function to control and manage different ipxe menu items across all menus
+- **Globals:** N/A
+- **Arguments:** 
+  - `$1: item`, an IPXE menu item
+  - `$2: mac`, a Media Access Control (MAC) address
+- **Outputs:** Depending on the input item, outputs numerous results, from initializing the menu to handling installations and recoveries. 
+- **Returns:** N/A
+- **Example usage:** `handle_menu_item init_menu 00:11:22:33:44:55`
+
+### 3. Quality and security recommendations
+
+1. Ensure input validation where necessary for the $item and $mac variables to guard against potential input related vulnerabilities.
+2. Usage of variable 'mac' without validation or sanitization may lead to potential issues. MAC address input should be validated before proceeding.
+3. All the echo statements in the function should be reviewed for potential information disclosure vulnerabilities.
+4. Error handling could be improved in this function, for instance in the case where an unrecognised menu item is provided.
+5. Consider making sure the function fails gracefully when non-existing or ill-formatted MAC addresses are given.
+6. Include comments for each case in the switch-case block for improved code comprehension by other developers.
 

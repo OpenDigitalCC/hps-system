@@ -1,28 +1,36 @@
 ### `n_clone_or_update_opensvc_source`
 
-Contained in `lib/host-scripts.d/alpine.d/BUILD/10-build_opensvc.sh`
+Contained in `lib/node-functions.d/alpine.d/BUILD/10-build_opensvc.sh`
 
-Function signature: 52f6718d72bd0134e7d189fdc858d3e63ae616bcecdc33d4cbf81fb3466beb9e
+Function signature: cdf629e03b8f345fb7a13c0b03de61c64e3c3c8cf1d6cedc7b8a88377b22a57a
 
 ### Function overview
 
-This shell function is designed to clone or update the OM3 module of the OpenSVC framework from a designated GitHub repository. It's named `n_clone_or_update_opensvc_source()`, and it fetches code from `https://github.com/opensvc/om3`. If a local copy exists, it pulls the latest updates; if not, it clones the repository.
+The `n_clone_or_update_opensvc_source` function is designed to handle the source directory for the OpenSVC software package. The function checks if the source repository exists or not, and if it does, updates the repository from the remote server. If the repository does not exist, the function attempts to clone it from the repo_url (`https://github.com/opensvc/om3`). The function makes use of git commands and basic directory manipulation commands such as mkdir.
 
 ### Technical description
 
-- **Name:** `n_clone_or_update_opensvc_source`
-- **Description:** This function clones or updates the OpenSVC OM3 module from its GitHub repository.
-- **Globals:** None
-- **Arguments:** None
-- **Outputs:** Logs and error messages.
-- **Returns:** `1` if an error occurs (e.g., if the source directory exists but isn't a valid git repository, if a parent directory fails to create, if unable to clone the repository, or if unable to fetch updates), `0` if the function succeeds.
-- **Example usage:** `n_clone_or_update_opensvc_source`
+- Name: `n_clone_or_update_opensvc_source`
+- Description: Manages the source directory for the OpenSVC package, updating it if it exists or cloning the repository if it does not.
+- Globals: None
+- Arguments:
+  - None
+- Outputs: Various status and error messages related to the process of updating or cloning the repository.
+- Returns: 
+  - 0: The function succeeded in either updating or cloning the repository.
+  - 1: The function encountered an error in either updating or cloning the repository.
+- Example Usage: 
+
+```Bash
+source_dir="$(get_src_dir)"
+n_clone_or_update_opensvc_source
+```
 
 ### Quality and security recommendations
 
-1. It's essential to make sure only trusted sources are used when cloning repositories for robust security.
-2. During any git operations, ensure that the repository's source is secure.
-3. Run regular security audits on the repositories to prevent the introduction of malicious software.
-4. Implement error handling for all external operations, such as database queries.
-5. When generating directories and handling files, confirm that their permissions are correctly set to avoid unintentional access from unauthorized users.
+1. Consider adding more detailed error handling, to give the user a more specific idea of what might have gone wrong in the event of a failure.
+2. Explicitly validate and sanitize any user-provided input that is used to form the directory paths. This not only avoids the risk of command injection attacks but also helps prevent accidental misconfiguration by the user.
+3. Make use of variables to store reusable command or path strings, which not only makes the script more maintainable but can also help to avoid typing mistakes or inconsistencies in command usage.
+4. Consider logging more detailed operation feedback to a dedicated log file for easier debugging.
+5. Always check the return value of system and external commands to ensure they have executed successfully before proceeding.
 

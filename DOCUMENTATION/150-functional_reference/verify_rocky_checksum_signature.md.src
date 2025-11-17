@@ -2,36 +2,32 @@
 
 Contained in `lib/functions.d/iso-functions.sh`
 
-Function signature: 63d87412289beb590b23dead3edfbcd2afb85d4ee141526d80e8ad9104dcfbcb
+Function signature: c29ccb47fbd2f30ffd999a0dbdad086aae4efbf33487b193102452f5f4b62cab
 
-### Function overview
+### Function Overview
 
-The `verify_rocky_checksum_signature` is a Bash function designed for verifying the checksum signature of a specified Rocky Linux ISO image. It accomplishes this by first downloading the checksum and signature associated with the provided version of the Rocky Linux ISO image, then importing the GPG key from the Rocky Linux server, and finally, verifying the GPG signature. If all passes, the function will then calculate and compare the sha256 checksum of a specified ISO file to ensure the ISO image has not been tampered with.
+The function `verify_rocky_checksum_signature()` is designed for verifying the checksum and signature of the downloaded Rocky Linux ISO in order to ensure its accuracy and safety. It requires a version number as an argument to specify which version of Rocky Linux for validation. The function firstly downloads the GPG key from Rocky Linux's official website. Then it uses this GPG key to verify the signature of the downloaded ISO CHECKSUM. Finally, it calculates and compares the SHA256 checksum of the downloaded ISO with the expected checksum obtained from the server.
 
-### Technical description
+### Technical Description
 
-- Name: `verify_rocky_checksum_signature`
-- Description: This function downloads and verifies the checksum and its signature of a Rocky Linux ISO image. Additionally, it validates the SHA256 hash of the ISO file against the downloaded checksum.
-- Globals: 
-  - `HPS_DISTROS_DIR`: A directory path where Rocky Linux distribution files are stored.
-- Arguments: 
-  - `$1 (version)`: The version of Rocky Linux ISO image to verify.
-- Outputs: The function will output various status messages indicating the status of download, GPG key import, and verification steps.
-- Returns: 
-  - `0`: Success. The checksum signature has been verified and matches the checksum of the specified ISO image.
-  - `1`: Failure. The GPG key import process was unsuccessful.
-  - `2`: Failure. The checksum signature verification failed.
-  - `3`: Failure. No checksum was found for the specified ISO image.
-  - `4`: Failure. The checksum of the ISO file does not match the downloaded checksum.
-- Example Usage:
-  - `verify_rocky_checksum_signature "8.4"`
+- **Name:** `verify_rocky_checksum_signature()`
+- **Description:** This function verifies the GPG signature of the CHECKSUM file of a particular downloaded Rocky Linux ISO. It also computes the SHA256 checksum of the downloaded ISO file and compares this calculated checksum against the server provided expected checksum.
+- **Globals:** 
+  - `arch: x86_64` Architecture of the system
+  - `base_url: https://download.rockylinux.org/pub/rocky/${version}/${arch}/iso/` The base url from which the ISO and other resources will be downloaded
+  - `target_dir: "$(_get_distro_dir)/rocky"` The directory where the ISO is stored after downloading
+- **Arguments:** 
+  - `$1: version` The version of Rocky Linux ISO to be verified 
+- **Outputs:** Status messages about ongoing process, checksum mismatch errors, GPG key import errors and GPG signature verification errors
+- **Returns:** 0 when GPG signature and checksum verification are successful, 1 when GPG key import fails, 2 when GPG signature verification fails, 3 when expected checksum is not found in the downloaded CHECKSUM file, 4 when the received and computed checksums of the ISO mismatch.
+- **Example Usage:** `verify_rocky_checksum_signature 8.4`
 
-### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. Always ensure to use secure and up-to-date versions of all tools and packages used in the function.
-2. Instead of hardcoding the architecture (`x86_64`), consider making it an argument or an environment variable that is configurable by the user.
-3. Consider checking whether the `curl` and `gpg` commands succeed immediately rather than using a mixture of exit status checks and error redirections.
-4. Employ better error handling and provide more specific output messages in case of failures.
-5. Avoid reassigning constants in the middle of the function, such as `checksum_path` and `sig_path`.
-6. Uncomment the downloading commands for CHECKSUM and CHECKSUM.sig or explain why they are commented out.
+1. Implement additional error handling and logging to provide more detailed feedback if the GPG key download fails or if incorrect input is provided.
+2. Before proceeding, validate the URL where the GPG key will be downloaded.
+3. Introduce tests to ensure SHA256SUM algorithm's reliability used in the computation of the received ISO checksum.
+4. Update the GPG key in a regular basis in case it has been updated by the server and consider a secure key handling.
+5. Make sure the directory and the ISO file path are valid and secured and have the write permission. 
+6. Check the availability of the `curl`, `gpg` and `sha256sum` tools before execution.
 

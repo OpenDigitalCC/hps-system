@@ -2,29 +2,29 @@
 
 Contained in `lib/functions.d/host-functions.sh`
 
-Function signature: f0dad0c738e5b5f97b960e78daed3dbb06ffdffd98737aaa8939313fb7223925
+Function signature: efb256e638c74f31eec111be92bae49216e5d4abc1cabf2c6961ab1b52ec20b7
 
 ### Function Overview
-
-The function `host_post_config_hooks()` takes as arguments a key and a value, and performs actions based on the key provided. Within the function, a hook mapping is defined, associating specific keys with specific functions to be performed. If the key provided as an argument is found in the hook mappings, the associated function is executed; the execution is logged and any output is suppressed. If the function fails, a warning message is logged. Regardless of the execution outcome, the function always returns a success status.
+The `host_post_config_hooks` function in bash is used to detect whether a given key has been assigned a hook in a specified array of hooks. If it has, the function checks if the hook function exists and then calls it, logging this process regardless of the function's existence or possible failures. It always returns success, denoted by '0' in bash.
 
 ### Technical Description
 
-- **Name:** `host_post_config_hooks()`
-- **Description:** This function takes in a key-value pair and performs specific actions (hook functions) mapped to the key. Status updates are logged.
-- **Globals:** _None defined directly within this function._
-- **Arguments:**
-    - `$1:` Key to check in the hook mappings.
-    - `$2:` Value paired with the key; used for logging purposes.
-- **Outputs:** Logs informational and warning messages based on the handling and execution of the hook function.
-- **Returns:** Always returns `0` which signifies success in bash.
-- **Example Usage:** `host_post_config_hooks "IP" "192.168.1.1"`
+- **Name:** `host_post_config_hooks`
+- **Description:** This function takes two inputs, a key and a value. It first defines a list of hooks and checks if the key has an associated hook. If such a hook exists, it verifies if the function for the hook exists before calling it. If it fails or the function doesn't exist, it logs the incident. 
+- **Globals:**  No global variables are used.
+- **Arguments:** 
+  - `$1: key` - The identifier for the hook to be invoked.
+  - `$2: value` - This value is only referenced, but not used within the function.
+- **Outputs:** Log messages informing about the call status and any incidents occurred.
+- **Returns:** The function always returns success, represented by '0' in bash, regardless of whether the hook function exists or runs successfully.
+- **Example usage:** `host_post_config_hooks "IP" "192.168.1.2"`
 
 ### Quality and Security Recommendations
 
-1. Ensure error handling is robust: Currently the function handles hook function failures. This could, however, be made more robust by handling more exceptions and adding more informative logs.
-2. Consider limiting the keys and values that can be added: To prevent misuse of the function, consider enforcing restrictions or validity checks on the key-value pairs passed.
-3. Encrypt sensitive data: If the key-value pairs contain sensitive data, consider encrypting them to enhance security.
-4. Always sanitize input: As a general security concept, any inputs passed into functions should be sanitized properly. A check should be added to handle malicious or unintended key-value inputs.
-5. Follow the least privilege principle: Make sure that your script is running with the lowest permissions possible. This reduces the chance of the script making unwanted or harmful changes.
+1. **Error Handling:** Function can be improved by better error handling. The value variable `$2` should be utilized, especially when the hook functions are failing.
+2. **Failure Response:** Always returning success regardless of function failure could cause downstream errors to be undetected. Consider returning different codes for differing process states.
+3. **Function Validation:** Validate input parameters to ensure key-value pairs being processed are expected system variables.
+4. **Logging Levels:** Implement more granular logging levels, providing more detailed error messages in case of a failure. It will help in debugging cases when hook function fails.
+5. **Security:** Be aware of possible command injections via the key-value parameters; ensure proper sanitization or escape of possible control characters.
+6. **Usage of Globals:** Consider passing all required data as function arguments, rather than relying on global variables, to decrease dependencies and improve the portability and testability of the function.
 

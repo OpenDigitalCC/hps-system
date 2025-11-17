@@ -1,35 +1,28 @@
 ### `n_storage_network_setup`
 
-Contained in `lib/host-scripts.d/common.d/n_storage-functions.sh`
+Contained in `lib/node-functions.d/common.d/n_storage-functions.sh`
 
 Function signature: b9d955ab898629611ccbb3c79adf2cb697c037821b05b564e6e5b61ababbb529
 
-### Function overview
+### Function Overview
 
-The `n_storage_network_setup` function is utilized for setting up the storage network in a remote computing system. The function takes two arguments, physical interface and storage index. It retrieves the MAC address of the specified interface and requests an IP allocation from the IPS. In case of failure, an error message is logged and the function returns 1. If successful, the IP allocation response is parsed and utilized to create a VLAN and set up the IP address. The VLAN interface, IP, and gateway are stored as host variables and the gateway's reachability is tested.
+The function `n_storage_network_setup` is used to setup a storage network on a physical interface. It gets the MAC address for identification, requests IP allocation from IPS, verifies the allocation, parses the allocation, creates a VLAN, and adds an IP. It also stores the configuration in host variables and tests if the gateway is accessible.
 
-### Technical description
+### Technical Description
 
-- **name**: `n_storage_network_setup`
-- **description**: This function sets up the storage network by creating a VLAN after obtaining an IP allocation from the IPS, sets up an IP address and tests the gateway for reachability. This function also stores the VLAN interface, IP, and Gateway as host variables.
-- **globals**: None
-- **arguments**: 
-    - `$1: phys_iface` — The physical interface.
-    - `$2: storage_index` — The storage index(defaults to 0).
-- **outputs**: Logs messages regarding the IP allocation from IPS, VLAN creation, and gateway reachability.
-- **returns**:  `1` if the IP allocation request is failed or empty. Also, `1` is returned if either VLAN creation or IP addition fails. Returns `0` if all operations are successful.
-- **example usage**: 
+- **Name:** `n_storage_network_setup`
+- **Description:** This function sets up a storage network on a physical interface, creates a VLAN, adds an IP, stores the configuration in host variables and tests if the gateway can be reached.
+- **Globals**: \[ `phys_iface`: Physical interface name, `storage_index`: Index used for storage \]
+- **Arguments**: \[ `$1`: Physical interface name, space where network will be set up. `$2`: (Optional) Index used for storage, default is 0. \]
+- **Outputs**: Logs messages, either about successful completion or detailing what went wrong, and sets host variables.
+- **Returns**: `0` if successful, `1` otherwise.
+- **Example Usage**: `n_storage_network_setup eth0 1` (This sets up a storage network on the physical interface 'eth0' with a storage index of 1)
 
-```bash
-n_storage_network_setup eth0 1
-```
+### Quality and Security Recommendations
 
-### Quality and security recommendations
-
-1. Always check user permissions before running critical functions such as `n_storage_network_setup` to ensure security. You must have necessary privileges for operations like VLAN creation and IP allocation.
-2. Robust error checking and handling could be provided for all stages within the function to offer better resiliency.
-3. Avoid using hardcoded strings like `"ERROR"`. It's recommended to define them as constants at the start of the script or to gather them from a central configuration file.
-4. Input validation should be performed to prevent any kind of script injection or faulty value passage.
-5. Make sure to store sensitive data such as IP addresses securely and ensure they are clean up properly to avoid exposing any sensitive information.
-6. Logging levels could be introduced to make troubleshooting easier in complex systems.
+1. Ensure that all input parameters are properly validated to avoid potential security risks.
+2. Introduce some error handling for the function to provide more granular feedback about what exactly went wrong in case of an error.
+3. Refactor the function to be less dependent on global variables. Instead, consider passing all necessary data as function arguments. This will make the function easier to test and use in other contexts.
+4. Make sure that the function is thoroughly covered by automated tests, checking not only positive but also negative scenarios.
+5. Review the security permissions required for the function, and make sure it only has the privileges it absolutely needs to function correctly.
 

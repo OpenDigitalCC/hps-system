@@ -1,57 +1,45 @@
 ### `n_build_opensvc_package`
 
-Contained in `lib/host-scripts.d/alpine.d/BUILD/10-build_opensvc.sh`
+Contained in `lib/node-functions.d/alpine.d/BUILD/10-build_opensvc.sh`
 
-Function signature: 22c7385e472169b5941896aee8c618de46e294a277f781fa9db14d57d7bcef04
+Function signature: 4ff11e24efab635ad3e7b651cc12ccd1498b33c83c50ee3968dd9e66651b9a8a
 
-### Function Overview
+### Function overview
 
-The `n_build_opensvc_package` function is an advanced installer script function designed to download, compile, and package the OpenSVC software into APK packages for Alpine Linux. OpenSVC is an open source project for managing and orchestrating heterogeneous application stacks within datacenters. 
+The Bash function `n_build_opensvc_package()` is a script to automate the build process for the OpenSVC agent on Alpine Linux. This script automatically handles version specification, repository cloning, checking network connectivity and compatibility, build dependencies, and performs build cleanup unless otherwise specified.
 
-This function accepts several optional command-line parameters, including the Alpine version, specific OpenSVC git tag, and an option to keep the build directory after the process completes. 
+### Technical description
 
-Without these, the function auto-detects the Alpine version and selects the latest compatible OpenSVC version based on the installed Go version. 
+**Name:** `n_build_opensvc_package` 
 
-### Technical Description
-
-**Name:** `n_build_opensvc_package`
-
-**Description:** This function downloads, compiles, and packages the OpenSVC software into an Alpine APK package. Run it on a system with network connectivity, and adjust the target Alpine version, the OpenSVC version, or whether to keep the build directory via command-line arguments.
+**Description:** This function automates the entire build process for OpenSVC agent in Alpine. 
 
 **Globals:** 
 
-- `alpine_version`: Target Alpine version (auto-detects if not specified)
-- `om3_version`: Specific OpenSVC git tag (Chooses the latest compatible version if not specified)
-- `keep_build`: Flag to keep the build directory after the process completes.
-- `source_dir`: The source directory where the script will clone the OpenSVC repository.
+- `OPENSVC_VERSION`: Defines the opensvc version
+- `OPENSVC_GIT_TAG`: Specifies the git tag to checkout from OpenSVC repository
+- `OPENSVC_BUILD_DIR`: Specifies the directory where the build will take place
 
 **Arguments:** 
 
-- `$1`: Options: `--alpine_version`, `--om3_version`, `--keep_build`, `--help`
-- `$2`: If $1 is `--alpine_version` or `--om3_version`, $2 should be the version or tag.
+- `$1`, `$2`: The arguments to the function serve to provide additional options, including specification of alpine version, opensvc git tag, whether to keep the build directory, or to request help.
 
-**Outputs:** 
+**Outputs:**   
+The function outputs status messages for each step of the build process, error messages when applicable, and success messages upon successful completion of the build.
 
-- Echoes build steps and relevant status information throughout execution
-- In the case of a successful build, the script produces APK packages in the build directory.
+**Returns:**  
+The function will return 1 in an error state if any of its steps fail to properly execute, and 0 upon a successful completion.
 
-**Returns:** 
-
-- `0` on successful execution and completion of all build tasks
-- `1` on failure or error
-
-**Example Usage:**
-
-```bash
-$ n_build_opensvc_package --alpine_version v3.7 --om3_version 2.0 --keep_build
+**Example Usage:**  
+```
+n_build_opensvc_package --alpine-version 3.14 --om3-version v1.9.1 --keep-build
 ```
 
-### Quality and Security Recommendations
+### Quality and security recommendations
 
-1. In the `--help` section, expand the option descriptions for better understanding of the function capabilities. 
-2. Use safer constructs for argument parsing, such as `getops`, which provides more robustness and flexibility.
-3. Apply proper error handling. Instead of only exiting with `return 1` upon errors, it would be beneficial to give more varied return codes depending on the error type.
-4. Provide a logging system that logs notable events and possible errors.
-5. Where feasible, avoid running the script as root to minimize potential security risks.
-6. Keep all code up to date with the latest safe practices and actively audit & review the code, patching any discovered insecurities.
+1. **Double check all command line arguments**: To avoid any potential vulnerabilities or crashes, ensure command line arguments are thoroughly checked and sanitized before use.
+2. **Check for potential failure states**: Ensure every command that has the potential to fail has a corresponding error check. This includes not only the steps in the build process, but any file or directory manipulation.
+3. **Implement more robust logging**: Consider creating separate log files for the build process, which could be useful for troubleshooting in the event of a failure.
+4. **Enforce permissions control**: To prevent potential unauthorized access or modifications, ensure correct permissions on directories and files that the script interacts with.
+5. **Consider implementing checksum verification for downloads**: Adding checksum verification for any downloads would enhance the security of the script by verifying the integrity of the download before it is used.
 

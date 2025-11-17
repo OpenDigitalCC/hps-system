@@ -1,33 +1,30 @@
 ### `n_display_info_before_prompt`
 
-Contained in `lib/host-scripts.d/alpine.d/console-control.sh`
+Contained in `lib/node-functions.d/common.d/console.sh`
 
-Function signature: 973863ced9e380918f2a6cfb0d3cb925aab9f7171b50b1c0b6920877dcdb4010
+Function signature: dcac048f62180791d143d456e76ba9be0d27cf9a94e052158bdc2101bc2a17cd
 
-### Function Overview
+### Function overview
 
-The `n_display_info_before_prompt()` function is used predominantly to display node information on the console before the prompt. This function first checks if the console is enabled or disabled. If the console is disabled, it simply logs the information and returns. If the console is enabled, it proceeds to ensure the `n_node_information` command is available before executing further commands. Then, it creates an issue file that displays before logging in and ensures it's readable. Finally, the function displays the issue file immediately on the console and logs the creation of the issue file with node info. The function returns 0 indicating successful execution.
+The bash function `n_display_info_before_prompt()` serves to display basic node information on the console every time it is restarted. The function first logs that the node information is being displayed and then checks whether the console is disabled by scanning through `/etc/inittab`. If the console is disabled, a log about it is created and the display will be handled by init respawn instead. Else, the function makes sure that the `n_node_information` is available and updates the issue file with the relevant node information. This issue file is then displayed on the console providing the node info logs.
 
-### Technical Description
+### Technical description
 
-- **Name:** `n_display_info_before_prompt()`
-- **Description:** This function displays node information in the console before the prompt arises.
-- **Globals:** None
-- **Arguments:** None
-- **Outputs:** Logs statements like "Displaying node information on console", "Console is disabled - display will start via inittab", and "Created /etc/issue with node info". It also displays content of issue file on the console.
-- **Returns:** 0, indicating successful execution of the function.
-- **Example Usage:**
+- **Name**: `n_display_info_before_prompt()`
+- **Description**: This function log's the node information, checks if the console is disabled, generates node info logs, and creates updates the issue file to be displayed on console.
+- **Globals**: `${console_disabled}`, a binary variable to check if console is disabled or not.
+- **Arguments**: No arguments accepted.
+- **Outputs**: Logs of node information, sends them to remote logs when necessary, and displays them on the console.
+- **Returns**: The function returns 0 indicating successful execution.
+- **Example usage**: To use this function, call it without any arguments like so: `n_display_info_before_prompt`.
 
-```sh
-$ source <path-to-script-containing-function>
-$ n_display_info_before_prompt
-```
+### Quality and security recommendations
 
-### Quality and Security Recommendations
-
-1. Although the function is encapsulated to avoid global variables, it uses a lot of system commands which may not be safe from all forms of shell-injection attacks. It is recommended to use safer forms of commands or sanitize user input.
-2. Robust error handling is not present. It is recommended to add more condition-based returns for errors and implement broader exceptions.
-3. While the function checks whether certain commands exist before trying to run them, there is no fallback method if these commands are not available.
-4. Function lacks explicit commenting on various sections, making it hard to understand for newer developers.
-5. The function could be modularized further for code clarity and function reusability. For instance, separate functions for checking if the console is disabled and creating the issue file could be beneficial.
+1. Handle errors when the `n_node_information` is not available or fails to execute. This would make the function more resilient. 
+2. Use full paths for all binaries to avoid dependency on `PATH` that can be exploited in some cases.
+3. Restrict editing rights to `/etc/issue` to prevent tampering.
+4. Document the requirements and side effects of the function more explicitly.
+5. Validate and sanitize any external inputs used in the function to avoid injection attacks.
+6. Be cautious about symlink attacks, especially when writing to `/etc/issue`. Make sure that the intended real file gets edited.
+7. Implement some form of rate limiting to the function to prevent abuse.
 

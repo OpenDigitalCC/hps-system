@@ -2,28 +2,35 @@
 
 Contained in `lib/functions.d/iso-functions.sh`
 
-Function signature: ac86f8c78c7149b4fbc3125a2f52dd65b160ad01f437b5eeb5b504bd1a90c6b1
+Function signature: 95853858409b34c65eb8d886732c7cec3b9e2f99fb6a3b3d95b1bc9d2780fed7
 
-### Function overview
+### Function Overview
 
-This shell function `check_and_download_latest_rocky`, written in bash script, is designed to check for the latest version of Rocky Linux for a specific architecture and download the ISO file if it is missing. It sets up the target base directory and checks whether the latest version ISO file is present. If it is not present, it downloads the ISO from the base url which is initially defined.
+The function `check_and_download_latest_rocky` checks for the latest version of Rocky Linux ISO in the specified architecture (x86_64) and downloads it if it does not already exist. The function also ensures the correct directory structure exists for storing the downloaded ISO. It includes checks for the latest version and whether the ISO already exists in the local directory. If it does not, it then proceeds to download the ISO using curl and displays appropriate messages. Subsequently, the function extracts the downloaded ISO for use with PXE booting.
 
-### Technical description
+### Technical Description
 
-- **Name**: `check_and_download_latest_rocky`
-- **Description**: This bash function checks and downloads the latest version of Rocky Linux for a specific architecture if it is missing.
-- **Globals**: `HPS_DISTROS_DIR`: Directory for storing ISOs.
-- **Arguments**: None.
-- **Outputs**: Logs and messages about the process and final results.
-- **Returns**: None in this function but could return 1 if erred in practical usage.
-- **Example Usage**: `check_and_download_latest_rocky`. As it doesn't require any arguments, the function can be called without providing any.
+- **Name:** `check_and_download_latest_rocky`
+- **Description:** This function checks for the latest version of Rocky Linux ISO, downloads it if it doesn't already exist, and extracts it for use with PXE.
+- **Globals**: 
+   - `base_url`: base URL for fetching Rocky Linux ISOs
+   - `arch`: The architecture of the ISO (default: x86_64)
+   - `iso_pattern`: Describes the type of ISO to download (default: minimal)
+- **Arguments**: None
+- **Outputs**: Log and echo messages regarding the program's progress and operations. These messages include the latest version number, downloading status, ISO availability, and further steps that are carried out by the function.
+- **Returns**: None. The function can exit early with a status of 1 if it cannot detect the version.
+- **Example Usage**:
+   ```bash
+   check_and_download_latest_rocky
+   ```
 
-### Quality and security recommendations
+### Quality and Security Recommendations
 
-1. **Validating inputs**: Input variables, especially those sourced from outside the function such as `HPS_DISTROS_DIR`, should be checked and validated to ensure they are correct and safe.
-2. **Error trapping**: Consider adding more error trapping to handle situations where commands within the function fail. 
-3. **Use More Robust Code**: String operations on paths can be replaced with more robust code using `dirname` and `basename`.
-4. **Use `https://`:** Always use secure protocol (https) while downloading files for ensured security.
-5. **Checksum Verification:** For further security, the downloaded ISO could be verified against a known checksum to ensure its integrity. Any mismatches should trigger a warning or error.
-6. **Permission and Access:** Ensure proper permission schemes for the directories and files mentioned in the function.
+1. Avoid the user of `local` keyword in the global scope, as its behavior might differ across bash versions.
+2. Validate and sanitize inputs to prevent command injection attacks.
+3. Include error handling for network operations.
+4. Consider using a more secure method of downloading the file, potentially through an encrypted connection.
+5. Check that requisite permissions exist for creating directories and downloading files.
+6. Implement logging for greater visibility for debugging and auditing.
+7. Performance improvements could be considered by avoiding unneeded downloads if the ISO already exists. Check for file integrity after download to prevent using a corrupted file.
 

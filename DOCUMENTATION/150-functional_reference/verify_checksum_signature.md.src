@@ -2,38 +2,33 @@
 
 Contained in `lib/functions.d/iso-functions.sh`
 
-Function signature: 6927fb684cf8e6a1fa690734435cbce8b702cdeef1affb7a199413ba1ed2e406
+Function signature: 56bea15c9139a6a7e8a5f6c061d1ea0f9983469c94f7d3149e7ccc3bf4984e51
 
 ### Function Overview
 
-The `verify_checksum_signature` function takes four positional arguments to define the type of ISO file to check and the location from where to fetch the ISO's CHECKSUM and GPG key. This function is designed to verify the integrity and authenticity of a downloaded ISO file according to the checksum and GPG signature fetched from the file's distribution server. 
-
-Currently, the function only supports the Rocky Linux distribution.
+The function `verify_checksum_signature()` is used to verify the integrity of an ISO file using checksum validation and GPG signature checking. It first asserts the existence of the ISO file, failing if the file does not exist. It then fetches `CHECKSUM` and `CHECKSUM.sig` files for the respective OS from a defined URL. Afterwards, it imports the necessary GPG key and verifies the GPG signature on the fetched `CHECKSUM`, and the actual checksum of the ISO file against the fetched `CHECKSUM`. The function has a case for `rockylinux` and fails by default for other OS.
 
 ### Technical Description
-
-- **Name:** `verify_checksum_signature`
-- **Description:** This function verifies a specified ISO checksum and GPG signature to ensure the authenticity and integrity of the file.
-- **Globals:** 
-  * `HPS_DISTROS_DIR` (Defaults to `/srv/hps-resources/distros`): Specifies the directory of the distros.
-- **Arguments:** 
-  * `$1 (cpu)`: Specifies the CPU architecture.
-  * `$2 (mfr)`: Specifies the manufacturer.
-  * `$3 (osname)`: Specifies the operating system name.
-  * `$4 (osver)`: Specifies the operating system version.
-- **Outputs:** Various status updates printed to the console. Error messages are redirected to standard error.
-- **Returns:** `0` on success, `1` if there is an error (such as the ISO not being found, a failed download, checksum mismatch, or signature verification failure).
-- **Example Usage:**
-    ```bash
-    verify_checksum_signature "x86_64" "rocky" "rockylinux" "8"
-    ```
+* __Name__: `verify_checksum_signature`
+* __Description__: This function verifies the checksum and GPG signature of ISO files.
+* __Globals__:
+  * No globals used by this function
+* __Arguments__: 
+  * `$1`: cpu - architecture of the targeted machine
+  * `$2`: mfr - manufacturer of the targeted machine
+  * `$3`: osname - name of the OS represented in the ISO file
+  * `$4`: osver - version of the OS represented in the ISO file.
+* __Outputs__:
+    * Errors to stderr when required files are not found, when downloads fail, when an invalid GPG key is imported, when the GPG signature verification fails, when the checksum mismatched, or when checksum verification is not implemented for the provided OS. 
+    * Verification status to stdout.
+* __Returns__: `1` when a failure situation is encountered, `0` when the ISO file passes verification.
+* __Example usage__: `verify_checksum_signature amd64 Lenovo rockylinux 8`
 
 ### Quality and Security Recommendations
-
-1. The function could benefit from input validation to ensure the provided `cpu`, `mfr`, `osname`, and `osver` arguments are in the expected formats before they are concatenated into URLs.
-2. The function may need to be modified to handle ISO files for operating systems other than Rocky Linux.
-3. Consider the implementation of stronger error handling rather than simply returning `1` on an error. Detailed and distinct exit codes may help to better identify specific issues that could occur.
-4. The echoing of status updates could be optionally silenced for running the script in a quiet mode.
-5. Temporary directories and files should be securely deleted to prevent sensitive information from being exposed on the server.
-6. Implement HTTPS download error handling to improve security and stability. This could be accomplished within the `curl` command statements.
+1. To improve security, validate the URLs before using them in `curl`. It is common for URLs to contain injection points that can lead to shell command injection if not sanitized properly.
+2. Maintain a good error handling system, don't just rely on the return status. Log errors for troubleshooting.
+3. Implement checks for more Linux distributions, rather than just for `rockylinux`.
+4. Create a cleanup routine to remove any temporary files and directories created even if the function fails or is interrupted.
+5. Use HTTPS for all URLs to ensure secure transfer of files.
+6. Use the long option names (e.g., `--silent` instead of `-s`) with the curl command for better readability.
 

@@ -2,35 +2,29 @@
 
 Contained in `lib/functions.d/ipxe-menu-functions.sh`
 
-Function signature: cbd14427c29a67a77d52cb0fd250b99f45cb94110f4d4b0a3f1123ec4fe219a4
+Function signature: 9c0baa423aebd8ca19123a28eecf2967abeaca9c11a26cd4fc657fd2c36b6517
 
 ### Function overview
 
-The `ipxe_show_info()` function is mainly used to display different configurations of a particular host. This function pulls up information such as the host's IP, hostname, platform, UUID, serial number, product, cluster configuration, and HPS (High Performance Storage) paths. 
-
-The function achieves this by taking a single argument, which determines the category of information that will be displayed for the host. The categories include `show_ipxe`, `show_cluster`, `show_host`, and `show_paths`. 
+The `ipxe_show_info` function is part of iPXE scripts within the Linux environment that serve to provide information about the host data, cluster configuration, host configuration, and HPS paths. The function uses here-documents and case statements in bash to format the output depending upon the category passed as an argument. It handles four category types: `show_ipxe`, `show_cluster`, `show_host`, and `show_paths`. For an unknown category, it chains a command to jump to the initial menu.
 
 ### Technical description
-
-- **Name**: `ipxe_show_info()`
-- **Description**: This function displays specific information about a host, based on what category is passed as an argument.
-- **Globals**: 
-  - `HPS_CLUSTER_CONFIG_DIR`: The directory where the cluster configuration is stored
-  - `CGI_URL`: Link to CGI (Common Gateway Interface) script which is used to implement the command `process_menu_item`
-  - `HPS_CONFIG`: The file where the HPS (High Performance Storage) configuration is stored
-- **Arguments**: 
-  - `$1: category`: The type of information to display about the host. The options are `show_ipxe`, `show_cluster`, `show_host`, and `show_paths`.
-- **Outputs**: Information about the host in the requested category, such as IP address, hostname, platform, UUID, serial and product numbers, and more.
-- **Returns**: Does not return a value.
-- **Example usage**: `ipxe_show_info show_ipxe`
+* **Name**: ipxe_show_info
+* **Description**: This function shows different types of configurations and host-path related data based on the category input provided. It is used mainly in the context of remote boot environments.
+* **Globals**: [ category: this local variable holds the value passed to the function as an argument which determines the type of information to be displayed ]
+* **Arguments**: [ $1: category – The category of information request. Chosen from `show_ipxe`, `show_cluster`, `show_host`, `show_paths`. ]
+* **Outputs**: This function displays different types of information (menu containing host data, configurations, HPS paths) depending on the category input
+* **Returns**: Nil
+* **Example Usage**:
+``` bash
+ipxe_show_info show_cluster
+```
+This will display the cluster configuration information.
 
 ### Quality and security recommendations
-
-1. Always ensure variable sanitization before using any variable in command substitution. This removes potential harmful commands being hidden as a value for a variable.
-2. Always quote the variables. This will prevent word splitting and pathname expansion.
-3. Implement error handling for when file reading or command chain replacement fails, or when an unknown item category is passed as an argument.
-4. Implement checking for edge cases where the category argument is not passed at all.
-5. The `ipxe_show_info` function is essentially storing, processing, and displaying sensitive information about a host. It is recommended to add necessary security measures to protect this sensitive data from potential breaches.
-6. Use `printf` instead of `echo` for better string handling, especially while displaying file contents.
-7. Consider using local variables. This can help in preventing variable clashing and accidental modification of environment variables which can have impact on how the system functions.
+1. *Input Validation*: The function could benefit from some form of input validation to ensure only the proper category labels are passed into the function.
+2. *Documentation*: The use of more inline comments throughout the function would make it more understandable to others or even the same author in the future.
+3. *Error Handling*: Implementing error handling strategies can improve the stability of the function. It seems there are already some checks for file existence, these could be expanded upon for more robust error handling.
+4. *Permissions*: For security purposes, be mindful of providing only necessary permissions to files involved in this function. It’s important to only give the minimum permissions required to properly execute the function.
+5. *Backup and Restore points*: Good to have backup and recovery mechanisms in place to avoid data loss during the runtime of scripts, particularly if they are writing, updating or deleting files.
 

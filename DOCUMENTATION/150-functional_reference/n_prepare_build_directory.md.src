@@ -1,34 +1,37 @@
 ### `n_prepare_build_directory`
 
-Contained in `lib/host-scripts.d/alpine.d/BUILD/10-build_opensvc.sh`
+Contained in `lib/node-functions.d/alpine.d/BUILD/10-build_opensvc.sh`
 
-Function signature: da5d976a232d610c6dee7320c9a7dd5f46b21af2840c2356476910456cae90e6
+Function signature: 078b9d8f7b0fe1e5882492f4afbd27578cba41f46c064e5c5366cb46685a3cf4
 
 ### Function overview
 
-This Bash function `n_prepare_build_directory` is used to prepare a directory for building the Opensvc version specified by `OPENSVC_VERSION`. It verifies the existence of the source directory, creates a temporary build directory, makes sure the directory does not already exist, copies the source tree to the build directory, and sets up the Go build environment for static compilation.
+The function `n_prepare_build_directory()` is designed to prepare a build directory for a specific version of OpenSVC - an open-source IT service and resource manager. The function takes no arguments, and mainly works by setting up several global variables and checking certain conditions. The function returns 1 in case of error, and 0 upon successful completion.
 
 ### Technical description
 
-- **Name**: `n_prepare_build_directory`
-- **Description**: Prepare directory for building OpenSVC. The function assumes that `OPENSVC_VERSION` and `source_dir` are set.
-- **Globals**: [ `OPENSVC_VERSION`: The version of OpenSVC to use for building, `OPENSVC_BUILD_DIR`: The directory to use for building OpenSVC, `CGO_ENABLED` : Flag indicating whether to use Go build environment for static compilation ]
-- **Arguments**: None
-- **Outputs**: Warnings or errors if the source directory does not exist, the build directory exist already or the build directory is unable to be created. It also provides information on the build and the version.
-- **Returns**: 
-  - 1 if `OPENSVC_VERSION` is not set, source directory does not exist or if it fails to create or delete the build directory
-  - 0 if the build directory has been prepared successfully
-- **Example usage**:
-```
-export OPENSVC_VERSION=2.0
-n_prepare_build_directory
+**- Name:** `n_prepare_build_directory`
+**- Description:** Prepares a build directory to install or update a specific version of OpenSVC. Checks for required global variables and previous actions, creates a temporary build directory, copies the source code into it, and sets up the build environment.
+**- Globals:** 
+- `OPENSVC_VERSION`: The version of OpenSVC to be installed.
+- `OPENSVC_BUILD_DIR`: The directory where the build process will take place.
+- `CGO_ENABLED`: A flag indicating if the Go build environment is enabled for static compilation.
+**- Arguments:** None.
+**- Outputs:** Echoes messages about operation progress and errors.
+**- Returns:**
+  - `1` if any error occurs.
+  - `0` on successful completion.
+**- Example usage:**
+```bash
+source n_prepare_build_directory.sh
 ```
 
 ### Quality and security recommendations
 
-1. Consider making the `source_dir` a script parameter or a global configuration so as to avoid hard coding paths within functions.
-2. It might be better to notify the user that the build directory is being deleted. They may have files in there which they didn't realize would be this function's responsibility.
-3. To prevent potential directory traversal or file overwrite attacks, ensure that the value of `OPENSVC_BUILD_DIR` is controlled or validated.
-4. The error messages printed by this function could be standardized and written in a dedicated error handling function, to make them easier to manage and keep the codebase DRY (Don't Repeat Yourself).
-5. Run static analysis tools to catch more nuanced potential security issues such as format string vulnerabilities, buffer overflows etc.
+1. For security purposes, particularly since the application is creating a temporary directory, take all precautions to prevent symbolical linking attacks (symlink race conditions).
+2. Increase the level of logging, such as indicating which action the script is currently performing, especially in long running scripts.
+3. Utilize a centralized error handling mechanism to ensure that returned errors are correctly interpreted and communicated.
+4. Use unambiguous variable names to simplify code readability and maintainability.
+5. Practice defensive programming by adding checks to ensure files and directories exist before using them.
+6. Make sure that all temporary files and directories are deleted after use to prevent unnecessary resource consumption.
 

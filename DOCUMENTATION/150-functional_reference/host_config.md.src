@@ -2,37 +2,37 @@
 
 Contained in `lib/functions.d/host-functions.sh`
 
-Function signature: e3395cb667c86565ac27cd12907de2a73dd934fe68e2741bcb6178e42eb80743
+Function signature: a18138191d6330ea30a34fdf3cbaf1fab14b34efcbc54f4a3dd355e1c45f5d13
 
-### Function overview
+### Function Overview
 
-`host_config` is a Shell function that allows operations on configuration values associated with a host's MAC address. The function is capable of getting a configuration value, checking if a key exists, validating a key's value, and setting a key's value. The configuration data is stored in associative array `HOST_CONFIG`, and loaded from a configuration file located at `${HPS_HOST_CONFIG_DIR}/${mac}.conf`.
+The bash function `host_config()` is designed to manage and manipulate host configurations. It takes inputs in the form of MAC addresses, commands, keys, and values, and executes a range of operations based on these inputs. These operations can include reading values directly from a file, checking if certain files exist, checking if elements within these files are equal to given values, and setting new values. The function implements a series of checks to validate inputs and return errors where necessary. Ultimately, the function aims to read, write, and update configuration data depending on the inputs provided.
 
-### Technical description
+### Technical Description
 
-- **Name:** host_config
-- **Description:** A Shell function to get, check and set configuration values for a specific MAC address.
-- **Globals:** 
-  - `__HOST_CONFIG_PARSED`: Indicates if a config file has been parsed.
-  - `__HOST_CONFIG_MAC`: The currently loaded MAC address.
-  - `__HOST_CONFIG_FILE`: The configuration file to load.
-- **Arguments:**
-  - `$1`: The MAC address of the host.
-  - `$2`: The command to run on the configuration (get, exists, equals, or set).
-  - `$3`: The key in the configuration to operate on.
-  - `$4`: The value to set in the configuration, if the command is `set`.
-- **Outputs:** Logs an error message when an invalid key or command is provided.
-- **Returns:** `0` if operation is successful, `1` if a specified key does not exist, `2` if an invalid key format or command is provided, `3` if it fails to create a config directory or to write a configuration file.
-- **Example usage:**
-```bash
-host_config '00:11:22:33:44:55' 'get' 'my_key'
-host_config '00:11:22:33:44:55' 'exists' 'my_key'
-host_config '00:11:22:33:44:55' 'equals' 'my_key' 'my_value'
-host_config '00:11:22:33:44:55' 'set' 'my_key' 'my_value'
-```
+For Pandoc's sake, the function `host_config()` is technically characterized as follows:
 
-### Quality and security recommendations
-1. Use printf instead of echo for more predictable and consistent output.
-2. Be careful with the execution of `host_post_config_hooks` function, make sure it does not introduce security vulnerabilities.
-3. Ensure the configuration directory and file have correct file permissions to prevent unauthorized access to the configuration.
+- **name**: `host_config()`
+- **description**: Bash function designed to manage host configuration data, taking in multiple arguments to read, write, and update configurations.
+- **globals**: None.
+- **arguments**:
+   - `$1` (mac_param): A string representing the MAC address to be processed
+   - `$2` (cmd): The command to be executed, which can be 'get', 'exists', 'equals' or 'set'
+   - `$3` (key): The key to be obtained or set in the operation
+   - `$4` (value): The value to be assigned to the key in the 'set' operation, if not specified, it's empty by default
+- **outputs**: Depending on the operation, the function can output values read from the configurations or logs for the updating processes. In case of errors, it also prints respective error messages.
+- **returns**: Boolean values indicating the success or failure of specific operations. If an error occurs, it returns different error codes.
+- **example usage**: 
+
+   ```bash
+   host_config "AA:BB:CC:DD:EE:FF" "get" "userConfig"
+   ```
+
+### Quality and Security Recommendations
+
+1. For improved error handling, it's desirable to define specific error codes for each type of error, which could assist in troubleshooting.
+2. Considering security, sensitive information should be masked or encrypted, especially if the function is to be used in a production environment.
+3. To enhance the function maintainability, more comments could be added to explain the purpose of each operation and what certain variables stand for.
+4. It would also be beneficial to test how the function handles potentially harmful input like shell command injections.
+5. User-provided arguments should be checked for null or malicious inputs in addition to the checks currently in place.
 
