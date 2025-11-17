@@ -1,7 +1,11 @@
 
 # To Do list
 
+
 List of requirements and ideas not yet implemented
+This list to be reviewed and organised.
+
+
 
 HPS - software defined infrastructure based on von Neumann with controller 
 
@@ -136,6 +140,26 @@ self-tests
 - create cluster config for configure_at - terminal, cli
   - if not terminal, dont presnt menu, just search for active config, update status to searching
   - if status is reboot, then reboot
+
+
+## Diagnostics
+
+Create tasks to run diagnistics on the node and repirt back.
+
+this will run all functinal tests, either read-only or destrcutve, to test any node on demand, or before first use.
+
+
+## Cluster
+
+One IPS always required
+If existing cluster, IPS must join, rather than create new cluster
+
+
+## Naming
+
+IPS name - ips-01
+To add new IPS to cluster, requires unique naming
+- maintain plain 'ips' name as alias to primary - note DNS host updates required to make this work reliably
 
 ## Provision iSCSI on SCH for thin servers
 
