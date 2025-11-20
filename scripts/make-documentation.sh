@@ -181,9 +181,7 @@ done | {
           out_file="$DST_DIR/${name}.md.src"
           echo ""
           echo "Found function $name to be written to $out_file"
-          if [ -f "$out_file" ]; then
-            cp "$out_file" "$DST_DIR/${name}.md"
-          fi
+          cp "$out_file" "$DST_DIR/${name}.md"
           write_index "$name" "$out_file" 
           call_openai "$body" "$name" "$file" "$out_file"
         fi
