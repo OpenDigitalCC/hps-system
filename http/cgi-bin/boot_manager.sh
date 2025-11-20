@@ -287,6 +287,28 @@ if [[ "$cmd" == "kickstart" ]]; then
 fi
 
 
+# Command: Get remote node functions
+if [[ "$cmd" == "get_remote_functions" ]]; then
+  cgi_header_plain
+  
+  # $mac already set by CGI framework via hps_origin_tag
+  if [[ -z "$mac" ]]; then
+    cgi_auto_fail "$cmd: Could not determine requesting node MAC"
+    exit 1
+  fi
+  
+  # Generate function bundle
+  if ! hps_get_remote_functions ; then
+    cgi_auto_fail "$cmd: Failed to generate function bundle for MAC $mac"
+    exit 1
+  fi
+  
+  exit 0
+fi
+
+
+
+# deprecated by get_remote_functions?
 # Command: Get the bootstrap functions, which allow the fullfunction lib to be downloaded
 if [[ "$cmd" == "node_get_bootstrap_functions" ]]; then
   cgi_header_plain
@@ -296,7 +318,7 @@ if [[ "$cmd" == "node_get_bootstrap_functions" ]]; then
   exit 0
 fi
 
-
+# deprecated by get_remote_functions?
 # Command: get the node function library appropriate for this distro
 if [[ "$cmd" == "node_get_functions" ]]; then
   cgi_header_plain

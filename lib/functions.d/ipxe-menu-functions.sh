@@ -414,11 +414,11 @@ ipxe_boot_alpine_tch() {
 
   local os_id=$(get_host_os_id "$mac")
 
-  apkovl_file_disk="$(get_tch_apkovl_filepath)"
+  apkovl_file_disk="$(get_tch_apkovl_filepath ${os_id})" 
   # Generate apk overlay if missing
   if [[ ! -f "${apkovl_file_disk}" ]]; then
     hps_log info "Generating Alpine apkovl for version $alpine_version"
-    tch_apkovol_create "${apkovl_file_disk}"
+    tch_apkovol_create "${apkovl_file_disk}" ${os_id}
   fi
 
   hps_log debug "Configuring TCH version $alpine_version with static IP: $client_ip"

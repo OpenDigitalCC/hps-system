@@ -2,6 +2,63 @@ __guard_source || return
 
 
 #===============================================================================
+# hps_get_remote_functions
+# ------------------------
+# Generate function bundle for the requesting remote node.
+#
+# Behaviour:
+#   - Uses $mac from CGI context (already set by hps_origin_tag)
+#   - Looks up os_id and HOST_PROFILE from host_config
+#   - Converts os_id to distro format using os_id_to_distro
+#   - Calls node_build_functions to generate bundle
+#   - Outputs function bundle to stdout
+#
+# Returns:
+#   0 on success
+#   1 if os_id not found or empty
+#   2 if os_id conversion fails
+#
+# Example:
+#   # In CGI context where $mac is already set
+#   hps_get_remote_functions
+#
+#===============================================================================
+hps_get_remote_functions() {
+  local os_id distro profile
+  
+  # Get os_id from host config (using $mac from CGI context)
+  if ! os_id=$(host_config "$mac" get os_id 2>/dev/null); then
+    hps_log error "Could not retrieve os_id for MAC $mac"
+    return 1
+  fi
+  
+  if [[ -z "$os_id" ]]; then
+    hps_log error "os_id is empty for MAC $mac"
+    return 1
+  fi
+  
+  # Convert os_id to distro format
+  if ! distro=$(os_id_to_distro "$os_id"); then
+    hps_log error "Failed to convert os_id '$os_id' to distro format"
+    return 2
+  fi
+  
+  # Get profile (empty is valid)
+  profile=$(host_config "$mac" get HOST_PROFILE 2>/dev/null || echo "")
+  
+  hps_log info "Building function bundle for MAC $mac (OS: $os_id, Profile: ${profile:-none})"
+  
+  # Generate and output function bundle
+  node_build_functions "$distro"
+  return 0
+}
+
+
+
+
+
+
+#===============================================================================
 # node_build_functions
 # ------------------
 # Concatenate host-side functions for a distro string and emit to stdout

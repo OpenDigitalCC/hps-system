@@ -11,12 +11,16 @@ get_tch_apkovl_filename () {
   echo "tch-bootstrap.apkovl.tar.gz"
 }
 
-get_tch_apkovl_filepath () {
-  if [[ -z "$os_id" ]]; then
-    hps_log error "os_id required"
+get_tch_apkovl_filepath() {
+  local os_id="${1:?Usage: get_tch_apkovl_filepath <os_id>}"
+  
+  if ! os_config "$os_id" exists; then
+    hps_log error "OS_ID not found: $os_id"
     return 1
   fi
-  echo "$(_get_distro_dir)/$(os_config "$os_id" "get" "repo_path")/$(get_tch_apkovl_filename)"
+  
+  local repo_path=$(os_config "$os_id" get repo_path)
+  echo "$(_get_distro_dir)/${repo_path}/$(get_tch_apkovl_filename)"
 }
 
 
@@ -25,46 +29,48 @@ get_tch_apkovl_filepath () {
 # ------------------
 # Generate Alpine apkovl tarball containing TCH bootstrap configuration
 #
-# WARNING: Known cosmetic issue - Alpine netboot modprobe warnings
-# "can't change directory to '6.6.41-0-lts'"
-# Cause: modloop loads modules from HTTP, /lib/modules irrelevant
-# Impact: None - modules load successfully from modloop
-# Status: Accepted as Alpine netboot standard behavior
-#
 # Arguments:
 #   $1 - output_file : Path where tarball should be written
+#   $2 - os_id       : OS identifier (e.g., "x86_64:alpine:3.20")
 #
 # Behaviour:
-#   - Retrieves configuration from cluster config
+#   - Retrieves configuration from os_config using os_id
 #   - Creates temporary directory structure
 #   - Generates resolv.conf, modloop setup script, bootstrap script, runlevel config
 #   - Creates tar.gz archive at specified output path
 #   - Cleans up temporary files
 #
-# Module Loading:
-#   Modloop is downloaded via HTTP and mounted at /.modloop/
-#   Modules are loaded directly using insmod from /.modloop/modules/
-#   This bypasses modprobe's directory detection issues
-#
 # Returns:
 #   0 on success
 #   1 on error
+#
+# Example:
+#   tch_apkovol_create "/srv/hps-resources/distros/x86_64_alpine-3.20/tch-bootstrap.apkovl.tar.gz" "x86_64:alpine:3.20"
+#
 #===============================================================================
 tch_apkovol_create() {
-  local output_file="${1:?Usage: tch_apkovol_create <output_file>}"
+  local output_file="${1:?Usage: tch_apkovol_create <output_file> <os_id>}"
+  local os_id="${2:?Usage: tch_apkovol_create <output_file> <os_id>}"
   
-  hps_log info "Creating Alpine apkovl: $output_file"
+  hps_log info "Creating Alpine apkovl: $output_file for OS: $os_id"
   
-  # Get configuration
+  # Validate os_id exists
+  if ! os_config "$os_id" exists; then
+    hps_log error "OS_ID not found in configuration: $os_id"
+    return 1
+  fi
+  
+  # Get configuration from os_config
   local ips_address=$(cluster_config get DHCP_IP)
   if [[ -z "$ips_address" ]]; then
     hps_log error "Failed to get gateway IP from cluster config"
     return 1
   fi
   
-  local alpine_version="$(get_host_os_version "$mac")"
-  if [[ -z "$alpine_version" ]]; then
-    hps_log error "Failed to determine Alpine version"
+  # Get Alpine version from os_config
+  local iso_version=$(os_config "$os_id" get iso_version)
+  if [[ -z "$iso_version" ]]; then
+    hps_log error "Failed to get iso_version for OS_ID: $os_id"
     return 1
   fi
   
@@ -74,11 +80,11 @@ tch_apkovol_create() {
     nameserver="$ips_address"
   fi
 
-  local download_base="http://${ips_address}/$(get_distro_base_path "$os_id" http)"  
-  local repo_path=$(get_distro_base_path "$os_id" "relative")
-
-  hps_log debug "Apkovl config: Alpine version: ${alpine_version}, IPS: ${ips_address}, DNS: ${nameserver} download_base: $download_base"
+  local download_base="http://${ips_address}/distros/$(os_config "$os_id" get repo_path)"
   
+  hps_log debug "Apkovl config: OS_ID: ${os_id}, Alpine version: ${iso_version}, IPS: ${ips_address}, DNS: ${nameserver}, download_base: $download_base"
+  
+  # Rest of function continues as before...
   # Create temporary workspace
   local tmp_dir=$(mktemp -d)
   if [[ ! -d "$tmp_dir" ]]; then
@@ -110,7 +116,7 @@ tch_apkovol_create() {
   fi
   
   # Create bootstrap script
-  if ! _apkovl_create_alpine_repos_script "$tmp_dir"  "$download_base"; then
+  if ! _apkovl_create_alpine_repos_script "$tmp_dir" "$download_base"; then
     rm -rf "$tmp_dir"
     return 1
   fi
@@ -121,15 +127,13 @@ tch_apkovol_create() {
     return 1
   fi
 
-  
   if ! _apkovl_create_runlevel_config "$tmp_dir"; then
     rm -rf "$tmp_dir"
     return 1
   fi
 
-
   # Create tarball
-  mkdir -p "$(dirname $output_file)"
+  mkdir -p "$(dirname "$output_file")"
   if ! tar czf "$output_file" -C "$tmp_dir" . 2>/dev/null; then
     hps_log error "Failed to create tar archive $output_file"
     rm -rf "$tmp_dir"
@@ -142,6 +146,8 @@ tch_apkovol_create() {
   
   return 0
 }
+
+
 
 
 _apkovl_create_queue_run_script() {

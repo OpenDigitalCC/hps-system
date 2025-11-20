@@ -13,6 +13,36 @@ _get_distro_dir () {
   echo "${HPS_DISTROS_DIR}"
 }
 
+#===============================================================================
+# os_id_to_distro
+# ---------------
+# Convert OS_ID format to distro string format for node_build_functions.
+#
+# Arguments:
+#   $1: OS_ID (e.g., "x86_64:alpine:3.20")
+#
+# Returns:
+#   Distro string (e.g., "x86_64-linux-alpine-3.20")
+#
+# Example:
+#   distro=$(os_id_to_distro "x86_64:alpine:3.20")
+#   # Returns: x86_64-linux-alpine-3.20
+#
+#===============================================================================
+os_id_to_distro() {
+  local os_id="$1"
+  
+  if [[ -z "$os_id" ]]; then
+    hps_log error "os_id_to_distro: OS_ID required"
+    return 1
+  fi
+  
+  # Parse components: x86_64:alpine:3.20 -> arch:name:version
+  IFS=':' read -r arch osname version <<< "$os_id"
+  
+  # Build distro string: arch-mfr-osname-version
+  echo "${arch}-linux-${osname}-${version}"
+}
 
 
 

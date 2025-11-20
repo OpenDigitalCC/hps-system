@@ -71,45 +71,67 @@ hps_get_provisioning_node() {
   ip route | awk '/^default/ { print $3; exit }'
 }
 
-hps_fetch_node_functions() {
-  local ips_address distro url
-  
-  ips_address="$(hps_get_provisioning_node)" || {
-    echo "[HPS] ERROR: Could not determine provisioning node" >&2
-    return 1
-  }
-  
-  distro="$(hps_get_distro_string)"
-  url="http://${ips_address}/cgi-bin/boot_manager.sh?cmd=node_get_functions&distro=$(hps_url_encode "$distro")"
-  
-  # Fetch functions without evaluating
-  local response
-  response=$(curl -fsSL "$url") || {
-    echo "[HPS] ERROR: Failed to fetch functions from $url" >&2
-    return 2
-  }
-  
-  # Output the functions
-  echo "$response"
-  return 0
-}
 
+
+# Load node functions from IPS with caching
 hps_load_node_functions() {
   echo "[HPS] Loading functions from IPS..." >&2
   
-  local functions
-  functions=$(hps_fetch_node_functions) || return $?
+  local ips url functions cache_file
   
+  # Determine provisioning node
+  if ! ips=$(hps_get_provisioning_node); then
+    echo "[HPS] ERROR: Could not determine provisioning node" >&2
+    return 1
+  fi
+  
+  # Prepare cache location
+  cache_file="/srv/hps/lib/hps-functions-cache.sh"
+  mkdir -p "$(dirname "$cache_file")" 2>/dev/null
+  
+  # Build URL - IPS identifies us via host_config
+  url="http://${ips}/cgi-bin/boot_manager.sh?cmd=get_remote_functions"
+  
+  # Fetch functions from IPS
+  if ! functions=$(curl -fsSL "$url" 2>&1); then
+    echo "[HPS] WARNING: Failed to fetch functions from IPS" >&2
+    
+    # Try cache fallback
+    if [[ -f "$cache_file" ]]; then
+      echo "[HPS] Using cached functions" >&2
+      if bash -n "$cache_file" 2>/dev/null && source "$cache_file"; then
+        echo "[HPS] Functions loaded from cache" >&2
+        return 0
+      else
+        echo "[HPS] ERROR: Failed to source cached functions" >&2
+        return 2
+      fi
+    else
+      echo "[HPS] ERROR: No cache available" >&2
+      return 2
+    fi
+  fi
+  
+  # Validate response
+  if [[ -z "$functions" ]]; then
+    echo "[HPS] ERROR: Empty response from IPS" >&2
+    return 2
+  fi
+  
+  # Cache the response
+  if echo "$functions" > "$cache_file" 2>/dev/null; then
+    chmod 0644 "$cache_file" 2>/dev/null
+  fi
+  
+  # Source into current shell
   if ! eval "$functions"; then
-    echo "[HPS] ERROR: Failed to evaluate functions, diagnosing:" >&2
-    hps_fetch_node_functions | hps_check_bash_syntax  >&2
+    echo "[HPS] ERROR: Failed to evaluate functions" >&2
     return 1
   fi
   
   echo "[HPS] Functions loaded successfully" >&2
   return 0
 }
-
 
 
 # Initialize node (load functions and run queue)
