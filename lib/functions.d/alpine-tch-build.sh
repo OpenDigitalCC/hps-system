@@ -148,32 +148,30 @@ tch_apkovol_create() {
 }
 
 
-
-
 _apkovl_create_queue_run_script() {
   local tmp_dir="${1:?Usage: _apkovl_create_queue_run_script <tmp_dir>}"
-  local localscript="$tmp_dir/etc/local.d/z-hps-queue_run.start"
+  local localscript="$tmp_dir/etc/local.d/z-hps-init_run.start"
   
   cat > "$localscript" <<'EOF'
-
 #!/bin/sh
-# Run HPS queue after modules are loaded
-echo "[HPS] Starting queue execution..."
+# Run HPS init sequence after system ready
+echo "[HPS] Starting init sequence execution..."
 
-# Source the library and run queue only
+# Source the library and run init
 if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
-  /bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_node_init'
-#    /bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_load_node_functions && n_queue_run'
+  /bin/bash -c 'source /usr/local/lib/hps-bootstrap-lib.sh && hps_load_node_functions && n_init_run'
 else
-    echo "[HPS] ERROR: Bootstrap library not found"
+  echo "[HPS] ERROR: Bootstrap library not found"
+  exit 1
 fi
-echo "[HPS] Queue execution complete"
 
+echo "[HPS] Init sequence execution complete"
 EOF
   
   chmod +x "$localscript"
   return $?
 }
+
 
 
 

@@ -206,16 +206,86 @@ node_build_functions() {
   declare -f | awk '/^o_[a-zA-Z_]+ \(\)/, /^}/'
   
   # Load post-load.sh last if it exists (for executing collected functions)
+
   local post_load="${base}/post-load.sh"
   if [[ -f "$post_load" ]]; then
     hps_log debug "Including post-load file: $post_load"
-    echo "# === post-load.sh included (execution script) ==="
+    echo "# === post-load.sh included ==="
     cat "$post_load"
     echo
     file_count=$((file_count + 1))
-  else
-    hps_log debug "No post-load.sh found in $base"
   fi
+
+
+
+  echo "# === Init Sequence Embedding ==="
+  echo
+  
+  # Determine init sequence files to include
+  local init_dir="${LIB_DIR}/node-init-sequences.d"
+  local -a init_files=()
+  
+  # Add base OS init file
+  local base_init="${init_dir}/${osname}.init"
+  if [[ -f "$base_init" ]]; then
+    init_files+=("$base_init")
+    hps_log debug "Found base init: $base_init"
+  else
+    hps_log debug "No base init file: $base_init"
+  fi
+  
+  # Add profile init file if profile is set
+  if [[ -n "$profile" ]]; then
+    local profile_init="${init_dir}/${osname}-${profile}.init"
+    if [[ -f "$profile_init" ]]; then
+      init_files+=("$profile_init")
+      hps_log debug "Found profile init: $profile_init"
+    else
+      hps_log debug "No profile init file: $profile_init"
+    fi
+  fi
+  
+  # Add common-post init (always included last)
+  local common_post="${init_dir}/common-post.init"
+  if [[ -f "$common_post" ]]; then
+    init_files+=("$common_post")
+    hps_log debug "Found common-post init: $common_post"
+  else
+    hps_log debug "No common-post init file: $common_post"
+  fi
+  
+  # Build init sequence array
+  local -a init_sequence=()
+  
+  for init_file in "${init_files[@]}"; do
+    hps_log debug "Processing init file: $init_file"
+    
+    while IFS= read -r line; do
+      # Skip empty lines and comments
+      [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+      
+      # Trim whitespace
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      
+      # Add non-empty lines to sequence
+      [[ -n "$line" ]] && init_sequence+=("$line")
+    done < "$init_file"
+  done
+  
+  # Output init sequence as bash array
+  echo "# Init sequence for: ${osname}${profile:+ (${profile})}"
+  echo "# Generated from: ${#init_files[@]} file(s), ${#init_sequence[@]} action(s)"
+  echo "HPS_INIT_SEQUENCE=("
+  
+  for action in "${init_sequence[@]}"; do
+    echo "  \"$action\""
+  done
+  
+  echo ")"
+  echo
+  
+  hps_log info "Embedded init sequence with ${#init_sequence[@]} action(s)"
   
   # Restore nullglob to previous state
   ((had_nullglob==1)) || shopt -u nullglob
