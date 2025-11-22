@@ -1,0 +1,11 @@
+
+#===============================================================================
+# alpine-KVM.init  
+# Additional initialization for Alpine KVM profile
+#===============================================================================
+# Install KVM packages and setup
+n_install_kvm
+
+# Start libvirt service
+n_start_libvirt
+

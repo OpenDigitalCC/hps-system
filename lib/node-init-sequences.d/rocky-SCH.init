@@ -1,0 +1,7 @@
+#===============================================================================
+# rocky-SCH.init
+# Additional initialization for Rocky SCH (Storage Cluster Host) profile
+#===============================================================================
+# Create ZFS pool on free disk
+zpool_create_on_free_disk
+

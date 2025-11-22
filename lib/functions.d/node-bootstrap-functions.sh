@@ -134,19 +134,7 @@ hps_load_node_functions() {
 }
 
 
-# Initialize node (load functions and run queue)
-hps_node_init() {
-  # Load functions first
-  hps_load_node_functions || return $?
-  
-  # Run initialization queue if available
-  if type n_queue_run >/dev/null 2>&1; then
-    echo "[HPS] Running initialization queue..." >&2
-    n_queue_run
-  else
-    echo "[HPS] WARNING: n_queue_run not found" >&2
-  fi
-}
+
 
 # Reload functions (alias for convenience)
 hps_reload() {
