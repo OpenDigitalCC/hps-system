@@ -1,11 +1,9 @@
 
 # To Do list
 
-
 List of requirements and ideas not yet implemented
-This list to be reviewed and organised.
 
-
+#TODO: This list to be reviewed and organised.
 
 HPS - software defined infrastructure based on von Neumann with controller 
 
@@ -512,6 +510,18 @@ Firewall - part of the cluster? Containerised? On IPS?
 - reject all queries from unknown MAC, with one exception
   - only allow initial config options to systems that we have dhcp booted
 - Don't allow sensitive config elements to be provided via the api
+
+# O/S boot support
+
+Add support for booting / deploying:
+
+- Nixos storage and compute nodes
+- Plan9 / 9front hosts
+- Architectires including Raspberry Pi, Sun/OpenSolaris
+- ReactOS
+- BSD
+
+
 
 
 
