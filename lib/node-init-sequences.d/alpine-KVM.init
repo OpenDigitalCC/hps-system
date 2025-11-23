@@ -6,6 +6,13 @@
 # Install KVM packages and setup
 n_install_kvm
 
+n_install_opensvc_packages
+n_osvc_start
+n_initialise_opensvc_cluster
+
+
+
 # Start libvirt service
 n_start_libvirt
+
 
