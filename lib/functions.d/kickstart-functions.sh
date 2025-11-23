@@ -23,7 +23,8 @@ generate_ks() {
   export HOST_NAME=$(host_config "$macid" get HOSTNAME)
   export HOST_GATEWAY="$(cluster_config get DHCP_IP)"
   export HOST_DNS="$(cluster_config get DHCP_IP)"
-  export HOST_TEMPLATE_DIR="${LIB_DIR}/kickstart-templates"
+  #TODO: /host-installer/rocky/kickstart requires variable for the o/s
+  export HOST_TEMPLATE_DIR="${LIB_DIR}/host-installer/rocky/kickstart"
   export INSTALLER_TYPE=kickstart
   export HOST_INSTALL_SCRIPT="${HOST_TEMPLATE_DIR}/${INSTALLER_TYPE}-${HOST_TYPE}.script"
   export HOST_INSTALL_FUNC="${INSTALLER_TYPE}-${HOST_TYPE}"
