@@ -4,10 +4,9 @@
 #===============================================================================
 
 
-n_install_opensvc_packages
-n_osvc_start
-n_initialise_opensvc_cluster
 n_configure_reboot_logging
 n_configure_ips_profile
 n_configure_motd
 n_display_info_before_prompt
+
+

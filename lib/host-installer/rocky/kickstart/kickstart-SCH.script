@@ -1,0 +1,309 @@
+#version=RHEL10
+text
+
+# ------------ Locale
+lang en_GB.UTF-8
+keyboard uk
+timezone --utc UTC
+
+# ------------ Network
+network --bootproto=dhcp --device=link --onboot=yes --activate
+firewall --disabled
+
+# ------------ Authentication
+rootpw --plaintext changeme
+selinux --permissive
+
+# ------------ Services
+services --enabled=sshd
+
+# ------------ Repositories
+url --url=http://ips/distros/rocky-10
+repo --name=baseos --baseurl=http://ips/distros/rocky-10/BaseOS/
+repo --name=appstream --baseurl=http://ips/distros/rocky-10/AppStream/
+
+
+#===============================================================================
+# PRE-INSTALL: Disk Detection and Partitioning
+#===============================================================================
+%pre --interpreter /bin/bash --log=/tmp/ks-pre.log
+
+echo "[PRE] Starting pre-install phase"
+
+# Load bootstrap library
+echo "[PRE] Loading bootstrap functions from IPS"
+if ! curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" > /tmp/hps-bootstrap.sh; then
+  echo "[PRE] ERROR: Failed to download bootstrap library"
+  exit 1
+fi
+
+source /tmp/hps-bootstrap.sh
+if [[ $? -ne 0 ]]; then
+  echo "[PRE] ERROR: Failed to source bootstrap library"
+  exit 1
+fi
+
+# Load node functions (includes installer functions)
+echo "[PRE] Loading node functions from IPS"
+if ! hps_load_node_functions; then
+  echo "[PRE] ERROR: Failed to load node functions"
+  exit 1
+fi
+
+# Detect OS disk(s)
+echo "[PRE] Detecting OS disk(s)"
+if ! n_installer_detect_os_disk; then
+  echo "[PRE] ERROR: Failed to detect suitable OS disk"
+  exit 1
+fi
+
+# Generate partitioning
+echo "[PRE] Generating partition layout"
+if ! n_installer_generate_partitioning; then
+  echo "[PRE] ERROR: Failed to generate partitioning"
+  exit 1
+fi
+
+echo "[PRE] Pre-install phase complete"
+exit 0
+
+%end
+
+
+#===============================================================================
+# INCLUDE: Dynamic Partitioning
+#===============================================================================
+%include /tmp/part-include.ks
+
+
+#===============================================================================
+# PACKAGES: Minimal Installation
+#===============================================================================
+%packages
+@^minimal-environment
+@core
+openssh-server
+
+# Storage packages
+targetcli
+python3-rtslib
+python3-configshell
+
+# Build tools for ZFS (future use)
+kernel-devel
+gcc
+make
+autoconf
+automake
+libtool
+rpm-build
+libblkid-devel
+libuuid-devel
+libudev-devel
+openssl-devel
+zlib-devel
+libaio-devel
+libattr-devel
+elfutils-libelf-devel
+python3
+python3-setuptools
+python3-cffi
+libffi-devel
+
+# Utilities
+rsync
+curl
+%end
+
+
+#===============================================================================
+# POST-INSTALL (NO CHROOT): Configure Remote Syslog
+#===============================================================================
+%post --nochroot --log=/tmp/ks-post-nochroot.log
+
+echo "[POST-NOCHROOT] Starting post-install (no chroot)"
+
+# Load bootstrap library
+echo "[POST-NOCHROOT] Loading bootstrap functions from IPS"
+if ! curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" > /tmp/hps-bootstrap.sh; then
+  echo "[POST-NOCHROOT] ERROR: Failed to download bootstrap library"
+  exit 1
+fi
+
+source /tmp/hps-bootstrap.sh
+if [[ $? -ne 0 ]]; then
+  echo "[POST-NOCHROOT] ERROR: Failed to source bootstrap library"
+  exit 1
+fi
+
+# Load node functions
+echo "[POST-NOCHROOT] Loading node functions from IPS"
+if ! hps_load_node_functions; then
+  echo "[POST-NOCHROOT] ERROR: Failed to load node functions"
+  exit 1
+fi
+
+# Copy bootstrap into installed system
+echo "[POST-NOCHROOT] Installing bootstrap library to installed system"
+mkdir -p /mnt/sysimage/srv/hps/lib
+cp /tmp/hps-bootstrap.sh /mnt/sysimage/srv/hps/lib/hps-bootstrap.sh
+chmod 0755 /mnt/sysimage/srv/hps/lib/hps-bootstrap.sh
+
+echo "[POST-NOCHROOT] Post-install (no chroot) complete"
+exit 0
+
+%end
+
+
+#===============================================================================
+# POST-INSTALL (CHROOT): System Configuration
+#===============================================================================
+%post --log=/root/ks-post.log
+
+echo "[POST] Starting post-install (chroot)"
+
+# Load bootstrap library (now from installed system)
+echo "[POST] Loading bootstrap functions"
+if [[ ! -f /srv/hps/lib/hps-bootstrap.sh ]]; then
+  echo "[POST] ERROR: Bootstrap library not found in installed system"
+  exit 1
+fi
+
+source /srv/hps/lib/hps-bootstrap.sh
+if [[ $? -ne 0 ]]; then
+  echo "[POST] ERROR: Failed to source bootstrap library"
+  exit 1
+fi
+
+# Load node functions
+echo "[POST] Loading node functions from IPS"
+if ! hps_load_node_functions; then
+  echo "[POST] ERROR: Failed to load node functions"
+  exit 1
+fi
+
+# Configure remote syslog
+echo "[POST] Configuring remote syslog"
+if ! n_installer_configure_syslog; then
+  echo "[POST] ERROR: Failed to configure syslog"
+  exit 1
+fi
+
+# Configure repositories
+echo "[POST] Configuring repositories"
+if ! n_installer_configure_repos; then
+  echo "[POST] ERROR: Failed to configure repositories"
+  exit 1
+fi
+
+# Create HPS directory structure
+echo "[POST] Creating HPS directory structure"
+mkdir -p /srv/hps/lib
+mkdir -p /srv/hps/sbin
+mkdir -p /srv/hps/log
+
+# Install init runner script
+echo "[POST] Installing HPS init runner script"
+cat > /srv/hps/sbin/hps-init-run.sh << 'INITSCRIPT'
+#!/bin/bash
+#===============================================================================
+# HPS Init Runner
+# Loads node functions and executes init sequence
+#===============================================================================
+
+echo "[INIT] HPS Init Runner starting"
+
+# Load bootstrap library
+if [[ ! -f /srv/hps/lib/hps-bootstrap.sh ]]; then
+  echo "[INIT] ERROR: Bootstrap library not found"
+  logger -t hps-init -p user.err "Bootstrap library not found"
+  exit 1
+fi
+
+source /srv/hps/lib/hps-bootstrap.sh
+if [[ $? -ne 0 ]]; then
+  echo "[INIT] ERROR: Failed to source bootstrap library"
+  logger -t hps-init -p user.err "Failed to source bootstrap library"
+  exit 1
+fi
+
+# Load node functions (with caching)
+echo "[INIT] Loading node functions from IPS"
+if ! hps_load_node_functions; then
+  echo "[INIT] ERROR: Failed to load node functions"
+  logger -t hps-init -p user.err "Failed to load node functions"
+  exit 1
+fi
+
+# Run init sequence
+echo "[INIT] Executing init sequence"
+if ! n_init_run; then
+  echo "[INIT] WARNING: Init sequence completed with errors"
+  logger -t hps-init -p user.warning "Init sequence completed with errors"
+  exit 0  # Non-fatal, continue boot
+fi
+
+echo "[INIT] HPS Init Runner complete"
+logger -t hps-init -p user.info "Init sequence completed successfully"
+exit 0
+INITSCRIPT
+
+chmod 0755 /srv/hps/sbin/hps-init-run.sh
+echo "[POST] Init runner script installed"
+
+# Install systemd service
+echo "[POST] Installing HPS init systemd service"
+cat > /etc/systemd/system/hps-init-run.service << 'SERVICEUNIT'
+[Unit]
+Description=HPS Init Sequence Execution
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/srv/hps/sbin/hps-init-run.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+SERVICEUNIT
+
+echo "[POST] Systemd service installed"
+
+# Enable the service
+echo "[POST] Enabling HPS init service"
+if ! systemctl enable hps-init-run.service; then
+  echo "[POST] ERROR: Failed to enable hps-init-run.service"
+  exit 1
+fi
+
+echo "[POST] Service enabled"
+
+# Basic networking configuration
+echo "[POST] Configuring network autoconnect"
+nmcli connection modify "Wired connection 1" connection.autoconnect yes 2>/dev/null || true
+
+# Enable essential services
+echo "[POST] Enabling essential services"
+systemctl enable sshd
+systemctl enable target 2>/dev/null || true
+
+# Notify IPS of installation completion
+echo "[POST] Notifying IPS of installation completion"
+curl -X POST "http://ips/cgi-bin/boot_manager.sh?cmd=set_status&status=INSTALLED" 2>/dev/null || true
+
+# Log completion
+echo "[POST] Installation completed at $(date)"
+echo "[POST] Post-install (chroot) complete"
+
+exit 0
+
+%end
+
+
+#===============================================================================
+# REBOOT
+#===============================================================================
+reboot

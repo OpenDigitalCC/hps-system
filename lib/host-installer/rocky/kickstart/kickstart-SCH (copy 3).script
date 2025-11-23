@@ -1,0 +1,343 @@
+#version=RHEL10
+text
+
+# ------------ Locale
+lang en_GB.UTF-8
+keyboard uk
+timezone --utc UTC
+
+# ------------ Network
+network --bootproto=dhcp --device=link --onboot=yes --activate
+firewall --disabled
+
+# ------------ Authentication
+rootpw --plaintext changeme
+selinux --permissive
+
+# ------------ Services
+services --enabled=sshd
+
+# ------------ Disk / boot
+zerombr
+clearpart --all --initlabel
+part biosboot --fstype=biosboot --size=1
+part /boot --fstype=xfs --size=512
+part / --fstype=xfs --size=3072
+part swap --size=512
+
+
+# ------------ Repositories
+url --url=http://ips/distros/rocky-10
+repo --name=baseos --baseurl=http://ips/distros/rocky-10/BaseOS/
+repo --name=appstream --baseurl=http://ips/distros/rocky-10/AppStream/
+
+
+%pre --interpreter /bin/bash --log=/tmp/ks-pre.log
+
+# load remote functions
+echo "loading functions from IPS"
+curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/tmp/remote_functions.sh
+source /tmp/remote_functions.sh
+hps_load_node_functions
+
+n_remote_log "*************** Entering PRE stage *******************"
+
+
+n_remote_log "Entering PRE stage"
+n_remote_log "lsblk: $(lsblk -n $DISK)"
+n_remote_log "Completed disk detection, found disk $DISK"
+
+## If no usable disk was found
+#if [ -z "$DISK" ]; then
+#    echo "No suitable empty disk found!" > /dev/ttyS0
+#    n_remote_log "No usable disk found, rebooting"
+#    reboot
+#fi
+
+n_remote_log "Usability check for $DISK passed"
+
+# Convert size to MiB
+DISK_SIZE_MIB=$((SIZE / 1024 / 1024))
+ROOT_SIZE=15000
+VAR_SIZE=15000
+ZFS_START_MIB=$((ROOT_SIZE + VAR_SIZE))
+ZFS_SIZE_MIB=$((DISK_SIZE_MIB - ZFS_START_MIB))
+
+n_remote_log "Disk size: $DISK_SIZE_MIB"
+
+# Store info for use later
+echo "$DISK" > /tmp/target-disk
+echo "$ZFS_START_MIB" > /tmp/zfs_start
+
+n_remote_log "Starting dynamic partitioning"
+
+
+# if PROFILE = STORAGESINGLE, elsif STORAGERAID else
+
+# Generate dynamic partition layout
+cat <<EOF > /tmp/part-include.ks
+ignoredisk --only-use=$DISK
+clearpart --all --initlabel --drives=$DISK
+bootloader --location=mbr --boot-drive=$DISK
+part biosboot --fstype=biosboot --size=1 --ondisk=$DISK
+part /     --fstype=xfs --size=$ROOT_SIZE   --ondisk=$DISK
+part /var  --fstype=xfs --size=$VAR_SIZE    --ondisk=$DISK
+# Calculate optimal swap, should be 20-30G assuming space
+part swap --size=5000 --ondisk=$DISK
+EOF
+
+n_remote_log "$(cat /tmp/part-include.ks)"
+
+n_remote_log "Pre section ended"
+
+
+exit 0
+
+%end
+
+
+
+# ------------ Packages
+%packages
+@^minimal-environment
+@core
+openssh-server
+# Storage packages
+targetcli
+python3-rtslib
+python3-configshell
+# Build tools for ZFS
+kernel-devel
+gcc
+make
+autoconf
+automake
+libtool
+rpm-build
+libblkid-devel
+libuuid-devel
+libudev-devel
+openssl-devel
+zlib-devel
+libaio-devel
+libattr-devel
+elfutils-libelf-devel
+python3
+python3-setuptools
+python3-cffi
+libffi-devel
+rsync
+%end
+
+
+
+
+
+#  ------------ Post chroot (installed system environment)
+
+%post --nochroot --log=/root/ks-post.log 
+
+echo "loading functions from IPS"
+
+curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/usr/local/lib/hps-bootstrap-lib.sh
+source /tmp/remote_functions.sh
+hps_load_node_functions
+
+
+
+## the below functions can be deleted when verified that they are loaded from above
+
+n_remote_log "Entering POST stage"
+
+
+# ------------- Post chroot
+chroot /mnt/sysimage /bin/bash <<EOF
+
+repo --name=baseos --baseurl=http://ips/distros/rocky-10/BaseOS/ --install --noverifyssl
+repo --name=appstream --baseurl=http://ips/distros/rocky-10/AppStream/ --install
+# Install packages not available in the official repo
+repo --name=hps-packages --baseurl=http://ips/packages/rocky-10/Repo/ --install
+
+# Now in mounted sysimage
+echo "loading functions from IPS"
+curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/tmp/remote_functions.sh
+source /tmp/remote_functions.sh
+hps_load_node_functions
+
+## the below functions can be deleted when verified that they are loaded from above
+
+n_remote_log "Inside post chroot"
+
+
+# Create directories
+mkdir -p /usr/local/bin
+mkdir -p /usr/local/lib
+
+#===============================================================================
+# Configure remote syslog
+#===============================================================================
+
+# Configure systemd-journald for minimal operation with syslog forwarding
+cat > /etc/systemd/journald.conf << 'EOF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=16M
+ForwardToSyslog=yes
+MaxLevelStore=err
+EOF
+
+# Configure rsyslog to forward everything to remote syslog server
+cat > /etc/rsyslog.d/01-remote.conf << 'EOF'
+# Forward all logs to remote syslog server
+# Buffer messages if syslog server is unavailable
+$ActionQueueType LinkedList
+$ActionQueueFileName srvrfwd
+$ActionResumeRetryCount -1
+$ActionQueueSaveOnShutdown on
+
+# Send everything to syslog host via TCP
+*.* @@syslog:514
+EOF
+
+# Disable local rsyslog file outputs
+sed -i 's/^\(.*\/var\/log\/.*\)/#\1/' /etc/rsyslog.conf
+
+# Ensure rsyslog is enabled
+systemctl enable rsyslog
+
+# Remove any existing journal persistent storage
+rm -rf /var/log/journal
+
+# Create marker for remote logging
+touch /etc/syslog.remote
+
+#===============================================================================
+# Install HPS bootstrap service
+#===============================================================================
+
+# Install systemd service
+cat > /etc/systemd/system/hps-sch-bootstrap.service << 'EOF'
+[Unit]
+Description=HPS SCH Bootstrap Functions
+After=network-online.target
+Before=getty.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hps-sch-bootstrap.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Install bootstrap script
+cat > /usr/local/bin/hps-sch-bootstrap.sh << 'EOF'
+#!/bin/bash
+
+echo "Loading functions from IPS"
+
+curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/usr/local/lib/hps-bootstrap-lib.sh; then
+
+source /usr/local/lib/hps-bootstrap-lib.sh
+hps_load_node_functions
+EOF
+
+chmod +x /usr/local/bin/hps-sch-bootstrap.sh
+
+# Enable the service
+systemctl enable hps-sch-bootstrap.service
+
+# Enable services
+
+systemctl enable target
+systemctl enable libvirtd
+systemctl start libvirtd
+
+nmcli connection modify "Wired connection 1" connection.autoconnect yes
+
+#TODO: sch security settings
+echo "Hardening install..."
+#sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+systemctl enable sshd
+#passwd -l root
+#systemctl disable firewalld NetworkManager
+#systemctl mask firewalld NetworkManager
+#echo "Hardening install..."
+#sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+#passwd -l root
+#systemctl enable sshd
+##systemctl disable firewalld NetworkManager
+##systemctl mask firewalld NetworkManager
+
+n_remote_log "Exiting post chroot"
+EOF
+
+sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+
+
+# Create directories
+mkdir -p /usr/local/bin
+mkdir -p /usr/local/lib
+
+# Install systemd service
+cat > /etc/systemd/system/hps-sch-bootstrap.service << 'EOF'
+[Unit]
+Description=HPS SCH Bootstrap Functions
+After=network-online.target
+Before=getty.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hps-sch-bootstrap.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Install bootstrap script
+cat > /usr/local/bin/hps-sch-bootstrap.sh << 'EOF'
+#!/bin/bash
+
+echo "Loading functions from IPS"
+
+curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" >/usr/local/lib/hps-bootstrap-lib.sh; then
+
+source /usr/local/lib/hps-bootstrap-lib.sh
+hps_load_node_functions
+EOF
+
+chmod +x /usr/local/bin/hps-sch-bootstrap.sh
+
+# Enable the service
+systemctl enable hps-sch-bootstrap.service
+
+
+curl -X POST "http://ips/cgi-bin/boot_manager.sh?&cmd=set_status&status=INSTALLED"
+n_remote_log "Install completed, status updated"
+
+# Log completion
+echo "Installation completed at $(date)" >> /root/install.log
+
+exit 0
+
+
+
+%end
+
+
+
+
+
+# ------------ Reboot when done
+reboot
+
+
+

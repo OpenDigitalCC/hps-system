@@ -3,7 +3,8 @@
 # Base initialization sequence for Rocky Linux SCH nodes
 #===============================================================================
 # Configure hostname from IPS
-n_configure_hostname
+n_set_hostname_and_hosts
 
 # Configure remote syslog (if not done in kickstart)
 # n_configure_syslog
+
