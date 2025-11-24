@@ -28,43 +28,72 @@ repo --name=appstream --baseurl=http://ips/distros/rocky-10/AppStream/
 #===============================================================================
 %pre --interpreter /bin/bash --log=/tmp/ks-pre.log
 
-echo "[PRE] Starting pre-install phase"
+# Helper function for remote logging
+remote_log() {
+  local msg="$1"
+  echo "[PRE] $msg"
+  curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=log_message&function=kickstart-pre&message=$(printf '%s' "$msg" | sed 's/ /%20/g')" >/dev/null 2>&1 || true
+}
+
+remote_log "Starting pre-install phase"
 
 # Load bootstrap library
-echo "[PRE] Loading bootstrap functions from IPS"
+remote_log "Loading bootstrap functions from IPS"
 if ! curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=node_get_bootstrap_functions" > /tmp/hps-bootstrap.sh; then
-  echo "[PRE] ERROR: Failed to download bootstrap library"
+  remote_log "ERROR: Failed to download bootstrap library"
   exit 1
 fi
 
-source /tmp/hps-bootstrap.sh
-if [[ $? -ne 0 ]]; then
-  echo "[PRE] ERROR: Failed to source bootstrap library"
+remote_log "Sourcing bootstrap library"
+if ! source /tmp/hps-bootstrap.sh; then
+  remote_log "ERROR: Failed to source bootstrap library"
   exit 1
 fi
 
-# Load node functions (includes installer functions)
-echo "[PRE] Loading node functions from IPS"
+remote_log "Bootstrap library loaded successfully"
+
+# Load node functions
+remote_log "Loading node functions from IPS"
 if ! hps_load_node_functions; then
-  echo "[PRE] ERROR: Failed to load node functions"
+  remote_log "ERROR: Failed to load node functions"
   exit 1
 fi
+
+remote_log "Node functions loaded successfully"
+
+# Load installer functions explicitly (not part of node function bundle)
+remote_log "Loading installer functions via CGI"
+if ! curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=get_installer_functions" > /tmp/installer-functions.sh; then
+  remote_log "ERROR: Failed to download installer functions"
+  exit 1
+fi
+
+remote_log "Sourcing installer functions"
+if ! source /tmp/installer-functions.sh; then
+  remote_log "ERROR: Failed to source installer functions"
+  exit 1
+fi
+
+remote_log "Installer functions loaded successfully"
 
 # Detect OS disk(s)
-echo "[PRE] Detecting OS disk(s)"
+remote_log "Detecting OS disk(s)"
 if ! n_installer_detect_os_disk; then
-  echo "[PRE] ERROR: Failed to detect suitable OS disk"
+  remote_log "ERROR: Failed to detect suitable OS disk"
   exit 1
 fi
+
+remote_log "OS disk detection complete"
 
 # Generate partitioning
-echo "[PRE] Generating partition layout"
+remote_log "Generating partition layout"
 if ! n_installer_generate_partitioning; then
-  echo "[PRE] ERROR: Failed to generate partitioning"
+  remote_log "ERROR: Failed to generate partitioning"
   exit 1
 fi
 
-echo "[PRE] Pre-install phase complete"
+remote_log "Partition layout generated successfully"
+remote_log "Pre-install phase complete"
 exit 0
 
 %end
@@ -143,6 +172,18 @@ if ! hps_load_node_functions; then
   exit 1
 fi
 
+# Load installer functions
+echo "[POST-NOCHROOT] Loading installer functions"
+if ! curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=get_installer_functions" > /tmp/installer-functions.sh; then
+  echo "[POST-NOCHROOT] ERROR: Failed to download installer functions"
+  exit 1
+fi
+
+if ! source /tmp/installer-functions.sh; then
+  echo "[POST-NOCHROOT] ERROR: Failed to source installer functions"
+  exit 1
+fi
+
 # Copy bootstrap into installed system
 echo "[POST-NOCHROOT] Installing bootstrap library to installed system"
 mkdir -p /mnt/sysimage/srv/hps/lib
@@ -179,6 +220,18 @@ fi
 echo "[POST] Loading node functions from IPS"
 if ! hps_load_node_functions; then
   echo "[POST] ERROR: Failed to load node functions"
+  exit 1
+fi
+
+# Load installer functions
+echo "[POST] Loading installer functions"
+if ! curl -fsSL "http://ips/cgi-bin/boot_manager.sh?cmd=get_installer_functions" > /tmp/installer-functions.sh; then
+  echo "[POST] ERROR: Failed to download installer functions"
+  exit 1
+fi
+
+if ! source /tmp/installer-functions.sh; then
+  echo "[POST] ERROR: Failed to source installer functions"
   exit 1
 fi
 
