@@ -44,12 +44,12 @@ cgi_log() {
 
 cgi_header_plain() {
   echo "Content-Type: text/plain"
-  echo
+  echo ""
 }
 
 cgi_success () {
   cgi_header_plain
-  echo "$1"
+  echo -n "$1"
 }
 
 
@@ -57,7 +57,7 @@ cgi_fail () {
   local cfmsg="$1"
   cgi_header_plain
   hps_log error "$cfmsg"
-  echo "$cfmsg"
+  echo -n "$cfmsg"
 }
 
 
@@ -79,7 +79,8 @@ cgi_param() {
     for pair in "${pairs[@]}"; do
       IFS='=' read -r rawkey rawval <<< "$pair"
       decoded_key=$(printf '%b' "${rawkey//+/ }" | sed 's/%/\\x/g')
-      decoded_val=$(printf '%b' "${rawval//+/ }" | sed 's/%/\\x/g')
+      decoded_val=$(printf '%b' "$(sed 's/%/\\x/g' <<< "${rawval//+/ }")")
+#      decoded_val=$(printf '%b' "${rawval//+/ }" | sed 's/%/\\x/g')
 
       if [[ "$decoded_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
         CGI_PARAMS["$decoded_key"]="$decoded_val"
