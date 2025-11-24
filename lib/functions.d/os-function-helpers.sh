@@ -78,6 +78,35 @@ get_os_name_version() {
   echo "$name_version"
 }
 
+#===============================================================================
+# get_os_name
+# -----------
+# Extract OS name from OS ID, without architecture or version.
+#
+# Arguments:
+#   $1: OS ID (e.g., "x86_64:alpine:3.20")
+#
+# Returns:
+#   OS name only (e.g., "alpine")
+#
+# Example usage:
+#   os_name=$(get_os_name "x86_64:alpine:3.20")           # alpine
+#   os_name=$(get_os_name "x86_64:rockylinux:9.3")        # rockylinux
+#
+#===============================================================================
+get_os_name() {
+  local os_id="$1"
+  
+  # Strip architecture prefix (everything before first colon)
+  local name_version="${os_id#*:}"
+  
+  # Extract just the name (everything before the second colon)
+  local name="${name_version%%:*}"
+  
+  echo "$name"
+}
+
+
 
 #===============================================================================
 # get_distro_base_path

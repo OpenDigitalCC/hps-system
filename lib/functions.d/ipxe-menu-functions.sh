@@ -118,18 +118,17 @@ handle_menu_item() {
         HOST_TYPE="${BASH_REMATCH[1]}"
         HOST_PROFILE="${BASH_REMATCH[2]}"
         # Set HOST_PROFILE
-        if [[ -n "${profile}" ]]; then
-          host_config "$mac" set HOST_PROFILE "${profile}"
+        if [[ -n "${HOST_PROFILE}" ]]; then
+          host_config "$mac" set HOST_PROFILE "${HOST_PROFILE}"
         fi  
-        hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
-      else
-        # No profile suffix, HOST_PROFILE remains empty
-        hps_log info "$item Running boot installer for type: '${HOST_TYPE}' (no profile)"
-      fi
-      
-      ipxe_boot_installer "$mac" "${HOST_TYPE}"
-      ;;
-      
+          hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
+        else
+          # No profile suffix, HOST_PROFILE remains empty
+          hps_log info "$item Running boot installer for type: '${HOST_TYPE}' (no profile)"
+        fi
+        ipxe_boot_installer "$mac" "${HOST_TYPE}"
+        ;;
+
     force_install_*)
       if [[ "${item}" == "force_install_on" ]] 
        then
@@ -187,14 +186,14 @@ item init_menu    < Back to initialisation menu
 item --gap 
 
 item --gap Install Thin Compute Host
-item install_TCH  > Default profile
+item install_TCH_DEFAULT  > Default profile
 item install_TCH_KVM  > Profile: KVM virtualisation
 item install_TCH_DOCKER  > Profile: Docker host
 item install_TCH_BUILD  > Profile: Build tools for packaging
 
 item --gap 
 item --gap Install Storage Cluster Host
-item install_SCH  > Default profile
+item install_SCH_DEFAULT  > Default profile
 item --gap 
 item --gap Install Disaster Recovery Host
 item install_DRH  > Default profile

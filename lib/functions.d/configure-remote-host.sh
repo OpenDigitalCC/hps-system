@@ -166,52 +166,78 @@ _output_function_files() {
 #===============================================================================
 # _collect_init_files
 # -------------------
-# Collect init sequence files based on OS, architecture, and profile.
+# Collect init sequence files based on OS, architecture, type, and profile.
 #
 # Arguments:
 #   $1 - init_dir : Init sequences directory
 #   $2 - arch     : CPU architecture
 #   $3 - osname   : OS name
-#   $4 - profile  : Profile (optional)
+#   $4 - type     : Host type (TCH, SCH, etc.)
+#   $5 - profile  : Profile (optional)
 #
 # Output:
 #   Array of init file paths (one per line)
+#
+# Search order:
+#   1. {osname}.init                           (base OS)
+#   2. {arch}-{osname}.init                    (arch-specific OS)
+#   3. {osname}-{type}.init                    (type-specific)
+#   4. {arch}-{osname}-{type}.init             (arch + type)
+#   5. {osname}-{type}-{profile}.init          (type + profile)
+#   6. {arch}-{osname}-{type}-{profile}.init   (arch + type + profile)
+#   7. common-post.init                        (always last)
 #===============================================================================
 _collect_init_files() {
-  local init_dir="$1" arch="$2" osname="$3" profile="$4"
+  local init_dir="$1" arch="$2" osname="$3" type="$4" profile="${5:-}"
   local -a init_files=()
   
-  # Base OS init
+  # 1. Base OS init
   local base_init="${init_dir}/${osname}.init"
   if [[ -f "$base_init" ]]; then
     init_files+=("$base_init")
     hps_log debug "Found base init: $base_init"
   fi
   
-  # Architecture-specific OS init
+  # 2. Architecture-specific OS init
   local arch_init="${init_dir}/${arch}-${osname}.init"
   if [[ -f "$arch_init" ]]; then
     init_files+=("$arch_init")
     hps_log debug "Found arch-specific init: $arch_init"
   fi
   
-  # Profile init
-  if [[ -n "$profile" ]]; then
-    local profile_init="${init_dir}/${osname}-${profile}.init"
-    if [[ -f "$profile_init" ]]; then
-      init_files+=("$profile_init")
-      hps_log debug "Found profile init: $profile_init"
+  # 3. Type-specific init
+  if [[ -n "$type" ]]; then
+    local type_init="${init_dir}/${osname}-${type}.init"
+    if [[ -f "$type_init" ]]; then
+      init_files+=("$type_init")
+      hps_log debug "Found type init: $type_init"
     fi
     
-    # Architecture-specific profile init
-    local arch_profile_init="${init_dir}/${arch}-${osname}-${profile}.init"
-    if [[ -f "$arch_profile_init" ]]; then
-      init_files+=("$arch_profile_init")
-      hps_log debug "Found arch-specific profile init: $arch_profile_init"
+    # 4. Architecture + type init
+    local arch_type_init="${init_dir}/${arch}-${osname}-${type}.init"
+    if [[ -f "$arch_type_init" ]]; then
+      init_files+=("$arch_type_init")
+      hps_log debug "Found arch-specific type init: $arch_type_init"
     fi
   fi
   
-  # Common post init (always last)
+  # 5. Type + Profile init
+  if [[ -n "$type" ]] && [[ -n "$profile" ]]; then
+    local type_profile_init="${init_dir}/${osname}-${type}-${profile}.init"
+    if [[ -f "$type_profile_init" ]]; then
+      init_files+=("$type_profile_init")
+      hps_log debug "Found type-profile init: $type_profile_init"
+    fi
+    
+    # 6. Architecture + type + profile init
+    local arch_type_profile_init="${init_dir}/${arch}-${osname}-${type}-${profile}.init"
+    if [[ -f "$arch_type_profile_init" ]]; then
+      init_files+=("$arch_type_profile_init")
+      hps_log debug "Found arch-specific type-profile init: $arch_type_profile_init"
+    fi
+  fi
+  
+  # 7. Common post init (always last)
   local common_post="${init_dir}/common-post.init"
   if [[ -f "$common_post" ]]; then
     init_files+=("$common_post")
@@ -221,6 +247,7 @@ _collect_init_files() {
   # Output file paths
   printf '%s\n' "${init_files[@]}"
 }
+
 
 #===============================================================================
 # _build_init_sequence
@@ -286,6 +313,8 @@ _build_init_sequence() {
   hps_log info "Built init sequence with ${#init_sequence[@]} action(s)"
 }
 
+
+
 #===============================================================================
 # node_build_functions
 # --------------------
@@ -303,14 +332,27 @@ node_build_functions() {
   local distro="${1:?Usage: node_build_functions <distro> [func_dir]}"
   local base="${2:-${LIB_DIR:+${LIB_DIR%/}/node-functions.d}}"
   
-  # Get profile
-  local profile
+  # Get type and profile
+  local type profile
+  
+  if ! type=$(host_config "$mac" get TYPE 2>/dev/null); then
+    hps_log warn "No TYPE available"
+    type=""
+  fi
+  
   if ! profile=$(host_config "$mac" get HOST_PROFILE 2>/dev/null); then
     hps_log warn "No HOST_PROFILE available"
+    profile=""
+  fi
+  
+  if [[ -z "$type" ]]; then
+    hps_log info "No type set, using base functions only"
+  else
+    hps_log info "Using type: $type"
   fi
   
   if [[ -z "$profile" ]]; then
-    hps_log info "No profile set, using base functions only"
+    hps_log info "No profile set"
   else
     hps_log info "Using profile: $profile"
   fi
@@ -320,12 +362,13 @@ node_build_functions() {
   IFS='-' read -r cpu mfr osname osver <<<"$distro"
   
   hps_log info "Building function bundle for distro: $distro"
-  hps_log debug "Components: cpu=$cpu mfr=$mfr osname=$osname osver=$osver"
+  hps_log debug "Components: cpu=$cpu mfr=$mfr osname=$osname osver=$osver type=$type profile=$profile"
   hps_log debug "Searching in: $base"
   
   # Header
   echo "# Host function bundle for: $distro"
   echo "# Source directory: $base"
+  [[ -n "$type" ]] && echo "# Type: $type"
   [[ -n "$profile" ]] && echo "# Profile: $profile"
   echo
   
@@ -389,12 +432,12 @@ node_build_functions() {
   
   local init_dir="${LIB_DIR}/node-init-sequences.d"
   local init_files
-  init_files=$(_collect_init_files "$init_dir" "$cpu" "$osname" "$profile")
+  init_files=$(_collect_init_files "$init_dir" "$cpu" "$osname" "$type" "$profile")
   
   local init_file_count
-  init_file_count=$(echo "$init_files" | grep -c .)
+  init_file_count=$(echo "$init_files" | grep -c . || echo 0)
   
-  echo "# Init sequence for: ${osname}${profile:+ (${profile})} [${cpu}]"
+  echo "# Init sequence for: ${osname}${type:+-${type}}${profile:+-${profile}} [${cpu}]"
   echo "# Generated from: ${init_file_count} file(s)"
   _build_init_sequence "$init_files"
   echo
@@ -405,5 +448,6 @@ node_build_functions() {
   hps_log info "Function bundle complete: $file_count files included"
   return 0
 }
+
 
 
