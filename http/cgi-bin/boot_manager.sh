@@ -307,6 +307,32 @@ if [[ "$cmd" == "get_remote_functions" ]]; then
 fi
 
 
+# Command: Get installer functions
+if [[ "$cmd" == "get_installer_functions" ]]; then
+  hps_log debug "Request for get_installer_functions"
+  cgi_header_plain
+  # Determine OS and TYPE from host config
+  type=$(host_config "$mac" get TYPE)
+  hps_log debug "---  get_installer_functions for mac $mac"
+  os_id=$(host_config "$mac" get os_id)
+  osname=$(get_os_name $os_id)
+
+  # Path to installer functions
+  installer_func_file="${LIB_DIR}/host-installer/${osname}/installer-functions.sh"
+  hps_log debug "Request for get_installer_functions from $installer_func_file"
+  
+  if [[ -f "$installer_func_file" ]]; then
+    hps_log info "get_installer_functions Serving installer functions: $installer_func_file"
+    cat "$installer_func_file"
+  else
+    hps_log error "get_installer_functions Installer functions not found: $installer_func_file"
+    cgi_auto_fail "ERROR: Installer functions not found for ${osname}-${type}"
+    exit 1
+  fi
+  
+  exit 0
+fi
+
 
 # deprecated by get_remote_functions?
 # Command: Get the bootstrap functions, which allow the fullfunction lib to be downloaded
