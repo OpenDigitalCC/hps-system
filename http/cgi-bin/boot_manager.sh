@@ -175,6 +175,64 @@ if [[ "$cmd" == "cluster_variable" ]]; then
 fi
 
 
+
+#===============================================================================
+# os_variable command handler
+# ---------------------------
+# Get OS configuration variables via CGI interface.
+#
+# Parameters (via CGI):
+#   cmd=os_variable
+#   os_id=<os_identifier>    (required, e.g., "x86_64:alpine:3.20")
+#   name=<key_name>          (required)
+#
+# Behaviour:
+#   - Validates os_id parameter exists
+#   - Validates name parameter exists
+#   - Checks OS section exists in registry
+#   - Returns value for the specified key
+#
+# Returns:
+#   - Success with value if found
+#   - Failure if parameters missing, OS not found, or key not found
+#
+# Example usage:
+#   curl "http://ips/cgi-bin/boot_manager.sh?cmd=os_variable&os_id=x86_64:alpine:3.20&name=repo_path"
+#
+#===============================================================================
+if [[ "$cmd" == "os_variable" ]]; then
+  # Validate required parameters
+  if ! cgi_param exists os_id; then
+    cgi_auto_fail "Param 'os_id' is required"
+    exit 1
+  fi
+
+  if ! cgi_param exists name; then
+    cgi_auto_fail "Param 'name' is required"
+    exit 1
+  fi
+
+  # Extract parameters
+  os_id="$(cgi_param get os_id)"
+  var_name="$(cgi_param get name)"
+
+  # Check OS section exists
+  if ! os_config_exists "$os_id"; then
+    cgi_auto_fail "OS '$os_id' not found"
+    exit 1
+  fi
+
+  # Attempt to get the value
+  if current_value="$(os_config_get "$os_id" "$var_name" 2>/dev/null)"; then
+    cgi_success "$current_value"
+    exit 0
+  else
+    cgi_auto_fail "Key '$var_name' not found for OS '$os_id'"
+    exit 1
+  fi
+fi
+
+
 # Command: Process ipxe menu
 
 if [[ "$cmd" == "process_menu_item" ]]; then
@@ -220,7 +278,7 @@ fi
 
 
 # get the host config file
-
+# TODO: deprecated / undesirable?
 if [[ "$cmd" == "host_get_config" ]]; then
   hps_log info "Config requested"
   cgi_header_plain
@@ -253,25 +311,6 @@ if [[ "$cmd" == "host_audit" ]]; then
   fi
   exit
 fi
-
-
-# this and associated functions in tch-build.sh are redundant AFAIK
-# Command: Get alpine bootstrap 
-if [[ "$cmd" == "x_get_alpine_bootstrap" ]]; then
-  cgi_header_plain
-  hps_log info "Generating Alpine bootstrap"
-  
-  stage="initramfs"
-  if cgi_param exists stage; then
-    stage="$(cgi_param get stage)"
-  fi
-  
-  if ! get_alpine_bootstrap "$stage" ; then
-    cgi_fail "Failed to generate bootstrap: get_alpine_bootstrap exited nonzero"
-  fi
-  exit 0
-fi
-
 
 
 # Command: Network bootstrap via kickstart
@@ -375,7 +414,7 @@ fi
 
 ## TODO: deprecated?
 # Command: Generate an opensvc conf
-if [[ "$cmd" == "generate_opensvc_conf" ]]; then
+if [[ "$cmd" == "x_generate_opensvc_conf" ]]; then
   hps_log info "Request to generate opensvc.conf"
   cgi_header_plain
   generate_opensvc_conf "$mac"

@@ -13,6 +13,76 @@ _get_distro_dir () {
   echo "${HPS_DISTROS_DIR}"
 }
 
+
+#===============================================================================
+# os_get_latest
+# -------------
+# Get the latest version of an OS from the registry.
+#
+# Behaviour:
+#   - Scans all OS entries for the given OS name
+#   - Finds the highest version number
+#   - Returns the full OS ID (arch:name:version) of the latest version
+#   - Assumes versions are numeric/sortable (e.g., 3.20, 10.0)
+#
+# Arguments:
+#   $1: OS name (e.g., "alpine", "rocky", "rockylinux")
+#
+# Returns:
+#   Latest OS ID on stdout, or nothing if not found
+#   Exit code: 0 if found, 1 if not found
+#
+# Example usage:
+#   latest=$(os_get_latest "alpine")           # x86_64:alpine:3.20
+#   latest=$(os_get_latest "rockylinux")       # x86_64:rockylinux:10.0
+#
+#===============================================================================
+os_get_latest() {
+  local os_name="$1"
+  local os_conf=$(_get_os_conf_path)
+  local latest_version=""
+  local latest_os_id=""
+  
+  [[ ! -f "$os_conf" ]] && return 1
+  
+  # Extract all section headers and find matching OS entries
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\[([^\]]+)\] ]]; then
+      local os_id="${BASH_REMATCH[1]}"
+      
+      # Parse the OS ID (arch:name:version)
+      local IFS=':'
+      read -r arch name version <<< "$os_id"
+      
+      # Check if this matches our OS name
+      if [[ "$name" == "$os_name" ]]; then
+        # Compare versions - using sort -V for version comparison
+        if [[ -z "$latest_version" ]]; then
+          latest_version="$version"
+          latest_os_id="$os_id"
+        else
+          # Check if this version is newer
+          local higher_version
+          higher_version=$(printf '%s\n%s\n' "$version" "$latest_version" | sort -V | tail -1)
+          
+          if [[ "$higher_version" == "$version" && "$version" != "$latest_version" ]]; then
+            latest_version="$version"
+            latest_os_id="$os_id"
+          fi
+        fi
+      fi
+    fi
+  done < "$os_conf"
+  
+  if [[ -n "$latest_os_id" ]]; then
+    echo "$latest_os_id"
+    return 0
+  else
+    return 1
+  fi
+}
+
+
 #===============================================================================
 # os_id_to_distro
 # ---------------
