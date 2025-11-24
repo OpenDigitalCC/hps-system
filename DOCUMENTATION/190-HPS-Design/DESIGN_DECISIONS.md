@@ -88,3 +88,39 @@ While acknowledging the speed advantages of image-based deployment, **fresh inst
  
 We will explore the feasibility of adding a controlled image duplication process to complement the standard fresh-install workflow for cases where rapid redeployment on identical hardware is beneficial.  
 
+
+
+
+
+## Choice of Operating System: Alpine Linux vs Rocky Linux for SCH
+
+Decision
+: **Alpine Linux** selected as the operating system for SCH and TCH HPS node types.
+
+### Rationale:
+
+- Rocky Linux kickstart was found to add significant opacity to the installation process, with limited visibility into %pre/%post script execution, silent errors, and difficult debugging cycles requiring full reboots (~5+ minutes each).
+- Alpine Linux provides a simpler and more transparent boot and installation model, with direct netboot to a shell environment where state can be inspected at any point.
+- TCH nodes already run Alpine successfully, and using the same OS for SCH enables consistent function loading, init sequences, and IPS communication across all node types.
+- Alpine's fast boot time (seconds vs minutes) provides immediate feedback during development, dramatically reducing iteration time.
+- The appliance philosophy of HPS aligns with Alpine's embedded/minimal design, where users should not need to care about the underlying OS.
+
+### Trade-offs and compromises:
+
+- Alpine uses musl libc rather than glibc, which may introduce minor compatibility differences for some software, though this does not affect HPS use cases.
+- Enterprise documentation and community resources for storage workloads on Alpine are smaller than for RHEL-based distributions.
+- RHEL ecosystem familiarity and enterprise certifications are lost, though these are not critical for HPS's appliance model.
+
+### Alternatives considered:
+
+These are intended to be revisited at a later date, as HPS should allow user preference of O/S
+
+- **Rocky Linux with kickstart** – Provides RHEL ecosystem familiarity but introduces installer opacity, fragile script environments across %pre/%post sections, and slow debug cycles. Rejected due to excessive complexity.
+- **Debian/Ubuntu** – Not considered as there is no existing HPS implementation and footprint is larger than Alpine.
+- **Mixed OS environment** – Running Rocky on SCH and Alpine on TCH was rejected as it doubles maintenance burden and prevents sharing of node functions.
+
+### Summary:
+
+For all HPS node types, Alpine Linux was chosen as it provides transparency, fast iteration, and consistency across TCH and SCH nodes. Rocky kickstart's opacity made it unsuitable for HPS's tight integration with IPS, where debugging visibility and predictable behaviour are essential.
+
+
