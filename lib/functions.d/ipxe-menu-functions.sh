@@ -51,7 +51,7 @@ handle_menu_item() {
   case "$item" in
 
     init_menu)
-      ipxe_init
+      ipxe_configure_main_menu
       ;;
 
     host_install_menu)
@@ -64,7 +64,7 @@ handle_menu_item() {
       ;;
 
     recover_DRH)
-      ipxe_init
+      ipxe_configure_main_menu
       ;;
 
     show_ipxe|show_cluster|show_host|show_paths)
@@ -365,13 +365,13 @@ ipxe_boot_installer () {
     ipxe_cgi_fail "Initrd not found: ${distro_mount}/${initrd_rel} for $host_type/$arch"
   fi
 
-
   hps_log debug "Preparing PXE Boot for ${os_id} non-interactive installation"
   hps_log debug "boot_kernel_line: $boot_kernel_line"
-
   hps_log info "Installer instruction sent. "
   _do_pxe_boot "$boot_kernel_line" "$boot_initrd_line"
 }
+
+
 
 
 ipxe_network_boot() {
