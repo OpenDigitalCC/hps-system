@@ -11,7 +11,7 @@ TITLE_PREFIX="$(cluster_config get CLUSTER_NAME) \${mac:hexraw} \${net0/ip}:"
 cat <<EOF
 #!ipxe
 set logmsg $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header requested by ${FUNCNAME[1]}
-imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
+imgfetch --name log ${CGI_URL}?cmd=log_message&message=\${logmsg} || echo Log failed
 echo
 echo Connected to cluster $(cluster_config get CLUSTER_NAME) 
 echo Client IP: \${client_ip} MAC address: \${mac:hexraw}
@@ -239,9 +239,9 @@ choose selection && goto HANDLE_MENU
 
 :HANDLE_MENU
 set logmsg ${FUNCNAME[1]} Menu selected: \${selection}
-imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
+imgfetch --name log ${CGI_URL}?cmd=log_message&message=\${logmsg} || echo Log failed
 
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${selection}
+chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=\${selection}
 
 EOF
 
@@ -632,7 +632,7 @@ EOF
     *)
       echo "echo Unknown item: $category"
       echo "sleep 3"
-      echo "chain ${CGI_URL}?cmd=process_menu_item&mac=${mac:hexraw}&menu_item=init_menu"
+      echo "chain ${CGI_URL}?cmd=process_menu_item&menu_item=init_menu"
       ;;
   esac
 }
