@@ -55,12 +55,7 @@ handle_menu_item() {
       ;;
 
     host_install_menu)
-      if cluster_has_installed_sch
-       then
-        ipxe_host_install_menu
-      else
-        ipxe_host_install_sch
-       fi
+      ipxe_host_install_menu
       ;;
 
     recover_DRH)
@@ -150,53 +145,44 @@ handle_menu_item() {
 }
 
 
-#TODO: this is redundant now
-ipxe_host_install_sch () {
-  # Run this to present menu to install SCH
-  ipxe_header
+ipxe_host_install_menu () {
+ipxe_header
 
 cat <<EOF
-# Fixed iPXE menu for Storage Cluster Host installation
-:start
-menu ${TITLE_PREFIX} Install Storage Cluster Host
-item --gap 
-item --gap At least one Storage Cluster Host must be configured for a cluster.
+menu ${TITLE_PREFIX} Select installation option:
+item --gap What would you like to configure \${mac:hexraw} as?
 item --gap Note: This will execute the installation immediately
 item --gap 
 item init_menu    < Back to initialisation menu
 item --gap 
-item install_SCH_STORAGESINGLE  > Install now: ZFS single-disk (for testing or multiple hosts)
-item install_SCH_STORAGERAID    > Install now: ZFS RAID (for multiple local disks)
-choose action
-
-set logmsg "Menu selected: \${action}"
-imgfetch --name log ${CGI_URL}?cmd=log_message&mac=\${mac:hexraw}&message=\${logmsg} || echo Log failed
-chain --replace ${CGI_URL}?cmd=process_menu_item&mac=\${mac:hexraw}&menu_item=\${action}
 EOF
-}
 
-
-ipxe_host_install_menu () {
-ipxe_header
+if cluster_has_installed_sch
+ then
 cat <<EOF
-menu ${TITLE_PREFIX} Select installation option:
-item --gap What would you like to configure \${mac:hexraw} as?
-item --gap 
-item init_menu    < Back to initialisation menu
-item --gap 
-
-item --gap Install Thin Compute Host
+item --gap Install Thin Compute Host (TCH)
 item install_TCH_DEFAULT  > Default profile
 item install_TCH_KVM  > Profile: KVM virtualisation
 item install_TCH_DOCKER  > Profile: Docker host
 item install_TCH_BUILD  > Profile: Build tools for packaging
-
-item --gap 
-item --gap Install Storage Cluster Host
-item install_SCH_DEFAULT  > Default profile
 item --gap 
 item --gap Install Disaster Recovery Host
-item install_DRH  > Default profile
+item install_DRH_DEFAULT  > Default profile
+
+EOF
+ else
+cat <<EOF
+item --gap 
+item --gap At least one Storage Cluster Host (SCH) must be configured for a cluster 
+item --gap before any other hosts can be installed.
+item --gap 
+EOF
+fi
+
+cat <<EOF
+item --gap 
+item --gap Install Storage Cluster Host (SCH)
+item install_SCH_DEFAULT  > Default profile
 
 choose selection && goto HANDLE_MENU
 
@@ -207,7 +193,6 @@ imgfetch --name log ${CGI_URL}?cmd=log_message&message=\${logmsg} || echo Log fa
 chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=\${selection}
 
 EOF
-
 }
 
 ipxe_configure_main_menu () {
