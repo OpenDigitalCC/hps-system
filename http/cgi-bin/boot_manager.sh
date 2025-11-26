@@ -411,17 +411,6 @@ fi
 
 
 
-
-## TODO: deprecated?
-# Command: Generate an opensvc conf
-if [[ "$cmd" == "x_generate_opensvc_conf" ]]; then
-  hps_log info "Request to generate opensvc.conf"
-  cgi_header_plain
-  generate_opensvc_conf "$mac"
-  exit
-fi
-
-
 # ---------------------- Router  based on state
 
 
@@ -442,56 +431,41 @@ if [[ "$cmd" == "init" ]]; then
   fi
 
   state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
-  hps_log info "STATE: $state"
+  hps_log info "Node STATE: $state"
 
   case "$state" in
   
     NETWORK_BOOT)
-      hps_log info "Network boot requested for MAC ${mac} (STATE=${state})"
+      hps_log info "State: $state requested for MAC ${mac}"
       ipxe_network_boot "$mac"
       ;;  
   
     UNCONFIGURED)
-      hps_log info "Unconfigured — offering install options."
+      hps_log info "State: $state - offering configure options."
       ipxe_configure_main_menu
       ;;
 
     CONFIGURED)
-      hps_log info "Configured — offering install options."
+      hps_log info "State: $state - offering install options."
       # establish type and o/s from config and cluster, then go to install that
       ipxe_host_install_menu
       ;;
 
-    INSTALLED)
-      hps_log info "Already installed. Booting from disk."
-      ipxe_boot_from_disk
-      exit
-      ;;
-
-    UNMANAGED)
-      hps_log info "Device set to UNMANAGED, booting from disk"
+    INSTALLED|DISK_BOOT|UNMANAGED)
+      hps_log info "State: $state - Booting from disk."
       ipxe_boot_from_disk
       exit
       ;;
 
     INSTALLING)
-      hps_log info "Currently installing. Continuing install."
-      HTYPE=$(host_config "$mac" get TYPE)
-      hps_log debug "Continuing installation - TYPE: $HTYPE"
-      ipxe_boot_installer "$mac" "$HTYPE"
-      ;;
-
-    ACTIVE)
-#      hps_log info "Active and provisioned. Booting configured image."
-#      ipxe_boot_provisioned
-      cgi_auto_fail "Section not yet written for state $state"
+      hps_log info "State: $state - Continuing install."
+      ipxe_boot_installer "$mac"
       ;;
 
     REINSTALL)
-#      hps_log info "Reinstall requested. Returning to install menu."
-#      ipxe_host_install_menu
+      hps_log info "Unconfiguring host"
       host_config "$mac" set STATE UNCONFIGURED
-      ipxe_reboot "Unconfiguring host and rebooting"
+      ipxe_goto_menu init_menu
       ;;
 
     FAILED)
