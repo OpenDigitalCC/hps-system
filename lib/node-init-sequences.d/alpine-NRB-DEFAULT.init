@@ -1,0 +1,9 @@
+# Load all required kernel modules
+n_rescue_load_modules
+
+# Display rescue mode help and available functions
+n_rescue_show_help
+
+# Display disk configuration from IPS
+n_rescue_display_config
+
