@@ -7,15 +7,20 @@ ipxe_header () {
 # Send pxe header so we don't get a boot failure
 cgi_header_plain
 # Set some variables to be used in IPXE scripts
-TITLE_PREFIX="$(cluster_config get CLUSTER_NAME) \${mac:hexraw} \${net0/ip}:"
+
+local STATE="$(host_config "$mac" get STATE)"
+local CLUSTER_NAME="$(cluster_config get CLUSTER_NAME)"
+
+TITLE_PREFIX="$CLUSTER_NAME \${mac:hexraw} \${net0/ip} $STATE:"
+
 cat <<EOF
 #!ipxe
-set logmsg $(cluster_config get CLUSTER_NAME) \${net0/ip} iPXE Header requested by ${FUNCNAME[1]}
+set logmsg $CLUSTER_NAME \${net0/ip} iPXE Header requested from function ${FUNCNAME[1]}
 imgfetch --name log ${CGI_URL}?cmd=log_message&message=\${logmsg} || echo Log failed
 echo
-echo Connected to cluster $(cluster_config get CLUSTER_NAME) 
+echo Connected to cluster $CLUSTER_NAME 
 echo Client IP: \${client_ip} MAC address: \${mac:hexraw}
-echo "Function: ${FUNCNAME[1]}"
+echo Calling function: ${FUNCNAME[1]}
 echo
 EOF
 }
@@ -54,12 +59,8 @@ handle_menu_item() {
       ipxe_configure_main_menu
       ;;
 
-    host_install_menu)
-      ipxe_host_install_menu
-      ;;
-
-    recover_DRH)
-      ipxe_configure_main_menu
+    host_configure_menu)
+      ipxe_host_configure_menu
       ;;
 
     show_ipxe|show_cluster|show_host|show_paths)
@@ -81,10 +82,10 @@ handle_menu_item() {
       ipxe_reboot "Menu selected - reboot"
       ;;
 
-    local_boot)
+    disk_boot)
       hps_log info "$item Boot from local disk"
       ipxe_header
-      echo "echo Local boot requested"
+      echo "echo disk boot requested"
       echo "sleep 5"
       echo "sanboot --no-describe --drive 0x80"
       ;;
@@ -92,48 +93,44 @@ handle_menu_item() {
     reinstall)
       hps_log info "$item Reinstall requested"
       host_config "$mac" set STATE REINSTALL
-      ipxe_host_install_menu
+      ipxe_host_configure_menu
       ;;
 
     rescue)
-      hps_log info "$item Entering rescue shell"
+      hps_log info "$item Entering iPXE rescue shell"
       ipxe_header
       echo "echo Local shell"
       echo "sleep 1"
       echo "shell"
       ;;
 
-    install_*)
-      local HOST_TYPE="${item#install_}"
-      local HOST_PROFILE=""
-      
-      # Check if there's an underscore indicating a profile suffix
-      if [[ "$HOST_TYPE" =~ ^([^_]+)_(.+)$ ]]; then
-        # Extract type and profile from the match
-        HOST_TYPE="${BASH_REMATCH[1]}"
-        HOST_PROFILE="${BASH_REMATCH[2]}"
-        # Set HOST_PROFILE
-        if [[ -n "${HOST_PROFILE}" ]]; then
-          host_config "$mac" set HOST_PROFILE "${HOST_PROFILE}"
-        fi  
-          hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
-        else
-          # No profile suffix, HOST_PROFILE remains empty
-          hps_log info "$item Running boot installer for type: '${HOST_TYPE}' (no profile)"
-        fi
-        ipxe_boot_installer "$mac" "${HOST_TYPE}"
-        ;;
+    boot_*)
+      # Use regex to extract TYPE and optional PROFILE
+      echo "$mac: $item"
+      if [[ "$item" =~ ^boot_([^_]+)(_(.+))?$ ]]; then
+        local HOST_TYPE="${BASH_REMATCH[1]}"
+        local HOST_PROFILE="${BASH_REMATCH[3]:-DEFAULT}"
+        
+        host_config "$mac" "set" "TYPE" "${HOST_TYPE}"
+        host_config "$mac" "set" "HOST_PROFILE" "${HOST_PROFILE}"
+        hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
+        ipxe_boot_installer "$mac"
+      else
+        hps_log error "Invalid install item format: $item"
+        return 1
+      fi
+      ;;
+
 
     force_install_*)
       if [[ "${item}" == "force_install_on" ]] 
        then
         host_config "$mac" set FORCE_INSTALL YES
         host_config "$mac" set STATUS UNCONFIGURED
-        ipxe_reboot "FORCE_INSTALL set to YES"
+        ipxe_goto_menu
        else
         host_config "$mac" set FORCE_INSTALL NO
-#        host_config "$mac" set STATUS UNCONFIGURED
-        ipxe_reboot "FORCE_INSTALL set to NO"
+        ipxe_goto_menu
       fi       
       ;;
 
@@ -144,8 +141,15 @@ handle_menu_item() {
   esac
 }
 
+ipxe_goto_menu () {
+  # refreesh ipxe and go to main menu unless specified
+  local MENU_CHOICE="${1:-init_menu}"
+  ipxe_header
+  echo "imgfree"
+  echo "chain --replace ${CGI_URL}?cmd=process_menu_item&menu_item=$MENU_CHOICE"
+}
 
-ipxe_host_install_menu () {
+ipxe_host_configure_menu () {
 ipxe_header
 
 cat <<EOF
@@ -161,13 +165,13 @@ if cluster_has_installed_sch
  then
 cat <<EOF
 item --gap Install Thin Compute Host (TCH)
-item install_TCH_DEFAULT  > Default profile
-item install_TCH_KVM  > Profile: KVM virtualisation
-item install_TCH_DOCKER  > Profile: Docker host
-item install_TCH_BUILD  > Profile: Build tools for packaging
+item boot_TCH_DEFAULT  > Default profile
+item boot_TCH_KVM  > Profile: KVM virtualisation
+item boot_TCH_DOCKER  > Profile: Docker host
+item boot_TCH_BUILD  > Profile: Build tools for packaging
 item --gap 
 item --gap Install Disaster Recovery Host
-item install_DRH_DEFAULT  > Default profile
+item boot_DRH_DEFAULT  > Default profile
 
 EOF
  else
@@ -182,7 +186,7 @@ fi
 cat <<EOF
 item --gap 
 item --gap Install Storage Cluster Host (SCH)
-item install_SCH_DEFAULT  > Default profile
+item boot_SCH_DEFAULT  > Default profile
 
 choose selection && goto HANDLE_MENU
 
@@ -218,14 +222,14 @@ cat <<EOF
 menu ${TITLE_PREFIX} Select a host option:
 
 item --gap Host options
-item host_install_menu > Host install menu
+item host_configure_menu > Host configuration menu
 item show_ipxe    > Show host and cluster configuration
 item --gap 
-item recover_DRH  > NOT YET IMPLEMENTED: Recover from Disaster Recovery Host (DRH) 
+item boot_NRB_DEFAULT  > Network recovery boot
 item --gap 
 item --gap System options
 item rescue       < Enter rescue shell
-item local_boot   < Boot from local disk
+item disk_boot   < Boot from local disk
 item reboot       < Reboot host
 item --gap 
 
@@ -258,53 +262,120 @@ ipxe_reboot () {
 }
 
 
-## This function runs once the user selects the install type from the install menu. 
-# It is the opportunity to configure the host variables
+## This function runs once when the user selects the install type from the install menu.
+# it won't be called again unless the node is unconfigured
+# It is the opportunity to configure the host variables, network etc
 ipxe_boot_installer () {
   local mac="$1"
-  local host_type="$2"
 
-  host_config "$mac" "set" "TYPE" "$host_type"
-
+  local host_type="$(host_config "$mac" get TYPE)"
+  local host_profile="$(host_config "$mac" get HOST_PROFILE)"
   local arch="$(host_config "$mac" get arch)"
-  local os_id=$(get_host_os_id "$mac")  # Determines from cluster config
-  host_config "$mac" "set" "os_id" "$os_id"
+
+  local lc_type=$(echo ${host_type} | tr '[:upper:]' '[:lower:]')
+  os_key="os_${lc_type}_${arch}"
+  os_id=$(cluster_config "get" "$os_key")
+  # Fallback to any OS for this arch/type
+  if [[ -z "$os_id" ]]; then
+    os_id=$(os_config_select "$arch" "$lc_type")
+  fi
+  hps_log debug "os_key: $os_key os_id: $os_id"
+
+  host_config "$mac" set os_id "$os_id"
 
   hps_log info "Installing new host of type $host_type ($arch) with $os_id"
 
   # Assign network addresses and other host config details
   host_network_configure "$mac"
 
-  # TCH are thin, so the only option is to network boot  
-  if [[ "${host_type}" == "TCH" ]]; then
-    # TCH: Set state and reboot for network boot preparation
-    hps_log info "Setting up TCH for network boot"
-    host_config "$mac" set STATE NETWORK_BOOT
-    ipxe_reboot "TCH configured for network boot - rebooting to apply"
+  if [[ "${host_type}" != "TCH" ]]; then
+    # set flag so that init knows to install
+      host_config "$mac" set STATE INSTALLING
+      ipxe_network_boot "$mac"
     exit
   fi
 
+  hps_log info "Setting up host for network boot"
+  host_config "$mac" set STATE NETWORK_BOOT
+  ipxe_reboot "Configured for network boot - rebooting to apply"
+
+}
+
+
+
+# Network boot router - depending on O/S, depends on which network boot function provided
+ipxe_network_boot() {
+  local mac="$1"
+  local os_name=$(get_os_name $(get_host_os_id "$mac"))
+  hps_log debug "Net booting $os_name"
+  local boot_func="ipxe_boot_${os_name}"
+  if declare -f "$boot_func" >/dev/null; then 
+    "$boot_func"
+  else
+    ipxe_cgi_fail "$os_name does not exist or $boot_func invalid"
+  fi
+}
+
+
+# Alpine network booter. 
+# TODO: this could become more generic, merging in different O/S patterns
+ipxe_boot_alpine() {
+  local alpine_version="$(get_host_os_version "$mac")"
+
+  # Validate Alpine repository before attempting boot
+  os_id=$(get_host_os_id "$mac")
+  if ! validate_alpine_repository "$os_id" "main" ; then
+    local alpine_version="$(get_host_os_version "$mac")"
+    hps_log error "Alpine repository validation failed for TCH boot"
+    ipxe_cgi_fail "Alpine ${alpine_version} repository not ready. Run: sync_alpine_repository \"${alpine_version}\" \"main\""
+    return 1
+  fi
+
+  local client_ip=$(host_config "$mac" get IP)
+  local ips_address=$(cluster_config get DHCP_IP)
+  local network_cidr=$(cluster_config get NETWORK_CIDR)
+  local hostname=$(host_config "$mac" get HOSTNAME)
+
+  # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
+  local prefix_len="${network_cidr##*/}"
+  local netmask=$(cidr_to_netmask "$prefix_len")
+
+  local download_base="http://${ips_address}/$(get_distro_base_path "$os_id" http)"
+
+  local os_id=$(get_host_os_id "$mac")
+
+  apkovl_file_disk="$(get_tch_apkovl_filepath ${os_id})" 
+  # Generate apk overlay if missing
+  if [[ ! -f "${apkovl_file_disk}" ]]; then
+    hps_log info "Generating Alpine apkovl for version $alpine_version"
+    tch_apkovol_create "${apkovl_file_disk}" ${os_id}
+  fi
+
+  hps_log debug "Configuring TCH version $alpine_version with static IP: $client_ip"
+
+  local boot_kernel_args="initrd=initramfs-lts"
+  boot_kernel_args="${boot_kernel_args} console=ttyS0,115200n8"
+  boot_kernel_args="${boot_kernel_args} alpine_repo=${download_base}/apks/main"
+  boot_kernel_args="${boot_kernel_args} ip=${client_ip}::${ips_address}:${netmask}:${hostname}:eth0:off"
+  boot_kernel_args="${boot_kernel_args} apkovl=$download_base/$(get_tch_apkovl_filename)"
+
+  local kernel_rel="boot/vmlinuz-lts"
+  local initrd_rel="boot/initramfs-lts"
+  
+  local boot_kernel_line="${download_base}/${kernel_rel} ${boot_kernel_args}"
+  local boot_initrd_line="${download_base}/${initrd_rel}"
+
+  _do_pxe_boot "$boot_kernel_line" "$boot_initrd_line"
+}
+
+
+# TODO: This doesn't currently work, ideally merge in with alpine to a generic booter
+ipxe_installer-rocky () {
+
   # Select OS based on architecture and host type
   # First try architecture-specific config
-  local lc_type=$(echo ${host_type} | tr '[:upper:]' '[:lower:]')
-  os_key="os_${lc_type}_${arch}"
-  os_id=$(cluster_config "get" "$os_key")
-
-  # Fallback to any OS for this arch/type
-  if [[ -z "$os_id" ]]; then
-    os_id=$(os_config_select "$arch" "$lc_type")
-  fi
-
-  hps_log debug "os_key: $os_key os_id: $os_id"
+  # this can be improved using the os_ functions
  
-  local state="$(host_config "$mac" get STATE)"
-
-  # Last check - Abort if we are already installed
-  if [ "$state" == "INSTALLED" ]
-   then
-    ipxe_reboot "Host already installed, aborting installation"
-  fi
-
   local os_name=$(os_config "$os_id" "get" "name")
   local boot_server=$(cluster_config get DHCP_IP)
   local distro_mount=$(get_distro_base_path "$os_id" "mount")
@@ -353,74 +424,18 @@ ipxe_boot_installer () {
   hps_log debug "Preparing PXE Boot for ${os_id} non-interactive installation"
   hps_log debug "boot_kernel_line: $boot_kernel_line"
   hps_log info "Installer instruction sent. "
-  _do_pxe_boot "$boot_kernel_line" "$boot_initrd_line"
-}
 
 
-
-
-ipxe_network_boot() {
-  local host_type=$(host_config "$mac" get TYPE)
-  hps_log debug "Booting host of type ${host_type}"
-  
-  case "$host_type" in
-    TCH)
-      # Validate Alpine repository before attempting boot
-      os_id=$(get_host_os_id "$mac")
-      if ! validate_alpine_repository "$os_id" "main" ; then
-        local alpine_version="$(get_host_os_version "$mac")"
-        hps_log error "Alpine repository validation failed for TCH boot"
-        ipxe_cgi_fail "Alpine ${alpine_version} repository not ready. Run: sync_alpine_repository \"${alpine_version}\" \"main\""
-        return 1
-      fi
-      ipxe_boot_alpine_tch
-      ;;
-    *)
-      ipxe_cgi_fail "Network boot not supported for host type: $host_type"
-      ;;
-  esac
-}
-
-
-ipxe_boot_alpine_tch() {
-  local alpine_version="$(get_host_os_version "$mac")"
-
-  local client_ip=$(host_config "$mac" get IP)
-  local ips_address=$(cluster_config get DHCP_IP)
-  local network_cidr=$(cluster_config get NETWORK_CIDR)
-  local hostname=$(host_config "$mac" get HOSTNAME)
-
-  # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
-  local prefix_len="${network_cidr##*/}"
-  local netmask=$(cidr_to_netmask "$prefix_len")
-
-  local download_base="http://${ips_address}/$(get_distro_base_path "$os_id" http)"
-
-  local os_id=$(get_host_os_id "$mac")
-
-  apkovl_file_disk="$(get_tch_apkovl_filepath ${os_id})" 
-  # Generate apk overlay if missing
-  if [[ ! -f "${apkovl_file_disk}" ]]; then
-    hps_log info "Generating Alpine apkovl for version $alpine_version"
-    tch_apkovol_create "${apkovl_file_disk}" ${os_id}
+    # Last check - Abort if we are already installed
+  if [ "$(host_config "$mac" get STATE)" == "INSTALLED" ]
+   then
+    ipxe_reboot "Host already installed, aborting installation for $mac"
   fi
 
-  hps_log debug "Configuring TCH version $alpine_version with static IP: $client_ip"
-
-  local boot_kernel_args="initrd=initramfs-lts"
-  boot_kernel_args="${boot_kernel_args} console=ttyS0,115200n8"
-  boot_kernel_args="${boot_kernel_args} alpine_repo=${download_base}/apks/main"
-  boot_kernel_args="${boot_kernel_args} ip=${client_ip}::${ips_address}:${netmask}:${hostname}:eth0:off"
-  boot_kernel_args="${boot_kernel_args} apkovl=$download_base/$(get_tch_apkovl_filename)"
-
-  local kernel_rel="boot/vmlinuz-lts"
-  local initrd_rel="boot/initramfs-lts"
-  
-  local boot_kernel_line="${download_base}/${kernel_rel} ${boot_kernel_args}"
-  local boot_initrd_line="${download_base}/${initrd_rel}"
-
   _do_pxe_boot "$boot_kernel_line" "$boot_initrd_line"
 }
+
+
 
 
 _do_pxe_boot () {
@@ -438,13 +453,11 @@ _do_pxe_boot () {
   ipxe_header
   IPXE_BOOT_INSTALL=$(cat <<EOF
 # created at $(date)
-
 # Required to prevent corrupt initrd
 imgfree
 
 kernel $kernel
 initrd $initrd
-
 sleep 1
 boot
 
@@ -455,9 +468,6 @@ EOF
 }
 
 
-
-
-
 ipxe_host_audit_include () {
 
 # No header sent as this is an include to be used inside other functions
@@ -465,8 +475,6 @@ ipxe_host_audit_include () {
 hps_log debug "Loading iPXE  audit"
 
 cat <<EOF
-
-
 # System audit with validation
 isset \${manufacturer} && set mfg \${manufacturer:uristring} || set mfg UNKNOWN
 isset \${product} && set prod \${product:uristring} || set prod UNKNOWN  

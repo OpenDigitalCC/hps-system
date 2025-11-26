@@ -163,10 +163,12 @@ _output_function_files() {
   ((had_nullglob==1)) || shopt -u nullglob
 }
 
+
 #===============================================================================
-# _collect_init_files
+# _collect_init_files - Modified to check STATE
 # -------------------
 # Collect init sequence files based on OS, architecture, type, and profile.
+# Special handling: If STATE=INSTALLING, return n_installer_run only.
 #
 # Arguments:
 #   $1 - init_dir : Init sequences directory
@@ -176,9 +178,11 @@ _output_function_files() {
 #   $5 - profile  : Profile (optional)
 #
 # Output:
-#   Array of init file paths (one per line)
+#   Array of init actions (one per line)
+#   - Normal boot: init file paths
+#   - INSTALLING: function name "n_installer_run"
 #
-# Search order:
+# Search order (normal boot):
 #   1. {osname}.init                           (base OS)
 #   2. {arch}-{osname}.init                    (arch-specific OS)
 #   3. {osname}-{type}.init                    (type-specific)
@@ -186,10 +190,31 @@ _output_function_files() {
 #   5. {osname}-{type}-{profile}.init          (type + profile)
 #   6. {arch}-{osname}-{type}-{profile}.init   (arch + type + profile)
 #   7. common-post.init                        (always last)
+#
+# Special handling (STATE=INSTALLING):
+#   Returns: "n_installer_run" (single function call, not file path)
+#   Note: All functions are still loaded, but only installer runs
 #===============================================================================
 _collect_init_files() {
   local init_dir="$1" arch="$2" osname="$3" type="$4" profile="${5:-}"
   local -a init_files=()
+  
+  # Check STATE first - special handling for INSTALLING
+  local state=""
+  if [[ -n "${mac:-}" ]]; then
+    state=$(host_config "$mac" get STATE 2>/dev/null || echo "")
+  fi
+  
+  if [[ "$state" == "INSTALLING" ]]; then
+    hps_log info "STATE=INSTALLING detected, init sequence will run installer only"
+    # Return function name directly, not a file path
+    # This will be processed by _build_init_sequence as a single action
+    echo "n_installer_run"
+    return 0
+  fi
+  
+  # Normal boot - proceed with standard init file collection
+  hps_log debug "Normal boot detected (STATE=${state:-<unset>}), using standard init sequence"
   
   # 1. Base OS init
   local base_init="${init_dir}/${osname}.init"
@@ -250,15 +275,19 @@ _collect_init_files() {
 
 
 #===============================================================================
-# _build_init_sequence
+# _build_init_sequence - Modified to handle function names
 # --------------------
-# Build init sequence array from init files.
+# Build init sequence array from init files OR direct function names.
 #
 # Arguments:
-#   $1 - init_files (newline-separated list of file paths)
+#   $1 - init_files (newline-separated list of file paths OR function names)
 #
 # Output:
 #   Bash array declaration to stdout
+#
+# Behaviour:
+#   - If input is a file path (exists as file): read and parse as before
+#   - If input is not a file: treat as direct function name and add to sequence
 #===============================================================================
 _build_init_sequence() {
   local init_files="$1"
@@ -272,35 +301,38 @@ _build_init_sequence() {
   while IFS= read -r init_file; do
     [[ -z "$init_file" ]] && continue
     
-    if [[ ! -f "$init_file" ]]; then
-      hps_log warn "Init file not found: $init_file"
-      continue
+    # Check if this is a file path or a direct function name
+    if [[ -f "$init_file" ]]; then
+      # It's a file - process as before
+      hps_log debug "Processing init file: $init_file"
+      
+      local line_count=0
+      while IFS= read -r line; do
+        ((line_count++))
+        
+        # Skip empty lines and comments
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+          hps_log debug "  Line $line_count: skipped (empty or comment)"
+          continue
+        fi
+        
+        # Trim whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        
+        # Add non-empty lines
+        if [[ -n "$line" ]]; then
+          init_sequence+=("$line")
+          hps_log debug "  Line $line_count: added '$line'"
+        fi
+      done < "$init_file"
+      
+      hps_log debug "Processed $line_count lines from $init_file"
+    else
+      # Not a file - treat as direct function name
+      hps_log debug "Adding direct function: $init_file"
+      init_sequence+=("$init_file")
     fi
-    
-    hps_log debug "Processing init file: $init_file"
-    
-    local line_count=0
-    while IFS= read -r line; do
-      ((line_count++))
-      
-      # Skip empty lines and comments
-      if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-        hps_log debug "  Line $line_count: skipped (empty or comment)"
-        continue
-      fi
-      
-      # Trim whitespace
-      line="${line#"${line%%[![:space:]]*}"}"
-      line="${line%"${line##*[![:space:]]}"}"
-      
-      # Add non-empty lines
-      if [[ -n "$line" ]]; then
-        init_sequence+=("$line")
-        hps_log debug "  Line $line_count: added '$line'"
-      fi
-    done < "$init_file"
-    
-    hps_log debug "Processed $line_count lines from $init_file"
   done <<< "$init_files"
   
   # Output array declaration
@@ -314,6 +346,59 @@ _build_init_sequence() {
 }
 
 
+#===============================================================================
+# node_build_functions - Add installer functions when STATE=INSTALLING
+#===============================================================================
+
+# Add this section after the "Function files" section and before 
+# "Relay OpenSVC o_ functions" section
+
+  #---------------------------------------------------------------------------
+  # Installer functions (if STATE=INSTALLING)
+  #---------------------------------------------------------------------------
+  local state=""
+  if [[ -n "${mac:-}" ]]; then
+    state=$(host_config "$mac" get STATE 2>/dev/null || echo "")
+  fi
+  
+  if [[ "$state" == "INSTALLING" ]]; then
+    hps_log info "STATE=INSTALLING, loading installer functions"
+    
+    # Determine installer directory based on OS name and major version
+    # osver format: "3.20" -> extract major version "3"
+    local major_ver="${osver%%.*}"
+    local installer_dir="${LIB_DIR}/host-installer/${osname}-${major_ver}"
+    
+    hps_log debug "Installer directory: $installer_dir"
+    
+    if [[ -d "$installer_dir" ]]; then
+      echo "# === Installer Functions (STATE=INSTALLING) ==="
+      
+      # Load all .sh files from installer directory
+      local installer_files
+      shopt -s nullglob
+      installer_files=("$installer_dir"/*.sh)
+      shopt -u nullglob
+      
+      if ((${#installer_files[@]} > 0)); then
+        for f in "${installer_files[@]}"; do
+          hps_log debug "Including installer file: $f"
+          echo "# === Installer: $(basename "$f") included ==="
+          cat "$f"
+          echo
+          ((file_count++))
+        done
+        
+        hps_log info "Loaded ${#installer_files[@]} installer function file(s)"
+      else
+        hps_log warn "No installer function files found in $installer_dir"
+      fi
+    else
+      hps_log error "Installer directory not found: $installer_dir"
+      hps_log error "Cannot proceed with installation"
+    fi
+  fi
+  
 
 #===============================================================================
 # node_build_functions
@@ -411,7 +496,55 @@ node_build_functions() {
   echo "# === Relay OpenSVC o_ functions ==="
   declare -f | awk '/^o_[a-zA-Z_]+ \(\)/, /^}/'
   echo
+
+
+  #---------------------------------------------------------------------------
+  # Installer functions (if STATE=INSTALLING)
+  #---------------------------------------------------------------------------
+  local state=""
+  if [[ -n "${mac:-}" ]]; then
+    state=$(host_config "$mac" get STATE 2>/dev/null || echo "")
+  fi
   
+  if [[ "$state" == "INSTALLING" ]]; then
+    hps_log info "STATE=INSTALLING, loading installer functions"
+    
+    # Determine installer directory based on OS name and major version
+    # osver format: "3.20" -> extract major version "3"
+    local major_ver="${osver%%.*}"
+    local installer_dir="${LIB_DIR}/host-installer/${osname}-${major_ver}"
+    
+    hps_log debug "Installer directory: $installer_dir"
+    
+    if [[ -d "$installer_dir" ]]; then
+      echo "# === Installer Functions (STATE=INSTALLING) ==="
+      
+      # Load all .sh files from installer directory
+      local installer_files
+      shopt -s nullglob
+      installer_files=("$installer_dir"/*.sh)
+      shopt -u nullglob
+      
+      if ((${#installer_files[@]} > 0)); then
+        for f in "${installer_files[@]}"; do
+          hps_log debug "Including installer file: $f"
+          echo "# === Installer: $(basename "$f") included ==="
+          cat "$f"
+          echo
+          ((file_count++))
+        done
+        
+        hps_log info "Loaded ${#installer_files[@]} installer function file(s)"
+      else
+        hps_log warn "No installer function files found in $installer_dir"
+      fi
+    else
+      hps_log error "Installer directory not found: $installer_dir"
+      hps_log error "Cannot proceed with installation"
+    fi
+  fi
+
+
   #---------------------------------------------------------------------------
   # Post-load
   #---------------------------------------------------------------------------
