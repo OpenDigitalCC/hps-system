@@ -1,3 +1,4 @@
+#@METADATA os=alpine-3 type=TCH profile=BUILD
 #===============================================================================
 # alpine-BUILD.init
 # Additional initialization for Alpine BUILD profile

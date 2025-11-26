@@ -1,3 +1,4 @@
+#@METADATA os=rocky-10
 #===============================================================================
 # rocky-SCH.init
 # Additional initialization for Rocky SCH (Storage Cluster Host) profile

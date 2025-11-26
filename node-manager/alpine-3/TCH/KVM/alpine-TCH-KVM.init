@@ -1,4 +1,4 @@
-
+#@METADATA os=alpine-3 type=TCH profile=KVM
 #===============================================================================
 # alpine-KVM.init  
 # Additional initialization for Alpine KVM profile

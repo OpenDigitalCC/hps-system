@@ -1,3 +1,5 @@
+#@METADATA os=alpine-3 RESCUE=true
+#@METADATA os=alpine-3 RESCUE=true
 # Load all required kernel modules
 n_rescue_load_modules
 

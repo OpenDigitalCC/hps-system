@@ -1,3 +1,5 @@
+#@METADATA os=* type=* profile=* state=*
+#@METADATA os=* type=* profile=* state=*
 #===============================================================================
 # common-post.init
 # Common finalization tasks - runs last for all systems

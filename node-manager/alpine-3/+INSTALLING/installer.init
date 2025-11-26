@@ -1,0 +1,4 @@
+#@METADATA os=alpine-3 state=INSTALLING
+
+n_installer_run
+

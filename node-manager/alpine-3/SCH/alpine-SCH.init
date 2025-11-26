@@ -1,3 +1,5 @@
+#@METADATA os=alpine-3 type=SCH state=RUNNING,INSTALLED
+#@METADATA os=alpine-3 type=SCH
 #===============================================================================
 # alpine-SCH-DEFAULT.init
 # ------------------------
