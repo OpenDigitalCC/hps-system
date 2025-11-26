@@ -1,0 +1,29 @@
+#===============================================================================
+# alpine-SCH-DEFAULT.init
+# ------------------------
+# Initialization sequence for Alpine SCH (Storage Cluster Host) nodes.
+#
+# Executed by n_init_run after boot on installed SCH systems.
+# Functions are loaded from IPS via hps_load_node_functions.
+#===============================================================================
+
+# Set hostname and /etc/hosts from IPS config
+n_set_hostname_and_hosts
+
+# Configure remote syslog to IPS
+n_configure_syslog
+
+# Create ZFS pool on remaining disk space
+n_zpool_create_on_free_disk
+
+# Configure iSCSI target service
+n_configure_iscsi_target
+
+# Install OpenSVC packages from IPS
+n_install_opensvc_packages
+
+# Start OpenSVC daemon
+n_osvc_start
+
+# Initialize OpenSVC cluster membership
+n_initialise_opensvc_cluster
