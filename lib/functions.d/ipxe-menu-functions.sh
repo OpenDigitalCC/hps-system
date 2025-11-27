@@ -48,6 +48,104 @@ ipxe_boot_from_disk () {
   echo "exit"
 }
 
+
+#===============================================================================
+# ipxe_init_handler
+# -----------------
+# Main entry point for iPXE boot initialisation.
+#
+# Behaviour:
+#   - Initialises host config if not exists
+#   - Checks for rescue mode override
+#   - Dispatches to appropriate handler based on STATE
+#
+# Arguments:
+#   $1: MAC address
+#
+# Returns:
+#   0 on success (handler executed)
+#   1 on error (unknown state)
+#
+#===============================================================================
+ipxe_init_handler() {
+  mac="$1"
+  
+  hps_log info "[$mac] iPXE Initialisation requested"
+  
+  # Detect architecture (TODO: audit to detect running arch)
+  arch="x86_64"
+  
+  # Initialise config if needed
+  if host_config_exists "$mac"; then
+    hps_log info "Found config for $mac"
+  else
+    hps_log info "No config found, initialising"
+    host_initialise_config "$mac" "$arch"
+  fi
+  
+  # Get current state
+  state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
+  
+  # Check rescue mode override
+  rescue=$(host_config "$mac" get RESCUE 2>/dev/null) || rescue=""
+  if [[ "$rescue" == "true" ]]; then
+    hps_log info "RESCUE mode active for MAC $mac"
+    ipxe_network_boot "$mac"
+    return 0
+  fi
+  
+  hps_log info "Node STATE: $state"
+  
+  # Dispatch based on state
+  case "$state" in
+    NETWORK_BOOT)
+      hps_log info "State: $state - network boot"
+      ipxe_network_boot "$mac"
+      ;;
+    
+    UNCONFIGURED)
+      hps_log info "State: $state - offering configure options"
+      ipxe_configure_main_menu
+      ;;
+    
+    CONFIGURED)
+      hps_log info "State: $state - offering install options"
+      ipxe_host_install_menu
+      ;;
+    
+    INSTALLED|DISK_BOOT|UNMANAGED)
+      hps_log info "State: $state - booting from disk"
+      ipxe_boot_from_disk
+      ;;
+    
+    INSTALLING)
+      hps_log info "State: $state - continuing install"
+      ipxe_boot_installer "$mac"
+      ;;
+    
+    REINSTALL)
+      hps_log info "State: $state - unconfiguring host"
+      host_config "$mac" set STATE UNCONFIGURED
+      ipxe_goto_menu init_menu
+      ;;
+    
+    FAILED|INSTALL_FAILED)
+      hps_log info "State: $state - install failed"
+      ipxe_configure_main_menu
+      ;;
+    
+    *)
+      hps_log error "Unknown or unset state: $state"
+      cgi_auto_fail "State '$state' unknown or unhandled"
+      return 1
+      ;;
+  esac
+  
+  return 0
+}
+
+
+
 handle_menu_item() {
   # This function handles any ipxe menu function across all menus
   local item="$1"

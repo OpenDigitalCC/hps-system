@@ -61,6 +61,52 @@ cgi_fail () {
 }
 
 
+
+
+
+#===============================================================================
+# cgi_require_param
+# -----------------
+# Require a CGI parameter exists and is non-empty, returning its value.
+#
+# Behaviour:
+#   - Checks parameter exists via cgi_param
+#   - Checks parameter value is non-empty
+#   - If missing or empty, calls cgi_auto_fail and exits
+#   - If valid, outputs value to stdout
+#
+# Arguments:
+#   $1: Parameter name
+#
+# Returns:
+#   Value on stdout, or exits with failure
+#
+# Example usage:
+#   var_name="$(cgi_require_param name)"
+#   os_id="$(cgi_require_param os_id)"
+#
+#===============================================================================
+cgi_require_param() {
+  local param_name="$1"
+  local param_value
+  
+  if ! cgi_param exists "$param_name"; then
+    cgi_auto_fail "Param '$param_name' is required"
+    exit 1
+  fi
+  
+  param_value="$(cgi_param get "$param_name")"
+  
+  if [[ -z "$param_value" ]]; then
+    cgi_auto_fail "Param '$param_name' cannot be empty"
+    exit 1
+  fi
+  
+  printf '%s' "$param_value"
+}
+
+
+
 # Internal associative map (populated once)
 declare -gA CGI_PARAMS
 declare -g __CGI_PARAMS_PARSED=0
