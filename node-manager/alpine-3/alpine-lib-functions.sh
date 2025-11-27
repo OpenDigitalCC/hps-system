@@ -283,7 +283,7 @@ n_load_kernel_module() {
 #===============================================================================
 # n_configure_reboot_logging
 # --------------------------
-# Configure reboot logging on TCH node to track all reboot attempts.
+# Configure reboot logging on node to track all reboot attempts.
 #
 # Prerequisites:
 #   - Alpine Linux base system with BusyBox
@@ -300,12 +300,12 @@ n_load_kernel_module() {
 #===============================================================================
 n_configure_reboot_logging() {
     echo "[HPS] Configuring reboot logging..."
-    n_remote_log "Configuring reboot logging on TCH node"
+    n_remote_log "Configuring reboot logging on node"
     
     # Ensure bash is available
     if ! command -v bash >/dev/null 2>&1; then
         echo "[HPS] ERROR: bash not found, required for reboot logging"
-        n_remote_log "ERROR: bash not found on TCH node"
+        n_remote_log "ERROR: bash not found on node"
         return 1
     fi
     
@@ -325,7 +325,7 @@ n_configure_reboot_logging() {
     for cmd in reboot poweroff halt; do
         cat > "/usr/local/sbin/${cmd}" <<EOF
 #!/bin/bash
-# HPS TCH Reboot Logger for ${cmd}
+# HPS Reboot Logger for ${cmd}
 
 # Source HPS node functions
 if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
@@ -337,7 +337,7 @@ TIMESTAMP="\$(date '+%Y-%m-%d %H:%M:%S')"
 
 # Log to IPS if available
 if command -v n_remote_log >/dev/null 2>&1; then
-    n_remote_log "REBOOT: ${cmd} \$@ initiated on TCH node at \${TIMESTAMP}"
+    n_remote_log "REBOOT: ${cmd} \$@ initiated on node at \${TIMESTAMP}"
     
     if command -v n_remote_host_variable >/dev/null 2>&1; then
         n_remote_host_variable "last_reboot_command" "${cmd} \$@"
@@ -364,7 +364,7 @@ EOF
     if /bin/busybox --list | grep -q "^shutdown$"; then
         cat > "/usr/local/sbin/shutdown" <<'EOF'
 #!/bin/bash
-# HPS TCH Reboot Logger for shutdown
+# HPS Reboot Logger for shutdown
 
 # Source HPS node functions
 if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
@@ -376,7 +376,7 @@ TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 
 # Log to IPS if available
 if command -v n_remote_log >/dev/null 2>&1; then
-    n_remote_log "REBOOT: shutdown $@ initiated on TCH node at ${TIMESTAMP}"
+    n_remote_log "REBOOT: shutdown $@ initiated on node at ${TIMESTAMP}"
     
     if command -v n_remote_host_variable >/dev/null 2>&1; then
         n_remote_host_variable "last_reboot_command" "shutdown $@"
@@ -414,7 +414,7 @@ if [ -f /usr/local/lib/hps-bootstrap-lib.sh ]; then
 fi
 
 if command -v n_remote_log >/dev/null 2>&1; then
-    n_remote_log "TCH node shutting down via init system"
+    n_remote_log "Node shutting down via init system"
 fi
 EOF
     chmod +x /etc/local.d/hps-shutdown.stop
