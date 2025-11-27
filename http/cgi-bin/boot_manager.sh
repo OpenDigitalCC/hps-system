@@ -79,17 +79,20 @@ if [[ "$cmd" == "set_status" ]]
 fi
 
 
+
 #===============================================================================
 # host_variable command handler
 # -----------------------------
-# Get or set host configuration variables via CGI interface.
+# Get, set, or unset host configuration variables via CGI interface.
 #
 # Parameters (via CGI):
 #   cmd=host_variable
 #   name=<variable_name>     (required)
 #   value=<variable_value>   (optional - if present, sets the value)
+#   action=unset            (optional - removes the variable)
 #
 # Behaviour:
+#   - If 'action=unset': DELETE operation
 #   - If 'value' parameter exists (even if empty): SET operation
 #   - If 'value' parameter is missing: GET operation
 #   - Uses host_config function to manage the actual storage
@@ -97,10 +100,12 @@ fi
 # Returns:
 #   - GET: Success with value if found, failure if key not found
 #   - SET: Success message on update, failure on error
+#   - UNSET: Success message on removal, failure on error
 #
 # Example usage:
-#   GET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging"
-#   SET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging&value=enabled"
+#   GET:    curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging"
+#   SET:    curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging&value=enabled"
+#   UNSET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging&action=unset"
 #
 #===============================================================================
 if [[ "$cmd" == "host_variable" ]]; then
@@ -113,8 +118,19 @@ if [[ "$cmd" == "host_variable" ]]; then
   # Extract variable name
   var_name="$(cgi_param get name)"
   
-  # Determine if this is a GET or SET operation
-  if cgi_param exists value; then
+  # Check for action parameter
+  action="$(cgi_param get action || echo "")"
+  
+  if [[ "$action" == "unset" ]]; then
+    # UNSET operation - remove the variable
+    if host_config "$mac" unset "$var_name" >/dev/null 2>&1; then
+      cgi_success "$mac unset $var_name"
+      exit 0
+    else
+      cgi_auto_fail "Failed to unset $var_name"
+      exit 1
+    fi
+  elif cgi_param exists value; then
     # SET operation - value parameter exists
     var_value="$(cgi_param get value)"
     
@@ -137,6 +153,8 @@ if [[ "$cmd" == "host_variable" ]]; then
     fi
   fi
 fi
+
+
 
 
 # --- Command: get or set cluster variables (receiver side) ---

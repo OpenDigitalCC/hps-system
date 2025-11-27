@@ -386,24 +386,28 @@ n_remote_log() {
 
 
 
-
-
 #===============================================================================
 # n_remote_host_variable
 # ----------------------
-# Get or set a host variable on the provisioning node.
+# Get, set, or unset a host variable on the provisioning node.
 #
 # Usage:
-#   n_remote_host_variable <name> <value>   # set
 #   n_remote_host_variable <name>           # get
+#   n_remote_host_variable <name> <value>   # set
+#   n_remote_host_variable <name> ""        # set empty
+#   n_remote_host_variable <name> --unset   # delete
 #
 # Parameters:
 #   $1 - Variable name (required)
-#   $2 - Variable value (optional; if provided, will set)
+#   $2 - Variable value (optional)
+#        - If omitted: GET operation
+#        - If provided: SET operation
+#        - If "--unset": DELETE operation
 #
 # Behaviour:
-#   - GET: When called with only name, retrieves the variable value
-#   - SET: When called with name and value, sets the variable
+#   - GET: Retrieves the variable value
+#   - SET: Sets the variable (including empty values)
+#   - UNSET: Removes the variable completely
 #   - Uses host_variable command on IPS
 #   - Checks response for "not found" errors
 #   - Logs errors to IPS via n_remote_log
@@ -414,7 +418,7 @@ n_remote_log() {
 #
 # Output:
 #   GET: Raw value of the variable (or nothing on error)
-#   SET: Success/failure message from server (or nothing on error)
+#   SET/UNSET: Success/failure message from server
 #
 # Returns:
 #   0 on success
@@ -422,24 +426,35 @@ n_remote_log() {
 #   Exit code from n_ips_command on other failures (1-3)
 #===============================================================================
 n_remote_host_variable() {
-  local name="${1:?Usage: n_remote_host_variable <name> [<value>]}"
+  local name="${1:?Usage: n_remote_host_variable <name> [<value>|--unset]}"
   local value="${2-}"
   local result
   local exit_code
   
-  if [[ -n "$value" ]]; then
-    # SET operation
-    result=$(n_ips_command "host_variable" "name=${name}" "value=${value}")
+  if [[ $# -eq 1 ]]; then
+    # GET operation - no second parameter
+    result=$(n_ips_command "host_variable" "name=${name}")
+    exit_code=$?
+  elif [[ "$value" == "--unset" ]]; then
+    # UNSET operation
+    result=$(n_ips_command "host_variable" "name=${name}" "action=unset")
     exit_code=$?
   else
-    # GET operation
-    result=$(n_ips_command "host_variable" "name=${name}")
+    # SET operation - including empty string
+    result=$(n_ips_command "host_variable" "name=${name}" "value=${value}")
     exit_code=$?
   fi
   
   # Check if n_ips_command itself failed
   if [[ $exit_code -ne 0 ]]; then
-    local operation=$([[ -n "$value" ]] && echo "set" || echo "get")
+    local operation
+    if [[ $# -eq 1 ]]; then
+      operation="get"
+    elif [[ "$value" == "--unset" ]]; then
+      operation="unset"
+    else
+      operation="set"
+    fi
     n_remote_log "Failed to $operation host variable '$name': $N_IPS_COMMAND_LAST_ERROR"
     return $exit_code
   fi
@@ -447,7 +462,7 @@ n_remote_host_variable() {
   # Check response content for errors (workaround until proper HTTP codes)
   if [[ "$result" =~ "Key '".*"' not found" ]]; then
     # Variable not found - this is an error for GET operations
-    if [[ -z "$value" ]]; then
+    if [[ $# -eq 1 ]]; then
       # GET operation - variable doesn't exist
       n_remote_log "Host variable '$name' not found"
       return 4  # Custom error code for "not found"
@@ -458,6 +473,7 @@ n_remote_host_variable() {
   echo "$result"
   return 0
 }
+
 
 
 #===============================================================================

@@ -880,6 +880,25 @@ host_config() {
       
       return 0
       ;;
+
+    # In host_config function, add this case:
+      unset|delete)
+      if [[ ! -f "$config_file" ]]; then
+        return 0  # Already doesn't exist
+      fi
+      
+      # Remove the key from the file
+      local temp_file="${config_file}.tmp"
+      grep -v "^${key}=" "$config_file" > "$temp_file" 2>/dev/null
+      
+      # Update timestamp
+      echo "UPDATED=\"$(make_timestamp)\"" >> "$temp_file"
+      
+      mv "$temp_file" "$config_file"
+      hps_log info "[$_host_mac] host_config removed: $key"
+      return 0
+      ;;
+
       
     *)
       echo "ERROR: Invalid host_config command: $cmd" >&2
