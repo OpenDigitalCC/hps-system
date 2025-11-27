@@ -509,7 +509,7 @@ AVAILABLE RESCUE COMMANDS
   n_rescue_reinstall_grub      Reinstall GRUB bootloader
   n_rescue_fsck [device]       Run filesystem check
   n_rescue_cleanup [disk]      Clean disk(s) and reset for reinstall
-  n_rescue_exit [state]        Exit rescue mode (default: INSTALLED)
+  n_rescue_exit                Exit rescue mode and clear RESCUE flag
   n_set_state <STATE>          Change node state
 
 COMMON WORKFLOWS
@@ -519,13 +519,15 @@ COMMON WORKFLOWS
      
      n_rescue_mount              # Mount filesystems from config
      n_rescue_reinstall_grub     # Reinstall bootloader
-     n_remote_host_variable STATE INSTALLED
+     n_rescue_exit               # Clear RESCUE flag
+     n_set_state INSTALLED       # Mark as bootable
      reboot
 
   2. Filesystem Repair:
      
      n_rescue_fsck /dev/vdb3     # Check/repair filesystem
-     n_remote_host_variable STATE INSTALLED
+     n_rescue_exit               # Clear RESCUE flag
+     n_set_state INSTALLED       # Mark as bootable
      reboot
 
   3. Manual Recovery:
@@ -534,8 +536,8 @@ COMMON WORKFLOWS
      n_rescue_chroot             # Get shell in installed system
      # ... perform repairs ...
      exit
-     umount /mnt/boot /mnt
-     n_remote_host_variable STATE INSTALLED
+     n_rescue_exit               # Unmount and clear RESCUE flag
+     n_set_state INSTALLED       # Mark as bootable
      reboot
 
   4. Inspect Without Mounting:
@@ -559,21 +561,21 @@ COMMON WORKFLOWS
 EXITING RESCUE MODE
 ───────────────────
 
-  Quick exit (recommended):
+  After fixing issues, clear RESCUE flag and set appropriate STATE:
 
-    n_rescue_exit               # Exit to INSTALLED, clear RESCUE flag
+    n_rescue_exit               # Clear RESCUE flag, unmount filesystems
+    n_set_state INSTALLED       # If system is fixed and bootable
     reboot
 
-  Exit and trigger reinstall:
+  Or to trigger fresh installation:
 
-    n_rescue_exit INSTALLING    # Will reinstall on reboot
+    n_rescue_exit               # Clear RESCUE flag
+    n_set_state INSTALLING      # Reinstall on next boot
     reboot
 
-  Manual exit:
+  If you didn't fix anything (will return to rescue mode):
 
-    n_remote_host_variable RESCUE ""
-    n_set_state INSTALLED
-    reboot
+    reboot                      # Keep RESCUE flag, stays in rescue mode
 
 REMOTE LOGGING
 ──────────────
@@ -998,6 +1000,7 @@ n_rescue_cleanup() {
   if [[ "$mode" == "config" ]] && [[ $force -eq 0 ]]; then
     echo "Would you like to reset node state? This will:" >&2
     echo "  - Set STATE to UNCONFIGURED" >&2
+    echo "  - Clear RESCUE flag" >&2
     echo "  - Clear all node configuration" >&2
     echo "  - Prepare node for fresh provisioning" >&2
     echo "" >&2
@@ -1005,21 +1008,39 @@ n_rescue_cleanup() {
     read -r reset_state
     
     if [[ "$reset_state" =~ ^[Yy]$ ]]; then
-      n_remote_host_variable STATE "UNCONFIGURED"
+      # Clear RESCUE flag
+      if n_remote_host_variable RESCUE "false"; then
+        echo "" >&2
+        echo "  ✓ Cleared RESCUE flag" >&2
+        n_remote_log "[INFO] RESCUE flag cleared"
+      else
+        echo "  ✗ Failed to clear RESCUE flag" >&2
+        n_remote_log "[ERROR] Failed to clear RESCUE flag"
+      fi
+      
+      # Set STATE to UNCONFIGURED
+      if n_remote_host_variable STATE "UNCONFIGURED"; then
+        echo "  ✓ State set to UNCONFIGURED" >&2
+        n_remote_log "[INFO] State reset to UNCONFIGURED"
+      else
+        echo "  ✗ Failed to set state" >&2
+        n_remote_log "[ERROR] Failed to set state to UNCONFIGURED"
+      fi
+      
       echo "" >&2
-      echo "✓ State set to UNCONFIGURED" >&2
-      echo "  On next boot, node will go through full provisioning" >&2
-      n_remote_log "[INFO] State reset to UNCONFIGURED"
+      echo "On next boot, node will go through full provisioning" >&2
     else
       echo "" >&2
       echo "State unchanged. Set manually with:" >&2
-      echo "  n_set_state UNCONFIGURED    # Full reset" >&2
-      echo "  n_set_state INSTALLING      # Reinstall only" >&2
+      echo "  n_remote_host_variable RESCUE false  # Clear rescue flag" >&2
+      echo "  n_set_state UNCONFIGURED             # Full reset" >&2
+      echo "  n_set_state INSTALLING               # Reinstall only" >&2
     fi
   elif [[ "$mode" == "config" ]] && [[ $force -eq 1 ]]; then
     echo "To reset node state:" >&2
-    echo "  n_set_state UNCONFIGURED    # Full reset" >&2
-    echo "  n_set_state INSTALLING      # Reinstall only" >&2
+    echo "  n_remote_host_variable RESCUE false  # Clear rescue flag" >&2
+    echo "  n_set_state UNCONFIGURED             # Full reset" >&2
+    echo "  n_set_state INSTALLING               # Reinstall only" >&2
   else
     echo "Disk cleaned. To use for HPS installation:" >&2
     echo "  1. Configure the node with this disk in IPS" >&2
@@ -1571,28 +1592,31 @@ n_rescue_fsck() {
 # Behaviour:
 #   - Unmounts any mounted filesystems under /mnt
 #   - Clears RESCUE flag in host config
-#   - Sets STATE to specified value (default: INSTALLED)
-#   - Displays instructions for reboot
+#   - Does NOT modify STATE (user must set manually based on repairs done)
+#   - Displays instructions for setting appropriate STATE
 #   - Does NOT reboot automatically (user must confirm)
 #
 # Arguments:
-#   $1 - target_state (optional, default: INSTALLED)
-#        Valid: INSTALLED, RUNNING, INSTALLING
+#   None
 #
 # Returns:
 #   0 on success
 #   1 on error
 #
 # Example usage:
-#   n_rescue_exit                    # Exit to INSTALLED state
-#   n_rescue_exit RUNNING            # Exit to RUNNING state
-#   n_rescue_exit INSTALLING         # Trigger reinstallation
+#   # After fixing GRUB:
+#   n_rescue_exit
+#   n_set_state INSTALLED
+#   reboot
+#
+#   # After filesystem repair:
+#   n_rescue_exit
+#   n_set_state INSTALLED
+#   reboot
 #
 #===============================================================================
 n_rescue_exit() {
-  local target_state="${1:-INSTALLED}"
-  
-  n_remote_log "[INFO] Exiting rescue mode, target state: $target_state"
+  n_remote_log "[INFO] Exiting rescue mode"
   
   echo "═══════════════════════════════════════════════════════════" >&2
   echo "Exiting RESCUE Mode" >&2
@@ -1606,7 +1630,7 @@ n_rescue_exit() {
   
   # Clear RESCUE flag
   echo "Clearing RESCUE flag..." >&2
-  if n_remote_host_variable RESCUE ""; then
+  if n_remote_host_variable RESCUE "false"; then
     echo "  ✓ RESCUE flag cleared" >&2
     n_remote_log "[INFO] RESCUE flag cleared"
   else
@@ -1615,37 +1639,25 @@ n_rescue_exit() {
     return 1
   fi
   
-  # Set target state
-  echo "Setting state to: $target_state" >&2
-  if n_remote_host_variable STATE "$target_state"; then
-    echo "  ✓ State set to $target_state" >&2
-    n_remote_log "[INFO] State set to $target_state"
-  else
-    echo "  ✗ Failed to set state" >&2
-    n_remote_log "[ERROR] Failed to set state to $target_state"
-    return 1
-  fi
-  
   echo "" >&2
   echo "═══════════════════════════════════════════════════════════" >&2
   echo "Ready to exit rescue mode" >&2
   echo "" >&2
-  echo "Next state: $target_state" >&2
-  
-  case "$target_state" in
-    INSTALLED|RUNNING)
-      echo "Boot method: System will attempt to boot from disk" >&2
-      ;;
-    INSTALLING)
-      echo "Boot method: System will netboot and run installer" >&2
-      ;;
-  esac
-  
+  echo "⚠ IMPORTANT: Set the appropriate STATE before rebooting:" >&2
   echo "" >&2
-  echo "To reboot now, run: reboot" >&2
+  echo "If you fixed the system (GRUB, filesystem, etc):" >&2
+  echo "  n_set_state INSTALLED" >&2
+  echo "  reboot" >&2
+  echo "" >&2
+  echo "If you want to trigger a fresh installation:" >&2
+  echo "  n_set_state INSTALLING" >&2
+  echo "  reboot" >&2
+  echo "" >&2
+  echo "If you didn't fix anything (will boot back to rescue):" >&2
+  echo "  reboot" >&2
   echo "═══════════════════════════════════════════════════════════" >&2
   
-  n_remote_log "[INFO] Rescue mode exit prepared, waiting for manual reboot"
+  n_remote_log "[INFO] Rescue mode exit prepared, waiting for manual STATE setting and reboot"
   return 0
 }
 

@@ -1,4 +1,4 @@
-#@METADATA os=alpine-3 type=TCH
+#@METADATA os=alpine-3
 
 # Make OpenSVC node
 n_install_opensvc_packages
