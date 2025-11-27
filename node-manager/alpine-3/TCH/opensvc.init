@@ -1,0 +1,8 @@
+#@METADATA os=alpine-3 type=TCH
+
+# Make OpenSVC node
+n_install_opensvc_packages
+n_osvc_start
+n_initialise_opensvc_cluster
+
+

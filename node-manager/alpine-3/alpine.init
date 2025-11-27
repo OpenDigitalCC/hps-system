@@ -1,14 +1,16 @@
 #@METADATA os=alpine-3
-#@METADATA os=alpine-3
 #===============================================================================
 # alpine.init
 # Base initialization sequence for Alpine Linux TCH nodes
 #===============================================================================
 
+n_start_modloop
 n_start_base_services
 n_set_hostname_and_hosts
 n_auto_load_network_modules
 n_configure_syslog
-n_storage_provision
+
+# not sure we need this yet
+#n_storage_provision
 
 
