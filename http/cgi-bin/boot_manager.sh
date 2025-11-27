@@ -431,6 +431,15 @@ if [[ "$cmd" == "init" ]]; then
   fi
 
   state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
+
+  rescue=$(host_config "$mac" get RESCUE 2>/dev/null) || rescue=""
+
+  if [[ "$rescue" == "true" ]]; then
+    hps_log info "RESCUE mode active for MAC $mac, forcing network boot"
+    ipxe_network_boot "$mac"
+    return 0
+  fi
+
   hps_log info "Node STATE: $state"
 
   case "$state" in

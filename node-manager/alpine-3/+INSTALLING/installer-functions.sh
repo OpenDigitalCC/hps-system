@@ -5,6 +5,312 @@
 
 
 #===============================================================================
+# n_installer_verify_disk_clean
+# ------------------------------
+# Verify a disk has no existing partition table or filesystem signatures.
+#
+# Behaviour:
+#   - Checks for GPT/MBR partition table using blkid
+#   - Checks for filesystem signatures on the disk
+#   - Checks for existing partitions
+#   - Checks for RAID superblocks
+#   - Returns error with details if disk is not clean
+#
+# Arguments:
+#   $1 - disk device path (e.g., /dev/vdb)
+#
+# Returns:
+#   0 if disk is clean (no partitions, no signatures)
+#   1 if disk has existing data
+#
+# Example usage:
+#   if ! n_installer_verify_disk_clean /dev/vdb; then
+#     echo "Disk not clean, run n_installer_cleanup first"
+#     return 1
+#   fi
+#
+#===============================================================================
+n_installer_verify_disk_clean() {
+  local disk="${1:?Usage: n_installer_verify_disk_clean <disk>}"
+  local is_clean=1
+  local issues=()
+
+  n_remote_log "[DEBUG] Verifying disk is clean: $disk"
+
+  # Check for partition table
+  local pttype=""
+  pttype=$(blkid -o value -s PTTYPE "$disk" 2>/dev/null) || true
+  if [[ -n "$pttype" ]]; then
+    is_clean=0
+    issues+=("Partition table found: $pttype")
+    n_remote_log "[DEBUG] Found partition table: $pttype on $disk"
+  fi
+
+  # Check for filesystem directly on disk (rare but possible)
+  local fstype=""
+  fstype=$(blkid -o value -s TYPE "$disk" 2>/dev/null) || true
+  if [[ -n "$fstype" ]]; then
+    is_clean=0
+    issues+=("Filesystem signature found: $fstype")
+    n_remote_log "[DEBUG] Found filesystem: $fstype on $disk"
+  fi
+
+  # Check for existing partitions
+  local partitions
+  partitions=$(lsblk -ln -o NAME "$disk" 2>/dev/null | tail -n +2) || true
+  if [[ -n "$partitions" ]]; then
+    is_clean=0
+    local part_count
+    part_count=$(echo "$partitions" | wc -l)
+    issues+=("Existing partitions: $part_count")
+    n_remote_log "[DEBUG] Found $part_count partitions on $disk"
+  fi
+
+  # Check for RAID superblock
+  if command -v mdadm >/dev/null 2>&1; then
+    if mdadm --examine "$disk" >/dev/null 2>&1; then
+      is_clean=0
+      issues+=("RAID superblock detected")
+      n_remote_log "[DEBUG] RAID superblock found on $disk"
+    fi
+  fi
+
+  # Check for LVM physical volume
+  if command -v pvs >/dev/null 2>&1; then
+    if pvs "$disk" >/dev/null 2>&1; then
+      is_clean=0
+      issues+=("LVM physical volume detected")
+      n_remote_log "[DEBUG] LVM PV found on $disk"
+    fi
+  fi
+
+  # Check for ZFS label
+  if command -v zdb >/dev/null 2>&1; then
+    if zdb -l "$disk" >/dev/null 2>&1; then
+      is_clean=0
+      issues+=("ZFS label detected")
+      n_remote_log "[DEBUG] ZFS label found on $disk"
+    fi
+  fi
+
+  if [[ $is_clean -eq 0 ]]; then
+    n_remote_log "[WARNING] Disk $disk is not clean"
+    for issue in "${issues[@]}"; do
+      n_remote_log "[WARNING]   - $issue"
+    done
+    return 1
+  fi
+
+  n_remote_log "[DEBUG] Disk $disk is clean"
+  return 0
+}
+
+
+#===============================================================================
+# n_installer_detect_target_disks
+# --------------------------------
+# Detect suitable disk(s) for Alpine OS installation.
+#
+# Behaviour:
+#   - Checks ROOT_RAID setting from host_config via n_remote_host_variable
+#   - Scans /sys/block for non-removable block devices >= 10GB
+#   - If ROOT_RAID=1: Requires 2 suitable disks for RAID1
+#   - If ROOT_RAID unset or !=1: Uses first suitable disk
+#   - Verifies target disk(s) are clean (no existing partitions/signatures)
+#   - Fails early if disk has existing data (prevents boot failures)
+#   - Stores result to IPS: n_remote_host_variable os_disk
+#
+# Returns:
+#   0 on success (required disk(s) found, verified clean, and stored)
+#   1 if no suitable disk found
+#   2 if ROOT_RAID=1 but fewer than 2 disks found
+#   3 if disk(s) not clean (existing partitions/data)
+#
+# Example usage:
+#   n_installer_detect_target_disks
+#
+# Stores to IPS:
+#   os_disk="/dev/sda" (single) or os_disk="/dev/sda,/dev/sdb" (RAID1)
+#
+#===============================================================================
+n_installer_detect_target_disks() {
+  n_remote_log "[INFO] Starting target disk detection"
+
+  # Check if RAID is requested
+  local root_raid=""
+  root_raid=$(n_remote_host_variable ROOT_RAID 2>/dev/null) || true
+
+  local require_raid=0
+  if [[ "$root_raid" == "1" ]]; then
+    require_raid=1
+    n_remote_log "[INFO] ROOT_RAID=1 set, will search for 2 disks"
+  else
+    n_remote_log "[INFO] Single disk mode (ROOT_RAID not set or !=1)"
+  fi
+
+  local suitable_disks=()
+  local min_size_gb=10
+  local min_size_bytes=$((min_size_gb * 1024 * 1024 * 1024))
+
+  # Scan all block devices
+  for disk in /sys/block/*; do
+    [[ -d "$disk" ]] || continue
+
+    local dev_name
+    dev_name=$(basename "$disk")
+    local dev_path="/dev/$dev_name"
+
+    n_remote_log "[DEBUG] Examining device: $dev_path"
+
+    # Skip if removable
+    if [[ -f "$disk/removable" ]] && [[ $(cat "$disk/removable") == "1" ]]; then
+      n_remote_log "[DEBUG] Skipping $dev_path: removable device"
+      continue
+    fi
+
+    # Skip if not a disk device type
+    if [[ ! "$dev_name" =~ ^(sd|hd|vd|nvme|xvd)[a-z0-9]*$ ]]; then
+      n_remote_log "[DEBUG] Skipping $dev_path: not a disk device"
+      continue
+    fi
+
+    # Skip partition devices (e.g., sda1, nvme0n1p1)
+    if [[ "$dev_name" =~ [0-9]$ ]] && [[ ! "$dev_name" =~ ^nvme[0-9]+n[0-9]+$ ]]; then
+      n_remote_log "[DEBUG] Skipping $dev_path: partition, not whole disk"
+      continue
+    fi
+
+    # Check size
+    if [[ -f "$disk/size" ]]; then
+      local size_sectors
+      size_sectors=$(cat "$disk/size")
+      local size_bytes=$((size_sectors * 512))
+      local size_gb=$((size_bytes / 1024 / 1024 / 1024))
+
+      n_remote_log "[DEBUG] $dev_path size: ${size_gb}GB"
+
+      if [[ $size_bytes -lt $min_size_bytes ]]; then
+        n_remote_log "[DEBUG] Skipping $dev_path: too small (< ${min_size_gb}GB)"
+        continue
+      fi
+
+      # Disk is suitable
+      n_remote_log "[DEBUG] $dev_path is suitable for OS installation"
+      suitable_disks+=("$dev_path")
+
+      # Stop searching based on mode
+      if [[ $require_raid -eq 1 ]] && [[ ${#suitable_disks[@]} -eq 2 ]]; then
+        n_remote_log "[DEBUG] Found 2 suitable disks for RAID1, stopping search"
+        break
+      elif [[ $require_raid -eq 0 ]] && [[ ${#suitable_disks[@]} -eq 1 ]]; then
+        n_remote_log "[DEBUG] Found suitable disk for single-disk install, stopping search"
+        break
+      fi
+    else
+      n_remote_log "[DEBUG] Skipping $dev_path: cannot determine size"
+    fi
+  done
+
+  # Validate results
+  local disk_count=${#suitable_disks[@]}
+  n_remote_log "[INFO] Found $disk_count suitable disk(s)"
+
+  if [[ $disk_count -eq 0 ]]; then
+    n_remote_log "[ERROR] No suitable disk found for OS installation"
+    n_remote_log "[ERROR] Requirements: non-removable disk >= ${min_size_gb}GB"
+    return 1
+  fi
+
+  if [[ $require_raid -eq 1 ]] && [[ $disk_count -lt 2 ]]; then
+    n_remote_log "[ERROR] ROOT_RAID=1 requires 2 disks, only found $disk_count"
+    return 2
+  fi
+
+  # Verify disk(s) are clean before proceeding
+  n_remote_log "[INFO] Verifying target disk(s) are clean"
+  local disk_clean=1
+  local unclean_disks=()
+
+  for disk in "${suitable_disks[@]}"; do
+    if ! n_installer_verify_disk_clean "$disk"; then
+      disk_clean=0
+      unclean_disks+=("$disk")
+    fi
+  done
+
+  if [[ $disk_clean -eq 0 ]]; then
+    n_remote_log "[ERROR] Installation cannot proceed with unclean disk(s)"
+    n_remote_log "[ERROR] Unclean disks: ${unclean_disks[*]}"
+
+    echo "" >&2
+    echo "â•"â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—" >&2
+    echo "â•'  ERROR: Target disk(s) contain existing data                       â•'" >&2
+    echo "â•'                                                                    â•'" >&2
+    echo "â•'  Installation cannot proceed - existing data may cause boot        â•'" >&2
+    echo "â•'  failures or data loss.                                            â•'" >&2
+    echo "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•" >&2
+    echo "" >&2
+    echo "Unclean disk(s):" >&2
+
+    for disk in "${unclean_disks[@]}"; do
+      echo "" >&2
+      echo "  $disk:" >&2
+
+      # Show partition table type
+      local pttype=""
+      pttype=$(blkid -o value -s PTTYPE "$disk" 2>/dev/null) || true
+      [[ -n "$pttype" ]] && echo "    Partition table: $pttype" >&2
+
+      # Show partitions
+      lsblk -ln -o NAME,SIZE,FSTYPE,LABEL "$disk" 2>/dev/null | while read -r line; do
+        echo "    $line" >&2
+      done
+    done
+
+    echo "" >&2
+    echo "To wipe disk(s) and proceed with installation:" >&2
+    echo "" >&2
+    echo "  1. Boot into rescue mode:" >&2
+    echo "     n_remote_host_variable STATE RESCUE" >&2
+    echo "     reboot" >&2
+    echo "" >&2
+    echo "  2. In rescue mode, wipe disk(s):" >&2
+    echo "     n_installer_cleanup --wipe-table -f" >&2
+    echo "" >&2
+    echo "  3. Restart installation:" >&2
+    echo "     n_remote_host_variable STATE INSTALLING" >&2
+    echo "     reboot" >&2
+    echo "" >&2
+
+    n_remote_log "[ERROR] Disk cleanup required before installation"
+    return 3
+  fi
+
+  n_remote_log "[INFO] All target disk(s) verified clean"
+
+  # Build result string
+  local os_disk_value
+  if [[ $require_raid -eq 1 ]]; then
+    os_disk_value="${suitable_disks[0]},${suitable_disks[1]}"
+    n_remote_log "[INFO] RAID1 install selected: $os_disk_value"
+  else
+    os_disk_value="${suitable_disks[0]}"
+    n_remote_log "[INFO] Single disk install selected: $os_disk_value"
+  fi
+
+  # Store to IPS
+  n_remote_log "[INFO] Storing os_disk to IPS: $os_disk_value"
+  if ! n_remote_host_variable os_disk "$os_disk_value"; then
+    n_remote_log "[ERROR] Failed to store os_disk to IPS"
+    return 1
+  fi
+
+  n_remote_log "[INFO] Target disk detection complete: $os_disk_value"
+  return 0
+}
+
+
+#===============================================================================
 # n_installer_load_ext4_modules
 # ------------------------------
 # Load ext4 kernel module and dependencies from modloop.
@@ -368,144 +674,6 @@ EOF
   return 0
 }
 
-
-#===============================================================================
-# n_installer_detect_target_disks
-# --------------------------------
-# Detect suitable disk(s) for Alpine OS installation.
-#
-# Behaviour:
-#   - Checks ROOT_RAID setting from host_config via n_remote_host_variable
-#   - Scans /sys/block for non-removable block devices >= 10GB
-#   - If ROOT_RAID=1: Requires 2 suitable disks for RAID1
-#   - If ROOT_RAID unset or !=1: Uses first suitable disk
-#   - Stores result to IPS: n_remote_host_variable os_disk
-#
-# Returns:
-#   0 on success (required disk(s) found and stored)
-#   1 if no suitable disk found
-#   2 if ROOT_RAID=1 but fewer than 2 disks found
-#
-# Example usage:
-#   n_installer_detect_target_disks
-#
-# Stores to IPS:
-#   os_disk="/dev/sda" (single) or os_disk="/dev/sda,/dev/sdb" (RAID1)
-#
-#===============================================================================
-n_installer_detect_target_disks() {
-  n_remote_log "[INFO] Starting target disk detection"
-  
-  # Check if RAID is requested
-  local root_raid=""
-  root_raid=$(n_remote_host_variable ROOT_RAID 2>/dev/null) || true
-  
-  local require_raid=0
-  if [[ "$root_raid" == "1" ]]; then
-    require_raid=1
-    n_remote_log "[INFO] ROOT_RAID=1 set, will search for 2 disks"
-  else
-    n_remote_log "[INFO] Single disk mode (ROOT_RAID not set or !=1)"
-  fi
-  
-  local suitable_disks=()
-  local min_size_gb=10
-  local min_size_bytes=$((min_size_gb * 1024 * 1024 * 1024))
-  
-  # Scan all block devices
-  for disk in /sys/block/*; do
-    [[ -d "$disk" ]] || continue
-    
-    local dev_name
-    dev_name=$(basename "$disk")
-    local dev_path="/dev/$dev_name"
-    
-    n_remote_log "[DEBUG] Examining device: $dev_path"
-    
-    # Skip if removable
-    if [[ -f "$disk/removable" ]] && [[ $(cat "$disk/removable") == "1" ]]; then
-      n_remote_log "[DEBUG] Skipping $dev_path: removable device"
-      continue
-    fi
-    
-    # Skip if not a disk device type
-    if [[ ! "$dev_name" =~ ^(sd|hd|vd|nvme|xvd)[a-z0-9]*$ ]]; then
-      n_remote_log "[DEBUG] Skipping $dev_path: not a disk device"
-      continue
-    fi
-    
-    # Skip partition devices (e.g., sda1, nvme0n1p1)
-    if [[ "$dev_name" =~ [0-9]$ ]] && [[ ! "$dev_name" =~ ^nvme[0-9]+n[0-9]+$ ]]; then
-      n_remote_log "[DEBUG] Skipping $dev_path: partition, not whole disk"
-      continue
-    fi
-    
-    # Check size
-    if [[ -f "$disk/size" ]]; then
-      local size_sectors
-      size_sectors=$(cat "$disk/size")
-      local size_bytes=$((size_sectors * 512))
-      local size_gb=$((size_bytes / 1024 / 1024 / 1024))
-      
-      n_remote_log "[DEBUG] $dev_path size: ${size_gb}GB"
-      
-      if [[ $size_bytes -lt $min_size_bytes ]]; then
-        n_remote_log "[DEBUG] Skipping $dev_path: too small (< ${min_size_gb}GB)"
-        continue
-      fi
-      
-      # Disk is suitable
-      n_remote_log "[DEBUG] $dev_path is suitable for OS installation"
-      suitable_disks+=("$dev_path")
-      
-      # Stop searching based on mode
-      if [[ $require_raid -eq 1 ]] && [[ ${#suitable_disks[@]} -eq 2 ]]; then
-        n_remote_log "[DEBUG] Found 2 suitable disks for RAID1, stopping search"
-        break
-      elif [[ $require_raid -eq 0 ]] && [[ ${#suitable_disks[@]} -eq 1 ]]; then
-        n_remote_log "[DEBUG] Found suitable disk for single-disk install, stopping search"
-        break
-      fi
-    else
-      n_remote_log "[DEBUG] Skipping $dev_path: cannot determine size"
-    fi
-  done
-  
-  # Validate results
-  local disk_count=${#suitable_disks[@]}
-  n_remote_log "[INFO] Found $disk_count suitable disk(s)"
-  
-  if [[ $disk_count -eq 0 ]]; then
-    n_remote_log "[ERROR] No suitable disk found for OS installation"
-    n_remote_log "[ERROR] Requirements: non-removable disk >= ${min_size_gb}GB"
-    return 1
-  fi
-  
-  if [[ $require_raid -eq 1 ]] && [[ $disk_count -lt 2 ]]; then
-    n_remote_log "[ERROR] ROOT_RAID=1 requires 2 disks, only found $disk_count"
-    return 2
-  fi
-  
-  # Build result string
-  local os_disk_value
-  if [[ $require_raid -eq 1 ]]; then
-    os_disk_value="${suitable_disks[0]},${suitable_disks[1]}"
-    n_remote_log "[INFO] RAID1 install selected: $os_disk_value"
-  else
-    os_disk_value="${suitable_disks[0]}"
-    n_remote_log "[INFO] Single disk install selected: $os_disk_value"
-  fi
-  
-  # Store to IPS
-  n_remote_log "[INFO] Storing os_disk to IPS: $os_disk_value"
-  if ! n_remote_host_variable os_disk "$os_disk_value"; then
-    n_remote_log "[ERROR] Failed to store os_disk to IPS"
-    return 1
-  fi
-  
-  n_remote_log "[INFO] Target disk detection complete: $os_disk_value"
-  return 0
-}
 
 
 #===============================================================================
@@ -1822,837 +1990,4 @@ n_installer_cleanup() {
   return 0
 }
 
-#===============================================================================
-# Alpine Linux Rescue Functions
-# For use during network rescue boot (NRB) mode
-#===============================================================================
-
-
-#===============================================================================
-# n_rescue_load_modules
-# ---------------------
-# Load all kernel modules required for rescue operations.
-#
-# Behaviour:
-#   - Loads ext4 modules (filesystem support)
-#   - Loads ZFS modules if available (for SCH storage nodes)
-#   - Loads mdadm/RAID modules (for RAID1 systems)
-#   - Reports success/failure for each module group
-#   - Continues on partial failure (best-effort loading)
-#
-# Returns:
-#   0 if all modules loaded successfully
-#   1 if some modules failed (non-fatal, continues to rescue shell)
-#
-# Example usage:
-#   n_rescue_load_modules
-#
-#===============================================================================
-n_rescue_load_modules() {
-  local failed=0
-  
-  n_remote_log "[INFO] Loading rescue mode kernel modules"
-  echo "=== Loading Kernel Modules ===" >&2
-  
-  # Load ext4 modules
-  echo -n "Loading ext4 modules... " >&2
-  if n_installer_load_ext4_modules >/dev/null 2>&1; then
-    echo "OK" >&2
-    n_remote_log "[INFO] ext4 modules loaded"
-  else
-    echo "FAILED" >&2
-    n_remote_log "[WARNING] Failed to load ext4 modules"
-    failed=1
-  fi
-  
-  # Load ZFS modules
-  echo -n "Loading ZFS modules... " >&2
-  if command -v modprobe >/dev/null 2>&1; then
-    if modprobe zfs 2>/dev/null; then
-      echo "OK" >&2
-      n_remote_log "[INFO] ZFS modules loaded"
-    else
-      echo "NOT AVAILABLE" >&2
-      n_remote_log "[DEBUG] ZFS modules not available (may not be needed)"
-    fi
-  else
-    echo "SKIPPED (no modprobe)" >&2
-  fi
-  
-  # Load mdadm/RAID modules
-  echo -n "Loading RAID modules... " >&2
-  local raid_modules=("raid1" "raid456")
-  local raid_loaded=0
-  
-  for mod in "${raid_modules[@]}"; do
-    if command -v modprobe >/dev/null 2>&1; then
-      if modprobe "$mod" 2>/dev/null; then
-        raid_loaded=1
-      fi
-    fi
-  done
-  
-  if [[ $raid_loaded -eq 1 ]]; then
-    echo "OK" >&2
-    n_remote_log "[INFO] RAID modules loaded"
-  else
-    echo "NOT AVAILABLE" >&2
-    n_remote_log "[DEBUG] RAID modules not available (may not be needed)"
-  fi
-  
-  # Ensure mdadm tool is available
-  if ! command -v mdadm >/dev/null 2>&1; then
-    echo -n "Installing mdadm tool... " >&2
-    if apk add --quiet mdadm 2>/dev/null; then
-      echo "OK" >&2
-      n_remote_log "[INFO] mdadm tool installed"
-    else
-      echo "FAILED" >&2
-      n_remote_log "[WARNING] Failed to install mdadm"
-    fi
-  fi
-  
-  echo "" >&2
-  
-  return $failed
-}
-
-
-#===============================================================================
-# n_rescue_display_config
-# -----------------------
-# Display disk configuration from IPS host_config.
-#
-# Behaviour:
-#   - Reads os_disk, boot_device, root_device, boot_uuid, root_uuid
-#   - Displays configuration if found
-#   - Shows suggested mount commands if devices exist
-#   - Reports if no configuration found (blank disk scenario)
-#   - Does NOT attempt any mounting operations
-#
-# Returns:
-#   0 if configuration displayed
-#   1 if no configuration found
-#
-# Example usage:
-#   n_rescue_display_config
-#
-#===============================================================================
-n_rescue_display_config() {
-  n_remote_log "[INFO] Displaying disk configuration from IPS"
-  
-  # Read configuration from host_config
-  local os_disk=""
-  local boot_device=""
-  local root_device=""
-  local boot_uuid=""
-  local root_uuid=""
-  
-  os_disk=$(n_remote_host_variable os_disk 2>/dev/null) || true
-  boot_device=$(n_remote_host_variable boot_device 2>/dev/null) || true
-  root_device=$(n_remote_host_variable root_device 2>/dev/null) || true
-  boot_uuid=$(n_remote_host_variable boot_uuid 2>/dev/null) || true
-  root_uuid=$(n_remote_host_variable root_uuid 2>/dev/null) || true
-  
-  echo "=== Disk Configuration from IPS ===" >&2
-  echo "" >&2
-  
-  # Check if we have any configuration
-  if [[ -z "$os_disk" ]] && [[ -z "$boot_device" ]] && [[ -z "$root_device" ]]; then
-    echo "No disk configuration found in host_config." >&2
-    echo "This may be a new system or installation failed before disk detection." >&2
-    echo "" >&2
-    echo "Use 'lsblk' or 'fdisk -l' to explore available disks." >&2
-    n_remote_log "[INFO] No disk configuration in host_config"
-    return 1
-  fi
-  
-  # Display configuration
-  [[ -n "$os_disk" ]] && echo "OS Disk:       $os_disk" >&2
-  [[ -n "$boot_device" ]] && echo "Boot Device:   $boot_device" >&2
-  [[ -n "$root_device" ]] && echo "Root Device:   $root_device" >&2
-  [[ -n "$boot_uuid" ]] && echo "Boot UUID:     $boot_uuid" >&2
-  [[ -n "$root_uuid" ]] && echo "Root UUID:     $root_uuid" >&2
-  echo "" >&2
-  
-  # Check if devices actually exist
-  local devices_exist=0
-  
-  if [[ -n "$root_device" ]] && [[ -b "$root_device" ]]; then
-    devices_exist=1
-    echo "Root device exists: $root_device" >&2
-  elif [[ -n "$root_device" ]]; then
-    echo "WARNING: Root device not found: $root_device" >&2
-  fi
-  
-  if [[ -n "$boot_device" ]] && [[ -b "$boot_device" ]]; then
-    devices_exist=1
-    echo "Boot device exists: $boot_device" >&2
-  elif [[ -n "$boot_device" ]]; then
-    echo "WARNING: Boot device not found: $boot_device" >&2
-  fi
-  
-  echo "" >&2
-  
-  # Provide suggested commands if devices exist
-  if [[ $devices_exist -eq 1 ]]; then
-    echo "Suggested mount commands:" >&2
-    [[ -n "$root_device" ]] && [[ -b "$root_device" ]] && \
-      echo "  n_rescue_mount $root_device" >&2
-    [[ -n "$root_device" ]] && [[ -b "$root_device" ]] && \
-      [[ -n "$boot_device" ]] && [[ -b "$boot_device" ]] && \
-      echo "  # OR for both:" >&2
-    [[ -n "$root_device" ]] && [[ -b "$root_device" ]] && \
-      [[ -n "$boot_device" ]] && [[ -b "$boot_device" ]] && \
-      echo "  n_rescue_mount $root_device $boot_device" >&2
-    echo "" >&2
-  else
-    echo "No valid block devices found from configuration." >&2
-    echo "Use 'lsblk' to explore available devices." >&2
-    echo "" >&2
-  fi
-  
-  n_remote_log "[INFO] Disk configuration displayed"
-  return 0
-}
-
-
-#===============================================================================
-# n_rescue_show_help
-# ------------------
-# Display rescue mode help and available commands.
-#
-# Behaviour:
-#   - Displays rescue mode banner
-#   - Lists all available n_rescue_* commands
-#   - Shows common rescue workflows
-#   - Displays exit instructions
-#
-# Returns:
-#   0 always
-#
-# Example usage:
-#   n_rescue_show_help
-#
-#===============================================================================
-n_rescue_show_help() {
-  n_remote_log "[INFO] Displaying rescue mode help"
-  
-  cat >&2 << 'EOF'
-
-╔══════════════════════════════════════════════════════════════════════════╗
-║                        HPS NETWORK RESCUE BOOT                           ║
-║                                                                          ║
-║  You are in rescue mode with full network connectivity and disk access. ║
-║  All HPS node functions (n_*) are available.                            ║
-╚══════════════════════════════════════════════════════════════════════════╝
-
-AVAILABLE RESCUE COMMANDS
-─────────────────────────
-
-  n_rescue_show_help           Show this help message
-  n_rescue_display_config      Display disk config from IPS
-  n_rescue_mount [root] [boot] Mount installed filesystems
-  n_rescue_chroot              Chroot into installed system
-  n_rescue_reinstall_grub      Reinstall GRUB bootloader
-  n_rescue_fsck [device]       Run filesystem check
-
-COMMON WORKFLOWS
-────────────────
-
-  1. GRUB Repair (boot failure):
-     
-     n_rescue_mount              # Mount filesystems from config
-     n_rescue_reinstall_grub     # Reinstall bootloader
-     n_remote_host_variable STATE INSTALLED
-     reboot
-
-  2. Filesystem Repair:
-     
-     n_rescue_fsck /dev/vdb3     # Check/repair filesystem
-     n_remote_host_variable STATE INSTALLED
-     reboot
-
-  3. Manual Recovery:
-     
-     n_rescue_mount
-     n_rescue_chroot             # Get shell in installed system
-     # ... perform repairs ...
-     exit
-     umount /mnt/boot /mnt
-     n_remote_host_variable STATE INSTALLED
-     reboot
-
-  4. Inspect Without Mounting:
-     
-     lsblk                       # List block devices
-     fdisk -l                    # Show partition tables
-     blkid                       # Show filesystem UUIDs
-     mdadm --detail /dev/md0     # Check RAID status
-
-EXITING RESCUE MODE
-───────────────────
-
-  To exit rescue mode and attempt normal boot:
-
-    n_remote_host_variable STATE INSTALLED
-    reboot
-
-  Or to restart installation from scratch:
-
-    n_remote_host_variable STATE INSTALLING
-    reboot
-
-REMOTE LOGGING
-──────────────
-
-  All rescue operations are logged to IPS.
-  Use n_remote_log to add custom log messages:
-
-    n_remote_log "[INFO] Your message here"
-
-EOF
-
-  n_remote_log "[INFO] Rescue mode help displayed"
-  return 0
-}
-
-
-#===============================================================================
-# n_rescue_mount
-# --------------
-# Mount installed filesystems to /mnt for rescue operations.
-#
-# Behaviour:
-#   - If called with no args, reads boot_device and root_device from config
-#   - If called with args: n_rescue_mount <root_device> [boot_device]
-#   - Unmounts /mnt if already mounted
-#   - Mounts root to /mnt
-#   - Mounts boot to /mnt/boot if boot_device specified
-#   - Creates essential directories (/mnt/proc, /mnt/sys, /mnt/dev)
-#
-# Arguments:
-#   $1 - root_device (optional, reads from config if not provided)
-#   $2 - boot_device (optional)
-#
-# Returns:
-#   0 on success
-#   1 if failed to read config or invalid device
-#   2 if mount operation failed
-#
-# Example usage:
-#   n_rescue_mount                      # Mount from config
-#   n_rescue_mount /dev/vdb3            # Mount root only
-#   n_rescue_mount /dev/vdb3 /dev/vdb2  # Mount root and boot
-#
-#===============================================================================
-n_rescue_mount() {
-  local root_device="$1"
-  local boot_device="$2"
-  
-  n_remote_log "[INFO] Starting rescue mount operation"
-  
-  # If no args provided, read from config
-  if [[ -z "$root_device" ]]; then
-    echo "Reading device configuration from IPS..." >&2
-    
-    root_device=$(n_remote_host_variable root_device 2>/dev/null) || true
-    boot_device=$(n_remote_host_variable boot_device 2>/dev/null) || true
-    
-    if [[ -z "$root_device" ]]; then
-      echo "ERROR: No root_device in config and none specified" >&2
-      echo "Usage: n_rescue_mount <root_device> [boot_device]" >&2
-      n_remote_log "[ERROR] No root_device available"
-      return 1
-    fi
-    
-    echo "  Root: $root_device" >&2
-    [[ -n "$boot_device" ]] && echo "  Boot: $boot_device" >&2
-  fi
-  
-  # Verify root device exists
-  if [[ ! -b "$root_device" ]]; then
-    echo "ERROR: Root device not found or not a block device: $root_device" >&2
-    n_remote_log "[ERROR] Root device not found: $root_device"
-    return 1
-  fi
-  
-  # Verify boot device if specified
-  if [[ -n "$boot_device" ]] && [[ ! -b "$boot_device" ]]; then
-    echo "ERROR: Boot device not found or not a block device: $boot_device" >&2
-    n_remote_log "[ERROR] Boot device not found: $boot_device"
-    return 1
-  fi
-  
-  # Unmount /mnt if already mounted
-  if mountpoint -q /mnt 2>/dev/null; then
-    echo "Unmounting existing /mnt..." >&2
-    umount -R /mnt 2>/dev/null || umount /mnt 2>/dev/null || true
-  fi
-  
-  # Ensure /mnt exists
-  mkdir -p /mnt
-  
-  # Mount root
-  echo "Mounting root: $root_device -> /mnt" >&2
-  if ! mount "$root_device" /mnt 2>&1 | while IFS= read -r line; do
-    echo "  $line" >&2
-    n_remote_log "[DEBUG] mount: $line"
-  done; then
-    echo "ERROR: Failed to mount root device" >&2
-    n_remote_log "[ERROR] Failed to mount root: $root_device"
-    return 2
-  fi
-  
-  echo "  Root mounted successfully" >&2
-  n_remote_log "[INFO] Root mounted: $root_device -> /mnt"
-  
-  # Mount boot if specified
-  if [[ -n "$boot_device" ]]; then
-    mkdir -p /mnt/boot
-    
-    echo "Mounting boot: $boot_device -> /mnt/boot" >&2
-    if ! mount "$boot_device" /mnt/boot 2>&1 | while IFS= read -r line; do
-      echo "  $line" >&2
-      n_remote_log "[DEBUG] mount: $line"
-    done; then
-      echo "WARNING: Failed to mount boot device" >&2
-      n_remote_log "[WARNING] Failed to mount boot: $boot_device"
-    else
-      echo "  Boot mounted successfully" >&2
-      n_remote_log "[INFO] Boot mounted: $boot_device -> /mnt/boot"
-    fi
-  fi
-  
-  # Create essential directories for chroot
-  echo "Creating chroot directories..." >&2
-  mkdir -p /mnt/proc /mnt/sys /mnt/dev /mnt/run
-  
-  echo "" >&2
-  echo "Filesystems mounted successfully." >&2
-  echo "Use 'n_rescue_chroot' to enter the installed system." >&2
-  echo "" >&2
-  
-  n_remote_log "[INFO] Rescue mount complete"
-  return 0
-}
-
-
-#===============================================================================
-# n_rescue_chroot
-# ---------------
-# Chroot into installed system at /mnt.
-#
-# Behaviour:
-#   - Verifies /mnt is mounted
-#   - Bind mounts /proc, /sys, /dev, /run if not already mounted
-#   - Executes chroot /mnt /bin/bash (or /bin/sh if bash unavailable)
-#   - Cleans up bind mounts on exit
-#   - Interactive shell, returns when user exits
-#
-# Prerequisites:
-#   - Root filesystem must be mounted at /mnt
-#   - Typically called after n_rescue_mount
-#
-# Returns:
-#   0 on successful chroot and exit
-#   1 if /mnt not mounted or chroot failed
-#
-# Example usage:
-#   n_rescue_mount
-#   n_rescue_chroot
-#   # ... perform repairs inside chroot ...
-#   exit
-#
-#===============================================================================
-n_rescue_chroot() {
-  n_remote_log "[INFO] Starting chroot into installed system"
-  
-  # Verify /mnt is mounted
-  if ! mountpoint -q /mnt 2>/dev/null; then
-    echo "ERROR: /mnt is not mounted" >&2
-    echo "Run 'n_rescue_mount' first" >&2
-    n_remote_log "[ERROR] Cannot chroot: /mnt not mounted"
-    return 1
-  fi
-  
-  echo "Preparing chroot environment..." >&2
-  
-  # Bind mount essential filesystems if not already mounted
-  if ! mountpoint -q /mnt/proc 2>/dev/null; then
-    mount --bind /proc /mnt/proc || mount -t proc proc /mnt/proc
-  fi
-  
-  if ! mountpoint -q /mnt/sys 2>/dev/null; then
-    mount --bind /sys /mnt/sys || mount -t sysfs sysfs /mnt/sys
-  fi
-  
-  if ! mountpoint -q /mnt/dev 2>/dev/null; then
-    mount --bind /dev /mnt/dev || mount -t devtmpfs devtmpfs /mnt/dev
-  fi
-  
-  if ! mountpoint -q /mnt/run 2>/dev/null; then
-    mount --bind /run /mnt/run 2>/dev/null || mount -t tmpfs tmpfs /mnt/run
-  fi
-  
-  # Determine shell to use
-  local shell="/bin/bash"
-  if [[ ! -x "/mnt${shell}" ]]; then
-    shell="/bin/sh"
-  fi
-  
-  echo "" >&2
-  echo "╔══════════════════════════════════════════════════════════════════╗" >&2
-  echo "║  Entering chroot environment                                     ║" >&2
-  echo "║  You are now inside the installed system                         ║" >&2
-  echo "║  Type 'exit' to return to rescue shell                           ║" >&2
-  echo "╚══════════════════════════════════════════════════════════════════╝" >&2
-  echo "" >&2
-  
-  n_remote_log "[INFO] Executing chroot shell"
-  
-  # Execute chroot
-  chroot /mnt "$shell"
-  local chroot_rc=$?
-  
-  echo "" >&2
-  echo "Exited chroot environment" >&2
-  n_remote_log "[INFO] Exited chroot (rc: $chroot_rc)"
-  
-  # Cleanup bind mounts
-  echo "Cleaning up bind mounts..." >&2
-  umount /mnt/run 2>/dev/null || true
-  umount /mnt/dev 2>/dev/null || true
-  umount /mnt/sys 2>/dev/null || true
-  umount /mnt/proc 2>/dev/null || true
-  
-  echo "" >&2
-  n_remote_log "[INFO] Chroot cleanup complete"
-  
-  return 0
-}
-
-
-#===============================================================================
-# n_rescue_reinstall_grub
-# -----------------------
-# Reinstall GRUB bootloader to disk.
-#
-# Behaviour:
-#   - Detects os_disk from host_config
-#   - Ensures /mnt and /mnt/boot are mounted (calls n_rescue_mount if needed)
-#   - Installs grub and grub-bios packages if not present
-#   - Runs grub-install --target=i386-pc --boot-directory=/mnt/boot
-#   - Verifies GRUB files installed correctly
-#   - Updates /mnt/boot/grub/grub.cfg if grub-mkconfig available
-#
-# Prerequisites:
-#   - os_disk must be set in host_config
-#   - Root filesystem should contain valid Alpine installation
-#
-# Returns:
-#   0 on successful GRUB installation
-#   1 if failed to read config or disk not found
-#   2 if mount operations failed
-#   3 if GRUB installation failed
-#
-# Example usage:
-#   n_rescue_reinstall_grub
-#
-#===============================================================================
-n_rescue_reinstall_grub() {
-  n_remote_log "[INFO] Starting GRUB reinstallation"
-  
-  echo "=== GRUB Bootloader Reinstallation ===" >&2
-  echo "" >&2
-  
-  # Get os_disk from config
-  local os_disk=""
-  os_disk=$(n_remote_host_variable os_disk 2>/dev/null) || true
-  
-  if [[ -z "$os_disk" ]]; then
-    echo "ERROR: No os_disk found in host_config" >&2
-    echo "Cannot determine target disk for GRUB installation" >&2
-    n_remote_log "[ERROR] No os_disk in config"
-    return 1
-  fi
-  
-  # Handle RAID - extract first disk from comma-separated list
-  local target_disk=""
-  if [[ "$os_disk" =~ , ]]; then
-    IFS=',' read -ra disks <<< "$os_disk"
-    target_disk="${disks[0]}"
-    echo "RAID detected: using first disk $target_disk" >&2
-  else
-    target_disk="$os_disk"
-  fi
-  
-  # Verify target disk exists
-  if [[ ! -b "$target_disk" ]]; then
-    echo "ERROR: Target disk not found: $target_disk" >&2
-    n_remote_log "[ERROR] Target disk not found: $target_disk"
-    return 1
-  fi
-  
-  echo "Target disk: $target_disk" >&2
-  echo "" >&2
-  
-  # Ensure filesystems are mounted
-  if ! mountpoint -q /mnt 2>/dev/null; then
-    echo "Root not mounted, mounting filesystems..." >&2
-    if ! n_rescue_mount; then
-      echo "ERROR: Failed to mount filesystems" >&2
-      n_remote_log "[ERROR] Failed to mount for GRUB install"
-      return 2
-    fi
-    echo "" >&2
-  else
-    echo "Root already mounted at /mnt" >&2
-  fi
-  
-  if ! mountpoint -q /mnt/boot 2>/dev/null; then
-    echo "WARNING: /mnt/boot not mounted" >&2
-    echo "GRUB installation may fail without boot partition" >&2
-  fi
-  
-  # Ensure GRUB packages are installed
-  echo "Checking for GRUB packages..." >&2
-  local grub_packages=("grub" "grub-bios")
-  local need_install=0
-  
-  for pkg in "${grub_packages[@]}"; do
-    if ! apk info -e "$pkg" >/dev/null 2>&1; then
-      need_install=1
-      break
-    fi
-  done
-  
-  if [[ $need_install -eq 1 ]]; then
-    echo "Installing GRUB packages..." >&2
-    if ! apk add --quiet grub grub-bios 2>&1 | while IFS= read -r line; do
-      echo "  $line" >&2
-      n_remote_log "[DEBUG] apk: $line"
-    done; then
-      echo "ERROR: Failed to install GRUB packages" >&2
-      n_remote_log "[ERROR] Failed to install GRUB packages"
-      return 3
-    fi
-    echo "  GRUB packages installed" >&2
-  else
-    echo "  GRUB packages already installed" >&2
-  fi
-  
-  echo "" >&2
-  
-  # Run grub-install
-  echo "Installing GRUB to $target_disk..." >&2
-  echo "(This may take a moment...)" >&2
-  echo "" >&2
-  
-  if ! grub-install \
-    --target=i386-pc \
-    --boot-directory=/mnt/boot \
-    "$target_disk" 2>&1 | while IFS= read -r line; do
-      echo "  $line" >&2
-      n_remote_log "[DEBUG] grub-install: $line"
-    done; then
-    echo "" >&2
-    echo "ERROR: grub-install failed" >&2
-    n_remote_log "[ERROR] grub-install failed"
-    return 3
-  fi
-  
-  echo "" >&2
-  
-  # Verify GRUB files exist
-  if [[ ! -d /mnt/boot/grub/i386-pc ]]; then
-    echo "ERROR: GRUB installation verification failed" >&2
-    echo "/mnt/boot/grub/i386-pc directory not found" >&2
-    n_remote_log "[ERROR] GRUB files not found after install"
-    return 3
-  fi
-  
-  echo "✓ GRUB installed successfully" >&2
-  n_remote_log "[INFO] GRUB installed to $target_disk"
-  
-  # Update grub.cfg if grub-mkconfig is available
-  if command -v grub-mkconfig >/dev/null 2>&1; then
-    echo "" >&2
-    echo "Updating GRUB configuration..." >&2
-    
-    if grub-mkconfig -o /mnt/boot/grub/grub.cfg 2>&1 | while IFS= read -r line; do
-      echo "  $line" >&2
-    done; then
-      echo "✓ GRUB configuration updated" >&2
-      n_remote_log "[INFO] GRUB config updated"
-    else
-      echo "WARNING: grub-mkconfig failed (may not be critical)" >&2
-      n_remote_log "[WARNING] grub-mkconfig failed"
-    fi
-  fi
-  
-  echo "" >&2
-  echo "═══════════════════════════════════════════════════════════" >&2
-  echo "GRUB bootloader reinstalled successfully!" >&2
-  echo "" >&2
-  echo "Next steps:" >&2
-  echo "  1. Verify with: ls -la /mnt/boot/grub/i386-pc/" >&2
-  echo "  2. Exit rescue mode: n_remote_host_variable STATE INSTALLED" >&2
-  echo "  3. Reboot: reboot" >&2
-  echo "═══════════════════════════════════════════════════════════" >&2
-  echo "" >&2
-  
-  n_remote_log "[INFO] GRUB reinstallation complete"
-  return 0
-}
-
-
-#===============================================================================
-# n_rescue_fsck
-# -------------
-# Run filesystem check on a device.
-#
-# Behaviour:
-#   - Accepts device path as argument
-#   - If no arg provided, shows available devices from config
-#   - Ensures device is unmounted before checking
-#   - Runs e2fsck -f -y (force check, auto-repair)
-#   - Reports results
-#
-# Arguments:
-#   $1 - device path (required)
-#
-# Returns:
-#   0 if fsck completed successfully or no errors found
-#   1 if device not specified or invalid
-#   2 if fsck failed or found uncorrectable errors
-#
-# Example usage:
-#   n_rescue_fsck /dev/vdb3
-#
-#===============================================================================
-n_rescue_fsck() {
-  local device="$1"
-  
-  n_remote_log "[INFO] Starting filesystem check"
-  
-  # Show help if no device specified
-  if [[ -z "$device" ]]; then
-    echo "Usage: n_rescue_fsck <device>" >&2
-    echo "" >&2
-    echo "Available devices from config:" >&2
-    
-    local root_device=""
-    local boot_device=""
-    root_device=$(n_remote_host_variable root_device 2>/dev/null) || true
-    boot_device=$(n_remote_host_variable boot_device 2>/dev/null) || true
-    
-    [[ -n "$root_device" ]] && echo "  Root: $root_device" >&2
-    [[ -n "$boot_device" ]] && echo "  Boot: $boot_device" >&2
-    
-    echo "" >&2
-    echo "Or list all devices with: lsblk" >&2
-    
-    n_remote_log "[ERROR] No device specified for fsck"
-    return 1
-  fi
-  
-  # Verify device exists
-  if [[ ! -b "$device" ]]; then
-    echo "ERROR: Device not found or not a block device: $device" >&2
-    n_remote_log "[ERROR] Device not found: $device"
-    return 1
-  fi
-  
-  echo "=== Filesystem Check: $device ===" >&2
-  echo "" >&2
-  
-  # Check if device is mounted
-  if mountpoint -q "$device" 2>/dev/null || grep -q "$device" /proc/mounts 2>/dev/null; then
-    echo "Device is currently mounted, unmounting..." >&2
-    
-    # Try to unmount
-    if ! umount "$device" 2>/dev/null; then
-      echo "ERROR: Failed to unmount $device" >&2
-      echo "Device may be in use or mounted at multiple locations" >&2
-      echo "" >&2
-      echo "Try: umount -R /mnt" >&2
-      n_remote_log "[ERROR] Cannot unmount device for fsck: $device"
-      return 1
-    fi
-    
-    echo "  Unmounted successfully" >&2
-    echo "" >&2
-  fi
-  
-  # Ensure e2fsck is available
-  if ! command -v e2fsck >/dev/null 2>&1; then
-    echo "Installing e2fsprogs..." >&2
-    if ! apk add --quiet e2fsprogs 2>/dev/null; then
-      echo "ERROR: Failed to install e2fsprogs" >&2
-      return 2
-    fi
-  fi
-  
-  # Run filesystem check
-  echo "Running filesystem check (this may take several minutes)..." >&2
-  echo "e2fsck will automatically repair errors found" >&2
-  echo "" >&2
-  
-  # Run e2fsck
-  # -f: force check even if filesystem appears clean
-  # -y: assume 'yes' to all prompts (auto-repair)
-  # -v: verbose
-  local fsck_rc
-  e2fsck -f -y -v "$device" 2>&1 | while IFS= read -r line; do
-    echo "  $line" >&2
-    n_remote_log "[DEBUG] e2fsck: $line"
-  done
-  fsck_rc=${PIPESTATUS[0]}
-  
-  echo "" >&2
-  
-  # Interpret fsck return code
-  # 0: no errors
-  # 1: errors corrected
-  # 2: errors corrected, reboot suggested
-  # 4: errors left uncorrected
-  # 8: operational error
-  # 16: usage error
-  # 32: e2fsck cancelled by user
-  # 128: shared library error
-  
-  case $fsck_rc in
-    0)
-      echo "✓ Filesystem is clean, no errors found" >&2
-      n_remote_log "[INFO] fsck complete: no errors ($device)"
-      return 0
-      ;;
-    1)
-      echo "✓ Filesystem errors corrected successfully" >&2
-      n_remote_log "[INFO] fsck complete: errors corrected ($device)"
-      return 0
-      ;;
-    2)
-      echo "✓ Filesystem errors corrected, reboot recommended" >&2
-      n_remote_log "[WARNING] fsck complete: reboot suggested ($device)"
-      return 0
-      ;;
-    4)
-      echo "✗ ERROR: Filesystem has uncorrectable errors" >&2
-      n_remote_log "[ERROR] fsck failed: uncorrectable errors ($device)"
-      return 2
-      ;;
-    8)
-      echo "✗ ERROR: Operational error during fsck" >&2
-      n_remote_log "[ERROR] fsck operational error ($device)"
-      return 2
-      ;;
-    *)
-      echo "✗ ERROR: fsck failed with code $fsck_rc" >&2
-      n_remote_log "[ERROR] fsck failed with code $fsck_rc ($device)"
-      return 2
-      ;;
-  esac
-}
 
