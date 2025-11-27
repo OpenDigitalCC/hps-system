@@ -1,0 +1,130 @@
+find_hps_config DOCUMENTATION/150-IPS-functional_reference/find_hps_config.md.src
+__guard_source DOCUMENTATION/150-IPS-functional_reference/__guard_source.md.src
+hps_check_bash_syntax DOCUMENTATION/150-IPS-functional_reference/hps_check_bash_syntax.md.src
+hps_find_syntax_pattern DOCUMENTATION/150-IPS-functional_reference/hps_find_syntax_pattern.md.src
+hps_debug_function_load DOCUMENTATION/150-IPS-functional_reference/hps_debug_function_load.md.src
+hps_safe_eval DOCUMENTATION/150-IPS-functional_reference/hps_safe_eval.md.src
+hps_source_with_debug DOCUMENTATION/150-IPS-functional_reference/hps_source_with_debug.md.src
+hps_log DOCUMENTATION/150-IPS-functional_reference/hps_log.md.src
+url_decode DOCUMENTATION/150-IPS-functional_reference/url_decode.md.src
+update_dns_dhcp_files DOCUMENTATION/150-IPS-functional_reference/update_dns_dhcp_files.md.src
+_set_ips_hostname  DOCUMENTATION/150-IPS-functional_reference/_set_ips_hostname .md.src
+build_dhcp_addresses_file DOCUMENTATION/150-IPS-functional_reference/build_dhcp_addresses_file.md.src
+init_dns_hosts_file DOCUMENTATION/150-IPS-functional_reference/init_dns_hosts_file.md.src
+dns_host_add DOCUMENTATION/150-IPS-functional_reference/dns_host_add.md.src
+dns_host_remove DOCUMENTATION/150-IPS-functional_reference/dns_host_remove.md.src
+dns_host_get DOCUMENTATION/150-IPS-functional_reference/dns_host_get.md.src
+_ips_resolv_conf_update  DOCUMENTATION/150-IPS-functional_reference/_ips_resolv_conf_update .md.src
+o_node_test_logger_ips DOCUMENTATION/150-IPS-functional_reference/o_node_test_logger_ips.md.src
+o_task_create DOCUMENTATION/150-IPS-functional_reference/o_task_create.md.src
+o_task_run DOCUMENTATION/150-IPS-functional_reference/o_task_run.md.src
+o_task_delete DOCUMENTATION/150-IPS-functional_reference/o_task_delete.md.src
+o_task_list DOCUMENTATION/150-IPS-functional_reference/o_task_list.md.src
+o_log DOCUMENTATION/150-IPS-functional_reference/o_log.md.src
+hps_services_stop DOCUMENTATION/150-IPS-functional_reference/hps_services_stop.md.src
+hps_services_start DOCUMENTATION/150-IPS-functional_reference/hps_services_start.md.src
+hps_services_restart DOCUMENTATION/150-IPS-functional_reference/hps_services_restart.md.src
+make_timestamp DOCUMENTATION/150-IPS-functional_reference/make_timestamp.md.src
+_is_tty DOCUMENTATION/150-IPS-functional_reference/_is_tty.md.src
+exec_wrapper DOCUMENTATION/150-IPS-functional_reference/exec_wrapper.md.src
+download_file DOCUMENTATION/150-IPS-functional_reference/download_file.md.src
+hps_origin_tag DOCUMENTATION/150-IPS-functional_reference/hps_origin_tag.md.src
+get_path_cluster_services_dir  DOCUMENTATION/150-IPS-functional_reference/get_path_cluster_services_dir .md.src
+export_dynamic_paths DOCUMENTATION/150-IPS-functional_reference/export_dynamic_paths.md.src
+detect_call_context DOCUMENTATION/150-IPS-functional_reference/detect_call_context.md.src
+_get_distro_dir  DOCUMENTATION/150-IPS-functional_reference/_get_distro_dir .md.src
+os_get_latest DOCUMENTATION/150-IPS-functional_reference/os_get_latest.md.src
+os_id_to_distro DOCUMENTATION/150-IPS-functional_reference/os_id_to_distro.md.src
+get_os_name_version DOCUMENTATION/150-IPS-functional_reference/get_os_name_version.md.src
+get_os_name DOCUMENTATION/150-IPS-functional_reference/get_os_name.md.src
+get_distro_base_path DOCUMENTATION/150-IPS-functional_reference/get_distro_base_path.md.src
+get_distro_url DOCUMENTATION/150-IPS-functional_reference/get_distro_url.md.src
+os_config_list DOCUMENTATION/150-IPS-functional_reference/os_config_list.md.src
+os_config_by_type DOCUMENTATION/150-IPS-functional_reference/os_config_by_type.md.src
+os_config_by_arch_and_type DOCUMENTATION/150-IPS-functional_reference/os_config_by_arch_and_type.md.src
+os_config_get_all DOCUMENTATION/150-IPS-functional_reference/os_config_get_all.md.src
+os_config_summary DOCUMENTATION/150-IPS-functional_reference/os_config_summary.md.src
+os_config_validate DOCUMENTATION/150-IPS-functional_reference/os_config_validate.md.src
+parse_os_id DOCUMENTATION/150-IPS-functional_reference/parse_os_id.md.src
+os_config_latest_minor DOCUMENTATION/150-IPS-functional_reference/os_config_latest_minor.md.src
+version_compare DOCUMENTATION/150-IPS-functional_reference/version_compare.md.src
+os_config_select DOCUMENTATION/150-IPS-functional_reference/os_config_select.md.src
+create_config_dnsmasq  DOCUMENTATION/150-IPS-functional_reference/create_config_dnsmasq .md.src
+hps_get_remote_functions DOCUMENTATION/150-IPS-functional_reference/hps_get_remote_functions.md.src
+node_build_functions DOCUMENTATION/150-IPS-functional_reference/node_build_functions.md.src
+_load_library_dir DOCUMENTATION/150-IPS-functional_reference/_load_library_dir.md.src
+_build_init_sequence DOCUMENTATION/150-IPS-functional_reference/_build_init_sequence.md.src
+_find_all_inits DOCUMENTATION/150-IPS-functional_reference/_find_all_inits.md.src
+_init_matches_metadata DOCUMENTATION/150-IPS-functional_reference/_init_matches_metadata.md.src
+_extract_metadata_field DOCUMENTATION/150-IPS-functional_reference/_extract_metadata_field.md.src
+_matches_field DOCUMENTATION/150-IPS-functional_reference/_matches_field.md.src
+cli_prompt DOCUMENTATION/150-IPS-functional_reference/cli_prompt.md.src
+cli_prompt_yesno DOCUMENTATION/150-IPS-functional_reference/cli_prompt_yesno.md.src
+cli_info DOCUMENTATION/150-IPS-functional_reference/cli_info.md.src
+cli_note DOCUMENTATION/150-IPS-functional_reference/cli_note.md.src
+cli_select DOCUMENTATION/150-IPS-functional_reference/cli_select.md.src
+cli_init_colors DOCUMENTATION/150-IPS-functional_reference/cli_init_colors.md.src
+cli_color DOCUMENTATION/150-IPS-functional_reference/cli_color.md.src
+__ui_log DOCUMENTATION/150-IPS-functional_reference/__ui_log.md.src
+ui_clear_screen DOCUMENTATION/150-IPS-functional_reference/ui_clear_screen.md.src
+ui_pause DOCUMENTATION/150-IPS-functional_reference/ui_pause.md.src
+ui_print_header DOCUMENTATION/150-IPS-functional_reference/ui_print_header.md.src
+ui_prompt_text DOCUMENTATION/150-IPS-functional_reference/ui_prompt_text.md.src
+ui_prompt_yesno DOCUMENTATION/150-IPS-functional_reference/ui_prompt_yesno.md.src
+ui_menu_select DOCUMENTATION/150-IPS-functional_reference/ui_menu_select.md.src
+_get_os_conf_path DOCUMENTATION/150-IPS-functional_reference/_get_os_conf_path.md.src
+os_config DOCUMENTATION/150-IPS-functional_reference/os_config.md.src
+os_config_get DOCUMENTATION/150-IPS-functional_reference/os_config_get.md.src
+os_config_set DOCUMENTATION/150-IPS-functional_reference/os_config_set.md.src
+os_config_exists DOCUMENTATION/150-IPS-functional_reference/os_config_exists.md.src
+os_config_undefine_key DOCUMENTATION/150-IPS-functional_reference/os_config_undefine_key.md.src
+os_config_undefine_section DOCUMENTATION/150-IPS-functional_reference/os_config_undefine_section.md.src
+cgi_auto_fail DOCUMENTATION/150-IPS-functional_reference/cgi_auto_fail.md.src
+cgi_log DOCUMENTATION/150-IPS-functional_reference/cgi_log.md.src
+cgi_header_plain DOCUMENTATION/150-IPS-functional_reference/cgi_header_plain.md.src
+cgi_success  DOCUMENTATION/150-IPS-functional_reference/cgi_success .md.src
+cgi_fail  DOCUMENTATION/150-IPS-functional_reference/cgi_fail .md.src
+cgi_require_param DOCUMENTATION/150-IPS-functional_reference/cgi_require_param.md.src
+cgi_param DOCUMENTATION/150-IPS-functional_reference/cgi_param.md.src
+urlencode DOCUMENTATION/150-IPS-functional_reference/urlencode.md.src
+get_ips_address  DOCUMENTATION/150-IPS-functional_reference/get_ips_address .md.src
+ips_allocate_storage_ip DOCUMENTATION/150-IPS-functional_reference/ips_allocate_storage_ip.md.src
+storage_register_dns DOCUMENTATION/150-IPS-functional_reference/storage_register_dns.md.src
+get_network_interfaces DOCUMENTATION/150-IPS-functional_reference/get_network_interfaces.md.src
+get_interface_network_info DOCUMENTATION/150-IPS-functional_reference/get_interface_network_info.md.src
+network_calculate_subnet DOCUMENTATION/150-IPS-functional_reference/network_calculate_subnet.md.src
+ip_to_int DOCUMENTATION/150-IPS-functional_reference/ip_to_int.md.src
+int_to_ip DOCUMENTATION/150-IPS-functional_reference/int_to_ip.md.src
+network_subnet_to_network DOCUMENTATION/150-IPS-functional_reference/network_subnet_to_network.md.src
+network_ip_to_prefix DOCUMENTATION/150-IPS-functional_reference/network_ip_to_prefix.md.src
+network_subnet_to_prefix DOCUMENTATION/150-IPS-functional_reference/network_subnet_to_prefix.md.src
+netmask_to_cidr DOCUMENTATION/150-IPS-functional_reference/netmask_to_cidr.md.src
+cidr_to_netmask DOCUMENTATION/150-IPS-functional_reference/cidr_to_netmask.md.src
+detect_client_type DOCUMENTATION/150-IPS-functional_reference/detect_client_type.md.src
+generate_dhcp_range_simple DOCUMENTATION/150-IPS-functional_reference/generate_dhcp_range_simple.md.src
+get_client_mac DOCUMENTATION/150-IPS-functional_reference/get_client_mac.md.src
+normalise_mac DOCUMENTATION/150-IPS-functional_reference/normalise_mac.md.src
+format_mac_colons DOCUMENTATION/150-IPS-functional_reference/format_mac_colons.md.src
+strip_quotes DOCUMENTATION/150-IPS-functional_reference/strip_quotes.md.src
+validate_ip_address DOCUMENTATION/150-IPS-functional_reference/validate_ip_address.md.src
+validate_hostname DOCUMENTATION/150-IPS-functional_reference/validate_hostname.md.src
+_supervisor_pre_start  DOCUMENTATION/150-IPS-functional_reference/_supervisor_pre_start .md.src
+supervisor_prepare_services  DOCUMENTATION/150-IPS-functional_reference/supervisor_prepare_services .md.src
+_supervisor_post_start  DOCUMENTATION/150-IPS-functional_reference/_supervisor_post_start .md.src
+supervisor_reload_core_config  DOCUMENTATION/150-IPS-functional_reference/supervisor_reload_core_config .md.src
+supervisor_reload_services DOCUMENTATION/150-IPS-functional_reference/supervisor_reload_services.md.src
+ipxe_header  DOCUMENTATION/150-IPS-functional_reference/ipxe_header .md.src
+ipxe_cgi_fail  DOCUMENTATION/150-IPS-functional_reference/ipxe_cgi_fail .md.src
+ipxe_boot_from_disk  DOCUMENTATION/150-IPS-functional_reference/ipxe_boot_from_disk .md.src
+ipxe_init_handler DOCUMENTATION/150-IPS-functional_reference/ipxe_init_handler.md.src
+handle_menu_item DOCUMENTATION/150-IPS-functional_reference/handle_menu_item.md.src
+ipxe_goto_menu  DOCUMENTATION/150-IPS-functional_reference/ipxe_goto_menu .md.src
+ipxe_host_configure_menu  DOCUMENTATION/150-IPS-functional_reference/ipxe_host_configure_menu .md.src
+ipxe_configure_main_menu  DOCUMENTATION/150-IPS-functional_reference/ipxe_configure_main_menu .md.src
+ipxe_reboot  DOCUMENTATION/150-IPS-functional_reference/ipxe_reboot .md.src
+ipxe_boot_installer  DOCUMENTATION/150-IPS-functional_reference/ipxe_boot_installer .md.src
+ipxe_network_boot DOCUMENTATION/150-IPS-functional_reference/ipxe_network_boot.md.src
+ipxe_boot_alpine DOCUMENTATION/150-IPS-functional_reference/ipxe_boot_alpine.md.src
+_do_pxe_boot  DOCUMENTATION/150-IPS-functional_reference/_do_pxe_boot .md.src
+ipxe_host_audit_include  DOCUMENTATION/150-IPS-functional_reference/ipxe_host_audit_include .md.src
+ipxe_show_info DOCUMENTATION/150-IPS-functional_reference/ipxe_show_info.md.src
