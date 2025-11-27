@@ -1,7 +1,0 @@
-find_hps_config DOCUMENTATION/150-functional_reference/find_hps_config.md.src
-n_node_information DOCUMENTATION/150-functional_reference/n_node_information.md.src
-n_queue_add DOCUMENTATION/150-functional_reference/n_queue_add.md.src
-n_queue_run DOCUMENTATION/150-functional_reference/n_queue_run.md.src
-n_queue_clear DOCUMENTATION/150-functional_reference/n_queue_clear.md.src
-n_queue_list DOCUMENTATION/150-functional_reference/n_queue_list.md.src
-n_keysafe_request_token DOCUMENTATION/150-functional_reference/n_keysafe_request_token.md.src

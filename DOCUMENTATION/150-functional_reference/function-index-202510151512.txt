@@ -1,2 +1,0 @@
-find_hps_config DOCUMENTATION/150-functional_reference//find_hps_config.md.src
-__guard_source DOCUMENTATION/150-functional_reference//__guard_source.md.src
