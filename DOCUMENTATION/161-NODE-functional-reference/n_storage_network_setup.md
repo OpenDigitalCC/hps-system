@@ -6,27 +6,33 @@ Function signature: b9d955ab898629611ccbb3c79adf2cb697c037821b05b564e6e5b61ababb
 
 ### Function overview
 
-The `n_storage_network_setup` function sets up a network storage allocation given a physical interface and an optional storage index. It queries the hardware MAC address and then requests an IP allocation from an IPS. If allocation is successful, the function will parse the allocation into several components like `vlan_id`, `ip`, `netmask`, etc. For each component, a corresponding variable is created which is then used to create a VLAN with `vlan_id` and `mtu`, and assigns the `ip` and `netmask` to the VLAN interface. The function concludes by testing the accessibility of the IP gateway.
+The `n_storage_network_setup()` is a Bash function designed for setting up the network for storage in a system. It uses the physical interface and storage index as parameters. It obtains the MAC for ID, requests an IP from IPS, does an error check and sets up the VLAN. It adds the IP and stores the result in host variables. The function also tests the gateway through a ping.
 
 ### Technical description
 
-- **Name**: n_storage_network_setup
-- **Description**: Sets up a network for a given storage given an interface and optional index.
-- **Globals**: None.
-- **Arguments**: 
-   - `$1`: The local physical interface for the storage.
-   - `$2`: Optional index number for the storage. Defaults to `0` if not provided.
-- **Outputs**: Logs messages indicating the progress of the allocation and any potential errors.
-- **Returns**: 
-   - `0` if the function successfully executed.
-   - `1` if there's an error (ex. failed to get the IP allocation, create VLAN, or add IP to the interface).
-- **Example Usage**: `n_storage_network_setup eth0 1`
+- **name:** n_storage_network_setup()
+- **description:** Function to set up a network for storage in a system using a physical interface and storage index.
+- **globals:** [None]
+- **arguments:**
+  - $1: The physical interface for network setup
+  - $2: The storage index number (defaults to `0` if not specified)
+- **outputs:** Logs for network setup progress and status
+- **returns:** `0` if successful, `1` if an error occurred
+- **example usage:**
+
+```shell
+n_storage_network_setup eth0 1
+```
 
 ### Quality and security recommendations
 
-1. Always validate the inputs of the function. Make sure that the physical interface provided exists.
-2. Validate the response when making a request for IP allocation. Make sure it returns the expected format.
-3. Add error logging statements in every failure point. This increases the debuggability of the function.
-4. It may be useful to implement a rollback mechanism for failed allocations to avoid leaving incomplete configurations in the system.
-5. Treat all function inputs as potentially malicious and sanitize/escape them as needed. Never trust user input implicitly.
+1. Implement input validation to ensure that the arguments provided to the function are in the correct format and within the expected range.
+2. Handle potential issues, such as unavailability or failure of the MAC address reading, IP allocation, VLAN creation, or interface IPs adding.
+3. Ensure that errors and failures provide clear, precise, and useful logging messages to help troubleshooting.
+4. Always use the latest secure versions of the libraries and tools used within this function.
+5. Consider edge cases, like if the physical interface is not available, or the IP allocation returns unexpected format.
+6. Utilize a secure method for storing and retrieving host variables.
+7. Secure any handling of data or communication that could be susceptible to injection attacks or eavesdropping. 
+
+Also, always follow good security practices while implementing any networking function, including the principle of least privilege (PoLP), segregation of duties (SoD), and ensuring strong access controls. Regular audits and updates are also essential to maintain the security of the function.
 

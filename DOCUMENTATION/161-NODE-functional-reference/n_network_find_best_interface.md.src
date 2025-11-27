@@ -4,31 +4,40 @@ Contained in `node-manager/base/n_network-functions.sh`
 
 Function signature: 6460d83e233fbb1d6aee3d49a4c4ee8e3c1c2b0a9e11a765b0eaf94aaad8b4a9
 
-### Function Overview
+### Function overview
 
-The Bash function `n_network_find_best_interface` is designed to find the best network interface based on a given minimum speed and a required state. By acquiring data on all network interfaces, the function filters the interfaces based on the requirements and ultimately selects the best fitting interface. If no interface meets the given requirements, the function will not return any interfaces.
+The function `n_network_find_best_interface()` is used to find the fastest network interface available that meets a certain minimum speed criteria and a network state criteria. It reads the interface descriptors, including MAC address, MTU, speed, and the driver from the `n_network_get_interfaces` function. These are used to determine the speed and state of each interface. The function then checks the speed of each interface and compares it with the minimum required speed. If the speed of an interface meets the minimum requirement, the function compares this speed with the speed of other interfaces to define the fastest one. The function returns the fastest interface; if no interface meets the requirements, it returns an error.
 
-### Technical Description
+### Technical description
 
 - **Name**: `n_network_find_best_interface`
-- **Description**: This function is used to find the optimum network interface by checking available interfaces against the minimum speed and the required state provided as arguments. If no suitable interface is found, the function will not return anything.
-- **Globals**: None.
-- **Arguments**:
-  - `$1` (min_speed): Minimum speed requirement for the network interface. Default value is 0.
-  - `$2` (req_state): The required connection state for the network interface. Default value is 'up'.
-- **Outputs**: If a suitable interface is found, the function will output the name of the best network interface.
-- **Returns**: The function will return 0 if a suitable interface is found, otherwise, it will return 1.
-- **Example Usage**:
-```bash
-n_network_find_best_interface 100 "up"
-```
-This example will find the best network interface which is 'up' and has a minimum speed of 100.
 
-### Quality and Security Recommendations
+- **Description**: This function finds the fastest network interface that matches the given state and minimum speed requirements.
 
-1. Error Handling: Include error handling for unexpected or undesirable function outcomes.
-2. Input Validation: Validate arguments to ensure they are of the correct data type and are within expected bounds.
-3. Secure Coding: Ensure that no insecure system calls are being made by checking 'n_network_get_interfaces' function for potential security flaws.
-4. Comments: Keep comments up-to-date and relevant for future developers and readability.
-5. Test Coverage: Maintain comprehensive test coverage to identify and resolve bugs quickly.
+- **Globals**: None
+
+- **Arguments**: 
+  - `$1`: minimum required speed for the interface (default: 0)
+  - `$2`: the required state for the interface (default: 'up')
+
+- **Outputs**: 
+  - Prints the name of the fastest qualifying interface.
+
+- **Returns**: 
+  - 0 if a qualifying interface is found.
+  - 1 if no qualifying interface is found.
+
+- **Example usage**: The following call finds the fastest network interface that is currently up and has a minimum speed of 100.
+  ```bash
+  n_network_find_best_interface 100 'up'
+  ```
+
+### Quality and Security Recommendations 
+1. Check the reliability of the input source (`n_network_get_interfaces`), as it directly relates to the output of this function.
+2. Avoid parsing command line arguments directly, as they might contain dangerous code. 
+3. Look for ways to refactor nested conditionals for improved readability.
+4. Consider handling unexpected cases, for example, non-numeric inputs for speed.
+5. Always verify and sanitize the inputs before using them. 
+6. Consistently comment code to ensure clarity for others and for future reference. 
+7. Use shellcheck or other linters to find common shell script problems.
 

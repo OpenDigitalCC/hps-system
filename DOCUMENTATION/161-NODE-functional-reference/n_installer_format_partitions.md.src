@@ -6,26 +6,27 @@ Function signature: 0b4a0dbbfa19524cd835648932858b139e035c5ca2a01459ac2743b4c74b
 
 ### Function overview
 
-The `n_installer_format_partitions` function is used in Bash to format and mount partitions on boot and root devices. It starts by logging the start of partition formatting, reads device paths from host_config, checks for mkfs.ext4 availability, formats boot and root partitions, fetches UUIDs, stores them to host_config, mounts root and boot partitions, creates essential directories, creates a swap file of 1GB, generates a static filesystem table (/etc/fstab), and ends by logging the completion of partition formatting and successful mount locations.
+The `n_installer_format_partitions` is a Bash function designed to format and mount boot and root partitions. This function reads device paths from a host config, checks for the necessary commands, and installs them if they are not already present. It then formats the boot and root partitions, mounts them on the filesystem, and generates a file system table (fstab). The function also includes extensive logging for debugging and troubleshooting purposes.
 
 ### Technical description
 
-- **Name**: `n_installer_format_partitions`
-- **Description**: This function formats and mounts partitions on boot and root devices.
-- **Globals**: `boot_device`: Contains the file path for the boot device; `root_device`: Contains the file path for the root device.
-- **Arguments**: This function does not have explicit arguments but uses devices defined in the host configuration.
-- **Outputs**: Logs messages that indicate the status and results of each operation.
-- **Returns**: Returns `1` if it fails to read `boot_device` or `root_device` from host_config or if `boot_device` or `root_device` is empty. Returns `2` if formatting, installation of `e2fsprogs`, or fetching UUIDs fail, while `3` if mounting of any partition fails, and `4` if creation or initialization of swap file or fstab fails. Returns `0` on successful execution.
-- **Example usage**: This function is primarily intended to be used within the boot and installation scripts, hence it is typically not invoked manually.
+- Name: `n_installer_format_partitions`
+- Description: This function formats and mounts the boot and root partitions on a device while ensuring all the necessary utilities are available and logs the process throughout.
+- Globals: None 
+- Arguments: None
+- Outputs: Logs the progress of operations, including errors, to the standard output or error output.
+- Returns: Returns 0 on success, and 1, 2, 3, or 4 on various errors.
+- Example Usage:
+
+```bash
+n_installer_format_partitions
+``` 
 
 ### Quality and security recommendations
 
-1. Validate user inputs or data retrieved from host configurations to prevent potential errors or code injection.
-2. All operations that may fail due to factors beyond control (like file system operations) are correctly handled with error checks.
-3. Logging of all significant actions is a good practice for future debugging.
-4. Clearing of any sensitive data when it's no longer needed.
-5. Prevent command injection by always using absolute paths to programs rather than relying on the user's `$PATH`. Make sure any dynamically constructed commands are correctly escaped.
-6. Avoid using temporary files to store sensitive information.
-7. Use silent or quiet flags in command to avoid exposing unnecessary details to the user.
-8. Always use the latest stable version of all software and libraries and routinely update them to get the latest security updates and bug fixes.
+1. Error handling is well implemented in this function, however, more specific error messages could be beneficial in debugging.
+2. In the event of an error, the function attempts to unmount the /mnt directory. However, for the /mnt/boot directory, it only attempts to unmount it once after failure. It might be beneficial to attempt to unmount /mnt/boot in other error situations as well.
+3. When fetching UUIDs for boot and root devices, there's no check for successful command execution. It might be useful to return an error if fetching UUID fails.
+4. The `umount` calls are fire-and-forget. Although unmounting often fails if a device is busy, in this case, failing to unmount might mean that important filesystem changes don't get written, and it would be safer to check the exit status.
+5. Lastly, when creating the swap file, the code assumes that the `dd` command will create a 1GB file. However, if disk space is insufficient, a smaller file, or no file, will be created. A subsequent check for the swap file's size will increase safety.
 

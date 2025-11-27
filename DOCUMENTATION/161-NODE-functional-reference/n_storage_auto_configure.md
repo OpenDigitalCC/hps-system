@@ -4,35 +4,30 @@ Contained in `node-manager/base/n_network-storage-functions.sh`
 
 Function signature: 55c01e597e7f0411d3ad5dbe517c5de657ce3823e117d7e2336947a6619eb87f
 
-### Function overview
+### Function Overview
 
-`n_storage_auto_configure()` is a bash function that configures network storage automatically. It determines network interface to use (either input or selected), brings up the network interface if it's not up, gets IP allocation data, parses it, and configures VLan with given parameters. If any step fails, it logs error and returns. 
+The `n_storage_auto_configure` function is used primarily in a network storage environment to automate configuration of network interfaces and IP allocations from an IP Scope Service (IPS). The function takes two optional parameters: a storage index, and an override network interface name.
 
-### Technical description
+### Technical Description
 
-- Name: `n_storage_auto_configure`
-- Description: This function automatically configures network storage based on the provided index and interface. If the interface is not provided, it selects one. It sets up the interface if it's not up yet, gets allocation for storage IP from IPS and configures the VLAN accordingly.  
-- Globals:
-    - None
-- Arguments:
-    - `$1: storage_index` (default: 0) - the index to configure the storage for.
-    - `$2: override_iface` (optional) - interface to override, if applicable.
-- Outputs: Logs actions and any failure encountered.
-- Returns: 0 if successful, 1 on failure.
-- Example usage:
-```bash
-# Set network storage with default settings
-n_storage_auto_configure
+- **Name**: `n_storage_auto_configure`
+- **Description**: The function automates the configuration of network interfaces and IP allocations for a network storage setup by specifying a storage index and an optional override interface. If an interface override is provided, it saves it for persistence. When no override is given, it selects an interface based on the storage index. Once an interface is selected, it brings up the interface if it's not already up, gets the allocation of IP from the IP Scope Service (IPS), parses and configures the vlan and interface using the obtained IPs.
+- **Globals**: None.
+- **Arguments**: 
+  - `$1`: Storage Index (default 0); Index to use when selecting a network interface or saving override.
+  - `$2`: Override Interface (optional); The name of the network interface to use instead of selecting based on index.
+- **Outputs**: Logs messages about the allocation, configuration, and errors if any.
+- **Returns**: Returns 0 on successful allocation and configuration, otherwise 1.
+- **Example usage**: 
+  ```bash
+  n_storage_auto_configure 1 ens160
+  ```
 
-# Set network storage with specific index and interface
-n_storage_auto_configure 2 eth0
-```
+### Quality and Security Recommendations
 
-### Quality and security recommendations
-
-1. Add input validation and error handling for function parameters.
-2. Include exit status checks after executing other bash commands.
-3. Protect sensitive data such as IP addresses, VLan ID, and network mask from exposure in log messages.
-4. Consider using secure coding practices to protect against common bash vulnerabilities.
-5. To avoid excessive resource usage, consider limiting the number of retries or adding timeouts for operations like IP allocation.
+1. Validity of the `storage_index` and `override_iface` variables should be checked before use.
+2. Check and handle any possible exceptions or errors during the execution of the ip and vlan commands.
+3. Increase the general robustness of the script through better error handling and confirmation of successful operations.
+4. Consider securely logging the activities and errors for future reference and auditing purposes.
+5. Wherever possible, limit the permissions of the function as much as possible so that it can only perform the necessary tasks.
 
