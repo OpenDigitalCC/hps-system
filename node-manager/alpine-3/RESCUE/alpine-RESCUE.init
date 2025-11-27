@@ -1,11 +1,8 @@
 #@METADATA os=alpine-3 RESCUE=true
 
-
 n_start_modloop
 n_set_hostname_and_hosts
 n_rescue_load_modules
 n_rescue_install_tools
 n_configure_bash_shell
-n_rescue_show_help
-n_rescue_display_config
-
+n_rescue_configure_profile

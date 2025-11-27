@@ -12,7 +12,6 @@
 # Behaviour:
 #   - Changes /bin/sh symlink from busybox to bash
 #   - Creates /etc/profile.d/hps.sh drop-in to auto-load HPS functions
-#   - Uses n_safe_function_runner to display rescue help/config on login
 #   - Sets correct permissions (755) on profile drop-in
 #   - Logs all operations
 #   - Idempotent: Safe to run multiple times
@@ -112,13 +111,6 @@ n_configure_bash_shell() {
 # Source the functions cache (contains n_safe_function_runner)
 [ -f /srv/hps/lib/hps-functions-cache.sh ] && . /srv/hps/lib/hps-functions-cache.sh 2>/dev/null
 
-# Display rescue mode help and configuration on login
-if [ -n "$PS1" ]; then
-  # Use safe runner to execute rescue functions (assumes it exists)
-  n_safe_function_runner n_rescue_show_help || true
-  echo "" # Blank line for separation
-  n_safe_function_runner n_rescue_display_config || true
-fi
 EOF
   
   local create_rc=$?

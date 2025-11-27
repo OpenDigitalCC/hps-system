@@ -4,6 +4,98 @@
 #===============================================================================
 
 
+
+
+#===============================================================================
+# n_rescue_configure_profile
+# --------------------------
+# Configure profile.d to display rescue help and config on login.
+#
+# Behaviour:
+#   - Creates /etc/profile.d/rescue.sh drop-in
+#   - Uses n_safe_function_runner to display rescue info safely
+#   - Only runs in interactive shells
+#   - Sets correct permissions (755)
+#   - Logs all operations
+#   - Idempotent: Safe to run multiple times
+#
+# Prerequisites:
+#   - n_safe_function_runner must be available in function cache
+#   - n_rescue_show_help and n_rescue_display_config must exist
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 on success
+#   1 if profile.d creation fails
+#
+# Example usage:
+#   n_rescue_configure_profile
+#
+# Notes:
+#   - File loads after hps.sh (alphabetically)
+#   - Changes take effect on next login
+#   - To remove: rm /etc/profile.d/rescue.sh
+#
+#===============================================================================
+n_rescue_configure_profile() {
+  n_remote_log "[INFO] Configuring rescue mode profile"
+  
+  echo "Configuring rescue mode login display..." >&2
+  
+  # Ensure profile.d directory exists
+  mkdir -p /etc/profile.d
+  
+  # Create the rescue profile drop-in
+  cat > /etc/profile.d/rescue.sh << 'EOF'
+#!/bin/bash
+# HPS Rescue Mode - Display help and config on login
+
+# Only run in interactive shells
+if [ -n "$PS1" ]; then
+  # Use safe runner to execute rescue functions
+  if type n_safe_function_runner >/dev/null 2>&1; then
+    n_safe_function_runner n_rescue_show_help || true
+    echo "" # Blank line for separation
+    n_safe_function_runner n_rescue_display_config || true
+  fi
+fi
+EOF
+  
+  local create_rc=$?
+  
+  if [[ $create_rc -ne 0 ]]; then
+    echo "  ✗ Failed to create rescue profile" >&2
+    n_remote_log "[ERROR] Failed to create /etc/profile.d/rescue.sh"
+    return 1
+  fi
+  
+  # Set permissions
+  if chmod 755 /etc/profile.d/rescue.sh 2>/dev/null; then
+    echo "  ✓ Created /etc/profile.d/rescue.sh" >&2
+    n_remote_log "[INFO] Created rescue profile drop-in"
+  else
+    echo "  ✗ Created but failed to set permissions" >&2
+    n_remote_log "[WARNING] Created rescue.sh but chmod failed"
+    return 1
+  fi
+  
+  # Verify file exists and is readable
+  if [[ -r /etc/profile.d/rescue.sh ]]; then
+    echo "  ✓ Rescue profile configured successfully" >&2
+    echo "" >&2
+    echo "Rescue help and config will display on next login" >&2
+  else
+    echo "  ✗ WARNING: File not readable" >&2
+    n_remote_log "[WARNING] /etc/profile.d/rescue.sh not readable"
+  fi
+  
+  n_remote_log "[INFO] Rescue profile configuration complete"
+  return 0
+}
+
+
 #===============================================================================
 # n_rescue_validate_device
 # ------------------------
