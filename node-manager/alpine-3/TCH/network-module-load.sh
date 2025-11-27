@@ -92,6 +92,7 @@ n_auto_load_network_modules_safe() {
 }
 
 
+
 #===============================================================================
 # n_auto_load_network_modules
 # ---------------------------
@@ -101,16 +102,19 @@ n_auto_load_network_modules_safe() {
 #   n_auto_load_network_modules
 #
 # Behaviour:
-#   - Scans for network devices that need modules
-#   - Loads appropriate kernel modules
-#   - Adds them to /etc/modules for persistence
+#   - Scans PCI devices for network controllers (if lspci available)
+#   - Tries common network modules for undetected hardware
+#   - Adds loaded modules to /etc/modules for persistence
 #
 # Returns:
 #   0 on success
-#   1 on failure
+#
+# Example usage:
+#   n_auto_load_network_modules
+#
 #===============================================================================
 n_auto_load_network_modules() {
-  local module_loaded=0
+  local modules_loaded=0
   
   n_remote_log "[NET] Detecting network interfaces requiring modules..."
   
@@ -118,39 +122,25 @@ n_auto_load_network_modules() {
   if command -v lspci >/dev/null 2>&1; then
     n_remote_log "[NET] Scanning PCI devices..."
     
-    # Find network devices and their kernel modules
     while IFS= read -r line; do
-      local pci_id module
-      pci_id=$(echo "$line" | awk '{print $1}')
+      local pci_id=$(echo "$line" | awk '{print $1}')
+      local module=$(lspci -k -s "$pci_id" 2>/dev/null | grep "Kernel modules:" | cut -d: -f2 | xargs)
       
-      # Get kernel module for this device
-      module=$(lspci -k -s "$pci_id" 2>/dev/null | grep "Kernel modules:" | cut -d: -f2 | xargs)
-      
-      if [[ -n "$module" ]]; then
-        for mod in $module; do
-          if ! lsmod | grep -q "^$mod "; then
-            n_remote_log "[NET] Loading module: $mod for device $pci_id"
-            if modprobe "$mod" 2>/dev/null; then
-              ((module_loaded++))
-              # Add to /etc/modules for persistence
-              if ! grep -q "^$mod$" /etc/modules 2>/dev/null; then
-                echo "$mod" >> /etc/modules
-              fi
-            else
-              n_remote_log "[NET] Failed to load module: $mod"
-            fi
-          else
-            n_remote_log "[NET] Module already loaded: $mod"
+      if [[ -n "${module}" ]]; then
+        for mod in ${module}; do
+          if n_load_kernel_module "${mod}"; then
+            ((modules_loaded++))
+            n_add_persistent_module "${mod}"
           fi
         done
       fi
     done < <(lspci -nn | grep -E "(Network|Ethernet)" || true)
   else
-    n_remote_log "[NET] lspci not found - install pciutils package"
+    n_remote_log "[NET] lspci not found - trying common modules"
   fi
   
-  # Method 2: Check for common network modules based on hardware
-  local common_modules=(
+  # Method 2: Try common network modules
+    local common_modules=(
     "e1000"      # Intel PRO/1000
     "e1000e"     # Intel PRO/1000 PCIe
     "igb"        # Intel Gigabit
@@ -160,53 +150,20 @@ n_auto_load_network_modules() {
     "vmxnet3"    # VMware
     "tun"       # Tunnel
   )
-  
+    
   n_remote_log "[NET] Checking common network modules..."
   for mod in "${common_modules[@]}"; do
-    # Check if hardware exists that might need this module
-    if modinfo "$mod" >/dev/null 2>&1; then
-      if ! lsmod | grep -q "^$mod "; then
-        n_remote_log "[NET] Attempting to load: $mod"
-        if modprobe "$mod" 2>/dev/null; then
-          ((module_loaded++))
-          # Check if it actually created an interface
-          sleep 1
-          local iface_count_after=$(ip link show 2>/dev/null | grep -c "^[0-9]:" || echo 0)
-          if [[ $iface_count_after -gt 0 ]]; then
-            n_remote_log "[NET] Module $mod loaded successfully"
-            if ! grep -q "^$mod$" /etc/modules 2>/dev/null; then
-              echo "$mod" >> /etc/modules
-            fi
-          else
-            # Unload if it didn't create an interface
-            modprobe -r "$mod" 2>/dev/null
-          fi
-        fi
-      fi
+    if n_load_kernel_module "${mod}"; then
+      ((modules_loaded++))
+      n_add_persistent_module "${mod}"
     fi
   done
   
-  # Method 3: Check dmesg for network devices needing firmware
-  n_remote_log "[NET] Checking for devices needing firmware..."
-  if dmesg | grep -i "firmware" | grep -iE "(eth|network|wifi)" > /tmp/firmware-msgs; then
-    cat /tmp/firmware-msgs | sed 's/^/  /'
-    rm -f /tmp/firmware-msgs
-  else
-    n_remote_log "  No firmware messages found"
-  fi
-  
-  # List all network interfaces after loading (BusyBox compatible)
-  n_remote_log "[NET] Current network interfaces:"
-  ip link show 2>/dev/null | grep "^[0-9]:" | awk '{print "  " $2}' | sed 's/:$//'
-  
-  if [[ $module_loaded -gt 0 ]]; then
-    n_remote_log "[NET] Loaded $module_loaded new network modules"
-    return 0
-  else
-    n_remote_log "[NET] No new network modules needed"
-    return 0
-  fi
+  n_remote_log "[NET] Network module loading complete, ${modules_loaded} modules loaded"
+  return 0
 }
+
+
 
 
 

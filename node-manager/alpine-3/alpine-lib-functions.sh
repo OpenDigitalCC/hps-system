@@ -211,24 +211,63 @@ n_create_cgroups() {
 }
 
 #===============================================================================
-# n_load_kernel_module
-# --------------------
-# Load a kernel module from mounted modloop
+# n_load_kernel_modules
+# ---------------------
+# Load multiple kernel modules.
+#
+# Usage:
+#   n_load_kernel_modules <module1> [module2] [module3] ...
 #
 # Behaviour:
-#   - Searches for module in /.modloop/modules/$(uname -r)/
-#   - Loads module using insmod
+#   - Calls n_load_kernel_module for each module
+#   - Continues on failure (best-effort)
+#   - Returns count of failed modules
+#
+# Arguments:
+#   $@ - module names to load
+#
+# Returns:
+#   0 if all modules loaded successfully
+#   N (1-255) number of modules that failed to load
+#
+# Example usage:
+#   n_load_kernel_modules ext4 mbcache jbd2
+#   n_load_kernel_modules raid1 raid456 md_mod
+#
+#===============================================================================
+n_load_kernel_modules() {
+  local failed=0
+  
+  for module in "$@"; do
+    if ! n_load_kernel_module "${module}"; then
+      ((failed++))
+    fi
+  done
+  
+  return ${failed}
+}
+
+#===============================================================================
+# n_load_kernel_module
+# --------------------
+# Load a kernel module with automatic fallback.
+#
+# Usage:
+#   n_load_kernel_module <module_name>
+#
+# Behaviour:
+#   - Checks if module is already loaded
+#   - Attempts modprobe first (handles dependencies)
+#   - Falls back to insmod from modloop if modprobe fails
 #   - Handles both .ko and .ko.gz files
-#   - Checks if module is already loaded before attempting load
 #
 # Arguments:
 #   $1 - module_name : Name of module to load (without .ko extension)
 #
 # Returns:
 #   0 if module loaded successfully or already loaded
-#   1 if modloop not mounted
-#   2 if module file not found
-#   3 if insmod failed
+#   1 if module not found
+#   2 if load failed
 #
 # Example usage:
 #   n_load_kernel_module 8021q
@@ -240,44 +279,84 @@ n_load_kernel_module() {
   
   # Check if already loaded
   if lsmod | grep -q "^${module_name} "; then
-    echo "Module already loaded: $module_name"
+    n_remote_log "[MOD] Module already loaded: ${module_name}"
     return 0
   fi
   
-  # Verify modloop is mounted
+  # Try modprobe first
+  if modprobe "${module_name}" 2>/dev/null; then
+    n_remote_log "[MOD] Loaded via modprobe: ${module_name}"
+    return 0
+  fi
+  
+  n_remote_log "[MOD] modprobe failed for ${module_name}, trying insmod fallback"
+  
+  # Fallback to insmod from modloop
   local modloop_mount="/.modloop"
-  if ! mountpoint -q "$modloop_mount" 2>/dev/null; then
-    echo "ERROR: Modloop not mounted at $modloop_mount" >&2
+  if ! mountpoint -q "${modloop_mount}" 2>/dev/null; then
+    n_remote_log "[MOD] ERROR: modprobe failed and modloop not mounted"
     return 1
   fi
   
-  # Detect kernel version
   local kver=$(uname -r)
-  local module_dir="$modloop_mount/modules/$kver"
+  local module_dir="${modloop_mount}/modules/${kver}"
   
-  if [[ ! -d "$module_dir" ]]; then
-    echo "ERROR: Module directory not found: $module_dir" >&2
+  if [[ ! -d "${module_dir}" ]]; then
+    n_remote_log "[MOD] ERROR: Module directory not found: ${module_dir}"
     return 1
   fi
   
-  # Find module file (handles .ko or .ko.gz)
-  local module_file=$(find "$module_dir" -name "${module_name}.ko*" | head -n1)
+  # Find module file
+  local module_file=$(find "${module_dir}" -name "${module_name}.ko*" 2>/dev/null | head -n1)
   
-  if [[ -z "$module_file" ]]; then
-    echo "ERROR: Module not found: $module_name" >&2
-    return 2
+  if [[ -z "${module_file}" ]]; then
+    n_remote_log "[MOD] ERROR: Module not found: ${module_name}"
+    return 1
   fi
   
-  # Load module
-  echo "Loading module: $module_name from $module_file"
-  if ! insmod "$module_file" 2>/dev/null; then
-    echo "ERROR: Failed to load module: $module_name" >&2
-    return 3
+  if insmod "${module_file}" 2>/dev/null; then
+    n_remote_log "[MOD] Loaded via insmod: ${module_name}"
+    return 0
   fi
   
-  echo "Successfully loaded module: $module_name"
+  n_remote_log "[MOD] ERROR: Failed to load module: ${module_name}"
+  return 2
+}
+
+
+#===============================================================================
+# n_add_persistent_module
+# -----------------------
+# Add a module to /etc/modules for persistence across reboots.
+#
+# Usage:
+#   n_add_persistent_module <module_name>
+#
+# Behaviour:
+#   - Checks if module already in /etc/modules
+#   - Appends if not present
+#
+# Arguments:
+#   $1 - module_name : Name of module
+#
+# Returns:
+#   0 on success
+#
+# Example usage:
+#   n_add_persistent_module e1000e
+#
+#===============================================================================
+n_add_persistent_module() {
+  local module_name="${1:?Usage: n_add_persistent_module <module_name>}"
+  
+  if ! grep -q "^${module_name}$" /etc/modules 2>/dev/null; then
+    echo "${module_name}" >> /etc/modules
+    n_remote_log "[MOD] Added ${module_name} to /etc/modules"
+  fi
+  
   return 0
 }
+
 
 
 #===============================================================================

@@ -288,22 +288,23 @@ n_rescue_read_disk_config() {
   return 0
 }
 
-
 #===============================================================================
 # n_rescue_load_modules
 # ---------------------
 # Load all kernel modules required for rescue operations.
 #
+# Usage:
+#   n_rescue_load_modules
+#
 # Behaviour:
-#   - Loads ext4 modules (filesystem support) using n_load_kernel_module
+#   - Loads ext4 modules (filesystem support)
 #   - Loads ZFS modules if available (for SCH storage nodes)
-#   - Loads mdadm/RAID modules (for RAID1 systems)
-#   - Reports success/failure for each module group
+#   - Loads RAID modules (for RAID1 systems)
 #   - Continues on partial failure (best-effort loading)
 #
 # Returns:
 #   0 if all modules loaded successfully
-#   1 if some modules failed (non-fatal, continues to rescue shell)
+#   1 if some modules failed (non-fatal)
 #
 # Example usage:
 #   n_rescue_load_modules
@@ -313,70 +314,27 @@ n_rescue_load_modules() {
   local failed=0
   
   n_remote_log "[INFO] Loading rescue mode kernel modules"
-  echo "=== Loading Kernel Modules ===" >&2
   
-  # Load ext4 modules
-  echo -n "Loading ext4 modules... " >&2
-  local ext4_loaded=0
-  for mod in ext4 mbcache jbd2; do
-    if n_load_kernel_module "$mod" 2>/dev/null; then
-      ext4_loaded=1
-    fi
-  done
-  
-  if [[ $ext4_loaded -eq 1 ]]; then
-    echo "OK" >&2
-    n_remote_log "[INFO] ext4 modules loaded"
-  else
-    echo "FAILED" >&2
-    n_remote_log "[WARNING] Failed to load ext4 modules"
+  # ext4 modules
+  n_remote_log "[INFO] Loading ext4 modules..."
+  if ! n_load_kernel_modules ext4 mbcache jbd2; then
+    n_remote_log "[WARN] Some ext4 modules failed to load"
     failed=1
   fi
   
-  # Load ZFS modules
-  echo -n "Loading ZFS modules... " >&2
-  if n_load_kernel_module zfs 2>/dev/null; then
-    echo "OK" >&2
-    n_remote_log "[INFO] ZFS modules loaded"
-  else
-    echo "NOT AVAILABLE" >&2
-    n_remote_log "[DEBUG] ZFS modules not available (may not be needed)"
+  # ZFS modules
+  n_remote_log "[INFO] Loading ZFS modules..."
+  if ! n_load_kernel_module zfs; then
+    n_remote_log "[DEBUG] ZFS not available (may not be needed)"
   fi
   
-  # Load mdadm/RAID modules
-  echo -n "Loading RAID modules... " >&2
-  local raid_modules=("raid1" "raid456" "md_mod")
-  local raid_loaded=0
-  
-  for mod in "${raid_modules[@]}"; do
-    if n_load_kernel_module "$mod" 2>/dev/null; then
-      raid_loaded=1
-    fi
-  done
-  
-  if [[ $raid_loaded -eq 1 ]]; then
-    echo "OK" >&2
-    n_remote_log "[INFO] RAID modules loaded"
-  else
-    echo "NOT AVAILABLE" >&2
-    n_remote_log "[DEBUG] RAID modules not available (may not be needed)"
+  # RAID modules
+  n_remote_log "[INFO] Loading RAID modules..."
+  if ! n_load_kernel_modules md_mod raid1 raid456; then
+    n_remote_log "[DEBUG] Some RAID modules not available (may not be needed)"
   fi
   
-  # Ensure mdadm tool is available
-  if ! command -v mdadm >/dev/null 2>&1; then
-    echo -n "Installing mdadm tool... " >&2
-    if apk add --quiet mdadm 2>/dev/null; then
-      echo "OK" >&2
-      n_remote_log "[INFO] mdadm tool installed"
-    else
-      echo "FAILED" >&2
-      n_remote_log "[WARNING] Failed to install mdadm"
-    fi
-  fi
-  
-  echo "" >&2
-  
-  return $failed
+  return ${failed}
 }
 
 
@@ -416,7 +374,7 @@ n_rescue_install_tools() {
     grub grub-bios syslinux
     smartmontools hdparm lsblk
     rsync wget curl
-    vim nano
+    vim nano screen
   )
   
   local valid_packages=()
