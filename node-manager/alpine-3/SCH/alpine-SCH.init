@@ -9,6 +9,10 @@
 # Functions are loaded from IPS via hps_load_node_functions.
 #===============================================================================
 
+n_install_apk_packages_from_ips zfs zfs-lts zfs-openrc targetcli-fb
+
+
+
 # Set hostname and /etc/hosts from IPS config
 n_set_hostname_and_hosts
 

@@ -511,207 +511,244 @@ EOF
 
 
 
-
 #===============================================================================
-# n_install_apk_packages_from_ips
-# --------------------------------
-# Install APK packages from IPS HTTP server on Alpine nodes.
+# n_install_packages
+# ------------------
+# Install APK packages with automatic fallback to direct HTTP download.
 #
-# Arguments:
-#   $@ - package_names : Package names to install (without version/extension)
-#                        e.g., "opensvc-server opensvc-client"
+# Usage:
+#   n_install_packages <package1> [package2] [package3] ...
 #
 # Behaviour:
-#   - Determines IPS gateway address
-#   - Fetches package list from IPS repository via HTTP
-#   - Matches requested package names to available .apk files
-#   - Selects latest version when multiple matches exist
-#   - Downloads each package to /tmp
-#   - Installs using apk add --allow-untrusted
-#   - Cleans up downloaded packages after installation
-#   - Logs progress and errors to IPS via n_remote_log
+#   - Attempts apk add first (uses configured repositories)
+#   - Falls back to direct HTTP download from IPS if apk fails
+#   - Direct mode searches three repositories:
+#     - Main: /distros/<repo_path>/apks/main/x86_64/
+#     - Community: /distros/<repo_path>/apks/community/x86_64/
+#     - Custom: /packages/alpine-repo/x86_64/
+#   - Selects latest version when package exists in multiple repos
+#   - Caches repo listings for efficiency
 #
-# Repository Location:
-#   http://<ips>/packages/alpine-repo/x86_64/
-#
-# Output:
-#   Installation progress and results (local and remote)
+# Arguments:
+#   $@ - package names to install
 #
 # Returns:
-#   0 on success (all packages installed)
-#   1 on invalid parameters or missing packages
+#   0 on success
+#   1 on invalid parameters
 #   2 on installation failure
+#
+# Example usage:
+#   n_install_packages zfs-lts zfs-openrc
+#   n_install_packages opensvc-server
+#
 #===============================================================================
-n_install_apk_packages_from_ips() {
-  local package_names=("$@")
+n_install_packages() {
+  local packages=("$@")
   
-  if [[ ${#package_names[@]} -eq 0 ]]; then
-    echo "Error: No package names provided"
-    echo "Usage: n_install_apk_packages_from_ips <package_name> [package_name...]"
-    n_remote_log "APK install called without package names"
+  if [[ ${#packages[@]} -eq 0 ]]; then
+    n_remote_log "[PKG] ERROR: No packages specified"
     return 1
   fi
   
-  # Get IPS gateway address
-  local ips_gateway
-  ips_gateway=$(n_get_provisioning_node) || {
-    echo "Error: Could not determine IPS gateway address"
-    n_remote_log "Failed to determine IPS gateway for APK installation"
-    return 1
-  }
+  n_remote_log "[PKG] Installing packages: ${packages[*]}"
   
-  local repo_url="http://${ips_gateway}/packages/alpine-repo/x86_64"
-  local temp_dir="/tmp/apk-install-$$"
-  
-  echo "Installing APK packages from IPS..."
-  echo "  IPS: ${ips_gateway}"
-  echo "  Repository: ${repo_url}"
-  echo "  Packages: ${package_names[*]}"
-  echo ""
-  
-  n_remote_log "Starting APK installation: ${package_names[*]}"
-  
-  # Create temp directory
-  mkdir -p "$temp_dir" || {
-    echo "Error: Failed to create temporary directory"
-    n_remote_log "Failed to create temp directory ${temp_dir}"
-    return 2
-  }
-  
-  # Fetch directory listing from IPS
-  echo "Fetching package list from IPS..."
-  local listing_file="${temp_dir}/listing.html"
-  
-  if ! curl -sf "${repo_url}/" > "$listing_file"; then
-    echo "Error: Failed to fetch package list from ${repo_url}"
-    n_remote_log "Failed to fetch package list from ${repo_url}"
-    rm -rf "$temp_dir"
-    return 2
+  # Try apk add first
+  if apk add --no-progress "${packages[@]}" 2>/dev/null; then
+    n_remote_log "[PKG] Installed via apk: ${packages[*]}"
+    return 0
   fi
   
-  # Extract .apk filenames from HTML listing
-  local available_packages
-  available_packages=$(grep -o 'href="[^"]*\.apk"' "$listing_file" | cut -d'"' -f2)
+  n_remote_log "[PKG] apk add failed, falling back to direct HTTP"
   
-  if [[ -z "$available_packages" ]]; then
-    echo "Error: No packages found in repository"
-    n_remote_log "No APK packages found in repository ${repo_url}"
-    rm -rf "$temp_dir"
+  # Fall back to direct HTTP installation
+  _n_install_packages_direct "${packages[@]}"
+}
+
+#===============================================================================
+# _n_install_packages_direct
+# --------------------------
+# Internal: Install packages via direct HTTP download from IPS.
+#
+# Usage:
+#   _n_install_packages_direct <package1> [package2] ...
+#
+# Behaviour:
+#   - Gets os_id and repo_path from IPS
+#   - Fetches and caches package listings from all repos
+#   - Finds latest version of each package across all repos
+#   - Downloads and installs with apk add --allow-untrusted
+#
+# Returns:
+#   0 on success
+#   1 on setup failure
+#   2 on installation failure
+#
+#===============================================================================
+_n_install_packages_direct() {
+  local packages=("$@")
+  local ips_host="ips"
+  local cache_dir="/tmp/apk-cache-$$"
+  local download_dir="/tmp/apk-download-$$"
+  
+  # Get os_id from host config
+  local os_id
+  os_id=$(n_remote_host_variable os_id)
+  if [[ -z "${os_id}" ]]; then
+    n_remote_log "[PKG] ERROR: Could not determine os_id"
     return 1
   fi
   
-  local pkg_count=$(echo "$available_packages" | wc -l)
-  echo "Available packages: ${pkg_count}"
-  echo ""
-  n_remote_log "Found ${pkg_count} packages in repository"
+  # Get repo_path from IPS
+  local repo_path
+  repo_path=$(n_ips_command os_variable os_id="${os_id}" name=repo_path)
+  if [[ -z "${repo_path}" ]]; then
+    n_remote_log "[PKG] ERROR: Could not determine repo_path for ${os_id}"
+    return 1
+  fi
   
-  # Function to extract version from APK filename
-  # Example: opensvc-server-3.0.8-r0.apk -> 3.0.8-r0
-  _extract_apk_version() {
-    local filename="$1"
-    local pkg_name="$2"
-    # Remove package name prefix and .apk suffix
-    echo "${filename#${pkg_name}-}" | sed 's/\.apk$//'
-  }
+  n_remote_log "[PKG] Using os_id=${os_id} repo_path=${repo_path}"
   
-  # Function to find latest version of a package
-  _find_latest_apk() {
-    local pkg_name="$1"
-    local candidates
+  # Define repository URLs
+  local repos=(
+    "http://${ips_host}/distros/${repo_path}/apks/main/x86_64"
+    "http://${ips_host}/distros/${repo_path}/apks/community/x86_64"
+    "http://${ips_host}/packages/alpine-repo/x86_64"
+  )
+  
+  mkdir -p "${cache_dir}" "${download_dir}"
+  
+  # Fetch and cache listings from all repos
+  local repo_index=0
+  for repo_url in "${repos[@]}"; do
+    local listing_file="${cache_dir}/repo_${repo_index}.list"
     
-    # Find all matching packages
-    candidates=$(echo "$available_packages" | grep "^${pkg_name}-[0-9]")
-    
-    if [[ -z "$candidates" ]]; then
-      return 1
+    if curl -sf "${repo_url}/" | grep -o 'href="[^"]*\.apk"' | cut -d'"' -f2 > "${listing_file}" 2>/dev/null; then
+      local pkg_count=$(wc -l < "${listing_file}")
+      n_remote_log "[PKG] Repo ${repo_index}: ${pkg_count} packages from ${repo_url}"
+    else
+      n_remote_log "[PKG] Repo ${repo_index}: unavailable (${repo_url})"
+      : > "${listing_file}"
     fi
     
-    # Sort by version and get the latest
-    # APK versions are typically: version-rN (e.g., 3.0.8-r0)
-    local latest=""
-    local latest_version=""
-    
-    while IFS= read -r candidate; do
-      if [[ -n "$candidate" ]]; then
-        local version
-        version=$(_extract_apk_version "$candidate" "$pkg_name")
-        
-        if [[ -z "$latest" ]]; then
-          latest="$candidate"
-          latest_version="$version"
-        else
-          # Compare versions using apk's version comparison logic
-          # Higher version sorts later with 'sort -V'
-          if echo -e "${version}\n${latest_version}" | sort -V | tail -1 | grep -q "^${version}$"; then
-            latest="$candidate"
-            latest_version="$version"
-          fi
-        fi
-      fi
-    done <<< "$candidates"
-    
-    echo "$latest"
-    return 0
-  }
+    ((repo_index++))
+  done
   
-  # Match and download requested packages
-  local -a packages_to_install=()
+  # Find and download each package
+  local packages_to_install=()
   local missing_packages=()
   
-  for pkg_name in "${package_names[@]}"; do
-    # Find latest version of package
-    local pkg_file
-    pkg_file=$(_find_latest_apk "$pkg_name")
+  for pkg_name in "${packages[@]}"; do
+    local best_file=""
+    local best_version=""
+    local best_repo_url=""
     
-    if [[ -z "$pkg_file" ]]; then
-      missing_packages+=("$pkg_name")
-      n_remote_log "Package not found: ${pkg_name}"
-      continue
-    fi
+    # Search all repos for this package
+    repo_index=0
+    for repo_url in "${repos[@]}"; do
+      local listing_file="${cache_dir}/repo_${repo_index}.list"
+      
+      # Find matching packages (name-version.apk pattern)
+      while IFS= read -r apk_file; do
+        if [[ "${apk_file}" =~ ^${pkg_name}-([0-9][^/]*)\.apk$ ]]; then
+          local version="${BASH_REMATCH[1]}"
+          
+          # Compare versions, keep latest
+          if [[ -z "${best_version}" ]] || _version_gt "${version}" "${best_version}"; then
+            best_file="${apk_file}"
+            best_version="${version}"
+            best_repo_url="${repo_url}"
+          fi
+        fi
+      done < "${listing_file}"
+      
+      ((repo_index++))
+    done
     
-    echo "Downloading: ${pkg_file} (latest version)"
-    if curl -sf -o "${temp_dir}/${pkg_file}" "${repo_url}/${pkg_file}"; then
-      packages_to_install+=("${temp_dir}/${pkg_file}")
-      n_remote_log "Downloaded: ${pkg_file}"
+    if [[ -n "${best_file}" ]]; then
+      n_remote_log "[PKG] Found ${pkg_name}: ${best_file} (${best_version})"
+      
+      # Download package
+      if curl -sf -o "${download_dir}/${best_file}" "${best_repo_url}/${best_file}"; then
+        packages_to_install+=("${download_dir}/${best_file}")
+      else
+        n_remote_log "[PKG] ERROR: Failed to download ${best_file}"
+        missing_packages+=("${pkg_name}")
+      fi
     else
-      echo "Error: Failed to download ${pkg_file}"
-      n_remote_log "Download failed: ${pkg_file}"
-      missing_packages+=("$pkg_name")
+      n_remote_log "[PKG] WARNING: Package not found: ${pkg_name}"
+      missing_packages+=("${pkg_name}")
     fi
   done
   
-  # Check for missing packages
+  # Report missing packages
   if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    echo ""
-    echo "Error: Some packages not found:"
-    printf '  %s\n' "${missing_packages[@]}"
-    n_remote_log "Missing packages: ${missing_packages[*]}"
-    rm -rf "$temp_dir"
-    return 1
+    n_remote_log "[PKG] Missing packages: ${missing_packages[*]}"
   fi
   
-  # Install packages
-  echo ""
-  echo "Installing ${#packages_to_install[@]} packages..."
-  n_remote_log "Installing ${#packages_to_install[@]} APK packages"
-  
-  # Use --force-non-repository for diskless/data Alpine systems
-  if ! apk add --allow-untrusted --force-non-repository "${packages_to_install[@]}"; then
-    echo "Error: Package installation failed"
-    n_remote_log "APK installation failed for packages: ${package_names[*]}"
-    rm -rf "$temp_dir"
+  # Install downloaded packages
+  if [[ ${#packages_to_install[@]} -eq 0 ]]; then
+    n_remote_log "[PKG] ERROR: No packages to install"
+    rm -rf "${cache_dir}" "${download_dir}"
     return 2
   fi
   
-  # Cleanup
-  rm -rf "$temp_dir"
-  
-  echo ""
-  echo "Successfully installed packages:"
-  printf '  %s\n' "${package_names[@]}"
-  
-  n_remote_log "Successfully installed APK packages: ${package_names[*]}"
-  
-  return 0
+  n_remote_log "[PKG] Installing ${#packages_to_install[@]} packages"
+  if apk add --allow-untrusted --force-non-repository "${packages_to_install[@]}" 2>&1 | while IFS= read -r line; do
+    n_remote_log "[PKG] ${line}"
+  done; then
+    n_remote_log "[PKG] Installation successful"
+    rm -rf "${cache_dir}" "${download_dir}"
+    return 0
+  else
+    n_remote_log "[PKG] ERROR: Installation failed"
+    rm -rf "${cache_dir}" "${download_dir}"
+    return 2
+  fi
 }
+
+#===============================================================================
+# _version_gt
+# -----------
+# Internal: Compare two version strings.
+#
+# Arguments:
+#   $1 - version a
+#   $2 - version b
+#
+# Returns:
+#   0 if a > b
+#   1 otherwise
+#
+#===============================================================================
+_version_gt() {
+  local a="$1"
+  local b="$2"
+  
+  local highest
+  highest=$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1)
+  
+  [[ "${highest}" == "$a" && "$a" != "$b" ]]
+}
+
+#===============================================================================
+# n_install_apk_packages_from_ips
+# -------------------------------
+# DEPRECATED: Use n_install_packages instead.
+#
+# This function is maintained for backward compatibility and will be
+# removed in a future release.
+#
+# Arguments:
+#   $@ - package names to install
+#
+# Returns:
+#   Same as n_install_packages
+#
+#===============================================================================
+n_install_apk_packages_from_ips() {
+  n_remote_log "[PKG] WARNING: n_install_apk_packages_from_ips is deprecated, use n_install_packages"
+  n_install_packages "$@"
+}
+
+
 
