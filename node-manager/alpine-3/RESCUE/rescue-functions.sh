@@ -294,18 +294,20 @@ n_rescue_load_modules() {
 # Install essential rescue and repair tools.
 #
 # Behaviour:
-#   - Installs disk partitioning tools (sfdisk, parted, gdisk)
+#   - Validates each package exists before installation
+#   - Installs disk partitioning tools (sfdisk, parted, gptfdisk)
 #   - Installs filesystem tools (e2fsprogs, dosfstools, xfsprogs)
 #   - Installs RAID tools (mdadm)
 #   - Installs bootloader tools (grub, grub-bios)
 #   - Installs diagnostic tools (smartmontools, hdparm)
-#   - Installs cleanup tools (wipefs from util-linux)
+#   - Installs network and utility tools
+#   - Skips unavailable packages with warning
 #   - Uses apk for Alpine
-#   - Logs installation progress
 #
 # Returns:
 #   0 on success
-#   1 if package installation fails
+#   1 if package index update fails
+#   2 if package installation fails
 #
 # Example usage:
 #   n_rescue_install_tools
@@ -313,64 +315,62 @@ n_rescue_load_modules() {
 #===============================================================================
 n_rescue_install_tools() {
   n_remote_log "[INFO] Installing rescue tools"
-  echo "Installing rescue and repair tools..." >&2
   
-  # Define package groups
-  local disk_tools="sfdisk parted gdisk util-linux"
-  local fs_tools="e2fsprogs e2fsprogs-extra dosfstools xfsprogs xfsprogs-extra"
-  local raid_tools="mdadm"
-  local boot_tools="grub grub-bios syslinux"
-  local diagnostic_tools="smartmontools hdparm lsblk"
-  local network_tools="rsync wget curl"
-  local editors="vim nano"
+  # Define all packages
+  local packages=(
+    sfdisk parted gptfdisk util-linux
+    e2fsprogs e2fsprogs-extra dosfstools xfsprogs xfsprogs-extra
+    mdadm
+    grub grub-bios syslinux
+    smartmontools hdparm lsblk
+    rsync wget curl
+    vim nano
+  )
   
-  # Combine all packages
-  local all_packages="$disk_tools $fs_tools $raid_tools $boot_tools $diagnostic_tools $network_tools $editors"
-  
-  echo "Packages to install:" >&2
-  echo "  Disk tools: $disk_tools" >&2
-  echo "  Filesystem tools: $fs_tools" >&2
-  echo "  RAID tools: $raid_tools" >&2
-  echo "  Bootloader tools: $boot_tools" >&2
-  echo "  Diagnostic tools: $diagnostic_tools" >&2
-  echo "  Network tools: $network_tools" >&2
-  echo "  Editors: $editors" >&2
-  echo "" >&2
+  local valid_packages=()
+  local missing_packages=()
   
   # Update package index first
   n_remote_log "[INFO] Updating package index"
-  echo "Updating package index..." >&2
   if ! apk update 2>&1 | while IFS= read -r line; do
-    n_remote_log "[DEBUG] apk update: $line"
+    n_remote_log "$line"
   done; then
     n_remote_log "[ERROR] Failed to update package index"
-    echo "ERROR: Failed to update package index" >&2
     return 1
   fi
   
-  # Install packages
-  n_remote_log "[INFO] Installing rescue tools: $all_packages"
-  echo "Installing packages - this may take a few minutes..." >&2
-  
-  # Use --no-progress for cleaner output
-  if apk add --no-progress $all_packages 2>&1 | while IFS= read -r line; do
-    # Only log important lines
-    if [[ "$line" =~ ^ERROR || "$line" =~ ^WARNING || "$line" =~ ^fetch || "$line" =~ Installing ]]; then
-      n_remote_log "[DEBUG] apk: $line"
-      echo "  $line" >&2
+  # Validate each package exists
+  n_remote_log "[INFO] Validating packages..."
+  for pkg in "${packages[@]}"; do
+    if apk search -e "${pkg}" | grep -q "^${pkg}-"; then
+      valid_packages+=("${pkg}")
+    else
+      missing_packages+=("${pkg}")
+      n_remote_log "[WARN] Package not found: ${pkg}"
     fi
-  done; then
-    n_remote_log "[INFO] Rescue tools installed successfully"
-    echo "" >&2
-    echo "✓ Rescue tools installed successfully" >&2
-    return 0
-  else
-    n_remote_log "[ERROR] Failed to install some rescue tools"
-    echo "" >&2
-    echo "✗ Failed to install some rescue tools" >&2
-    echo "You may need to install specific tools manually with: apk add PACKAGE_NAME" >&2
-    return 1
+  done
+  
+  # Report missing packages
+  if [[ ${#missing_packages[@]} -gt 0 ]]; then
+    n_remote_log "[WARN] Unavailable packages: ${missing_packages[*]}"
   fi
+  
+  # Install valid packages
+  if [[ ${#valid_packages[@]} -eq 0 ]]; then
+    n_remote_log "[ERROR] No valid packages to install"
+    return 2
+  fi
+  
+  n_remote_log "[INFO] Installing: ${valid_packages[*]}"
+  if ! apk add --no-progress "${valid_packages[@]}" 2>&1 | while IFS= read -r line; do
+    n_remote_log "$line"
+  done; then
+    n_remote_log "[ERROR] Failed to install packages"
+    return 2
+  fi
+  
+  n_remote_log "[INFO] Rescue tools installed successfully"
+  return 0
 }
 
 
