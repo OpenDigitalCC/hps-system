@@ -578,6 +578,43 @@ EXITING RESCUE MODE
     reboot                      # Keep RESCUE flag, stays in rescue mode
 
 REMOTE LOGGING
+     
+     lsblk                       # List block devices
+     fdisk -l                    # Show partition tables
+     blkid                       # Show filesystem UUIDs
+     mdadm --detail /dev/md0     # Check RAID status
+
+  5. Clean Failed Installation:
+     
+     n_rescue_cleanup            # Clean disks from config
+     # Choose 'y' to reset state to UNCONFIGURED
+     reboot
+
+  6. Repurpose Disk from Another System:
+     
+     n_rescue_cleanup /dev/vdb --wipe-table -f
+     # This disk can now be used for fresh install
+
+EXITING RESCUE MODE
+───────────────────
+
+  After fixing issues, clear RESCUE flag and set appropriate STATE:
+
+    n_rescue_exit               # Clear RESCUE flag, unmount filesystems
+    n_set_state INSTALLED       # If system is fixed and bootable
+    reboot
+
+  Or to trigger fresh installation:
+
+    n_rescue_exit               # Clear RESCUE flag
+    n_set_state INSTALLING      # Reinstall on next boot
+    reboot
+
+  If you didn't fix anything (will return to rescue mode):
+
+    reboot                      # Keep RESCUE flag, stays in rescue mode
+
+REMOTE LOGGING
 ──────────────
 
   All rescue operations are logged to IPS.
@@ -949,22 +986,26 @@ n_rescue_cleanup() {
     for disk in "${disk_array[@]}"; do
       if n_rescue_validate_device "$disk"; then
         echo "  Wiping $disk..." >&2
+        
+        # Run wipefs
         local wipe_output
         wipe_output=$(wipefs -a "$disk" 2>&1)
         local wipe_rc=$?
         
-        if [[ $wipe_rc -eq 0 ]]; then
+        # Check if disk is now clean (verification-based success)
+        local verify_output
+        verify_output=$(wipefs "$disk" 2>&1) || true
+        
+        if ! echo "$verify_output" | grep -q "PTUUID\|TYPE"; then
+          # No partition table signatures found = success
           n_remote_log "[DEBUG] Wiped partition table from $disk"
           echo "    ✓ Wiped partition table: $disk" >&2
-          
-          # Verify partition table removed
-          local verify_output
-          verify_output=$(wipefs "$disk" 2>&1) || true
-          if echo "$verify_output" | grep -q "PTUUID\|TYPE"; then
-            echo "    ⚠ WARNING: Partition table may remain on $disk" >&2
-            n_remote_log "[WARNING] Verification: partition table may remain on $disk"
-          fi
+        elif [[ $wipe_rc -eq 0 ]]; then
+          # wipefs succeeded but verification shows signatures
+          n_remote_log "[WARNING] wipefs succeeded but signatures may remain on $disk"
+          echo "    ⚠ Wiped but verification shows possible signatures: $disk" >&2
         else
+          # wipefs failed
           n_remote_log "[WARNING] Failed to wipe partition table on $disk: $wipe_output"
           echo "    ✗ Failed to wipe partition table on $disk" >&2
         fi
@@ -982,9 +1023,12 @@ n_rescue_cleanup() {
     [[ $wipe_table -eq 1 ]] && vars_to_clear+=("os_disk")
     
     for var in "${vars_to_clear[@]}"; do
-      if n_remote_host_variable "$var" "" 2>/dev/null; then
+      if n_remote_host_variable "$var" --unset 2>/dev/null; then
         n_remote_log "[DEBUG] Cleared $var"
         echo "  ✓ Cleared: $var" >&2
+      else
+        n_remote_log "[WARNING] Failed to clear $var"
+        echo "  ✗ Failed to clear: $var" >&2
       fi
     done
     echo "" >&2
