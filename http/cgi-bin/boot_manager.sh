@@ -495,7 +495,7 @@ if [[ "$cmd" == "init" ]]; then
       ipxe_goto_menu init_menu
       ;;
 
-    FAILED)
+    FAILED|INSTALL_FAILED)
       hps_log info "Install failed"
       ipxe_configure_main_menu
 #      cgi_auto_fail "Installation marked as FAILED"
