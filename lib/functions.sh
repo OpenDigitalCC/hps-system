@@ -10,6 +10,9 @@
 [[ -n "${_HPS_FUNCTIONS_LOADED:-}" ]] && return 0
 _HPS_FUNCTIONS_LOADED=1
 
+# Optional timing - set HPS_PROFILE=1 to enable
+[[ -n "${HPS_PROFILE:-}" ]] && { _HPS_START=$SECONDS; echo "[PROFILE] Starting functions.sh load"; }
+
 #------------------------------------------------------------------------------
 # Locate and load hps.conf (or system registry)
 #------------------------------------------------------------------------------
@@ -36,6 +39,8 @@ find_hps_config() {
   return 1
 }
 
+[[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Finding config: $((SECONDS - _HPS_START))s"
+
 # Locate config file or registry
 if ! HPS_CONFIG="$(find_hps_config)"; then
   echo "[HPS] ERROR: Could not locate hps.conf or system.db in any expected location:" >&2
@@ -45,31 +50,46 @@ if ! HPS_CONFIG="$(find_hps_config)"; then
   return 1
 fi
 
-# Source hps.conf for system paths (HPS_LOG_DIR, HPS_PACKAGES_DIR, etc)
-if [[ -f "${HPS_CONFIG_BASE}/hps.conf" ]]; then
-  source "${HPS_CONFIG_BASE}/hps.conf"
-elif [[ -f /srv/hps-config/hps.conf ]]; then
-  source /srv/hps-config/hps.conf
+[[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Config located: $((SECONDS - _HPS_START))s"
+
+# Set HPS_CONFIG_BASE if not already set (derive from HPS_CONFIG)
+if [[ -z "${HPS_CONFIG_BASE:-}" ]]; then
+  if [[ "$HPS_CONFIG" == *"/system.db" ]]; then
+    HPS_CONFIG_BASE="$(dirname "$(dirname "$HPS_CONFIG")")"  # Go up 2 levels from system.db
+  else
+    HPS_CONFIG_BASE="$(dirname "$HPS_CONFIG")"
+  fi
 fi
 
+# Source hps.conf for system paths (HPS_LOG_DIR, HPS_PACKAGES_DIR, etc)
+# This should be in the same location as HPS_CONFIG or system.db
+if [[ -f "${HPS_CONFIG_BASE}/hps.conf" ]]; then
+  source "${HPS_CONFIG_BASE}/hps.conf"
+fi
 
 # Load configuration based on type
 if [[ -d "$HPS_CONFIG" ]]; then
+  [[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Loading registry from $HPS_CONFIG"
+  
   # System registry - export variables from JSON
-  if [[ -f "${HPS_CONFIG}/../lib/functions.d/hps-registry.sh" ]]; then
-    # Need basic jq functionality to read registry
-    if command -v jq >/dev/null 2>&1; then
-      # Export each system registry key as environment variable
-      for json_file in "${HPS_CONFIG}"/*.json; do
-        [[ -f "$json_file" ]] || continue
-        local key=$(basename "$json_file" .json)
-        local value=$(jq -r . "$json_file" 2>/dev/null)
-        [[ -n "$value" ]] && export "${key}=${value}"
-      done
-    else
-      echo "[HPS] WARNING: jq not found, cannot read system registry" >&2
-    fi
+  if command -v jq >/dev/null 2>&1; then
+    # Count files for profiling
+    [[ -n "${HPS_PROFILE:-}" ]] && {
+      local json_count=$(find "${HPS_CONFIG}" -name "*.json" -type f 2>/dev/null | wc -l)
+      echo "[PROFILE] Found ${json_count} JSON files to process"
+    }
+    
+    # Export each system registry key as environment variable
+    for json_file in "${HPS_CONFIG}"/*.json; do
+      [[ -f "$json_file" ]] || continue
+      key=$(basename "$json_file" .json)
+      value=$(jq -r . "$json_file" 2>/dev/null)
+      [[ -n "$value" ]] && export "${key}=${value}"
+    done
+  else
+    echo "[HPS] WARNING: jq not found, cannot read system registry" >&2
   fi
+  
 elif [[ -f "$HPS_CONFIG" ]]; then
   # Legacy hps.conf file
   if ! source "$HPS_CONFIG"; then
@@ -81,9 +101,10 @@ else
   return 1
 fi
 
-export HPS_CONFIG
+[[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Registry/config loaded: $((SECONDS - _HPS_START))s"
 
-# Set defaults if not already set
+# Set all defaults based on CONFIG location
+export HPS_CONFIG
 export HPS_SYSTEM_BASE="${HPS_SYSTEM_BASE:-/srv/hps-system}"
 export HPS_CONFIG_BASE="${HPS_CONFIG_BASE:-/srv/hps-config}"
 export HPS_CLUSTER_CONFIG_BASE_DIR="${HPS_CLUSTER_CONFIG_BASE_DIR:-${HPS_CONFIG_BASE}/clusters}"
@@ -101,6 +122,8 @@ if [[ ! -d "$LIB_DIR" ]]; then
   return 1
 fi
 
+export FUNCDIR="${LIB_DIR}/functions.d"
+
 #------------------------------------------------------------------------------
 # Source core functions first
 #------------------------------------------------------------------------------
@@ -115,16 +138,22 @@ else
   return 1
 fi
 
+[[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Core functions loaded: $((SECONDS - _HPS_START))s"
+
 #------------------------------------------------------------------------------
 # Source function library fragments
 #------------------------------------------------------------------------------
 
-FUNCDIR="${LIB_DIR}/functions.d"
-
 if [[ -d "$FUNCDIR" ]]; then
+  [[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Loading libraries from $FUNCDIR"
+  
+  # Check if we have debug function once
+  has_debug_func=0
+  declare -f hps_source_with_debug >/dev/null 2>&1 && has_debug_func=1
+  
   # Source registry functions first as other functions depend on it
   if [[ -f "${FUNCDIR}/hps-registry.sh" ]]; then
-    if declare -f hps_source_with_debug >/dev/null 2>&1; then
+    if [[ $has_debug_func -eq 1 ]]; then
       hps_source_with_debug "${FUNCDIR}/hps-registry.sh" "continue"
     else
       source "${FUNCDIR}/hps-registry.sh" || {
@@ -134,13 +163,26 @@ if [[ -d "$FUNCDIR" ]]; then
     fi
   fi
   
+  [[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Registry functions loaded: $((SECONDS - _HPS_START))s"
+  
+  # Count libraries for profiling
+  [[ -n "${HPS_PROFILE:-}" ]] && {
+    lib_count=$(find "${FUNCDIR}" -name "*.sh" -type f 2>/dev/null | wc -l)
+    echo "[PROFILE] Found ${lib_count} library files to load"
+  }
+  
   # Source remaining function libraries
   for func_file in "$FUNCDIR"/*.sh; do
     [[ -e "$func_file" ]] || continue  # Skip if no matches
     [[ "$func_file" == *"hps-registry.sh" ]] && continue  # Already loaded
     
-    # Use hps_source_with_debug if available, otherwise simple source
-    if declare -f hps_source_with_debug >/dev/null 2>&1; then
+    [[ -n "${HPS_PROFILE:-}" ]] && {
+      _lib_start=$SECONDS
+      echo -n "[PROFILE]   Loading $(basename "$func_file")... "
+    }
+    
+    # Source the file
+    if [[ $has_debug_func -eq 1 ]]; then
       hps_source_with_debug "$func_file" "continue"
     else
       source "$func_file" || {
@@ -148,10 +190,14 @@ if [[ -d "$FUNCDIR" ]]; then
         return 1
       }
     fi
+    
+    [[ -n "${HPS_PROFILE:-}" ]] && echo "$((SECONDS - _lib_start))s"
   done
 else
   echo "[HPS] WARNING: Function directory not found: $FUNCDIR" >&2
 fi
+
+[[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] All libraries loaded: $((SECONDS - _HPS_START))s"
 
 #------------------------------------------------------------------------------
 # Initialize dynamic paths and cluster configuration
@@ -187,6 +233,8 @@ elif declare -f get_active_cluster_file >/dev/null 2>&1; then
     fi
   fi
 fi
+
+[[ -n "${HPS_PROFILE:-}" ]] && echo "[PROFILE] Total load time: $((SECONDS - _HPS_START))s"
 
 # Success
 return 0
