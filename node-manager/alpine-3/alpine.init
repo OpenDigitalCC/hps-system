@@ -10,6 +10,8 @@ n_set_hostname_and_hosts
 n_auto_load_network_modules
 n_configure_syslog
 
+n_install_packages jq
+
 n_configure_bash_shell
 
 # not sure we need this yet
