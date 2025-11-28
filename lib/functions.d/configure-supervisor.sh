@@ -1,4 +1,3 @@
-__guard_source || return
 
 
 get_path_supervisord_conf () {

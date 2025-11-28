@@ -1,4 +1,3 @@
-__guard_source || return
 
 # Purpose: functions to find any external dependencies and add them to the resources folder
 

@@ -1,4 +1,3 @@
-__guard_source || return
 # Define your functions below
 
 configure_kickstart () {

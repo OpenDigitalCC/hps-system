@@ -9,7 +9,6 @@
 # Platform: IPS (Initial Provisioning System) only
 #
 
-__guard_source || return
 
 #===============================================================================
 # get_keysafe_dir

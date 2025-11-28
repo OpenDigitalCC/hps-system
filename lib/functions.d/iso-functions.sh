@@ -1,4 +1,3 @@
-__guard_source || return
 
 
 _get_iso_path() {

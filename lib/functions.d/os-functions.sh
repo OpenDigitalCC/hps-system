@@ -1,4 +1,3 @@
-__guard_source || return
 
 #===============================================================================
 # OS Configuration Registry Core Functions

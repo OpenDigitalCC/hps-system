@@ -1,4 +1,3 @@
-__guard_source || return
 
 #:name: create_bootstrap_core_lib
 #:group: bootstrap

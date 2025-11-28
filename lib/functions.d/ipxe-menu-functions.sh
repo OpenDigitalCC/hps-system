@@ -1,4 +1,3 @@
-__guard_source || return
 # Define your functions below
 
 CGI_URL="http://\${next-server}/cgi-bin/boot_manager.sh"

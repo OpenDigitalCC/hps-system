@@ -1,4 +1,3 @@
-__guard_source || return
 
 # Disable patsub_replacement to ensure consistent string substitution
 shopt -u patsub_replacement 2>/dev/null || true

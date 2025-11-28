@@ -1,4 +1,3 @@
-__guard_source || return
 
 # at initial containwer start, subsequent supervisor starts or restarts, prepare the services
 _supervisor_pre_start () {
