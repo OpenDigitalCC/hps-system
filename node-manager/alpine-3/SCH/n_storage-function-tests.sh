@@ -87,6 +87,435 @@ n_test_sch_zfs_packages() {
 }
 
 #===============================================================================
+# n_test_sch_storage_all
+# -----------------------
+# Run complete storage test suite (ZFS + iSCSI).
+#
+# Behaviour:
+#   - Runs all ZFS tests
+#   - Runs all iSCSI tests
+#   - Reports comprehensive results
+#
+# Returns:
+#   0 if all tests pass
+#   1 if any test fails
+#
+# Example usage:
+#   n_test_sch_storage_all
+#
+#===============================================================================
+n_test_sch_storage_all() {
+  echo "============================================="
+  echo "HPS Storage Functions - Complete Test Suite"
+  echo "============================================="
+  echo ""
+  
+  local failed=0
+  
+  # Run ZFS tests
+  echo "[SUITE] Running ZFS test suite..."
+  echo ""
+  if ! n_test_sch_zpool_all; then
+    ((failed++))
+  fi
+  
+  echo ""
+  echo "============================================="
+  echo ""
+  
+  # Run iSCSI tests
+  echo "[SUITE] Running iSCSI test suite..."
+  echo ""
+  if ! n_test_sch_iscsi_all; then
+    ((failed++))
+  fi
+  
+  # Overall summary
+  echo ""
+  echo "============================================="
+  echo "Complete Test Suite Summary"
+  echo "============================================="
+  if [[ $failed -eq 0 ]]; then
+    echo "✓ All storage tests passed (ZFS + iSCSI)"
+    echo "============================================="
+    return 0
+  else
+    echo "✗ Storage tests failed: $failed test suites"
+    echo "============================================="
+    return 1
+  fi
+}
+
+#===============================================================================
+# iSCSI Target Tests
+#===============================================================================
+
+#===============================================================================
+# n_test_sch_iscsi_packages
+# --------------------------
+# Test iSCSI package installation and LIO initialization.
+#
+# Behaviour:
+#   - Verifies targetcli and targetcli-openrc packages installed
+#   - Checks for targetcli command
+#   - Verifies LIO subsystem is initialized
+#   - Checks configfs is mounted
+#   - Verifies kernel modules loaded
+#   - Checks targetcli service is running
+#
+# Returns:
+#   0 on success
+#   1 on failure
+#
+# Example usage:
+#   n_test_sch_iscsi_packages
+#
+#===============================================================================
+n_test_sch_iscsi_packages() {
+  echo "[TEST] Testing iSCSI package installation"
+  
+  local failed=0
+  
+  # Test 1: Verify packages installed
+  echo "[TEST] Checking installed packages..."
+  if apk info -e targetcli >/dev/null 2>&1; then
+    echo "  ✓ Package installed: targetcli"
+  else
+    echo "  ✗ Package missing: targetcli"
+    ((failed++))
+  fi
+  
+  if apk info -e targetcli-openrc >/dev/null 2>&1; then
+    echo "  ✓ Package installed: targetcli-openrc"
+  else
+    echo "  ✗ Package missing: targetcli-openrc"
+    ((failed++))
+  fi
+  
+  # Test 2: Verify targetcli command exists
+  echo "[TEST] Checking targetcli command..."
+  if command -v targetcli >/dev/null 2>&1; then
+    echo "  ✓ targetcli command found: $(command -v targetcli)"
+  else
+    echo "  ✗ targetcli command not found"
+    ((failed++))
+  fi
+  
+  # Test 3: Verify configfs is mounted
+  echo "[TEST] Checking configfs..."
+  if mountpoint -q /sys/kernel/config 2>/dev/null; then
+    echo "  ✓ configfs mounted at /sys/kernel/config"
+  else
+    echo "  ✗ configfs not mounted"
+    ((failed++))
+  fi
+  
+  # Test 4: Verify kernel modules loaded
+  echo "[TEST] Checking kernel modules..."
+  local modules=("target_core_mod" "target_core_iblock" "iscsi_target_mod")
+  for mod in "${modules[@]}"; do
+    if lsmod | grep -q "^${mod} "; then
+      echo "  ✓ Module loaded: $mod"
+    else
+      echo "  ✗ Module not loaded: $mod"
+      ((failed++))
+    fi
+  done
+  
+  # Test 5: Verify targetcli service running
+  echo "[TEST] Checking targetcli service..."
+  if rc-service targetcli status >/dev/null 2>&1; then
+    echo "  ✓ targetcli service is running"
+  else
+    echo "  ✗ targetcli service not running"
+    ((failed++))
+  fi
+  
+  # Test 6: Verify targetcli runs
+  echo "[TEST] Testing targetcli execution..."
+  if targetcli ls >/dev/null 2>&1; then
+    echo "  ✓ targetcli executes successfully"
+  else
+    echo "  ✗ targetcli execution failed"
+    ((failed++))
+  fi
+  
+  # Summary
+  echo ""
+  if [[ $failed -eq 0 ]]; then
+    echo "[TEST] ✓ All iSCSI package tests passed"
+    return 0
+  else
+    echo "[TEST] ✗ iSCSI package tests failed: $failed errors"
+    return 1
+  fi
+}
+
+#===============================================================================
+# n_test_sch_lio_create
+# ----------------------
+# Test iSCSI target creation validation.
+#
+# Behaviour:
+#   - Tests argument validation
+#   - Tests missing parameter detection
+#   - Tests device validation
+#   - Does NOT create actual targets (use live test for that)
+#
+# Returns:
+#   0 on success
+#   1 on failure
+#
+# Example usage:
+#   n_test_sch_lio_create
+#
+#===============================================================================
+n_test_sch_lio_create() {
+  echo "[TEST] Testing LIO create function validation"
+  
+  local failed=0
+  
+  # Test 1: Missing --iqn
+  echo "[TEST] Testing missing --iqn..."
+  if n_lio_create --device /dev/null 2>/dev/null; then
+    echo "  ✗ Failed to detect missing --iqn"
+    ((failed++))
+  else
+    echo "  ✓ Correctly detected missing --iqn"
+  fi
+  
+  # Test 2: Missing --device
+  echo "[TEST] Testing missing --device..."
+  if n_lio_create --iqn iqn.2025-11.test:test 2>/dev/null; then
+    echo "  ✗ Failed to detect missing --device"
+    ((failed++))
+  else
+    echo "  ✓ Correctly detected missing --device"
+  fi
+  
+  # Test 3: Non-existent device
+  echo "[TEST] Testing non-existent device..."
+  if n_lio_create --iqn iqn.2025-11.test:test --device /dev/nonexistent 2>/dev/null; then
+    echo "  ✗ Failed to detect non-existent device"
+    ((failed++))
+  else
+    echo "  ✓ Correctly detected non-existent device"
+  fi
+  
+  # Summary
+  echo ""
+  if [[ $failed -eq 0 ]]; then
+    echo "[TEST] ✓ All LIO create validation tests passed"
+    return 0
+  else
+    echo "[TEST] ✗ LIO create validation tests failed: $failed errors"
+    return 1
+  fi
+}
+
+#===============================================================================
+# n_test_sch_lio_live
+# -------------------
+# Test actual iSCSI target creation with zvol or loop device.
+#
+# Behaviour:
+#   - Creates a test zvol in existing pool OR loop device
+#   - Creates iSCSI target
+#   - Verifies target visible in targetcli
+#   - Deletes target
+#   - Cleans up zvol/loop device
+#   - Only runs if root and ZFS pool available
+#
+# Returns:
+#   0 on success
+#   1 on failure
+#   2 if skipped (not root or no pool)
+#
+# Example usage:
+#   n_test_sch_lio_live
+#
+#===============================================================================
+n_test_sch_lio_live() {
+  echo "[TEST] Testing live iSCSI target creation"
+  
+  # Check if running as root
+  if [[ $EUID -ne 0 ]]; then
+    echo "  ⚠ Skipping live test (requires root)"
+    return 2
+  fi
+  
+  local failed=0
+  local test_device=""
+  local cleanup_type=""
+  local test_iqn="iqn.2025-11.hps.test:test-$(date +%s)${RANDOM}"
+  
+  echo "[TEST] Creating test block device..."
+  
+  # Try to use existing ZFS pool for test zvol
+  local pool_name
+  pool_name=$(zpool list -H -o name 2>/dev/null | head -n1)
+  
+  if [[ -n "$pool_name" ]]; then
+    local test_zvol="${pool_name}/test-lio-$(date +%s)"
+    
+    if zfs create -V 100M "$test_zvol" 2>/dev/null; then
+      test_device="/dev/zvol/${test_zvol}"
+      cleanup_type="zvol"
+      echo "  ✓ Created test zvol: $test_zvol"
+    else
+      echo "  ⚠ Failed to create test zvol"
+    fi
+  fi
+  
+  # Fallback to loop device if zvol creation failed
+  if [[ -z "$test_device" ]]; then
+    if ! command -v losetup >/dev/null 2>&1; then
+      echo "  ⚠ Skipping live test (no ZFS pool and losetup not available)"
+      return 2
+    fi
+    
+    local test_file="/tmp/lio-test-$(date +%s).img"
+    truncate -s 100M "$test_file"
+    test_device=$(losetup -f --show "$test_file")
+    cleanup_type="loop"
+    echo "  ✓ Created test loop device: $test_device"
+  fi
+  
+  # Test target creation
+  echo "[TEST] Creating iSCSI target: $test_iqn"
+  if ! n_lio_create --iqn "$test_iqn" --device "$test_device"; then
+    echo "  ✗ Failed to create iSCSI target"
+    ((failed++))
+  else
+    echo "  ✓ Target creation succeeded"
+    
+    # Verify target exists
+    if targetcli /iscsi ls 2>/dev/null | grep -q "$test_iqn"; then
+      echo "  ✓ Target is visible in targetcli"
+    else
+      echo "  ✗ Target not found in targetcli"
+      ((failed++))
+    fi
+    
+    # Test target deletion
+    echo "[TEST] Deleting iSCSI target..."
+    if ! n_lio_delete --iqn "$test_iqn"; then
+      echo "  ✗ Failed to delete target"
+      ((failed++))
+    else
+      echo "  ✓ Target deletion succeeded"
+      
+      # Verify target gone
+      if targetcli /iscsi ls 2>/dev/null | grep -q "$test_iqn"; then
+        echo "  ✗ Target still exists after deletion"
+        ((failed++))
+      else
+        echo "  ✓ Target successfully removed"
+      fi
+    fi
+  fi
+  
+  # Cleanup
+  echo "[TEST] Cleaning up..."
+  
+  if [[ "$cleanup_type" == "zvol" ]]; then
+    local zvol_name="${test_device#/dev/zvol/}"
+    if zfs destroy "$zvol_name" 2>/dev/null; then
+      echo "  ✓ Test zvol destroyed"
+    else
+      echo "  ⚠ Failed to destroy test zvol"
+    fi
+  elif [[ "$cleanup_type" == "loop" ]]; then
+    if losetup -d "$test_device" 2>/dev/null; then
+      echo "  ✓ Loop device detached"
+    fi
+    local test_file="/tmp/lio-test-*.img"
+    rm -f $test_file 2>/dev/null
+    echo "  ✓ Test file removed"
+  fi
+  
+  # Summary
+  echo ""
+  if [[ $failed -eq 0 ]]; then
+    echo "[TEST] ✓ Live iSCSI target test passed"
+    return 0
+  else
+    echo "[TEST] ✗ Live iSCSI target test failed"
+    return 1
+  fi
+}
+
+#===============================================================================
+# n_test_sch_iscsi_all
+# ---------------------
+# Run all iSCSI tests in sequence.
+#
+# Behaviour:
+#   - Runs iSCSI package tests
+#   - Runs LIO create validation tests
+#   - Runs live target creation test (optional)
+#   - Reports overall results
+#
+# Returns:
+#   0 if all tests pass
+#   1 if any test fails
+#
+# Example usage:
+#   n_test_sch_iscsi_all
+#
+#===============================================================================
+n_test_sch_iscsi_all() {
+  echo "==========================================="
+  echo "HPS Storage Functions - iSCSI Test Suite"
+  echo "==========================================="
+  echo ""
+  
+  local failed=0
+  
+  # Run package tests
+  if ! n_test_sch_iscsi_packages; then
+    ((failed++))
+  fi
+  
+  echo ""
+  
+  # Run LIO create validation tests
+  if ! n_test_sch_lio_create; then
+    ((failed++))
+  fi
+  
+  echo ""
+  
+  # Run live test (optional, requires root)
+  echo "[TEST] Running optional live iSCSI target test..."
+  local live_rc
+  n_test_sch_lio_live
+  live_rc=$?
+  
+  if [[ $live_rc -eq 0 ]]; then
+    echo "  ✓ Live test passed"
+  elif [[ $live_rc -eq 2 ]]; then
+    echo "  ⚠ Live test skipped (not root or no pool/loop support)"
+  else
+    echo "  ✗ Live test failed"
+    ((failed++))
+  fi
+  
+  # Overall summary
+  echo ""
+  echo "==========================================="
+  if [[ $failed -eq 0 ]]; then
+    echo "✓ All iSCSI tests passed"
+    echo "==========================================="
+    return 0
+  else
+    echo "✗ iSCSI tests failed: $failed test suites"
+    echo "==========================================="
+    return 1
+  fi
+}
+
+#===============================================================================
 # n_test_sch_zpool_create_on_free_disk
 # -------------------------------------
 # Test high-level pool creation wrapper.

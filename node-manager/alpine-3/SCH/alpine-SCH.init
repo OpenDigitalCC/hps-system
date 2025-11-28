@@ -33,3 +33,7 @@ n_osvc_start
 
 # Initialize OpenSVC cluster membership
 n_initialise_opensvc_cluster
+
+# Initialise iSCSI
+n_lio_initialize
+
