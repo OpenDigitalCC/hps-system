@@ -124,10 +124,12 @@ echo -e "Line 1\nLine 2" | n_remote_log
 
 ```bash
 # Find hosts by field value
-n_registry_search "type" "SCH"
+
+n_registry_search "TYPE" "SCH"
+
 # Returns: ["52540011223344", "52540055667788"]
 
-n_registry_search "status" "active"
+n_registry_search "STATE" "INSTALLED"
 
 ```
 
