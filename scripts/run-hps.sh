@@ -21,7 +21,7 @@ SUPERVISORD_CONF=$(get_path_supervisord_conf)
 
 echo "[✓] hps started and initialised."
 
-if cluster_file=$(get_active_cluster_filename 2>/dev/null)
+if system_registry exists ACTIVE_CLUSTER 2>/dev/null
  then
   if [[ -f "$cluster_file" ]]
    then

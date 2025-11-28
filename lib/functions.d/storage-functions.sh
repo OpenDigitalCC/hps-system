@@ -27,7 +27,7 @@ storage_get_host_vlan() {
     fi
     
     # Check host config first
-    local vlan=$(host_config "$mac_address" "get" "storage_vlan")
+    local vlan=$(host_registry "$mac_address" "get" "storage_vlan")
     if [[ -n "$vlan" ]]; then
         echo "$vlan"
         return 0

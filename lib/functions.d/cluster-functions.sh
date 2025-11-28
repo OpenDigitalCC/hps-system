@@ -1,41 +1,49 @@
 __guard_source || return
 
 
+#===============================================================================
+# load_cluster_config
+# ------------------
+# Load active cluster configuration variables into environment.
+# Exports each cluster config key as an environment variable.
+#
+# Usage:
+#   load_cluster_config
+#
+# Returns:
+#   0 on success, 1 if no active cluster
+#===============================================================================
+load_cluster_config() {
+  # Check if active cluster exists
+  local active_cluster
+  active_cluster=$(system_registry get ACTIVE_CLUSTER 2>/dev/null) || return 1
+  
+  # Load each config key as environment variable
+  if cluster_registry list >/dev/null 2>&1; then
+    while IFS= read -r key; do
+      local value
+      value=$(cluster_registry get "$key" 2>/dev/null)
+      if [[ -n "$value" && "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        export "${key}=${value}"
+      fi
+    done < <(cluster_registry list)
+  fi
+  
+  return 0
+}
+
 
 #===============================================================================
 # get_active_cluster_name
 # -----------------------
-# Convenience: returns the basename of the active cluster directory.
+# Get the name of the currently active cluster.
 #
 # Returns:
 #   Cluster name via stdout, or non-zero on error.
 #===============================================================================
 get_active_cluster_name() {
-  local dir
-  dir="$(get_active_cluster_dir)" || return 1
-  basename -- "$dir"
+  system_registry get ACTIVE_CLUSTER 2>/dev/null
 }
-
-#===============================================================================
-# get_active_cluster_link
-# -----------------------
-# Return the path to the "active-cluster" symlink under the cluster config base.
-# Verifies that the symlink exists. This avoids hardcoding the path elsewhere.
-#
-# Returns:
-#   Symlink path via stdout, or non-zero with error to stderr if not found.
-#===============================================================================
-get_active_cluster_link() {
-  local link="$(get_active_cluster_link_path)"
-
-  if [[ ! -L "$link" ]]; then
-    echo "[ERROR] No active cluster symlink at: $link" >&2
-    return 1
-  fi
-
-  echo "$link"
-}
-
 
 #===============================================================================
 # get_cluster_dir
@@ -57,132 +65,44 @@ get_cluster_dir() {
   echo "${HPS_CLUSTER_CONFIG_BASE_DIR}/${cluster_name}"
 }
 
-
-
 #===============================================================================
 # get_active_cluster_dir
 # ----------------------
-# Resolve the absolute path to the *active* cluster directory, via the symlink
-# returned by get_active_cluster_link.
-#
-# Reuses:
-#   - get_active_cluster_link
-#   - get_cluster_dir
+# Get the absolute path to the active cluster directory.
 #
 # Returns:
 #   Path via stdout, or non-zero with error message on stderr.
 #===============================================================================
 get_active_cluster_dir() {
-  local link
-  link="$(get_active_cluster_link)" || return 1
-
-  local target
-  if ! target="$(readlink -f -- "$link")"; then
-    echo "[ERROR] Failed to resolve active cluster symlink: $link" >&2
-    return 1
-  fi
-
-  # Derive the name (last path component) and recompose with get_cluster_dir
-  local name
-  name="$(basename -- "$target")"
-  local dir
-  dir="$(get_cluster_dir "$name")" || return 1
-
-  if [[ ! -d "$dir" ]]; then
-    echo "[ERROR] Active cluster target is not a directory: $dir" >&2
-    return 1
-  fi
-
-  echo "$dir"
-}
-
-#===============================================================================
-# get_active_cluster_link_path
-# ----------------------------
-# Return the absolute path to where the active-cluster symlink should live.
-# (No validation is done here.)
-#
-# Returns:
-#   Path via stdout.
-#===============================================================================
-get_active_cluster_link_path() {
-  echo "${HPS_CLUSTER_CONFIG_BASE_DIR}/active-cluster"
-}
-
-
-#===============================================================================
-# get_cluster_conf_file
-# ---------------------
-# Return the absolute path to the cluster.conf file for a given cluster.
-#
-# Arguments:
-#   $1 - Cluster name
-#
-# Reuses:
-#   - get_cluster_dir
-#
-# Returns:
-#   Path via stdout, or non-zero on error.
-#===============================================================================
-get_cluster_conf_file() {
-  local cluster_name="$1"
-  [[ -z "$cluster_name" ]] && {
-    echo "[ERROR] Usage: get_cluster_conf_file <cluster-name>" >&2
+  local cluster_name
+  cluster_name=$(get_active_cluster_name) || {
+    echo "[ERROR] No active cluster set" >&2
     return 1
   }
-
+  
   local cluster_dir
-  cluster_dir="$(get_cluster_dir "$cluster_name")" || return 1
-  echo "${cluster_dir}/cluster.conf"
-}
-
-
-#===============================================================================
-# get_active_cluster_filename
-# ---------------------------
-# Return the absolute path to the active cluster.conf file.
-#
-# Dependencies:
-#   - get_active_cluster_dir
-#   - get_cluster_conf_file
-#
-# Returns:
-#   Path via stdout, or non-zero with error to stderr.
-#===============================================================================
-get_active_cluster_filename() {
-  local cluster_dir
-  cluster_dir="$(get_active_cluster_dir)" || return 1
-
-  local cluster_name
-  cluster_name="$(basename -- "$cluster_dir")"
-
-  local file
-  file="$(get_cluster_conf_file "$cluster_name")" || return 1
-
-  if [[ ! -f "$file" ]]; then
-    echo "[ERROR] Active cluster missing cluster.conf: $file" >&2
+  cluster_dir=$(get_cluster_dir "$cluster_name") || return 1
+  
+  if [[ ! -d "$cluster_dir" ]]; then
+    echo "[ERROR] Active cluster directory not found: $cluster_dir" >&2
     return 1
   fi
-
-  echo "$file"
+  
+  echo "$cluster_dir"
 }
 
-
 #===============================================================================
-# get_active_cluster_file
-# -----------------------
-# Output the contents of the active cluster.conf file to stdout.
-#
-# Dependencies:
-#   - get_active_cluster_filename
+# get_active_cluster_hosts_dir
+# ----------------------------
+# Get the hosts directory for the active cluster.
 #
 # Returns:
-#   File content via stdout, or non-zero with error to stderr.
+#   Path via stdout
 #===============================================================================
-get_active_cluster_file() {
-  local file
-  file="$(get_active_cluster_filename)" || return 1
-  cat -- "$file"
+get_active_cluster_hosts_dir() {
+  local cluster_dir
+  cluster_dir=$(get_active_cluster_dir) || return 1
+  echo "${cluster_dir}/hosts"
 }
 
 #===============================================================================
@@ -195,14 +115,8 @@ get_active_cluster_file() {
 #   - Else, if exactly one real cluster exists, print it as "(Only; not Active)".
 #   - Else, print that no active cluster is set and list available clusters.
 #
-# Metadata fields (queried via helper, not by reading files):
+# Metadata fields (queried via cluster_registry):
 #   DESCRIPTION, NETWORK_CIDR, DNS_DOMAIN
-#
-# Reuses:
-#   - _collect_cluster_dirs
-#   - get_active_cluster_dir
-#   - get_active_cluster_name
-#   - cluster_config get <KEY>        # must resolve against active cluster
 #
 # Returns:
 #   0 on success, non-zero if no clusters exist or other error.
@@ -216,18 +130,19 @@ get_active_cluster_info() {
     return 1
   fi
 
-  # Helper: print a key via cluster_config get (skip silently if empty)
+  # Helper: print a key via cluster_registry get (skip silently if empty)
   _print_meta() {
     local key="$1" label="$2" val=""
-    if val="$(cluster_config get "$key" 2>/dev/null)"; then
+    if val="$(cluster_registry get "$key" 2>/dev/null)"; then
       [[ -n "$val" ]] && echo "${label}: ${val}"
     fi
   }
 
   # Case 1: Active cluster exists
-  local active_dir active_name
-  if active_dir="$(get_active_cluster_dir 2>/dev/null)"; then
-    active_name="$(basename -- "$active_dir")"
+  local active_name
+  if active_name="$(get_active_cluster_name 2>/dev/null)"; then
+    local active_dir
+    active_dir=$(get_active_cluster_dir 2>/dev/null)
     echo "Cluster: ${active_name} (Active)"
     echo "Directory: ${active_dir}"
     _print_meta "DESCRIPTION"   "Description"
@@ -236,8 +151,7 @@ get_active_cluster_info() {
     return 0
   fi
 
-  # Case 2: No active; if exactly one cluster, show it (metadata unavailable
-  # without temporarily switching active; we only show name/dir here).
+  # Case 2: No active; if exactly one cluster, show it
   if (( ${#dirs[@]} == 1 )); then
     local only_dir="${dirs[0]}"
     local only_name
@@ -261,15 +175,11 @@ get_active_cluster_info() {
   return 0
 }
 
-
-
-
-
 #===============================================================================
 # _collect_cluster_dirs
 # ---------------------
 # Populate a nameref array with absolute paths of *real* cluster directories
-# under ${HPS_CLUSTER_CONFIG_BASE_DIR}, excluding symlinks (e.g. active-cluster).
+# under ${HPS_CLUSTER_CONFIG_BASE_DIR}, excluding symlinks.
 #
 # Args:
 #   $1  - nameref to an array variable to receive results
@@ -298,7 +208,6 @@ _collect_cluster_dirs() {
   shopt -u nullglob
 }
 
-
 #===============================================================================
 # count_clusters
 # --------------
@@ -324,12 +233,8 @@ count_clusters() {
 #===============================================================================
 # list_clusters
 # -------------
-# List all *real* cluster directories (no symlinks) under
-# ${HPS_CLUSTER_CONFIG_BASE_DIR}. Appends " (Active)" to the active one.
-#
-# Dependencies:
-#   - _collect_cluster_dirs (gathers non-symlink dirs)
-#   - get_active_cluster_name (resolves active via symlink)
+# List all *real* cluster directories under ${HPS_CLUSTER_CONFIG_BASE_DIR}.
+# Appends " (Active)" to the active one.
 #
 # Usage:
 #   list_clusters
@@ -358,34 +263,33 @@ list_clusters() {
   done
 }
 
-#:name: list_cluster_hosts
-#:group: cluster
-#:synopsis: List all host MAC addresses in a cluster.
-#:usage: list_cluster_hosts [cluster_name]
-#:description:
-#  Lists all host MAC addresses configured in the specified cluster.
-#  If no cluster_name is provided, uses the active cluster.
-#  Outputs one MAC address per line by examining host config files.
-#  Uses get_active_cluster_hosts_dir or get_cluster_dir to locate hosts.
-#:parameters:
-#  cluster_name - (optional) Name of the cluster. If empty, uses active cluster.
-#:returns:
-#  0 on success (outputs MAC addresses to stdout, one per line)
-#  1 if cluster directory doesn't exist or cannot be determined
+#===============================================================================
+# list_cluster_hosts
+# ------------------
+# List all host MAC addresses in a cluster.
+#
+# Usage:
+#   list_cluster_hosts [cluster_name]
+#
+# Parameters:
+#   cluster_name - (optional) Name of the cluster. If empty, uses active cluster.
+#
+# Returns:
+#   0 on success (outputs MAC addresses to stdout, one per line)
+#   1 if cluster directory doesn't exist or cannot be determined
+#===============================================================================
 list_cluster_hosts() {
   local cluster_name="${1:-}"
   local hosts_dir
   
   # Determine hosts directory
   if [[ -z "$cluster_name" ]]; then
-    # Use active cluster hosts directory
     hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
     if [[ -z "$hosts_dir" ]]; then
       hps_log error "list_cluster_hosts: Cannot determine active cluster hosts directory"
       return 1
     fi
   else
-    # Get specific cluster directory and append /hosts
     local cluster_dir
     cluster_dir=$(get_cluster_dir "$cluster_name" 2>/dev/null)
     if [[ -z "$cluster_dir" ]]; then
@@ -401,128 +305,87 @@ list_cluster_hosts() {
     return 0
   fi
   
-  # List all .conf files and extract MAC addresses from filenames
-  if compgen -G "${hosts_dir}/*.conf" > /dev/null 2>&1; then
-    for conf_file in "${hosts_dir}"/*.conf; do
-      [[ ! -f "$conf_file" ]] && continue
-      
-      # Extract MAC address from filename
-      local mac
-      mac=$(get_mac_from_conffile "$conf_file" 2>/dev/null)
-      
-      if [[ -n "$mac" ]]; then
-        echo "$mac"
-      fi
-    done
+  # List only .db directories (registry format only)
+  if compgen -G "${hosts_dir}/*.db" > /dev/null 2>&1; then
+    for db_dir in "${hosts_dir}"/*.db; do
+      [[ ! -d "$db_dir" ]] && continue
+      basename "$db_dir" .db
+    done | sort -u
   fi
   
   return 0
 }
 
-#:name: get_cluster_host_ips
-#:group: cluster
-#:synopsis: Get IP addresses of all hosts in a cluster.
-#:usage: get_cluster_host_ips [cluster_name]
-#:description:
-#  Returns IP addresses for all configured hosts in the specified cluster.
-#  If no cluster_name is provided, uses the active cluster.
-#  Outputs one IP address per line.
-#:parameters:
-#  cluster_name - (optional) Name of the cluster. If empty, uses active cluster.
-#:returns:
-#  0 on success (outputs IP addresses to stdout, one per line)
-#  1 if cluster cannot be determined
+#===============================================================================
+# get_cluster_host_ips
+# --------------------
+# Get IP addresses of all hosts in a cluster.
+#
+# Usage:
+#   get_cluster_host_ips [cluster_name]
+#
+# Parameters:
+#   cluster_name - (optional) Name of the cluster. If empty, uses active cluster.
+#
+# Returns:
+#   0 on success (outputs IP addresses to stdout, one per line)
+#   1 if cluster cannot be determined
+#===============================================================================
 get_cluster_host_ips() {
   local cluster_name="${1:-}"
   local mac ip
-  local hosts_dir
-  
-  # Determine hosts directory
-  if [[ -z "$cluster_name" ]]; then
-    hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
-  else
-    local cluster_dir
-    cluster_dir=$(get_cluster_dir "$cluster_name" 2>/dev/null)
-    hosts_dir="${cluster_dir}/hosts"
-  fi
-  
-  if [[ -z "$hosts_dir" ]] || [[ ! -d "$hosts_dir" ]]; then
-    hps_log error "get_cluster_host_ips: Cannot determine hosts directory"
-    return 1
-  fi
   
   # Get list of all MACs in cluster
   while IFS= read -r mac; do
     [[ -z "$mac" ]] && continue
     
-    # Get IP directly from the config file
-    local conf_file="${hosts_dir}/${mac}.conf"
-    if [[ -f "$conf_file" ]]; then
-      ip=$(grep -E "^IP=" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d '"')
-      if [[ -n "$ip" ]]; then
-        echo "$ip"
-      fi
+    ip=$(host_registry "$mac" get IP 2>/dev/null)
+    if [[ -n "$ip" ]]; then
+      echo "$ip"
     fi
   done < <(list_cluster_hosts "$cluster_name")
   
   return 0
 }
 
-#:name: get_cluster_host_hostnames
-#:group: cluster
-#:synopsis: Get hostnames of all hosts in a cluster.
-#:usage: get_cluster_host_hostnames [cluster_name] [hosttype_filter]
-#:description:
-#  Returns hostnames for all configured hosts in the specified cluster.
-#  If no cluster_name is provided, uses the active cluster.
-#  Optionally filter by host type (case-insensitive).
-#  Outputs one hostname per line.
-#:parameters:
-#  cluster_name     - (optional) Name of the cluster. If empty, uses active cluster.
-#  hosttype_filter  - (optional) Filter by host type (e.g., TCH, ROCKY)
-#:returns:
-#  0 on success (outputs hostnames to stdout, one per line)
-#  1 if cluster cannot be determined
+#===============================================================================
+# get_cluster_host_hostnames
+# --------------------------
+# Get hostnames of all hosts in a cluster.
+#
+# Usage:
+#   get_cluster_host_hostnames [cluster_name] [hosttype_filter]
+#
+# Parameters:
+#   cluster_name     - (optional) Name of the cluster. If empty, uses active cluster.
+#   hosttype_filter  - (optional) Filter by host type (e.g., TCH, ROCKY)
+#
+# Returns:
+#   0 on success (outputs hostnames to stdout, one per line)
+#   1 if cluster cannot be determined
+#===============================================================================
 get_cluster_host_hostnames() {
   local cluster_name="${1:-}"
   local hosttype_filter="${2:-}"
   local mac hostname hosttype
-  local hosts_dir
   
   # Convert filter to lowercase for comparison
   if [[ -n "$hosttype_filter" ]]; then
     hosttype_filter=$(echo "$hosttype_filter" | tr '[:upper:]' '[:lower:]')
   fi
   
-  # Determine hosts directory
-  if [[ -z "$cluster_name" ]]; then
-    hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
-  else
-    local cluster_dir
-    cluster_dir=$(get_cluster_dir "$cluster_name" 2>/dev/null)
-    hosts_dir="${cluster_dir}/hosts"
-  fi
-  
-  if [[ -z "$hosts_dir" ]] || [[ ! -d "$hosts_dir" ]]; then
-    hps_log error "get_cluster_host_hostnames: Cannot determine hosts directory"
-    return 1
-  fi
-  
   # Get list of all MACs in cluster
   while IFS= read -r mac; do
     [[ -z "$mac" ]] && continue
     
-    local conf_file="${hosts_dir}/${mac}.conf"
-    [[ ! -f "$conf_file" ]] && continue
-    
     # Apply type filter if specified
     if [[ -n "$hosttype_filter" ]]; then
-      hosttype=$(grep -E "^TYPE=" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
+      hosttype=$(host_registry "$mac" get TYPE 2>/dev/null | tr '[:upper:]' '[:lower:]')
       [[ "$hosttype" != "$hosttype_filter" ]] && continue
     fi
     
     # Get hostname
-    hostname=$(grep -E "^HOSTNAME=" "$conf_file" 2>/dev/null | cut -d= -f2 | tr -d '"')
+    hostname=$(host_registry "$mac" get HOSTNAME 2>/dev/null)
     
     if [[ -n "$hostname" ]]; then
       echo "$hostname"
@@ -535,15 +398,10 @@ get_cluster_host_hostnames() {
 #===============================================================================
 # set_active_cluster
 # ------------------
-# Set the active cluster by updating the active-cluster symlink.
+# Set the active cluster by updating system registry.
 #
 # Arguments:
-#   $1  - Cluster name (must correspond to a real cluster dir with cluster.conf)
-#
-# Reuses:
-#   - get_cluster_dir
-#   - get_cluster_conf_file
-#   - get_active_cluster_link_path
+#   $1  - Cluster name (must correspond to a real cluster dir)
 #
 # Returns:
 #   0 on success, non-zero on error.
@@ -555,9 +413,8 @@ set_active_cluster() {
     return 1
   }
 
-  local cluster_dir conf_file
+  local cluster_dir
   cluster_dir="$(get_cluster_dir "$cluster_name")" || return 1
-  conf_file="$(get_cluster_conf_file "$cluster_name")" || return 1
 
   # Ensure directory exists
   if [[ ! -d "$cluster_dir" ]]; then
@@ -565,40 +422,20 @@ set_active_cluster() {
     return 1
   fi
 
-  # Ensure cluster.conf exists
-  if [[ ! -f "$conf_file" ]]; then
-    echo "[x] cluster.conf not found: $conf_file" >&2
+  # Ensure cluster registry exists
+  if [[ ! -d "$cluster_dir/cluster.db" ]]; then
+    echo "[x] Cluster registry not found: $cluster_dir/cluster.db" >&2
     return 2
   fi
 
-  # Ensure symlink is updated
-  local link
-  link="$(get_active_cluster_link_path)"
-  ln -sfn "$cluster_dir" "$link"
+  # Update system registry
+  if ! system_registry set ACTIVE_CLUSTER "$cluster_name"; then
+    echo "[x] Failed to update system registry" >&2
+    return 3
+  fi
 
   echo "[OK] Active cluster set to: $cluster_name"
 }
-
-
-
-
-
-
-write_cluster_config() {
-  local target_file="$1"
-  shift
-  local values=("$@")
-
-  if [[ ${#values[@]} -eq 0 ]]; then
-    echo "[x] Cannot write empty cluster config to $target_file" >&2
-    return 1
-  fi
-
-  echo "Writing: ${values[*]}"
-  printf "%s\n" "${values[@]}" > "$target_file"
-  echo "[OK] Cluster configuration written to $target_file"
-}
-
 
 #===============================================================================
 # commit_changes
@@ -636,7 +473,7 @@ commit_changes() {
         local key="${config_item%%:*}"
         local value="${config_item#*:}"
         
-        if ! cluster_config "set" "$key" "$value" "$cluster"; then
+        if ! cluster_registry "set" "$key" "$value" "$cluster"; then
             hps_log "error" "Failed to set: $key=$value"
             return 1
         fi
@@ -651,107 +488,33 @@ commit_changes() {
     return 0
 }
 
-
-
-
-
-
 #===============================================================================
 # cluster_config
 # --------------
-# Get/set/check cluster configuration values
+# Alias to cluster_registry for backward compatibility
+#===============================================================================
+cluster_config() {
+  cluster_registry "$@"
+}
+
+#===============================================================================
+# initialise_cluster
+# ------------------
+# Initialize a new cluster with registry storage.
 #
-# Parameters:
-#   $1 - Operation (get/set/exists)
-#   $2 - Configuration key
-#   $3 - Value (for set operation)
-#   $4 - Cluster name (optional, defaults to active cluster)
-#
-# Behaviour:
-#   - set: Quotes values when writing if they contain spaces/special chars
-#   - get: Returns values without quotes
-#   - Handles both quoted and unquoted values when reading
+# Arguments:
+#   $1 - cluster_name: Name of the cluster to create
 #
 # Returns:
 #   0 on success
-#   1 on error
-#   2 on invalid operation
+#   1 if cluster name not provided
+#   2 if cluster already exists
+#   3 if path export fails
 #===============================================================================
-cluster_config() {
-  local op="$1"
-  local key="$2"
-  local value="${3:-}"
-  local cluster="${4:-}"
-  local cluster_file
-  
-  # If cluster name provided, use that cluster's config
-  if [[ -n "$cluster" ]]; then
-    cluster_file="$(get_active_cluster_filename)"
-    if [[ ! -f "$cluster_file" ]]; then
-      # Create if doesn't exist for set operations
-      if [[ "$op" == "set" ]]; then
-        mkdir -p "$(dirname "$cluster_file")"
-        touch "$cluster_file"
-      else
-        return 1
-      fi
-    fi
-  else
-    # Use active cluster
-    cluster_file=$(get_active_cluster_filename) || {
-      echo "[x] No active cluster config found." >&2
-      return 1
-    }
-  fi
-  
-  case "$op" in
-    get)
-      local raw_value=$(grep -E "^${key}=" "$cluster_file" 2>/dev/null | cut -d= -f2-)
-      # Strip surrounding quotes if present (handles both single and double quotes)
-      if [[ "$raw_value" =~ ^\"(.*)\"$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-      elif [[ "$raw_value" =~ ^\'(.*)\'$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-      else
-        echo "$raw_value"
-      fi
-      ;;
-    set)
-      # Determine if value needs quoting
-      local quoted_value="$value"
-      
-      # Quote if contains: spaces, $, `, \, ", ', newlines, tabs
-      if [[ "$value" =~ [[:space:]\$\`\\\"\'] ]] || [[ -z "$value" ]]; then
-        # Escape any existing double quotes in the value
-        quoted_value="${value//\"/\\\"}"
-        quoted_value="\"${quoted_value}\""
-      fi
-      
-      # Update or add the key=value pair
-      if grep -qE "^${key}=" "$cluster_file" 2>/dev/null; then
-        # Use a different delimiter to avoid issues with / in values
-        sed -i "s|^${key}=.*|${key}=${quoted_value}|" "$cluster_file"
-      else
-        echo "${key}=${quoted_value}" >> "$cluster_file"
-      fi
-      ;;
-    exists)
-      grep -qE "^${key}=" "$cluster_file" 2>/dev/null
-      ;;
-    *)
-      echo "[x] Unknown cluster_config operation: $op" >&2
-      return 2
-      ;;
-  esac
-}
-
-
-
 initialise_cluster() {
   local cluster_name="$1"
   local base_dir="${HPS_CLUSTER_CONFIG_BASE_DIR}"
   local cluster_dir="${base_dir}/${cluster_name}"
-  local cluster_file="${cluster_dir}/cluster.conf"
 
   if [[ -z "$cluster_name" ]]; then
     hps_log ERROR "[x] Cluster name must be provided."
@@ -766,13 +529,12 @@ initialise_cluster() {
   mkdir -p "${cluster_dir}/hosts"
   mkdir -p "${cluster_dir}/services"
   mkdir -p "${cluster_dir}/keysafe"
-
-  touch "$cluster_file"
+  mkdir -p "${cluster_dir}/cluster.db"
 
   hps_log info "[OK] Cluster initialised at: $cluster_dir"
-  hps_log info "[OK] Created config: $cluster_file"
+  hps_log info "[OK] Created registry: ${cluster_dir}/cluster.db"
 
-  cluster_config "set" "CLUSTER_NAME" "${cluster_name}"
+  cluster_registry "set" "CLUSTER_NAME" "${cluster_name}"
 
   export_dynamic_paths "$cluster_name" || {
     hps_log ERROR "[x] Failed to export cluster paths for $cluster_name"
@@ -780,69 +542,61 @@ initialise_cluster() {
   }
 }
 
+#===============================================================================
+# print_cluster_variables
+# -----------------------
+# Print all cluster configuration variables.
+#
+# Returns:
+#   0 on success
+#   1 if cluster registry cannot be read
+#===============================================================================
 print_cluster_variables() {
-  local config_file="$(get_active_cluster_filename)"
-  local k v
+  # Use cluster_registry view to get all variables as JSON
+  local view_output
+  view_output="$(cluster_registry view 2>/dev/null)" || {
+    echo "[x] Cannot read cluster registry" >&2
+    return 1
+  }
+  
+  # Convert JSON to key=value format
+  echo "$view_output" | jq -r 'to_entries[] | "\(.key)=\(.value)"'
+}
 
-  if [[ ! -f "$config_file" ]]; then
-    echo "[x] Cluster config not found: $config_file" >&2
+#===============================================================================
+# cluster_has_installed_sch
+# -------------------------
+# Check if cluster has any SCH hosts with STATE=INSTALLED.
+#
+# Returns:
+#   0 if at least one installed SCH host exists
+#   1 if no installed SCH hosts found
+#===============================================================================
+cluster_has_installed_sch() {
+  # Search for hosts with TYPE=SCH
+  local sch_hosts
+  sch_hosts=$(registry_search host TYPE SCH 2>/dev/null)
+  
+  if [[ -z "$sch_hosts" ]]; then
     return 1
   fi
-
-  while IFS='=' read -r k v; do
-    # Skip blank lines and comments
-    [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
-    v="${v%\"}"; v="${v#\"}"  # strip surrounding quotes
-    echo "$k=$v"
-  done < "$config_file"
-}
-
-get_host_type_param() {
-  local type="$1"
-  local key="$2"
-  declare -n ref="$type"
-
-  echo "${ref[$key]}"
-}
-
-#:name: cluster_has_installed_sch
-#:group: cluster
-#:synopsis: Check if cluster has any SCH hosts with STATE=INSTALLED.
-#:usage: cluster_has_installed_sch
-#:description:
-#  Checks if at least one SCH (Storage/Compute Host) in the active cluster
-#  has STATE set to INSTALLED. Uses cluster helper functions for enumeration.
-#:returns:
-#  0 if at least one installed SCH host exists
-#  1 if no installed SCH hosts found
-cluster_has_installed_sch() {
-  local mac
   
-  # Get all hosts in cluster
+  # Check if any have STATE=INSTALLED
+  local mac
   while IFS= read -r mac; do
     [[ -z "$mac" ]] && continue
     
-    # Check if this host is TYPE=SCH
-    local host_type
-    host_type=$(host_config "$mac" get TYPE 2>/dev/null)
-    [[ "$host_type" != "SCH" ]] && continue
-    
-    # Check if STATE=INSTALLED
-    local host_state
-    host_state=$(host_config "$mac" get STATE 2>/dev/null)
-    if [[ "$host_state" == "INSTALLED" ]]; then
-      return 0  # Found at least one installed SCH
+    local state
+    state=$(host_registry "$mac" get STATE 2>/dev/null)
+    if [[ "$state" == "INSTALLED" ]]; then
+      return 0
     fi
-  done < <(list_cluster_hosts)
+  done <<< "$sch_hosts"
   
-  return 1  # No installed SCH hosts found
+  return 1
 }
 
-
-
-
 ## Interactive functions
-
 
 #===============================================================================
 # cli_set_active_cluster
@@ -871,7 +625,7 @@ cli_set_active_cluster() {
     fi
     
     # Get current active cluster
-    local current_active=$(get_active_cluster 2>/dev/null || echo "")
+    local current_active=$(get_active_cluster_name 2>/dev/null || echo "")
     
     # Skip if this cluster is already active
     if [[ "$cluster_name" == "$current_active" ]]; then
@@ -904,7 +658,6 @@ cli_set_active_cluster() {
         return 2
     fi
 }
-
 
 #===============================================================================
 # select_network_interface
@@ -1012,7 +765,7 @@ config_get_value() {
   
   # Check existing config for the specified cluster
   if [[ -n "$cluster" ]]; then
-    value=$(cluster_config "get" "$key" "" "$cluster" 2>/dev/null || echo "")
+    value=$(cluster_registry "get" "$key" "" "$cluster" 2>/dev/null || echo "")
     if [[ -n "$value" ]]; then
       echo "$value"
       return 0
@@ -1024,15 +777,10 @@ config_get_value() {
   return 0
 }
 
-
-
 #===============================================================================
 # select_cluster
 # --------------
 # Interactive selector for cluster directories using Bash `select`.
-# Reuses:
-#   - _collect_cluster_dirs
-#   - get_active_cluster_name
 #
 # Behaviour:
 #   - Lists cluster names; appends " (Active)" to the current one.
@@ -1109,9 +857,6 @@ select_cluster() {
   done
 }
 
-
-#!/bin/bash
-
 #===============================================================================
 # cluster_storage_init_network
 # ----------------------------
@@ -1136,7 +881,7 @@ cluster_storage_init_network() {
   local cluster_domain
   
   # Get cluster domain
-  cluster_domain=$(cluster_config "get" "DNS_DOMAIN")
+  cluster_domain=$(cluster_registry "get" "DNS_DOMAIN")
   if [[ -z "$cluster_domain" ]]; then
     hps_log "error" "Cluster domain not set"
     return 1
@@ -1190,11 +935,11 @@ cluster_storage_init_network() {
   [[ "$enable_jumbo_frames" == "y" ]] && mtu=9000
   
   # Store base configuration
-  cluster_config "set" "network_storage_count" "$num_storage_networks"
-  cluster_config "set" "network_storage_mtu" "$mtu"
-  cluster_config "set" "network_storage_base_vlan" "$storage_base_vlan"
-  cluster_config "set" "network_storage_subnet_base" "$storage_subnet_base"
-  cluster_config "set" "network_storage_subnet_cidr" "$storage_subnet_cidr"
+  cluster_registry "set" "network_storage_count" "$num_storage_networks"
+  cluster_registry "set" "network_storage_mtu" "$mtu"
+  cluster_registry "set" "network_storage_base_vlan" "$storage_base_vlan"
+  cluster_registry "set" "network_storage_subnet_base" "$storage_subnet_base"
+  cluster_registry "set" "network_storage_subnet_cidr" "$storage_subnet_cidr"
   
   # Configure each storage network
   local i
@@ -1214,17 +959,14 @@ cluster_storage_init_network() {
     local netmask=$(cidr_to_netmask "${storage_subnet_cidr}")
     local domain="storage$((i+1)).${cluster_domain}"
     
-    cluster_config "set" "network_storage_vlan${vlan}_subnet" "$subnet"
-    cluster_config "set" "network_storage_vlan${vlan}_gateway" "$gateway"
-    cluster_config "set" "network_storage_vlan${vlan}_netmask" "$netmask"
-    cluster_config "set" "network_storage_vlan${vlan}_domain" "$domain"
-    cluster_config "set" "network_storage_vlan${vlan}_allocated" "false"
+    cluster_registry "set" "network_storage_vlan${vlan}_subnet" "$subnet"
+    cluster_registry "set" "network_storage_vlan${vlan}_gateway" "$gateway"
+    cluster_registry "set" "network_storage_vlan${vlan}_netmask" "$netmask"
+    cluster_registry "set" "network_storage_vlan${vlan}_domain" "$domain"
+    cluster_registry "set" "network_storage_vlan${vlan}_allocated" "false"
     
     hps_log "info" "Configured storage network $((i+1)): VLAN $vlan, subnet $subnet, domain $domain"
   done
   
   return 0
 }
-
-
-

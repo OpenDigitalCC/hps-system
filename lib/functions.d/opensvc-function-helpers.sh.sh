@@ -140,7 +140,7 @@ _osvc_create_conf() {
   
   # Get DNS domain
   local dns_domain
-  dns_domain="$(cluster_config get DNS_DOMAIN 2>/dev/null)" || dns_domain=""
+  dns_domain="$(cluster_registry get DNS_DOMAIN 2>/dev/null)" || dns_domain=""
   
   if [[ -z "${dns_domain}" ]]; then
     hps_log error "DNS_DOMAIN not set in cluster_config"
@@ -176,7 +176,7 @@ EOF
 # Manages OpenSVC agent key with single cluster key policy.
 #
 # Behaviour:
-#   - Reads cluster key from cluster_config (OPENSVC_AGENT_KEY)
+#   - Reads cluster key from cluster_registry (OPENSVC_AGENT_KEY)
 #   - Reads existing on-disk key from /etc/opensvc/agent.key
 #   - If cluster has canonical key, disk must match or function fails
 #   - If no cluster key exists, adopts existing disk key or generates new
@@ -198,7 +198,7 @@ _osvc_cluster_agent_key() {
   
   # Read cluster key (if any)
   local cluster_key
-  cluster_key="$(cluster_config get OPENSVC_AGENT_KEY 2>/dev/null)" || cluster_key=""
+  cluster_key="$(cluster_registry get OPENSVC_AGENT_KEY 2>/dev/null)" || cluster_key=""
   cluster_key="${cluster_key//$'\r'/}"  # Strip CR
   cluster_key="${cluster_key## }"       # Trim leading spaces
   cluster_key="${cluster_key%% }"       # Trim trailing spaces
@@ -219,7 +219,7 @@ _osvc_cluster_agent_key() {
       hps_log error "  Disk key: ${disk_key:0:8}..."
       hps_log error "  Cluster key: ${cluster_key:0:8}..."
       hps_log error "Refusing to overwrite ${key_file}"
-      hps_log error "Resolution: update cluster_config or replace ${key_file} manually"
+      hps_log error "Resolution: update cluster_registry or replace ${key_file} manually"
       return 2
     fi
     
@@ -233,7 +233,7 @@ _osvc_cluster_agent_key() {
     # No cluster key yet → adopt existing or generate new
     if [[ -n "${disk_key}" ]]; then
       # Adopt existing disk key into cluster config
-      cluster_config set OPENSVC_AGENT_KEY "${disk_key}"
+      cluster_registry set OPENSVC_AGENT_KEY "${disk_key}"
       hps_log info "Adopted existing agent key into cluster config"
     else
       # Generate new key
@@ -245,7 +245,7 @@ _osvc_cluster_agent_key() {
         [[ -z "${new_key}" ]] && new_key="generated-fallback-key"
       fi
       
-      cluster_config set OPENSVC_AGENT_KEY "${new_key}"
+      cluster_registry set OPENSVC_AGENT_KEY "${new_key}"
       printf '%s\n' "${new_key}" > "${key_file}"
       chmod 0600 "${key_file}"
       chown root:root "${key_file}"
@@ -262,7 +262,7 @@ _osvc_cluster_agent_key() {
 # Manages OpenSVC cluster secret for IPS.
 #
 # Behaviour:
-#   - Reads cluster secret from cluster_config (OPENSVC_CLUSTER_SECRET)
+#   - Reads cluster secret from cluster_registry (OPENSVC_CLUSTER_SECRET)
 #   - If no secret exists, generates new one using openssl or urandom
 #   - Stores generated secret in cluster_config
 #   - Returns the secret value via stdout
@@ -278,7 +278,7 @@ _osvc_cluster_agent_key() {
 #===============================================================================
 _osvc_cluster_secrets() {
   local cluster_secret
-  cluster_secret="$(cluster_config get OPENSVC_CLUSTER_SECRET 2>/dev/null)" || cluster_secret=""
+  cluster_secret="$(cluster_registry get OPENSVC_CLUSTER_SECRET 2>/dev/null)" || cluster_secret=""
   
   # IPS: Generate secret if not exists
   if [[ -z "${cluster_secret}" ]]; then
@@ -292,7 +292,7 @@ _osvc_cluster_secrets() {
       }
     fi
     
-    cluster_config set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
+    cluster_registry set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
     hps_log info "Generated and stored OPENSVC_CLUSTER_SECRET"
   fi
   

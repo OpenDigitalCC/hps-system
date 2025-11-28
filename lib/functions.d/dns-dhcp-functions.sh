@@ -118,14 +118,14 @@ build_dhcp_addresses_file() {
   # Process each host
   for mac in $hosts; do
     # Get hostname
-    hostname=$(host_config "$mac" get HOSTNAME 2>/dev/null)
+    hostname=$(host_registry "$mac" get HOSTNAME 2>/dev/null)
     if [[ $? -ne 0 ]] || [[ -z "$hostname" ]]; then
       hps_log "WARN" "Skipping host $mac: could not get HOSTNAME from MAC address"
       continue
     fi
     
     # Get IP address
-    ip=$(host_config "$mac" get IP 2>/dev/null)
+    ip=$(host_registry "$mac" get IP 2>/dev/null)
     if [[ $? -ne 0 ]] || [[ -z "$ip" ]]; then
       hps_log "WARN" "Skipping host $mac: could not get IP from MAC address"
       continue
@@ -238,7 +238,7 @@ init_dns_hosts_file() {
   
   # Get DNS domain from cluster config
   local dns_domain
-  dns_domain=$(cluster_config get DNS_DOMAIN 2>/dev/null)
+  dns_domain=$(cluster_registry get DNS_DOMAIN 2>/dev/null)
   if [[ $? -ne 0 ]] || [[ -z "$dns_domain" ]]; then
     hps_log error "Failed to get DNS_DOMAIN from cluster config"
     return 1
@@ -247,7 +247,7 @@ init_dns_hosts_file() {
   
   # Get IPS IP address (use DHCP_IP as IPS address)
   local ips_ip
-  ips_ip=$(cluster_config get DHCP_IP 2>/dev/null)
+  ips_ip=$(cluster_registry get DHCP_IP 2>/dev/null)
   if [[ $? -ne 0 ]] || [[ -z "$ips_ip" ]]; then
     hps_log error "Failed to get DHCP_IP from cluster config"
     return 1
@@ -520,7 +520,7 @@ _ips_resolv_conf_update () {
     return 1
   }
   
-  dns_domain=$(cluster_config get DNS_DOMAIN) || {
+  dns_domain=$(cluster_registry get DNS_DOMAIN) || {
     hps_log error "Failed to get DNS_DOMAIN from cluster config"
     return 1
   }

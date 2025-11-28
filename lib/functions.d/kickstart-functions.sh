@@ -9,8 +9,8 @@ generate_ks() {
   hps_log info "[$macid]" "Requesting kickstart for $macid ${HOST_TYPE}"
   cgi_header_plain
 
-#  CLNAME=$(cluster_config get CLUSTER_NAME)
-#  host_config "$macid" || {
+#  CLNAME=$(cluster_registry get CLUSTER_NAME)
+#  host_registry "$macid" || {
 #    hps_log debug "[x] Failed to load host config for $macid"
 #    return 1
 #  }
@@ -18,18 +18,18 @@ generate_ks() {
 
 # Make variables available for the installer script
 
-  export HOST_IP=$(host_config "$macid" get IP)
-  export HOST_NETMASK=$(host_config "$macid" get NETMASK)
-  export HOST_NAME=$(host_config "$macid" get HOSTNAME)
-  export HOST_GATEWAY="$(cluster_config get DHCP_IP)"
-  export HOST_DNS="$(cluster_config get DHCP_IP)"
+  export HOST_IP=$(host_registry "$macid" get IP)
+  export HOST_NETMASK=$(host_registry "$macid" get NETMASK)
+  export HOST_NAME=$(host_registry "$macid" get HOSTNAME)
+  export HOST_GATEWAY="$(cluster_registry get DHCP_IP)"
+  export HOST_DNS="$(cluster_registry get DHCP_IP)"
   #TODO: /host-installer/rocky/kickstart requires variable for the o/s
   export HOST_TEMPLATE_DIR="${LIB_DIR}/host-installer/rocky/kickstart"
   export INSTALLER_TYPE=kickstart
   export HOST_INSTALL_SCRIPT="${HOST_TEMPLATE_DIR}/${INSTALLER_TYPE}-${HOST_TYPE}.script"
   export HOST_INSTALL_FUNC="${INSTALLER_TYPE}-${HOST_TYPE}"
 
-  host_config "$macid" set STATE "INSTALLING"
+  host_registry "$macid" set STATE "INSTALLING"
   hps_log info "[$macid]" "Script ${HOST_INSTALL_SCRIPT} offered"
   cat "${HOST_INSTALL_SCRIPT}" | script_render_template
 }

@@ -217,22 +217,21 @@ get_path_cluster_services_dir () {
 export_dynamic_paths() {
   local cluster_name="${1:-}"
   local base_dir="${HPS_CLUSTER_CONFIG_BASE_DIR:-/srv/hps-config/clusters}"
-  local active_link="${base_dir}/active-cluster"
-
+  
   if [[ -z "$cluster_name" ]]; then
-    [[ -L "$active_link" ]] || {
+    cluster_name=$(get_active_cluster_name 2>/dev/null) || {
       echo "[x] No active cluster and none specified." >&2
       return 1
     }
-    cluster_name=$(basename "$(readlink -f "$active_link")" .cluster)
   fi
-
+  
   export CLUSTER_NAME="$cluster_name"
   export HPS_CLUSTER_CONFIG_DIR="${base_dir}/${CLUSTER_NAME}"
   export HPS_HOST_CONFIG_DIR="${HPS_CLUSTER_CONFIG_DIR}/hosts"
-
   return 0
 }
+
+
 
 # Returns one of: CGI | SCRIPT | SOURCED
 detect_call_context() {

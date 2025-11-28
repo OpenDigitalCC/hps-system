@@ -44,8 +44,8 @@ ips_allocate_storage_ip() {
   fi
   
   # Check if storage network is configured
-  local base_vlan=$(cluster_config "get" "network_storage_base_vlan")
-  local storage_count=$(cluster_config "get" "network_storage_count")
+  local base_vlan=$(cluster_registry "get" "network_storage_base_vlan")
+  local storage_count=$(cluster_registry "get" "network_storage_count")
   
   if [[ -z "$base_vlan" ]] || [[ -z "$storage_count" ]]; then
     echo "ERROR: Storage network not initialized"
@@ -62,19 +62,19 @@ ips_allocate_storage_ip() {
   local vlan_id=$((base_vlan + storage_index))
   
   # Check if this VLAN is configured
-  local subnet=$(cluster_config "get" "network_storage_vlan${vlan_id}_subnet")
+  local subnet=$(cluster_registry "get" "network_storage_vlan${vlan_id}_subnet")
   if [[ -z "$subnet" ]]; then
     echo "ERROR: VLAN $vlan_id not configured"
     return 1
   fi
   
   # Check if already allocated
-  local existing_ip=$(host_config "$source_mac" "get" "storage${storage_index}_ip")
+  local existing_ip=$(host_registry "$source_mac" "get" "storage${storage_index}_ip")
   if [[ -n "$existing_ip" ]]; then
     # Return existing allocation
-    local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
-    local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
-    local mtu=$(cluster_config "get" "network_storage_mtu")
+    local netmask=$(cluster_registry "get" "network_storage_vlan${vlan_id}_netmask")
+    local gateway=$(cluster_registry "get" "network_storage_vlan${vlan_id}_gateway")
+    local mtu=$(cluster_registry "get" "network_storage_mtu")
     
     hps_log "info" "Returning existing storage allocation for $source_mac: $existing_ip"
     echo "${vlan_id}:${existing_ip}:${netmask}:${gateway}:${mtu}"
@@ -82,9 +82,9 @@ ips_allocate_storage_ip() {
   fi
   
   # Get network configuration
-  local netmask=$(cluster_config "get" "network_storage_vlan${vlan_id}_netmask")
-  local gateway=$(cluster_config "get" "network_storage_vlan${vlan_id}_gateway")
-  local mtu=$(cluster_config "get" "network_storage_mtu")
+  local netmask=$(cluster_registry "get" "network_storage_vlan${vlan_id}_netmask")
+  local gateway=$(cluster_registry "get" "network_storage_vlan${vlan_id}_gateway")
+  local mtu=$(cluster_registry "get" "network_storage_mtu")
   
     
   # Extract network prefix
@@ -102,7 +102,7 @@ ips_allocate_storage_ip() {
   
   # Find used IPs - fixed to properly scan all hosts
   local used_ips=()
-  local host_dir="/srv/hps-config/clusters/$(readlink /srv/hps-config/clusters/active-cluster)/hosts"
+  local host_dir="$(get_active_cluster_hosts_dir)"
   
   if [[ -d "$host_dir" ]]; then
     for host_file in "$host_dir"/*; do
@@ -139,18 +139,18 @@ ips_allocate_storage_ip() {
   fi
   
   # Allocate and store
-  host_config "$source_mac" "set" "storage${storage_index}_vlan" "$vlan_id"
-  host_config "$source_mac" "set" "storage${storage_index}_ip" "$new_ip"
+  host_registry "$source_mac" "set" "storage${storage_index}_vlan" "$vlan_id"
+  host_registry "$source_mac" "set" "storage${storage_index}_ip" "$new_ip"
   
   # Get hostname from host config
-  local hostname=$(host_config "$source_mac" "get" "hostname")
+  local hostname=$(host_registry "$source_mac" "get" "hostname")
   if [[ -z "$hostname" ]]; then
     # Try to derive from MAC
     hostname="host-${source_mac//:/-}"
   fi
 
   # Get cluster domain instead of storage-specific domain
-  local domain=$(cluster_config "get" "DNS_DOMAIN")
+  local domain=$(cluster_registry "get" "DNS_DOMAIN")
   domain=${domain:-"local"}
     
 
@@ -188,14 +188,14 @@ storage_register_dns() {
   fi
   
   # Get storage network count
-  local storage_count=$(cluster_config "get" "network_storage_count")
+  local storage_count=$(cluster_registry "get" "network_storage_count")
   if [[ -z "$storage_count" ]]; then
     hps_log "error" "Storage networks not configured"
     return 1
   fi
   
   # Get cluster domain
-  local cluster_domain=$(cluster_config "get" "DNS_DOMAIN")
+  local cluster_domain=$(cluster_registry "get" "DNS_DOMAIN")
   cluster_domain=${cluster_domain:-"local"}
   
   # Process each hostname
@@ -212,8 +212,8 @@ storage_register_dns() {
     # Check each storage network
     local i
     for ((i=0; i<storage_count; i++)); do
-      local ip=$(host_config "$mac" "get" "storage${i}_ip")
-      local vlan=$(host_config "$mac" "get" "storage${i}_vlan")
+      local ip=$(host_registry "$mac" "get" "storage${i}_ip")
+      local vlan=$(host_registry "$mac" "get" "storage${i}_vlan")
       
       if [[ -n "$ip" ]] && [[ -n "$vlan" ]]; then
         local storage_hostname="${hostname,,}-storage$((i + 1))"

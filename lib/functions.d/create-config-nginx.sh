@@ -3,14 +3,17 @@ __guard_source || return
 # Define your functions below
 
 create_config_nginx () {
+  # Load system paths
+  source /srv/hps-config/hps.conf
 
-source $(get_active_cluster_filename 2>/dev/null)
+  # Load cluster config into environment
 
-# Paths
+  load_cluster_config
 
-local NGINX_CONF="$(get_path_cluster_services_dir)/nginx.conf"
+  # Paths
+  local NGINX_CONF="$(get_path_cluster_services_dir)/nginx.conf"
 
-hps_log info "Configuring nginx"
+  hps_log info "Configuring nginx"
 
 cat > "${NGINX_CONF}" <<EOF
 
@@ -44,16 +47,6 @@ http {
 # TODO: turn off autoindex
       autoindex on;
     }
-
-    location /hosts/ {
-      alias ${HPS_HOST_CONFIG_DIR}/;
-      default_type text/plain;
-      autoindex on;
-# TODO: turn off autoindex
-#      autoindex off;
-#      try_files \$uri =404;
-    }
-
 
     # CGI Bash scripts via fcgiwrap
     location /cgi-bin/ {

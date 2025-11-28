@@ -1,7 +1,20 @@
 __guard_source || return
-# Define your functions below
 
 
+#===============================================================================
+# get_active_cluster_hosts_dir
+# ----------------------------
+# Get the hosts directory for the active cluster.
+#
+# Returns:
+#   Path via stdout
+#   1 if active cluster cannot be determined
+#===============================================================================
+get_active_cluster_hosts_dir() {
+  local cluster_dir
+  cluster_dir=$(get_active_cluster_dir 2>/dev/null) || return 1
+  echo "${cluster_dir}/hosts"
+}
 
 
 #===============================================================================
@@ -62,7 +75,7 @@ process_host_audit() {
   if [[ -f "$temp_file" ]] && [[ -s "$temp_file" ]]; then
     while IFS='=' read -r key value; do
       # Now we can safely call functions
-      host_config "$mac" "set" "$key" "$value"
+      host_registry "$mac" "set" "$key" "$value"
       hps_log debug "Stored: $key = $value"
     done < "$temp_file"
     
@@ -73,14 +86,12 @@ process_host_audit() {
   fi
   
   # Store metadata
-  host_config "$mac" "set" "${prefix}_timestamp" "$(date +%s)"
-  host_config "$mac" "set" "${prefix}_count" "$field_count"
+  host_registry "$mac" "set" "${prefix}_timestamp" "$(date +%s)"
+  host_registry "$mac" "set" "${prefix}_count" "$field_count"
   
   hps_log info "Host data collection '${prefix}' completed for ${mac}: ${field_count} fields"
   return 0
 }
-
-
 
 
 #===============================================================================
@@ -108,8 +119,8 @@ get_host_os_id() {
   local mac="$1"
   
   # Get host info
-  local host_type=$(host_config "$mac" "get" "TYPE")
-  local arch=$(host_config "$mac" "get" "arch")
+  local host_type=$(host_registry "$mac" "get" "TYPE")
+  local arch=$(host_registry "$mac" "get" "arch")
   
   # Validate we have required info
   if [[ -z "$host_type" ]]; then
@@ -122,12 +133,12 @@ get_host_os_id() {
   
   # Build the cluster config key
   local os_key="os_$(echo $host_type | tr '[:upper:]' '[:lower:]')_${arch}"
-  local os_id=$(cluster_config "get" "$os_key")
+  local os_id=$(cluster_registry "get" "$os_key")
   
   # Fallback to non-architecture-specific if not found
   if [[ -z "$os_id" ]]; then
     os_key="os_$(echo $host_type | tr '[:upper:]' '[:lower:]')"
-    os_id=$(cluster_config "get" "$os_key")
+    os_id=$(cluster_registry "get" "$os_key")
     
     # If found non-arch specific, prepend architecture
     if [[ -n "$os_id" ]] && [[ "$os_id" != *:* ]]; then
@@ -141,7 +152,7 @@ get_host_os_id() {
   fi
   
   # Verify the OS exists in registry
-  if ! os_config "$os_id" "exists"; then
+  if ! os_registry "$os_id" "exists"; then
     hps_log error "[get_host_os_id] OS '$os_id' not found in registry"
     return 1
   fi
@@ -171,24 +182,26 @@ get_host_os_version() {
   
   [[ -z "$os_id" ]] && return 1
   
-  os_config "$os_id" "get" "version"
+  os_registry "$os_id" get "version"
 }
 
 
-
-#:name: host_initialise_config
-#:group: host-management
-#:synopsis: Initialize a new host configuration file.
-#:usage: host_initialise_config <mac>
-#:description:
-#  Creates a new configuration file for a host identified by MAC address.
-#  Sets the initial STATE to UNCONFIGURED. Creates the hosts directory if needed.
-#  Uses get_active_cluster_hosts_dir to determine the correct location.
-#:parameters:
-#  mac - MAC address of the host
-#:returns:
-#  0 on success
-#  1 if MAC not provided or initialization fails
+#===============================================================================
+# host_initialise_config
+# ----------------------
+# Initialize a new host configuration in registry.
+#
+# Usage:
+#   host_initialise_config <mac> <arch>
+#
+# Parameters:
+#   mac  - MAC address of the host
+#   arch - Architecture (e.g., x86_64)
+#
+# Returns:
+#   0 on success
+#   1 if MAC not provided or initialization fails
+#===============================================================================
 host_initialise_config() {
   local mac="$1"
   local arch="$2"
@@ -217,13 +230,13 @@ host_initialise_config() {
     hps_log debug "Created hosts directory: $hosts_dir"
   fi
   
-  # Set initial state using host_config (which will create the file)
-  if ! host_config "$mac" set STATE "UNCONFIGURED"; then
+  # Set initial state using host_registry (which will create the registry)
+  if ! host_registry "$mac" set STATE "UNCONFIGURED"; then
     hps_log error "Failed to set initial state for MAC: $mac"
     return 1
   fi
   
-  if ! host_config "$mac" set arch "$arch"; then
+  if ! host_registry "$mac" set arch "$arch"; then
     hps_log error "Failed to set arch for MAC: $mac"
     return 1
   fi
@@ -232,111 +245,23 @@ host_initialise_config() {
 }
 
 
-get_active_cluster_hosts_dir () {
-  echo "$(get_active_cluster_link_path)/hosts"
-}
-
-
-#:name: get_mac_from_conffile
-#:group: host-management
-#:synopsis: Extract MAC address from a host configuration filename.
-#:usage: get_mac_from_conffile <conf_file_path>
-#:description:
-#  Extracts the MAC address from a host configuration file path.
-#  The MAC is the basename of the file without the .conf extension.
-#:parameters:
-#  conf_file_path - Full path to the configuration file
-#:returns:
-#  0 on success (outputs MAC address to stdout)
-#  1 if filename is invalid or cannot be parsed
-get_mac_from_conffile() {
-  local conf_file="$1"
-  
-  if [[ -z "$conf_file" ]]; then
-    hps_log error "get_mac_from_conffile: No config file provided"
-    return 1
-  fi
-  
-  local mac
-  mac=$(basename "$conf_file" .conf 2>/dev/null)
-  
-  if [[ -z "$mac" ]] || [[ "$mac" == "$conf_file" ]]; then
-    hps_log error "get_mac_from_conffile: Cannot extract MAC from: $conf_file"
-    return 1
-  fi
-  
-  echo "$mac"
-  return 0
-}
-
-
-
-#:name: get_host_conf_filename
-#:group: host-management
-#:synopsis: Get the full path to a host's configuration file.
-#:usage: get_host_conf_filename <mac>
-#:description:
-#  Returns the full path to the configuration file for a host identified by MAC address.
-#  Uses the active cluster's hosts directory to construct the path.
-#  Validates that the hosts directory can be determined and the config file exists and is readable.
-#:parameters:
-#  mac - MAC address of the host
-#:returns:
-#  0 on success (outputs config file path to stdout)
-#  1 if MAC not provided or hosts directory cannot be determined
-#  2 if config file does not exist or is not readable
-get_host_conf_filename() {
-  local mac="$1"
-  
-  # Validate MAC address is provided
-  if [[ -z "$mac" ]]; then
-    hps_log error "get_host_conf_filename: MAC address not provided"
-    return 1
-  fi
-  
-  # Get active cluster hosts directory
-  local hosts_dir
-  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
-  
-  if [[ -z "$hosts_dir" ]]; then
-    hps_log error "get_host_conf_filename: Cannot determine active cluster hosts directory"
-    return 1
-  fi
-  
-  # Construct the config file path
-  local conf_file="${hosts_dir}/${mac}.conf"
-  
-  # Verify file exists and is readable
-  if [[ ! -f "$conf_file" ]]; then
-    hps_log error "get_host_conf_filename: Config file does not exist: $conf_file"
-    return 2
-  fi
-  
-  if [[ ! -r "$conf_file" ]]; then
-    hps_log error "get_host_conf_filename: Config file is not readable: $conf_file"
-    return 2
-  fi
-  
-  # Output the config file path
-  echo "$conf_file"
-  return 0
-}
-
-#:name: _find_available_ip
-#:group: network
-#:synopsis: Find an available IP address in DHCP range.
-#:usage: _find_available_ip <mac> <dhcp_ip> <dhcp_rangesize>
-#:description:
-#  Scans DHCP range for available IP address.
-#  Skips DHCP server IP and already-assigned IPs.
-#  Preserves current host IP if already assigned.
-#:parameters:
-#  mac            - MAC address of host (to check current IP)
-#  dhcp_ip        - DHCP server IP (start of range)
-#  dhcp_rangesize - Size of DHCP range
-#:returns:
-#  0 on success (outputs IP to stdout)
-#  1 if no available IPs found
+#===============================================================================
+# _find_available_ip
+# ------------------
+# Find an available IP address in DHCP range.
+#
+# Usage:
+#   _find_available_ip <mac> <dhcp_ip> <dhcp_rangesize>
+#
+# Parameters:
+#   mac            - MAC address of host (to check current IP)
+#   dhcp_ip        - DHCP server IP (start of range)
+#   dhcp_rangesize - Size of DHCP range
+#
+# Returns:
+#   0 on success (outputs IP to stdout)
+#   1 if no available IPs found
+#===============================================================================
 _find_available_ip() {
   local mac="$1"
   local dhcp_ip="$2"
@@ -348,7 +273,7 @@ _find_available_ip() {
   
   # Get current host's IP if it already has one
   local current_host_ip
-  current_host_ip=$(host_config "$mac" get IP 2>/dev/null) || current_host_ip=""
+  current_host_ip=$(host_registry "$mac" get IP 2>/dev/null) || current_host_ip=""
   
   # Convert DHCP start IP to integer
   local dhcp_start_int
@@ -384,18 +309,21 @@ _find_available_ip() {
   return 1
 }
 
-#:name: _find_available_hostname
-#:group: network
-#:synopsis: Find available hostname with sequential numbering.
-#:usage: _find_available_hostname <hosttype>
-#:description:
-#  Generates hostname by finding highest existing number for host type
-#  and incrementing. Returns hostname in format: type-NNN (lowercase, zero-padded).
-#:parameters:
-#  hosttype - Host type prefix (e.g., TCH, ROCKY)
-#:returns:
-#  0 on success (outputs hostname to stdout)
-#  1 on failure
+#===============================================================================
+# _find_available_hostname
+# ------------------------
+# Find available hostname with sequential numbering.
+#
+# Usage:
+#   _find_available_hostname <hosttype>
+#
+# Parameters:
+#   hosttype - Host type prefix (e.g., TCH, ROCKY)
+#
+# Returns:
+#   0 on success (outputs hostname to stdout)
+#   1 on failure
+#===============================================================================
 _find_available_hostname() {
   local hosttype="$1"
   local hosttype_lower=$(echo "$hosttype" | tr '[:upper:]' '[:lower:]')
@@ -423,24 +351,25 @@ _find_available_hostname() {
   return 0
 }
 
-#:name: host_network_configure
-#:group: network
-#:synopsis: Assign IP address and hostname to a host based on MAC address.
-#:usage: host_network_configure <mac> <hosttype>
-#:description:
-#  Allocates a unique IP address from the DHCP range and generates
-#  a unique hostname based on host type. Preserves existing network
-#  configuration if already set. Persists configuration via host_config.
-#:parameters:
-#  mac      - MAC address of the host
-#  hosttype - Host type prefix for hostname generation (e.g., TCH, ROCKY)
-#:returns:
-#  0 on success
-#  1 if configuration fails or no available IPs/hostnames
+#===============================================================================
+# host_network_configure
+# ----------------------
+# Assign IP address and hostname to a host based on MAC address.
+#
+# Usage:
+#   host_network_configure <mac>
+#
+# Parameters:
+#   mac - MAC address of the host
+#
+# Returns:
+#   0 on success
+#   1 if configuration fails or no available IPs/hostnames
+#===============================================================================
 host_network_configure() {
   local macid="$1"
 
-  local hosttype=$(host_config "$macid" get TYPE 2>/dev/null)
+  local hosttype=$(host_registry "$macid" get TYPE 2>/dev/null)
   
   hps_log debug "host_network_configure called with MAC: $macid, TYPE: $hosttype"
   
@@ -457,9 +386,9 @@ host_network_configure() {
   
   # Get cluster network configuration
   local dhcp_ip dhcp_rangesize network_cidr
-  dhcp_ip=$(cluster_config get DHCP_IP 2>/dev/null)
-  dhcp_rangesize=$(cluster_config get DHCP_RANGESIZE 2>/dev/null)
-  network_cidr=$(cluster_config get NETWORK_CIDR 2>/dev/null)
+  dhcp_ip=$(cluster_registry get DHCP_IP 2>/dev/null)
+  dhcp_rangesize=$(cluster_registry get DHCP_RANGESIZE 2>/dev/null)
+  network_cidr=$(cluster_registry get NETWORK_CIDR 2>/dev/null)
 
   hps_log debug "Configuring with network $network_cidr"
 
@@ -486,15 +415,15 @@ host_network_configure() {
   # Check if network config already exists - if so, preserve it
   local assigned_ip assigned_hostname
     # Check if IP already exists before trying to get it
-  if host_config "$macid" exists IP; then
-    assigned_ip=$(host_config "$macid" get IP 2>/dev/null)
+  if host_registry "$macid" exists IP; then
+    assigned_ip=$(host_registry "$macid" get IP 2>/dev/null)
   else
     assigned_ip=""
   fi
   
   # Check if HOSTNAME already exists before trying to get it
-  if host_config "$macid" exists HOSTNAME; then
-    assigned_hostname=$(host_config "$macid" get HOSTNAME 2>/dev/null)
+  if host_registry "$macid" exists HOSTNAME; then
+    assigned_hostname=$(host_registry "$macid" get HOSTNAME 2>/dev/null)
   else
     assigned_hostname=""
   fi
@@ -540,27 +469,27 @@ host_network_configure() {
   fi
   
   # Write configuration (only updates changed values)
-  host_config "$macid" set IP "$assigned_ip" || {
+  host_registry "$macid" set IP "$assigned_ip" || {
     hps_log error "Failed to set IP"
     return 1
   }
   
-  host_config "$macid" set NETMASK "$netmask" || {
+  host_registry "$macid" set NETMASK "$netmask" || {
     hps_log error "Failed to set NETMASK"
     return 1
   }
   
-  host_config "$macid" set HOSTNAME "$assigned_hostname" || {
+  host_registry "$macid" set HOSTNAME "$assigned_hostname" || {
     hps_log error "Failed to set HOSTNAME"
     return 1
   }
   
-  host_config "$macid" set TYPE "$hosttype" || {
+  host_registry "$macid" set TYPE "$hosttype" || {
     hps_log error "Failed to set TYPE"
     return 1
   }
   
-  host_config "$macid" set STATE "CONFIGURED" || {
+  host_registry "$macid" set STATE "CONFIGURED" || {
     hps_log error "Failed to set STATE"
     return 1
   }
@@ -570,21 +499,23 @@ host_network_configure() {
 }
 
 
-#:name: host_config_delete
-#:group: host-management
-#:synopsis: Delete a host's configuration file.
-#:usage: host_config_delete <mac>
-#:description:
-#  Deletes the configuration file for a host identified by MAC address.
-#  Uses get_host_conf_filename to locate the file in the active cluster.
-#  Validates the file exists before attempting deletion.
-#:parameters:
-#  mac - MAC address of the host
-#:returns:
-#  0 on success (file deleted)
-#  1 if MAC not provided or config file cannot be determined
-#  2 if config file does not exist
-#  3 if deletion fails
+#===============================================================================
+# host_config_delete
+# ------------------
+# Delete a host's configuration from registry.
+#
+# Usage:
+#   host_config_delete <mac>
+#
+# Parameters:
+#   mac - MAC address of the host
+#
+# Returns:
+#   0 on success (registry deleted)
+#   1 if MAC not provided
+#   2 if registry does not exist
+#   3 if deletion fails
+#===============================================================================
 host_config_delete() {
   local mac="$1"
   
@@ -594,54 +525,55 @@ host_config_delete() {
     return 1
   fi
   
-  # Get the config file path using helper function
-  local config_file
-  config_file=$(get_host_conf_filename "$mac" 2>/dev/null)
-  
-  # Check if get_host_conf_filename succeeded
-  if [[ $? -ne 0 ]] || [[ -z "$config_file" ]]; then
-    hps_log error "[$mac] Cannot determine config file location"
-    return 1
-  fi
-  
-  # Verify file exists (get_host_conf_filename already checks this, but double-check)
-  if [[ ! -f "$config_file" ]]; then
-    hps_log warning "[$mac] Host config not found: $config_file"
+  # Check if host registry exists
+  if ! host_registry "$mac" exists; then
+    hps_log warning "[$mac] Host registry not found"
     return 2
   fi
   
-  # Attempt to delete the file
-  if rm -f "$config_file" 2>/dev/null; then
-    hps_log info "[$mac] Deleted host config: $config_file"
-    
-    # Reset the host_config cache for this MAC
-    if [[ "${__HOST_CONFIG_MAC:-}" == "$mac" ]]; then
-      __HOST_CONFIG_PARSED=0
-      __HOST_CONFIG_MAC=""
-      __HOST_CONFIG_FILE=""
-    fi
-    
+  # Get the hosts directory
+  local hosts_dir
+  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
+  if [[ -z "$hosts_dir" ]]; then
+    hps_log error "[$mac] Cannot determine hosts directory"
+    return 1
+  fi
+  
+  # Normalize MAC for directory name
+  local mac_normalized
+  mac_normalized=$(normalise_mac "$mac") || {
+    hps_log error "[$mac] Failed to normalize MAC"
+    return 1
+  }
+  
+  local registry_dir="${hosts_dir}/${mac_normalized}.db"
+  
+  # Delete the entire registry directory
+  if rm -rf "$registry_dir" 2>/dev/null; then
+    hps_log info "[$mac] Deleted host registry: $registry_dir"
     return 0
   else
-    hps_log error "[$mac] Failed to delete config file: $config_file"
+    hps_log error "[$mac] Failed to delete registry directory: $registry_dir"
     return 3
   fi
 }
 
 
-#:name: host_config_show
-#:group: host-management
-#:synopsis: Display a host's configuration.
-#:usage: host_config_show <mac>
-#:description:
-#  Displays the configuration for a host identified by MAC address.
-#  Reads the config file and outputs each key-value pair with proper quoting.
-#  Skips comments and empty lines.
-#:parameters:
-#  mac - MAC address of the host
-#:returns:
-#  0 on success (outputs config to stdout)
-#  1 if MAC not provided or config file cannot be read
+#===============================================================================
+# host_config_show
+# ----------------
+# Display a host's configuration from registry.
+#
+# Usage:
+#   host_config_show <mac>
+#
+# Parameters:
+#   mac - MAC address of the host
+#
+# Returns:
+#   0 on success (outputs config to stdout)
+#   1 if MAC not provided or config cannot be read
+#===============================================================================
 host_config_show() {
   local mac="$1"
   
@@ -651,51 +583,41 @@ host_config_show() {
     return 1
   fi
   
-  # Get the config file path using helper function
-  local config_file
-  config_file=$(get_host_conf_filename "$mac" 2>/dev/null)
-  
-  # Check if file exists and is readable
-  if [[ $? -ne 0 ]] || [[ -z "$config_file" ]]; then
+  # Check if host exists
+  if ! host_registry "$mac" exists; then
     hps_log info "No host config found for MAC: $mac"
     return 1
   fi
   
-  # Read and display the config file
-  while IFS='=' read -r k v; do
-    # Skip comments and empty lines
-    [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
-    
-    # Strip surrounding quotes from value
-    v="${v%\"}"
-    v="${v#\"}"
-    
-    # Escape embedded quotes and backslashes
-    v="${v//\\/\\\\}"
-    v="${v//\"/\\\"}"
-    
-    # Output key-value pair with proper quoting
-    echo "${k}=\"${v}\""
-  done < "$config_file"
+  # Use registry view to get all keys as JSON, then convert to key=value
+  local view_output
+  view_output=$(host_registry "$mac" view 2>/dev/null) || {
+    hps_log error "Failed to read host registry for MAC: $mac"
+    return 1
+  }
+  
+  # Convert JSON to key=value format with proper quoting
+  echo "$view_output" | jq -r 'to_entries[] | "\(.key)=\"\(.value)\""'
   
   return 0
 }
 
 
-
-
-#:name: host_config_exists
-#:group: host-management
-#:synopsis: Check if a host's configuration file exists.
-#:usage: host_config_exists <mac>
-#:description:
-#  Checks if a configuration file exists for a host identified by MAC address.
-#  Uses get_host_conf_filename to locate the file in the active cluster.
-#:parameters:
-#  mac - MAC address of the host
-#:returns:
-#  0 if config file exists and is readable
-#  1 if MAC not provided, config file doesn't exist, or cannot be determined
+#===============================================================================
+# host_config_exists
+# ------------------
+# Check if a host's configuration exists in registry.
+#
+# Usage:
+#   host_config_exists <mac>
+#
+# Parameters:
+#   mac - MAC address of the host
+#
+# Returns:
+#   0 if config exists
+#   1 if MAC not provided or config doesn't exist
+#===============================================================================
 host_config_exists() {
   local mac="$1"
   
@@ -704,12 +626,26 @@ host_config_exists() {
     return 1
   fi
   
-  # Use get_host_conf_filename which validates existence and readability
-  # If it returns successfully (exit code 0), the file exists and is readable
-  get_host_conf_filename "$mac" >/dev/null 2>&1
+  # Use host_registry exists (which checks for .db directory)
+  host_registry "$mac" exists >/dev/null 2>&1
   return $?
 }
 
+#===============================================================================
+# host_post_config_hooks
+# ----------------------
+# Execute post-configuration hooks when host config changes.
+#
+# Usage:
+#   host_post_config_hooks <key> <value>
+#
+# Parameters:
+#   key   - Configuration key that was changed
+#   value - New value
+#
+# Returns:
+#   0 always (hooks don't fail the main operation)
+#===============================================================================
 host_post_config_hooks() {
     local key="$1"
     local value="$2"
@@ -743,224 +679,51 @@ host_post_config_hooks() {
 }
 
 
-
-#:name: host_config
-#:group: host-management
-#:synopsis: Manage host configuration key-value storage per MAC address.
-#:usage: host_config <mac> <command> [key] [value]
-#:description:
-#  Parses and manages host configuration from active cluster hosts directory.
-#  Supports get, exists, equals, and set operations on host configuration keys.
-#  MAC addresses are normalized (colons removed) for filenames.
-#:parameters:
-#  mac     - MAC address of the host (e.g., 52:54:00:9c:4c:24 or 5254009c4c24)
-#  command - Operation: get, exists, equals, set
-#  key     - Configuration key name (alphanumeric and underscore)
-#  value   - Value to set (only for 'set' and 'equals' commands)
-#:returns:
-#  get:    0 if key exists (prints value), 1 if key not found
-#  exists: 0 if key exists, 1 if not
-#  equals: 0 if key exists and matches value, 1 otherwise
-#  set:    0 on success
-#  other:  2 for invalid command
+#===============================================================================
+# host_config
+# -----------
+# Alias to host_registry for backward compatibility
+#===============================================================================
 host_config() {
-  local mac_param=$1
-  local cmd="$2"
-  local key="$3"
-  local value="${4:-}"
-  
-  # Use a local variable name that won't collide
-  local _host_mac="$mac_param"
-  
-  # Validate MAC format if provided
-  if [[ -n "$_host_mac" ]]; then
-    if [[ ! "$_host_mac" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]] && \
-       [[ ! "$_host_mac" =~ ^[0-9a-fA-F]{12}$ ]]; then
-      echo "ERROR: Invalid MAC address format: $_host_mac" >&2
-      return 1
-    fi
-  else
-    echo "ERROR: MAC address required" >&2
-    return 1
-  fi
-  
-  # Normalize MAC address for filename (remove colons, lowercase)
-  local _mac_normalized
-  _mac_normalized=$(normalise_mac "$_host_mac") || {
-    echo "ERROR: Failed to normalize MAC address: $_host_mac" >&2
-    return 1
-  }
-  
-  # Get active cluster hosts directory and construct path
-  local hosts_dir
-  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
-  if [[ -z "$hosts_dir" ]]; then
-    echo "ERROR: Cannot determine active cluster hosts directory" >&2
-    return 1
-  fi
-  
-  local config_file="${hosts_dir}/${_mac_normalized}.conf"
-  
-  case "$cmd" in
-    get)
-      # Read value directly from file
-      if [[ ! -f "$config_file" ]]; then
-        return 1
-      fi
-      
-      local val
-      val=$(grep -E "^${key}=" "$config_file" 2>/dev/null | cut -d= -f2- | tr -d '"')
-      
-      if [[ -n "$val" ]]; then
-        printf '%s\n' "$val"
-        return 0
-      else
-        return 1
-      fi
-      ;;
-      
-    exists)
-      [[ -f "$config_file" ]] && grep -qE "^${key}=" "$config_file" 2>/dev/null
-      return $?
-      ;;
-      
-    equals)
-      if [[ ! -f "$config_file" ]]; then
-        return 1
-      fi
-      
-      local val
-      val=$(grep -E "^${key}=" "$config_file" 2>/dev/null | cut -d= -f2- | tr -d '"')
-      [[ "$val" == "$value" ]]
-      return $?
-      ;;
-      
-    set)
-      # Validate key format
-      if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-        echo "ERROR: Invalid key format: $key" >&2
-        return 2
-      fi
-      
-      # Ensure config directory exists
-      local config_dir
-      config_dir="$(dirname "$config_file")"
-      if [[ ! -d "$config_dir" ]]; then
-        mkdir -p "$config_dir" || return 3
-      fi
-      
-      # Read existing config into associative array
-      declare -A config
-      if [[ -f "$config_file" ]]; then
-        while IFS='=' read -r k v; do
-          [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-          v="${v#"${v%%[![:space:]]*}"}"
-          v="${v%"${v##*[![:space:]]}"}"
-          [[ "$v" == \"*\" ]] && v="${v%\"}" && v="${v#\"}"
-          config["$k"]="$v"
-        done < "$config_file"
-      fi
-      
-      # Update key and timestamp
-      config["$key"]="$value"
-      config["UPDATED"]="$(make_timestamp)"
-      
-      # Write configuration file
-      {
-        echo "# Auto-generated host config"
-        echo "# MAC: $_host_mac"
-        for k in $(printf '%s\n' "${!config[@]}" | LC_ALL=C sort); do
-          local v="${config[$k]//\"/\\\"}"
-          printf '%s="%s"\n' "$k" "$v"
-        done
-      } > "$config_file" || return 3
-      
-      # Log after write completes (use original MAC format for display)
-      hps_log info "[$_host_mac] host_config updated: $key = $value"
-      
-      return 0
-      ;;
-
-    # In host_config function, add this case:
-      unset|delete)
-      if [[ ! -f "$config_file" ]]; then
-        return 0  # Already doesn't exist
-      fi
-      
-      # Remove the key from the file
-      local temp_file="${config_file}.tmp"
-      grep -v "^${key}=" "$config_file" > "$temp_file" 2>/dev/null
-      
-      # Update timestamp
-      echo "UPDATED=\"$(make_timestamp)\"" >> "$temp_file"
-      
-      mv "$temp_file" "$config_file"
-      hps_log info "[$_host_mac] host_config removed: $key"
-      return 0
-      ;;
-
-      
-    *)
-      echo "ERROR: Invalid host_config command: $cmd" >&2
-      return 2
-      ;;
-  esac
+  host_registry "$@"
 }
 
 #===============================================================================
 # get_host_mac_by_keyvalue
 # -------------------------
-# Find host MAC address by searching for key/value pair
+# Find host MAC address by searching for key/value pair using registry search.
 #
-# Behaviour:
-#   - Searches all host configs for matching key=value
-#   - Returns MAC address (filename) of matching host
-#   - Case-insensitive for both key and value
+# Usage:
+#   get_host_mac_by_keyvalue <key> <value>
 #
 # Parameters:
-#   $1: Key to search for (e.g., "hostname", "ip", "storage0_ip")
-#   $2: Value to match
+#   key   - Key to search for (e.g., "HOSTNAME", "IP", "storage0_ip")
+#   value - Value to match
 #
 # Returns:
 #   0 on success (echoes MAC address)
 #   1 if not found
 #
 # Example usage:
-#   mac=$(get_host_mac_by_keyvalue "hostname" "tch-001")
-#   mac=$(get_host_mac_by_keyvalue "ip" "10.99.1.8")
-#   mac=$(get_host_mac_by_keyvalue "storage0_ip" "10.31.0.100")
+#   mac=$(get_host_mac_by_keyvalue "HOSTNAME" "tch-001")
+#   mac=$(get_host_mac_by_keyvalue "IP" "10.99.1.8")
 #===============================================================================
 get_host_mac_by_keyvalue() {
-  local search_key="${1^^}"  # uppercase for case-insensitive match
-  local search_value="${2,,}"  # lowercase for case-insensitive match
+  local search_key="$1"
+  local search_value="$2"
   
   if [[ -z "$search_key" ]] || [[ -z "$search_value" ]]; then
     return 1
   fi
   
-  local host_dir="$(get_active_cluster_hosts_dir)"
-  [[ ! -d "$host_dir" ]] && return 1
+  # Use registry_search which searches JSON files directly
+  local result
+  result=$(registry_search host "$search_key" "$search_value" 2>/dev/null)
   
-  for host_file in "$host_dir"/*.conf; do
-    [[ ! -f "$host_file" ]] && continue
-    
-    # Search for key=value pattern (case-insensitive)
-    while IFS='=' read -r key value; do
-      # Skip comments and empty lines
-      [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
-      
-      # Clean up quotes if present
-      value="${value//\"/}"
-      
-      # Case-insensitive comparison
-      if [[ "${key^^}" == "$search_key" ]] && [[ "${value,,}" == "$search_value" ]]; then
-        # Extract MAC from filename
-        local filename=$(basename "$host_file" .conf)
-        echo "$filename"
-        return 0
-      fi
-    done < "$host_file"
-  done
+  if [[ -n "$result" ]]; then
+    echo "$result"
+    return 0
+  fi
   
   return 1
 }
@@ -968,66 +731,59 @@ get_host_mac_by_keyvalue() {
 #===============================================================================
 # get_all_hosts_by_keyvalue
 # --------------------------
-# Find all host MAC addresses matching a key/value pair
+# Find all host MAC addresses matching a key/value pair.
 #
-# Behaviour:
-#   - Similar to get_host_mac_by_keyvalue but returns all matches
-#   - Useful for finding all hosts with same property
+# Usage:
+#   get_all_hosts_by_keyvalue <key> <value>
 #
 # Parameters:
-#   $1: Key to search for
-#   $2: Value to match
+#   key   - Key to search for
+#   value - Value to match
 #
 # Returns:
 #   0 if any found (echoes all MACs, one per line)
 #   1 if none found
 #
 # Example usage:
-#   macs=$(get_all_hosts_by_keyvalue "type" "TCH")
+#   macs=$(get_all_hosts_by_keyvalue "TYPE" "TCH")
 #===============================================================================
 get_all_hosts_by_keyvalue() {
-  local search_key="${1^^}"
-  local search_value="${2,,}"
-  local found=0
+  local search_key="$1"
+  local search_value="$2"
   
   if [[ -z "$search_key" ]] || [[ -z "$search_value" ]]; then
     return 1
   fi
   
-  local host_dir="$(get_active_cluster_hosts_dir)"
-  [[ ! -d "$host_dir" ]] && return 1
+  # Scan all hosts and check for matching key/value
+  local found=0
+  local mac
   
-  for host_file in "$host_dir"/*.conf; do
-    [[ ! -f "$host_file" ]] && continue
+  while IFS= read -r mac; do
+    [[ -z "$mac" ]] && continue
     
-    while IFS='=' read -r key value; do
-      [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
-      
-      value="${value//\"/}"
-      
-      if [[ "${key^^}" == "$search_key" ]] && [[ "${value,,}" == "$search_value" ]]; then
-        local filename=$(basename "$host_file" .conf)
-        echo "$filename"
-        found=1
-        break
-      fi
-    done < "$host_file"
-  done
+    local stored_value
+    stored_value=$(host_registry "$mac" get "$search_key" 2>/dev/null)
+    
+    if [[ "$stored_value" == "$search_value" ]]; then
+      echo "$mac"
+      found=1
+    fi
+  done < <(list_cluster_hosts)
   
   return $((found ? 0 : 1))
 }
 
 
-#:name: has_sch_host
-#:group: cluster
-#:synopsis: Check if the active cluster has any SCH (Storage/Compute Host) hosts.
-#:usage: has_sch_host
-#:description:
-#  Checks if at least one host in the active cluster is configured with TYPE=SCH.
-#  Uses get_cluster_host_hostnames to check for SCH type hosts.
-#:returns:
-#  0 if at least one SCH host exists
-#  1 if no SCH hosts found or cluster cannot be determined
+#===============================================================================
+# has_sch_host
+# ------------
+# Check if the active cluster has any SCH (Storage/Compute Host) hosts.
+#
+# Returns:
+#   0 if at least one SCH host exists
+#   1 if no SCH hosts found or cluster cannot be determined
+#===============================================================================
 has_sch_host() {
   # Get all SCH hosts using the cluster helper with type filter
   local sch_hosts
@@ -1040,9 +796,3 @@ has_sch_host() {
     return 1
   fi
 }
-
-
-
-
-
-

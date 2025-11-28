@@ -24,6 +24,7 @@ get_tch_apkovl_filepath() {
 }
 
 
+
 #===============================================================================
 # tch_apkovol_create
 # ------------------
@@ -61,20 +62,21 @@ tch_apkovol_create() {
   fi
   
   # Get configuration from os_config
-  local ips_address=$(cluster_config get DHCP_IP)
+  local ips_address=$(cluster_registry get DHCP_IP)
   if [[ -z "$ips_address" ]]; then
     hps_log error "Failed to get gateway IP from cluster config"
     return 1
   fi
   
   # Get Alpine version from os_config
-  local iso_version=$(os_config "$os_id" get iso_version)
-  if [[ -z "$iso_version" ]]; then
-    hps_log error "Failed to get iso_version for OS_ID: $os_id"
+  # Use 'version' field directly - Alpine repos use major.minor only (e.g., 3.20)
+  local alpine_version=$(os_config "$os_id" get version)
+  if [[ -z "$alpine_version" ]]; then
+    hps_log error "Failed to get version for OS_ID: $os_id"
     return 1
   fi
   
-  local nameserver=$(cluster_config get NAME_SERVER)
+  local nameserver=$(cluster_registry get NAME_SERVER)
   if [[ -z "$nameserver" ]]; then
     hps_log warn "NAME_SERVER not configured, using gateway IP for DNS"
     nameserver="$ips_address"
@@ -82,9 +84,8 @@ tch_apkovol_create() {
 
   local download_base="http://${ips_address}/distros/$(os_config "$os_id" get repo_path)"
   
-  hps_log debug "Apkovl config: OS_ID: ${os_id}, Alpine version: ${iso_version}, IPS: ${ips_address}, DNS: ${nameserver}, download_base: $download_base"
+  hps_log debug "Apkovl config: OS_ID: ${os_id}, Alpine version: ${alpine_version}, IPS: ${ips_address}, DNS: ${nameserver}, download_base: $download_base"
   
-  # Rest of function continues as before...
   # Create temporary workspace
   local tmp_dir=$(mktemp -d)
   if [[ ! -d "$tmp_dir" ]]; then

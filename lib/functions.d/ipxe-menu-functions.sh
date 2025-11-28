@@ -8,8 +8,8 @@ ipxe_header () {
 cgi_header_plain
 # Set some variables to be used in IPXE scripts
 
-local STATE="$(host_config "$mac" get STATE)"
-local CLUSTER_NAME="$(cluster_config get CLUSTER_NAME)"
+local STATE="$(host_registry "$mac" get STATE)"
+local CLUSTER_NAME="$(cluster_registry get CLUSTER_NAME)"
 
 TITLE_PREFIX="$CLUSTER_NAME \${mac:hexraw} \${net0/ip} $STATE:"
 
@@ -84,10 +84,10 @@ ipxe_init_handler() {
   fi
   
   # Get current state
-  state=$(host_config "$mac" get STATE 2>/dev/null) || state=""
+  state=$(host_registry "$mac" get STATE 2>/dev/null) || state=""
   
   # Check rescue mode override
-  rescue=$(host_config "$mac" get RESCUE 2>/dev/null) || rescue=""
+  rescue=$(host_registry "$mac" get RESCUE 2>/dev/null) || rescue=""
   if [[ "$rescue" == "true" ]]; then
     hps_log info "RESCUE mode active for MAC $mac"
     ipxe_network_boot "$mac"
@@ -125,7 +125,7 @@ ipxe_init_handler() {
     
     REINSTALL)
       hps_log info "State: $state - unconfiguring host"
-      host_config "$mac" set STATE UNCONFIGURED
+      host_registry "$mac" set STATE UNCONFIGURED
       ipxe_goto_menu init_menu
       ;;
     
@@ -171,7 +171,7 @@ handle_menu_item() {
       ;;
 
     unmanage)
-      host_config "$mac" set STATE UNMANAGED
+      host_registry "$mac" set STATE UNMANAGED
       ipxe_reboot "Menu selected - Set to UNMANAGED and reboot"
       ;;
   
@@ -190,7 +190,7 @@ handle_menu_item() {
 
     reinstall)
       hps_log info "$item Reinstall requested"
-      host_config "$mac" set STATE REINSTALL
+      host_registry "$mac" set STATE REINSTALL
       ipxe_host_configure_menu
       ;;
 
@@ -209,8 +209,8 @@ handle_menu_item() {
         local HOST_TYPE="${BASH_REMATCH[1]}"
         local HOST_PROFILE="${BASH_REMATCH[3]:-DEFAULT}"
         
-        host_config "$mac" "set" "TYPE" "${HOST_TYPE}"
-        host_config "$mac" "set" "HOST_PROFILE" "${HOST_PROFILE}"
+        host_registry "$mac" "set" "TYPE" "${HOST_TYPE}"
+        host_registry "$mac" "set" "HOST_PROFILE" "${HOST_PROFILE}"
         hps_log info "$item Running boot installer for type: '${HOST_TYPE}' profile: '${HOST_PROFILE}'"
         ipxe_boot_installer "$mac"
       else
@@ -223,11 +223,11 @@ handle_menu_item() {
     force_install_*)
       if [[ "${item}" == "force_install_on" ]] 
        then
-        host_config "$mac" set FORCE_INSTALL YES
-        host_config "$mac" set STATUS UNCONFIGURED
+        host_registry "$mac" set FORCE_INSTALL YES
+        host_registry "$mac" set STATUS UNCONFIGURED
         ipxe_goto_menu
        else
-        host_config "$mac" set FORCE_INSTALL NO
+        host_registry "$mac" set FORCE_INSTALL NO
         ipxe_goto_menu
       fi       
       ;;
@@ -307,7 +307,7 @@ ipxe_header
 # run iPXE audit
 ipxe_host_audit_include
 
-if [[ "$(host_config "$mac" get FORCE_INSTALL)" == "YES" ]]; then
+if [[ "$(host_registry "$mac" get FORCE_INSTALL)" == "YES" ]]; then
   FI_MENU="item force_install_off Disable forced installation"
   hps_log debug "Forced install set"
 else
@@ -366,20 +366,20 @@ ipxe_reboot () {
 ipxe_boot_installer () {
   local mac="$1"
 
-  local host_type="$(host_config "$mac" get TYPE)"
-  local host_profile="$(host_config "$mac" get HOST_PROFILE)"
-  local arch="$(host_config "$mac" get arch)"
+  local host_type="$(host_registry "$mac" get TYPE)"
+  local host_profile="$(host_registry "$mac" get HOST_PROFILE)"
+  local arch="$(host_registry "$mac" get arch)"
 
   local lc_type=$(echo ${host_type} | tr '[:upper:]' '[:lower:]')
   os_key="os_${lc_type}_${arch}"
-  os_id=$(cluster_config "get" "$os_key")
+  os_id=$(cluster_registry "get" "$os_key")
   # Fallback to any OS for this arch/type
   if [[ -z "$os_id" ]]; then
     os_id=$(os_config_select "$arch" "$lc_type")
   fi
   hps_log debug "os_key: $os_key os_id: $os_id"
 
-  host_config "$mac" set os_id "$os_id"
+  host_registry "$mac" set os_id "$os_id"
 
   hps_log info "Installing new host of type $host_type ($arch) with $os_id"
 
@@ -388,13 +388,13 @@ ipxe_boot_installer () {
 
   if [[ "${host_type}" != "TCH" ]]; then
     # set flag so that init knows to install
-      host_config "$mac" set STATE INSTALLING
+      host_registry "$mac" set STATE INSTALLING
       ipxe_network_boot "$mac"
     exit
   fi
 
   hps_log info "Setting up host for network boot"
-  host_config "$mac" set STATE NETWORK_BOOT
+  host_registry "$mac" set STATE NETWORK_BOOT
   ipxe_reboot "Configured for network boot - rebooting to apply"
 
 }
@@ -429,10 +429,10 @@ ipxe_boot_alpine() {
     return 1
   fi
 
-  local client_ip=$(host_config "$mac" get IP)
-  local ips_address=$(cluster_config get DHCP_IP)
-  local network_cidr=$(cluster_config get NETWORK_CIDR)
-  local hostname=$(host_config "$mac" get HOSTNAME)
+  local client_ip=$(host_registry "$mac" get IP)
+  local ips_address=$(cluster_registry get DHCP_IP)
+  local network_cidr=$(cluster_registry get NETWORK_CIDR)
+  local hostname=$(host_registry "$mac" get HOSTNAME)
 
   # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
   local prefix_len="${network_cidr##*/}"
@@ -474,8 +474,8 @@ ipxe_installer-rocky () {
   # First try architecture-specific config
   # this can be improved using the os_ functions
  
-  local os_name=$(os_config "$os_id" "get" "name")
-  local boot_server=$(cluster_config get DHCP_IP)
+  local os_name=$(os_registry "$os_id" get "name")
+  local boot_server=$(cluster_registry get DHCP_IP)
   local distro_mount=$(get_distro_base_path "$os_id" "mount")
   local repo_base="http://${boot_server}/$(get_distro_base_path $os_id http)"
 
@@ -525,7 +525,7 @@ ipxe_installer-rocky () {
 
 
     # Last check - Abort if we are already installed
-  if [ "$(host_config "$mac" get STATE)" == "INSTALLED" ]
+  if [ "$(host_registry "$mac" get STATE)" == "INSTALLED" ]
    then
     ipxe_reboot "Host already installed, aborting installation for $mac"
   fi
@@ -646,16 +646,15 @@ EOF
 
     show_cluster)
       echo "menu Cluster Configuration"
-
-      local config_file="${HPS_CLUSTER_CONFIG_DIR}/cluster.conf"
-      if [[ ! -f "$config_file" ]]; then
-        echo "item --gap [x] Cluster config not found: $config_file"
+      # List all keys and their values
+      if cluster_registry list >/dev/null 2>&1; then
+        while IFS= read -r key; do
+          local value
+          value=$(cluster_registry get "$key" 2>/dev/null)
+          echo "item --gap ${key}: ${value}"
+        done < <(cluster_registry list | sort)
       else
-        while IFS='=' read -r k v; do
-          [[ "$k" =~ ^#.*$ || -z "$k" ]] && continue
-          v="${v%\"}"; v="${v#\"}"
-          echo "item --gap ${k}: ${v}"
-        done < "$config_file"
+        echo "item --gap [x] Cluster config not accessible"
       fi
 
       cat <<'EOF'

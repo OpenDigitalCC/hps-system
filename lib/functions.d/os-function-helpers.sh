@@ -6,13 +6,9 @@
 # support using colon delimiter format: <arch>:<name>:<version>
 #===============================================================================
 
-
-
-
 _get_distro_dir () {
   echo "${HPS_DISTROS_DIR}"
 }
-
 
 #===============================================================================
 # os_get_latest
@@ -39,40 +35,32 @@ _get_distro_dir () {
 #===============================================================================
 os_get_latest() {
   local os_name="$1"
-  local os_conf=$(_get_os_conf_path)
   local latest_version=""
   local latest_os_id=""
   
-  [[ ! -f "$os_conf" ]] && return 1
-  
-  # Extract all section headers and find matching OS entries
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^\[([^\]]+)\] ]]; then
-      local os_id="${BASH_REMATCH[1]}"
-      
-      # Parse the OS ID (arch:name:version)
-      local IFS=':'
-      read -r arch name version <<< "$os_id"
-      
-      # Check if this matches our OS name
-      if [[ "$name" == "$os_name" ]]; then
-        # Compare versions - using sort -V for version comparison
-        if [[ -z "$latest_version" ]]; then
+  # Get all OS IDs from registry
+  for os_id in $(os_registry list); do
+    # Parse the OS ID (arch:name:version)
+    IFS=':' read -r arch name version <<< "$os_id"
+    
+    # Check if this matches our OS name
+    if [[ "$name" == "$os_name" ]]; then
+      # Compare versions - using sort -V for version comparison
+      if [[ -z "$latest_version" ]]; then
+        latest_version="$version"
+        latest_os_id="$os_id"
+      else
+        # Check if this version is newer
+        local higher_version
+        higher_version=$(printf '%s\n%s\n' "$version" "$latest_version" | sort -V | tail -1)
+        
+        if [[ "$higher_version" == "$version" && "$version" != "$latest_version" ]]; then
           latest_version="$version"
           latest_os_id="$os_id"
-        else
-          # Check if this version is newer
-          local higher_version
-          higher_version=$(printf '%s\n%s\n' "$version" "$latest_version" | sort -V | tail -1)
-          
-          if [[ "$higher_version" == "$version" && "$version" != "$latest_version" ]]; then
-            latest_version="$version"
-            latest_os_id="$os_id"
-          fi
         fi
       fi
     fi
-  done < "$os_conf"
+  done
   
   if [[ -n "$latest_os_id" ]]; then
     echo "$latest_os_id"
@@ -81,7 +69,6 @@ os_get_latest() {
     return 1
   fi
 }
-
 
 #===============================================================================
 # os_id_to_distro
@@ -113,8 +100,6 @@ os_id_to_distro() {
   # Build distro string: arch-mfr-osname-version
   echo "${arch}-linux-${osname}-${version}"
 }
-
-
 
 #===============================================================================
 # get_os_name_version
@@ -176,8 +161,6 @@ get_os_name() {
   echo "$name"
 }
 
-
-
 #===============================================================================
 # get_distro_base_path
 # --------------------
@@ -208,7 +191,7 @@ get_distro_base_path() {
 
   # Try to get configured repo path
   if os_config "$os_id" "exists"; then
-    repo_path=$(os_config "$os_id" "get" "repo_path" 2>/dev/null)
+    repo_path=$(os_registry "$os_id" get "repo_path" 2>/dev/null)
    else
     hps_log error "O/S $os_id does not have a repo_path set"
     return 1
@@ -230,7 +213,6 @@ get_distro_base_path() {
       ;;
   esac
 }
-
 
 #===============================================================================
 # get_distro_url
@@ -256,20 +238,18 @@ get_distro_url() {
   echo "http://${server}${http_path}"
 }
 
-
-
 #===============================================================================
 # os_config_list
 # --------------
 # List all configured OS entries.
 #
 # Behaviour:
-#   - Reads the OS config file and outputs all section names
+#   - Uses os_registry to list all OS IDs
 #   - One OS per line
 #
 # Returns:
 #   0 on success
-#   1 if config file doesn't exist
+#   1 if no OS entries found
 #
 # Example usage:
 #   os_config_list
@@ -279,12 +259,7 @@ get_distro_url() {
 #
 #===============================================================================
 os_config_list() {
-  local os_conf=$(_get_os_conf_path)
-  
-  [[ ! -f "$os_conf" ]] && return 1
-  
-  # More robust pattern that handles whitespace and colons
-  grep -E '^\[[^]]+\]' "$os_conf" | sed 's/^\[\([^]]*\)\]/\1/'
+  os_registry list
 }
 
 #===============================================================================
@@ -313,7 +288,7 @@ os_config_by_type() {
   local found=0
   
   for os_id in $(os_config_list); do
-    local types=$(os_config "$os_id" "get" "hps_types" 2>/dev/null)
+    local types=$(os_registry "$os_id" get "hps_types" 2>/dev/null)
     if [[ "$types" =~ (^|,)${host_type}(,|$) ]]; then
       echo "$os_id"
       found=1
@@ -350,8 +325,8 @@ os_config_by_arch_and_type() {
     local id_arch="${os_id%%:*}"
     
     # Also check the arch field for verification
-    local conf_arch=$(os_config "$os_id" "get" "arch" 2>/dev/null)
-    local types=$(os_config "$os_id" "get" "hps_types" 2>/dev/null)
+    local conf_arch=$(os_registry "$os_id" get "arch" 2>/dev/null)
+    local types=$(os_registry "$os_id" get "hps_types" 2>/dev/null)
     
     if [[ "$id_arch" == "$req_arch" || "$conf_arch" == "$req_arch" ]] && \
        [[ "$types" =~ (^|,)${host_type}(,|$) ]]; then
@@ -369,8 +344,8 @@ os_config_by_arch_and_type() {
 # Get all key-value pairs for a specific OS.
 #
 # Behaviour:
-#   - Outputs all keys and values for the specified OS section
-#   - Format: key=value
+#   - Uses os_registry view to get all keys as JSON
+#   - Converts JSON to key=value format using jq
 #
 # Arguments:
 #   $1: OS identifier
@@ -385,36 +360,13 @@ os_config_by_arch_and_type() {
 #===============================================================================
 os_config_get_all() {
   local os_id="$1"
-  local os_conf=$(_get_os_conf_path)
-  local in_section=0
   
-  [[ ! -f "$os_conf" ]] && return 1
+  if ! os_registry "$os_id" exists; then
+    return 1
+  fi
   
-  while IFS= read -r line; do
-    # Check for section header
-    if [[ "$line" =~ ^\[([^\]]+)\] ]]; then
-      if [[ "${BASH_REMATCH[1]}" == "$os_id" ]]; then
-        in_section=1
-      elif [[ $in_section -eq 1 ]]; then
-        # We've left our section
-        break
-      fi
-      continue
-    fi
-    
-    # If in correct section, output key=value pairs
-    if [[ $in_section -eq 1 ]] && [[ "$line" =~ ^[[:space:]]*([^=]+)=(.*)$ ]]; then
-      local key="${BASH_REMATCH[1]}"
-      local value="${BASH_REMATCH[2]}"
-      key="${key%%[[:space:]]}"  # Trim trailing spaces
-      key="${key##[[:space:]]}"  # Trim leading spaces
-      value="${value%%[[:space:]]}"  # Trim trailing spaces  
-      value="${value##[[:space:]]}"  # Trim leading spaces
-      echo "${key}=${value}"
-    fi
-  done < "$os_conf"
-  
-  return $((in_section ? 0 : 1))
+  # Use registry view for JSON output, convert to key=value
+  os_registry "$os_id" view | jq -r 'to_entries[] | "\(.key)=\(.value)"'
 }
 
 #===============================================================================
@@ -435,10 +387,6 @@ os_config_get_all() {
 #
 #===============================================================================
 os_config_summary() {
-  local os_conf=$(_get_os_conf_path)
-  
-  [[ ! -f "$os_conf" ]] && return 1
-  
   echo "Available OS Configurations"
   echo "==========================="
   
@@ -458,12 +406,12 @@ os_config_summary() {
     echo "-------------------"
     
     for os_id in $(os_config_list | grep "^${arch}:"); do
-      local hps_types=$(os_config "$os_id" "get" "hps_types" 2>/dev/null || echo "N/A")
-      local name=$(os_config "$os_id" "get" "name" 2>/dev/null || echo "N/A")
-      local version=$(os_config "$os_id" "get" "version_full" 2>/dev/null || echo "N/A")
-      local status=$(os_config "$os_id" "get" "status" 2>/dev/null || echo "N/A")
-      local updated=$(os_config "$os_id" "get" "updated" 2>/dev/null || echo "N/A")
-      local notes=$(os_config "$os_id" "get" "notes" 2>/dev/null || echo "")
+      local hps_types=$(os_registry "$os_id" get "hps_types" 2>/dev/null || echo "N/A")
+      local name=$(os_registry "$os_id" get "name" 2>/dev/null || echo "N/A")
+      local version=$(os_registry "$os_id" get "version_full" 2>/dev/null || echo "N/A")
+      local status=$(os_registry "$os_id" get "status" 2>/dev/null || echo "N/A")
+      local updated=$(os_registry "$os_id" get "updated" 2>/dev/null || echo "N/A")
+      local notes=$(os_registry "$os_id" get "notes" 2>/dev/null || echo "")
       
       echo "  [$os_id]"
       echo "    Host Types: $hps_types"
@@ -511,7 +459,7 @@ os_config_validate() {
   fi
   
   for field in "${required_fields[@]}"; do
-    if ! os_config "$os_id" "get" "$field" >/dev/null 2>&1; then
+    if ! os_registry "$os_id" get "$field" >/dev/null 2>&1; then
       missing_fields+=("$field")
       valid=1
     fi
@@ -571,11 +519,11 @@ os_config_latest_minor() {
   for os_id in $(os_config_list | grep "^${pattern}"); do
     # Check status if filter provided
     if [[ -n "$status_filter" ]]; then
-      local status=$(os_config "$os_id" "get" "status" 2>/dev/null)
+      local status=$(os_registry "$os_id" get "status" 2>/dev/null)
       [[ "$status" != "$status_filter" ]] && continue
     fi
     
-    local version_full=$(os_config "$os_id" "get" "version_full" 2>/dev/null)
+    local version_full=$(os_registry "$os_id" get "version_full" 2>/dev/null)
     if [[ -n "$version_full" ]]; then
       if [[ -z "$highest_version" ]] || version_compare "$version_full" ">" "$highest_version"; then
         highest_version="$version_full"
@@ -676,7 +624,7 @@ os_config_select() {
   if [[ -n "$version_pref" ]]; then
     local exact="${arch}:${version_pref}"
     if os_config "$exact" "exists"; then
-      local types=$(os_config "$exact" "get" "hps_types")
+      local types=$(os_registry "$exact" get "hps_types")
       if [[ "$types" =~ (^|,)${host_type}(,|$) ]]; then
         echo "$exact"
         return 0
@@ -693,7 +641,7 @@ os_config_select() {
   
   # Fall back to any prod OS for this arch/type
   for os_id in $(os_config_by_arch_and_type "$arch" "$host_type"); do
-    local status=$(os_config "$os_id" "get" "status")
+    local status=$(os_registry "$os_id" get "status")
     if [[ "$status" == "prod" ]]; then
       echo "$os_id"
       return 0

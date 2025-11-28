@@ -80,7 +80,7 @@ osvc_configure_cluster() {
   
   # Get cluster configuration
   local cluster_name
-  cluster_name="$(cluster_config get CLUSTER_NAME 2>/dev/null)"
+  cluster_name="$(cluster_registry get CLUSTER_NAME 2>/dev/null)"
   
   if [[ -z "${cluster_name}" ]]; then
     hps_log error "CLUSTER_NAME not set in cluster_config"
@@ -89,7 +89,7 @@ osvc_configure_cluster() {
   
   # Get heartbeat configuration
   local hb_type
-  hb_type="$(cluster_config get OSVC_HB_TYPE 2>/dev/null)" || hb_type="multicast"
+  hb_type="$(cluster_registry get OSVC_HB_TYPE 2>/dev/null)" || hb_type="multicast"
   
   # Build configuration update arguments
   local config_updates=()

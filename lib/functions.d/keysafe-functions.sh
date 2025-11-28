@@ -98,16 +98,11 @@ keysafe_issue_token() {
     
     # Get keysafe directory
     keysafe_dir=$(get_keysafe_dir) || return 1
-    
-    # Determine keysafe mode from cluster config
-    local cluster_dir="${HPS_CLUSTER_CONFIG_BASE_DIR}/active-cluster"
-    local cluster_config="$(readlink -f "$cluster_dir")/cluster.conf"
-    
-    if [[ -f "$cluster_config" ]]; then
-        source "$cluster_config"
-    fi
-    
-    mode="${HPS_KEYSAFE_MODE:-open}"
+  
+  # Determine keysafe mode from cluster config
+    mode=$(cluster_registry get "HPS_KEYSAFE_MODE" 2>/dev/null)
+    mode="${mode:-open}"
+
     
     # Get current timestamp
     issued=$(date +%s)
@@ -286,7 +281,7 @@ keysafe_cleanup_expired() {
 #
 # Behaviour:
 #   - Validates request parameters (MAC, purpose)
-#   - Looks up node HOSTNAME from host_config using MAC
+#   - Looks up node HOSTNAME from host_registry using MAC
 #   - Logs all operations and errors via hps_log
 #   - Issues token via keysafe_issue_token
 #   - Returns token string or error message
@@ -296,7 +291,7 @@ keysafe_cleanup_expired() {
 #   $2 - purpose: Token purpose (e.g., "backup") (required)
 #
 # Dependencies:
-#   - host_config function (from boot_manager/host management)
+#   - host_registry function (from boot_manager/host management)
 #   - hps_log function (for logging)
 #
 # Returns:
@@ -326,7 +321,7 @@ keysafe_handle_token_request() {
     fi
     
     # Get node hostname from host config
-    node_id=$(host_config "$mac" get HOSTNAME 2>/dev/null)
+    node_id=$(host_registry "$mac" get HOSTNAME 2>/dev/null)
     
     if [[ -z "$node_id" ]]; then
         hps_log warn "keysafe_handle_token_request: Could not determine HOSTNAME for MAC: $mac"

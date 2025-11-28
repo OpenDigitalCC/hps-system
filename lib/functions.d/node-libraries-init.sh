@@ -26,7 +26,7 @@ hps_get_remote_functions() {
   local os_id type profile state rescue
   
   # Get os_id from host config (using $mac from CGI context)
-  if ! os_id=$(host_config "$mac" get os_id 2>/dev/null); then
+  if ! os_id=$(host_registry "$mac" get os_id 2>/dev/null); then
     hps_log error "Could not retrieve os_id for MAC $mac"
     return 1
   fi
@@ -37,10 +37,10 @@ hps_get_remote_functions() {
   fi
   
   # Get type, profile, state, rescue
-  type=$(host_config "$mac" get TYPE 2>/dev/null || echo "")
-  profile=$(host_config "$mac" get PROFILE 2>/dev/null || echo "DEFAULT")
-  state=$(host_config "$mac" get STATE 2>/dev/null || echo "RUNNING")
-  rescue=$(host_config "$mac" get RESCUE 2>/dev/null || echo "false")
+  type=$(host_registry "$mac" get TYPE 2>/dev/null || echo "")
+  profile=$(host_registry "$mac" get PROFILE 2>/dev/null || echo "DEFAULT")
+  state=$(host_registry "$mac" get STATE 2>/dev/null || echo "RUNNING")
+  rescue=$(host_registry "$mac" get RESCUE 2>/dev/null || echo "false")
   
   hps_log info "Building function bundle for MAC $mac"
   hps_log info "  OS: $os_id, Type: ${type:-<unset>}, Profile: $profile, State: $state, Rescue: $rescue"

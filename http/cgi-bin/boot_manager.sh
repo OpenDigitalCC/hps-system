@@ -6,9 +6,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 mac="$(hps_origin_tag)"
 
-# Retrieve config file name of the cluster
-CLUSTER_FILE=$(get_active_cluster_filename) || {
-  cgi_auto_fail "No active cluster"
+
+# Is a cluster configured?
+get_active_cluster_name >/dev/null 2>&1 || {
+  echo "ERROR: No active cluster configured"
   exit 1
 }
 
@@ -24,8 +25,12 @@ cmd="$(cgi_param get cmd)"
 # Command: Get TCH apkovol
 if [[ "$cmd" == "get_tch_apkovol" ]]; then
   hps_log info "Generating Alpine apkovol"
-  tch_apkovol_create
-  exit 0
+  if tch_apkovol_create; then 
+    exit 0
+   else
+    cgi_auto_fail "$cmd failed"
+    exit 1
+  fi
 fi
 
 
@@ -63,7 +68,7 @@ fi
 # Command: set status
 if [[ "$cmd" == "set_status" ]]; then
   SET_STATUS="$(cgi_require_param status)"
-  host_config "$mac" set STATE "$SET_STATUS"
+  host_registry "$mac" set STATE "$SET_STATUS"
   cgi_success "$mac set to $SET_STATUS"
   exit 0
 fi
@@ -84,7 +89,7 @@ fi
 #   - If 'action=unset': DELETE operation
 #   - If 'value' parameter exists (even if empty): SET operation
 #   - If 'value' parameter is missing: GET operation
-#   - Uses host_config function to manage the actual storage
+#   - Uses host_registry function to manage the actual storage
 #
 # Returns:
 #   - GET: Success with value if found, failure if key not found
@@ -103,7 +108,7 @@ if [[ "$cmd" == "host_variable" ]]; then
   
   if [[ "$action" == "unset" ]]; then
     # UNSET operation - remove the variable
-    if host_config "$mac" unset "$var_name" >/dev/null 2>&1; then
+    if host_registry "$mac" unset "$var_name" >/dev/null 2>&1; then
       cgi_success "$mac unset $var_name"
       exit 0
     else
@@ -113,7 +118,7 @@ if [[ "$cmd" == "host_variable" ]]; then
   elif cgi_param exists value; then
     # SET operation - value parameter exists
     var_value="$(cgi_param get value)"
-    if host_config "$mac" set "$var_name" "$var_value" >/dev/null 2>&1; then
+    if host_registry "$mac" set "$var_name" "$var_value" >/dev/null 2>&1; then
       cgi_success "$mac set $var_name to $var_value"
       exit 0
     else
@@ -122,7 +127,7 @@ if [[ "$cmd" == "host_variable" ]]; then
     fi
   else
     # GET operation - no value parameter
-    if current_value="$(host_config "$mac" get "$var_name" 2>/dev/null)"; then
+    if current_value="$(host_registry "$mac" get "$var_name" 2>/dev/null)"; then
       cgi_success "$current_value"
       exit 0
     else
@@ -153,7 +158,7 @@ fi
 #
 #===============================================================================
 if [[ "$cmd" == "cluster_variable" ]]; then
-  # Ensure dynamic paths are exported so cluster_config points at active cluster
+  # Ensure dynamic paths are exported so cluster_registry points at active cluster
   type export_dynamic_paths >/dev/null 2>&1 && export_dynamic_paths
 
   name="$(cgi_require_param name)"
@@ -161,7 +166,7 @@ if [[ "$cmd" == "cluster_variable" ]]; then
   if cgi_param exists value; then
     # SET path
     value="$(cgi_param get value)"
-    if cluster_config set "$name" "$value" >/dev/null 2>&1; then
+    if cluster_registry set "$name" "$value" >/dev/null 2>&1; then
       cgi_success "cluster set $name to $value"
       exit 0
     else
@@ -170,7 +175,7 @@ if [[ "$cmd" == "cluster_variable" ]]; then
     fi
   else
     # GET path
-    if val="$(cluster_config get "$name" 2>/dev/null)"; then
+    if val="$(cluster_registry get "$name" 2>/dev/null)"; then
       cgi_success "$val"
       exit 0
     else
@@ -250,7 +255,7 @@ fi
 # Command: Determine current state
 if [[ "$cmd" == "determine_state" ]]; then
   hps_log info "Host wants to know its state"
-  state="$(host_config "$mac" get STATE)"
+  state="$(host_registry "$mac" get STATE)"
   hps_log info "State: $state"
   cgi_success "$state"
   exit 0
@@ -270,7 +275,7 @@ fi
 # Command: Configure this host
 if [[ "$cmd" == "config_host" ]]; then
   hosttype="$(cgi_require_param hosttype)"
-  host_config "$mac" set TYPE "$hosttype"
+  host_registry "$mac" set TYPE "$hosttype"
   cgi_success "$mac configured as $hosttype"
   exit 0
 fi
@@ -287,7 +292,7 @@ fi
 
 # Command: Network bootstrap via kickstart
 if [[ "$cmd" == "kickstart" ]]; then
-  hosttype="$(host_config "$mac" get TYPE)"
+  hosttype="$(host_registry "$mac" get TYPE)"
   if [[ -z "${hosttype:-}" ]]; then
     cgi_auto_fail "Host TYPE not configured for kickstart"
     exit 1
@@ -322,9 +327,9 @@ if [[ "$cmd" == "get_installer_functions" ]]; then
   hps_log debug "Request for get_installer_functions"
   cgi_header_plain
   
-  type=$(host_config "$mac" get TYPE)
+  type=$(host_registry "$mac" get TYPE)
   hps_log debug "---  get_installer_functions for mac $mac"
-  os_id=$(host_config "$mac" get os_id)
+  os_id=$(host_registry "$mac" get os_id)
   osname=$(get_os_name $os_id)
 
   installer_func_file="${LIB_DIR}/host-installer/${osname}/installer-functions.sh"

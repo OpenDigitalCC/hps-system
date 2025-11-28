@@ -5,6 +5,12 @@ get_path_supervisord_conf () {
   echo "$(get_path_cluster_services_dir)/supervisord.conf"
 }
 
+_get_hps_environment() {
+  # Return standard HPS environment for supervisor programs
+  echo "HPS_SYSTEM_BASE=\"/srv/hps-system\",HPS_CONFIG_BASE=\"/srv/hps-config\",HPS_CLUSTER_CONFIG_BASE_DIR=\"/srv/hps-config/clusters\",HOME=\"/root\""
+}
+
+
 #:name: supervisor_configure_core_services
 #:group: supervisor
 #:synopsis: Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, and OpenSVC agent.
@@ -39,7 +45,8 @@ supervisor_configure_core_services() {
   # Ensure required directories exist
   local config_dir log_dir
   config_dir="$(dirname "${SUPERVISORD_CONF}")"
-  log_dir="${HPS_LOG_DIR}"
+#  log_dir="${HPS_LOG_DIR}"
+  log_dir="/srv/hps-system/log"
 
   for dir in "${config_dir}" "${log_dir}"; do
     if [[ ! -d "${dir}" ]]; then
@@ -89,6 +96,7 @@ stdout_logfile=syslog
 stderr_logfile=syslog
 #stderr_logfile=${DNSMASQ_LOG_STDERR}
 #stdout_logfile=${DNSMASQ_LOG_STDOUT}
+environment=$(_get_hps_environment)
 
 EOF
 )" || return 3
@@ -103,6 +111,7 @@ stdout_logfile=syslog
 stderr_logfile=syslog
 #stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
 #stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
+environment=$(_get_hps_environment)
 
 EOF
 )" || return 3
@@ -118,6 +127,7 @@ stdout_logfile=syslog
 stderr_logfile=syslog
 #stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
 #stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
+environment=$(_get_hps_environment)
 
 EOF
 )" || return 3
@@ -132,6 +142,7 @@ stderr_logfile=${HPS_LOG_DIR}/rsyslog/rsyslog.err.log
 stdout_logfile=${HPS_LOG_DIR}/rsyslog/rsyslog.out.log
 stdout_events_enabled=true
 stderr_events_enabled=true
+environment=$(_get_hps_environment)
 
 EOF
 )" || return 3
@@ -151,12 +162,12 @@ startsecs=2
 startretries=3
 stopsignal=TERM
 user=root
-environment=HOME="/root"
 directory=/
 stdout_logfile=syslog
 stderr_logfile=syslog
 #stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
 #stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
+environment=$(_get_hps_environment)
 
 EOF
 )" || return 3
@@ -173,6 +184,7 @@ stdout_logfile=syslog
 stderr_logfile=syslog
 #stdout_logfile=${HPS_LOG_DIR}/supervisor-post-start.log
 #stderr_logfile=${HPS_LOG_DIR}/supervisor-post-start.err
+environment=$(_get_hps_environment)
 
 EOF
 )" || return 3

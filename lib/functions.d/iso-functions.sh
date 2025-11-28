@@ -114,7 +114,7 @@ mount_distro_iso() {
   fi
   
   # Get ISO filename from os_config
-  iso_filename=$(os_config "$os_id" "get" "iso_filename" 2>/dev/null)
+  iso_filename=$(os_registry "$os_id" get "iso_filename" 2>/dev/null)
 
   # Mount point uses the OS ID with colons replaced by underscores
   # to avoid filesystem issues
