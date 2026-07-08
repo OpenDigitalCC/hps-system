@@ -494,34 +494,13 @@ _osvc_kv_set() {
 }
 
 
-osvc_process_commands() {
-  local cmd="$1"
-  
-  # Validate command parameter
-  if [[ -z "$cmd" ]]; then
-    hps_log error "No command specified"
-    return 1
-  fi
-  
-  case "$cmd" in 
-    get_auth_token)
-      _osvc_get_auth_token
-      ;;
-    *)
-      hps_log error "Unknown command: $cmd"
-      return 1
-      ;;
-  esac
-}
-
-
-
-# Get an auth token from OpenSVC. Short-lived 
-# so that it is only used in this atomic operation
-# the joining client must use it straight away.
+# Get an OpenSVC cluster-join token. Short-lived so it is only usable for the
+# atomic join operation. Minted IPS-locally and delivered to the joining node
+# over the authenticated ctrl-exec channel (see ADR 0001) - it is no longer
+# exposed via an unauthenticated CGI endpoint.
 _osvc_get_auth_token () {
 # TODO: add --subject calling hostname
-  echo $(om daemon auth --duration 15s --role join)
+  om daemon auth --duration 15s --role join
 }
 
 

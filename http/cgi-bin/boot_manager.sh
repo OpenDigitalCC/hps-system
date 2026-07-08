@@ -54,15 +54,6 @@ if [[ "$cmd" == "keysafe_request_token" ]]; then
 fi
 
 
-# Command: osvc_cmd
-if [[ "$cmd" == "osvc_cmd" ]]; then
-  #TODO: add param validation
-  osvc_cmd=$(cgi_require_param osvc_cmd)
-  cgi_header_plain
-  osvc_process_commands "${osvc_cmd}"
-  exit 0
-fi
-
 
 # Command: set status
 if [[ "$cmd" == "set_status" ]]; then

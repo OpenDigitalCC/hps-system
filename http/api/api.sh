@@ -195,6 +195,7 @@ parse_request() {
       REQUEST_MESSAGE=\(.message // "")
       REQUEST_FUNCTION=\(.function // "")
       REQUEST_FIELD=\(.field // "")
+      REQUEST_REQID=\(.reqid // "")
     "')"
     
     # Use provided MAC or detected MAC  
@@ -529,6 +530,22 @@ handle_system_action() {
       api_success "$health_data"
       ;;
       
+    ctrl_exec_pair_request)
+      # A provisioning node reports the pairing reqid it obtained from the
+      # dispatcher. The registry-bound approver decides whether to approve.
+      # Authorisation is by the binding checks in ce_approve_pair_request,
+      # not by this endpoint (the caller is already MAC-authenticated).
+      if [[ -z "$REQUEST_REQID" ]]; then
+        api_error 400 "Missing reqid parameter"
+        return
+      fi
+      if ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID"; then
+        api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
+      else
+        api_error 403 "Pairing request denied" "$REQUEST_MAC"
+      fi
+      ;;
+
     node_functions|bootstrap_functions)
       # Return node functions bundle
       local functions_file="/srv/hps-system/lib/node-functions"
