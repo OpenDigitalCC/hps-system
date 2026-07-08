@@ -9,7 +9,7 @@ _supervisor_pre_start () {
 
 # Get all services ready to start
 supervisor_prepare_services () {
-  _set_ips_hostname
+#  _set_ips_hostname
   create_config_nginx
   create_config_dnsmasq
   update_dns_dhcp_files
@@ -25,7 +25,7 @@ _supervisor_post_start () {
 
 
 supervisor_reload_core_config () {
-  local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
+  local SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
   hps_log info "Reread: $(supervisorctl -c "$SUPERVISORD_CONF" reread) $?"
   hps_log info "Update: $(supervisorctl -c "$SUPERVISORD_CONF" update) $?"
 }
@@ -47,7 +47,7 @@ supervisor_reload_core_config () {
 #  1 if SUPERVISORD_CONF is not set or file doesn't exist
 #  2 if supervisorctl command fails
 supervisor_reload_services() {
-  local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
+  local SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
   local service_name="${1:-}"
   
   # Validate SUPERVISORD_CONF is set
@@ -86,6 +86,5 @@ supervisor_reload_services() {
     return 2
   fi
 }
-
 
 

@@ -1,243 +1,65 @@
+#!/bin/bash
 
-
-get_path_supervisord_conf () {
-  echo "$(get_path_cluster_services_dir)/supervisord.conf"
-}
+#===============================================================================
+# Supervisor Configuration Functions
+#===============================================================================
+# Functions for generating and managing supervisord configuration.
+# Uses centralized paths via hps_get_config for consistency.
+#===============================================================================
 
 _get_hps_environment() {
   # Return standard HPS environment for supervisor programs
-  echo "HPS_SYSTEM_BASE=\"/srv/hps-system\",HPS_CONFIG_BASE=\"/srv/hps-config\",HPS_CLUSTER_CONFIG_BASE_DIR=\"/srv/hps-config/clusters\",HOME=\"/root\""
+  echo "HPS_SYSTEM_BASE=\"${HPS_SYSTEM_BASE}\",HPS_CONFIG_BASE=\"${HPS_CONFIG_BASE}\",HOME=\"/root\""
 }
 
-
-#:name: supervisor_configure_core_services
-#:group: supervisor
-#:synopsis: Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, and OpenSVC agent.
-#:usage: supervisor_configure_core_services
-#:description:
-#  Writes $(get_path_cluster_services_dir)/supervisord.conf with dnsmasq, nginx,
-#  fcgiwrap, and OpenSVC agent programs. Logs are written to ${HPS_LOG_DIR}.
-#  The function is idempotent: each program block is only added once.
-#  Validates that the configuration file and required directories are created successfully.
-#:returns:
-#  0 on success
-#  1 if core configuration creation fails
-#  2 if directory creation fails
-#  3 if configuration file write fails
-supervisor_configure_core_services() {
-  # Ensure the core header and defaults exist
-  local SUPERVISORD_CONF
-  SUPERVISORD_CONF="$(get_path_supervisord_conf)" || {
-    hps_log error "Failed to get supervisor core configuration"
-    return 1
-  }
-
-  # Verify core config file was actually created
-  if [[ ! -f "${SUPERVISORD_CONF}" ]]; then
-    hps_log error "Supervisor core configuration file not found: ${SUPERVISORD_CONF}"
-    return 1
-  fi
-
-  
-  hps_log info "Creating Supervisor services config ${SUPERVISORD_CONF}"
-
-  # Ensure required directories exist
-  local config_dir log_dir
-  config_dir="$(dirname "${SUPERVISORD_CONF}")"
-#  log_dir="${HPS_LOG_DIR}"
-  log_dir="/srv/hps-system/log"
-
-  for dir in "${config_dir}" "${log_dir}"; do
-    if [[ ! -d "${dir}" ]]; then
-      mkdir -p "${dir}" || {
-        hps_log error "Failed to create directory: ${dir}"
-        return 2
-      }
-      hps_log debug "Created directory: ${dir}"
-    fi
-  done
-
-  # Helper: append a block once, keyed by program stanza name
-  _supervisor_append_once() {
-    local stanza="$1"    # e.g. program:nginx
-    local block="$2"
-    
-    # Check if stanza already exists
-    if ! grep -qE "^\[${stanza}\]\s*$" "${SUPERVISORD_CONF}" 2>/dev/null; then
-      # Attempt to append the block
-      if printf '\n%s\n\n' "${block}" >> "${SUPERVISORD_CONF}" 2>/dev/null; then
-        hps_log debug "Added supervisor service: ${stanza}"
-      else
-        hps_log error "Failed to write service block: ${stanza}"
-        return 3
-      fi
-    else
-      hps_log debug "Supervisor service already exists: ${stanza}"
-    fi
-  }
-
-  # --- dnsmasq ---
-
-
-  local DNSMASQ_CONF="$(get_path_cluster_services_dir)/dnsmasq.conf"
-  local DNSMASQ_LOG_STDERR="${HPS_LOG_DIR}/dnsmasq.err.log"
-  local DNSMASQ_LOG_STDOUT="${HPS_LOG_DIR}/dnsmasq.out.log"
-  
-  touch ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
-  chown nobody:nogroup ${DNSMASQ_LOG_STDERR} ${DNSMASQ_LOG_STDOUT}
-
-  _supervisor_append_once "program:dnsmasq" "$(cat <<EOF
-[program:dnsmasq]
-command=/usr/sbin/dnsmasq -k --conf-file=${DNSMASQ_CONF} --log-facility=${DNSMASQ_LOG_STDOUT}
-autostart=true
-autorestart=true
-stdout_logfile=syslog
-stderr_logfile=syslog
-#stderr_logfile=${DNSMASQ_LOG_STDERR}
-#stdout_logfile=${DNSMASQ_LOG_STDOUT}
-environment=$(_get_hps_environment)
-
-EOF
-)" || return 3
-
-  # --- nginx ---
-  _supervisor_append_once "program:nginx" "$(cat <<EOF
-[program:nginx]
-command=/usr/sbin/nginx -g 'daemon off;' -c "$(get_path_cluster_services_dir)/nginx.conf"
-autostart=true
-autorestart=true
-stdout_logfile=syslog
-stderr_logfile=syslog
-#stderr_logfile=${HPS_LOG_DIR}/nginx.err.log
-#stdout_logfile=${HPS_LOG_DIR}/nginx.out.log
-environment=$(_get_hps_environment)
-
-EOF
-)" || return 3
-
-  # --- fcgiwrap ---
-  _supervisor_append_once "program:fcgiwrap" "$(cat <<EOF
-[program:fcgiwrap]
-command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
-umask=002
-autostart=true
-autorestart=true
-stdout_logfile=syslog
-stderr_logfile=syslog
-#stdout_logfile=${HPS_LOG_DIR}/fcgiwrap.out.log
-#stderr_logfile=${HPS_LOG_DIR}/fcgiwrap.err.log
-environment=$(_get_hps_environment)
-
-EOF
-)" || return 3
-
-  # --- rsyslogd ---
-  _supervisor_append_once "program:rsyslogd" "$(cat <<EOF
-[program:rsyslogd]
-command=/usr/sbin/rsyslogd -n -f $(get_path_cluster_services_dir)/rsyslog.conf
-autostart=true
-autorestart=true
-stderr_logfile=${HPS_LOG_DIR}/rsyslog/rsyslog.err.log
-stdout_logfile=${HPS_LOG_DIR}/rsyslog/rsyslog.out.log
-stdout_events_enabled=true
-stderr_events_enabled=true
-environment=$(_get_hps_environment)
-
-EOF
-)" || return 3
-
-
-  # --- OpenSVC agent ---
-  
-install_opensvc_foreground_wrapper
-
-  _supervisor_append_once "program:opensvc" "$(cat <<EOF
-[program:opensvc]
-#command=/usr/local/sbin/opensvc-foreground
-command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _opensvc_foreground_wrapper'
-autostart=true
-autorestart=true
-startsecs=2
-startretries=3
-stopsignal=TERM
-user=root
-directory=/
-stdout_logfile=syslog
-stderr_logfile=syslog
-#stdout_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stdout.log
-#stderr_logfile=${HPS_LOG_DIR}/opensvc.supervisor-stderr.log
-environment=$(_get_hps_environment)
-
-EOF
-)" || return 3
-
-  # --- Event listner to run post_start
-  _supervisor_append_once "eventlistener:post_start_config" "$(cat <<EOF
-[eventlistener:post_start_config]
-command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _supervisor_post_start'
-events=PROCESS_STATE_RUNNING
-buffer_size=100
-autostart=true
-autorestart=unexpected
-stdout_logfile=syslog
-stderr_logfile=syslog
-#stdout_logfile=${HPS_LOG_DIR}/supervisor-post-start.log
-#stderr_logfile=${HPS_LOG_DIR}/supervisor-post-start.err
-environment=$(_get_hps_environment)
-
-EOF
-)" || return 3
-
-
-  # Final validation: verify the file exists and is readable
-  if [[ ! -f "${SUPERVISORD_CONF}" ]] || [[ ! -r "${SUPERVISORD_CONF}" ]]; then
-    hps_log error "Supervisor configuration file validation failed: ${SUPERVISORD_CONF}"
-    return 3
-  fi
-
-  hps_log info "Supervisor services config generated successfully at: ${SUPERVISORD_CONF}"
-  return 0
-}
-
-
-
-
-#:name: supervisor_configure_core_config
-#:group: supervisor
-#:synopsis: Write the base supervisord.conf using ${HPS_LOG_DIR} for all logs.
-#:usage: supervisor_configure_core_config
-#:description:
-#  Generates $(get_path_cluster_services_dir)/supervisord.conf core sections and sets:
-#    - logfile=${HPS_LOG_DIR}/supervisord.log
-#    - childlogdir=${HPS_LOG_DIR}/supervisor
-#  Ensures ${HPS_LOG_DIR} and ${HPS_LOG_DIR}/supervisor exist.
-#  Validates that all directories and the configuration file are created successfully.
-#:returns:
-#  0 on success (outputs config file path to stdout)
-#  1 if required variables are not set
-#  2 if directory creation fails
-#  3 if configuration file write fails
-#  4 if configuration file validation fails
+#===============================================================================
+# supervisor_configure_core_config
+# --------------------------------
+# Write the base supervisord.conf using ${HPS_LOG} for all logs.
+#
+# Usage:
+#   supervisor_configure_core_config
+#
+# Description:
+#   Generates /srv/hps-config/services/supervisord.conf core sections:
+#     - logfile=${HPS_LOG}/supervisord.log
+#     - childlogdir=${HPS_LOG}/supervisor
+#   Ensures ${HPS_LOG} and ${HPS_LOG}/supervisor exist.
+#   Validates that all directories and the configuration file are created.
+#
+# Returns:
+#   0 on success
+#   1 if required variables are not set
+#   2 if directory creation fails
+#   3 if configuration file write fails
+#   4 if configuration file validation fails
+#
+# Note:
+#   Config location is fixed at /srv/hps-config/services/supervisord.conf
+#   Logs are centralized (not cluster-specific)
+#
+#===============================================================================
 supervisor_configure_core_config() {
-  # Validate required environment variables
-  if [[ -z "$(get_path_cluster_services_dir)" ]]; then
-    hps_log error "Cannot locate cluster services dir"
+  # Get supervisor config path
+  local supervisord_conf
+  supervisord_conf=$(hps_get_config supervisord_conf) || {
+    hps_log error "Cannot determine supervisord configuration path"
     return 1
-  fi
+  }
   
-  if [[ -z "${HPS_LOG_DIR}" ]]; then
-    hps_log error "HPS_LOG_DIR is not set"
+  # Validate HPS_LOG is set
+  if [[ -z "${HPS_LOG}" ]]; then
+    hps_log error "HPS_LOG is not set"
     return 1
   fi
 
-  local SUPERVISORD_CONF="$(get_path_supervisord_conf)"
-  local SUPERVISOR_CHILD_LOG_DIR="${HPS_LOG_DIR}/supervisor"
+  local supervisor_child_log_dir="${HPS_LOG}/supervisor"
   
-  hps_log info "Creating Supervisor core config ${SUPERVISORD_CONF}"
+  hps_log info "Creating Supervisor core config ${supervisord_conf}"
 
   # Ensure parent directory for config exists
   local config_dir
-  config_dir="$(dirname "${SUPERVISORD_CONF}")"
+  config_dir="$(dirname "${supervisord_conf}")"
   if [[ ! -d "${config_dir}" ]]; then
     if ! mkdir -p "${config_dir}"; then
       hps_log error "Failed to create configuration directory: ${config_dir}"
@@ -248,7 +70,7 @@ supervisor_configure_core_config() {
 
   # Ensure base log directories exist
   local dir
-  for dir in "${HPS_LOG_DIR}" "${SUPERVISOR_CHILD_LOG_DIR}"; do
+  for dir in "${HPS_LOG}" "${supervisor_child_log_dir}"; do
     if [[ ! -d "${dir}" ]]; then
       if ! mkdir -p "${dir}"; then
         hps_log error "Failed to create log directory: ${dir}"
@@ -259,7 +81,7 @@ supervisor_configure_core_config() {
   done
 
   # Write the configuration file
-  if ! cat > "${SUPERVISORD_CONF}" <<EOF
+  if ! cat > "${supervisord_conf}" <<EOF
 [unix_http_server]
 file=/var/run/supervisor.sock
 chmod=0700
@@ -276,9 +98,9 @@ supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 
 [supervisord]
 nodaemon=true
-logfile=${HPS_LOG_DIR}/supervisord.log
+logfile=${HPS_LOG}/supervisord.log
 pidfile=/var/run/supervisord.pid
-childlogdir=${SUPERVISOR_CHILD_LOG_DIR}
+childlogdir=${supervisor_child_log_dir}
 logfile_maxbytes=10000
 loglevel=info
 identifier=supervisor
@@ -289,26 +111,26 @@ strip_ansi=false
 syslog=true
 EOF
   then
-    hps_log error "Failed to write supervisor core configuration to: ${SUPERVISORD_CONF}"
+    hps_log error "Failed to write supervisor core configuration to: ${supervisord_conf}"
     return 3
   fi
 
   # Validate the configuration file was created and is readable
-  if [[ ! -f "${SUPERVISORD_CONF}" ]]; then
-    hps_log error "Configuration file does not exist after write: ${SUPERVISORD_CONF}"
+  if [[ ! -f "${supervisord_conf}" ]]; then
+    hps_log error "Configuration file does not exist after write: ${supervisord_conf}"
     return 4
   fi
 
-  if [[ ! -r "${SUPERVISORD_CONF}" ]]; then
-    hps_log error "Configuration file is not readable: ${SUPERVISORD_CONF}"
+  if [[ ! -r "${supervisord_conf}" ]]; then
+    hps_log error "Configuration file is not readable: ${supervisord_conf}"
     return 4
   fi
 
   # Validate file has content (should be at least 100 bytes for this config)
   local file_size
-  file_size=$(stat -c%s "${SUPERVISORD_CONF}" 2>/dev/null || stat -f%z "${SUPERVISORD_CONF}" 2>/dev/null)
+  file_size=$(stat -c%s "${supervisord_conf}" 2>/dev/null || stat -f%z "${supervisord_conf}" 2>/dev/null)
   if [[ -z "${file_size}" ]] || [[ "${file_size}" -lt 100 ]]; then
-    hps_log error "Configuration file appears to be empty or truncated: ${SUPERVISORD_CONF}"
+    hps_log error "Configuration file appears to be empty or truncated: ${supervisord_conf}"
     return 4
   fi
 
@@ -316,18 +138,210 @@ EOF
   local required_sections=("[unix_http_server]" "[supervisorctl]" "[supervisord]")
   local section
   for section in "${required_sections[@]}"; do
-    if ! grep -qF "${section}" "${SUPERVISORD_CONF}"; then
+    if ! grep -qF "${section}" "${supervisord_conf}"; then
       hps_log error "Configuration file missing required section: ${section}"
       return 4
     fi
   done
 
-  hps_log info "Supervisor core config generated successfully at: ${SUPERVISORD_CONF}"
-
+  hps_log info "Supervisor core config generated successfully at: ${supervisord_conf}"
   return 0
 }
 
+#===============================================================================
+# supervisor_configure_core_services
+# ----------------------------------
+# Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, rsyslog, and OpenSVC.
+#
+# Usage:
+#   supervisor_configure_core_services
+#
+# Description:
+#   Appends service blocks to /srv/hps-config/services/supervisord.conf.
+#   Logs are written to ${HPS_LOG}.
+#   The function is idempotent: each program block is only added once.
+#   Service configs use cluster-specific paths for dnsmasq, nginx, rsyslog.
+#
+# Returns:
+#   0 on success
+#   1 if core configuration not found
+#   2 if directory creation fails
+#   3 if service block write fails
+#
+#===============================================================================
+supervisor_configure_core_services() {
+  # Get supervisor config path
+  local supervisord_conf
+  supervisord_conf=$(hps_get_config supervisord_conf) || {
+    hps_log error "Failed to get supervisor configuration path"
+    return 1
+  }
 
+  # Verify core config file exists
+  if [[ ! -f "${supervisord_conf}" ]]; then
+    hps_log error "Supervisor core configuration file not found: ${supervisord_conf}"
+    return 1
+  fi
+  
+  hps_log info "Adding service blocks to Supervisor config: ${supervisord_conf}"
 
+  # Get active cluster for log directory
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "Cannot determine active cluster"
+    return 1
+  }
 
+  # Get cluster-specific directories
+  local cluster_services_dir
+  cluster_services_dir=$(hps_get_config cluster_services) || {
+    hps_log error "Cannot determine cluster services directory"
+    return 1
+  }
 
+  local cluster_log_dir="${HPS_LOG}/clusters/${cluster}"
+
+  # Ensure required directories exist
+  local config_dir
+  config_dir="$(dirname "${supervisord_conf}")"
+
+  for dir in "${config_dir}" "${HPS_LOG}" "${cluster_log_dir}"; do
+    if [[ ! -d "${dir}" ]]; then
+      mkdir -p "${dir}" || {
+        hps_log error "Failed to create directory: ${dir}"
+        return 2
+      }
+      hps_log debug "Created directory: ${dir}"
+    fi
+  done
+
+  # Helper: append a block once, keyed by program stanza name
+  _supervisor_append_once() {
+    local stanza="$1"
+    local block="$2"
+    
+    # Check if stanza already exists
+    if ! grep -qE "^\[${stanza}\]\s*$" "${supervisord_conf}" 2>/dev/null; then
+      # Attempt to append the block
+      if printf '\n%s\n\n' "${block}" >> "${supervisord_conf}" 2>/dev/null; then
+        hps_log debug "Added supervisor service: ${stanza}"
+      else
+        hps_log error "Failed to write service block: ${stanza}"
+        return 3
+      fi
+    else
+      hps_log debug "Supervisor service already exists: ${stanza}"
+    fi
+  }
+
+  # --- dnsmasq ---
+  local dnsmasq_conf="${cluster_services_dir}/dnsmasq.conf"
+  local dnsmasq_log_stderr="${cluster_services_dir}/dnsmasq.err.log"
+  local dnsmasq_log_stdout="${cluster_services_dir}/dnsmasq.out.log"
+  
+  touch "${dnsmasq_log_stderr}" "${dnsmasq_log_stdout}"
+  chown nobody:nogroup "${dnsmasq_log_stderr}" "${dnsmasq_log_stdout}" 2>/dev/null || true
+
+  _supervisor_append_once "program:dnsmasq" "$(cat <<EOF
+[program:dnsmasq]
+command=/usr/sbin/dnsmasq -k --conf-file=${dnsmasq_conf} --log-facility=${dnsmasq_log_stdout}
+autostart=true
+autorestart=true
+stdout_logfile=${dnsmasq_log_stdout}
+stderr_logfile=${dnsmasq_log_stderr}
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- nginx ---
+  local nginx_conf="${cluster_services_dir}/nginx.conf"
+  local nginx_log_stderr="${cluster_services_dir}/nginx.err.log"
+  local nginx_log_stdout="${cluster_services_dir}/nginx.out.log"
+  
+  _supervisor_append_once "program:nginx" "$(cat <<EOF
+[program:nginx]
+command=/usr/sbin/nginx -g 'daemon off;' -c ${nginx_conf}
+autostart=true
+autorestart=true
+stdout_logfile=${nginx_log_stdout}
+stderr_logfile=${nginx_log_stderr}
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- fcgiwrap ---
+  local fcgiwrap_log_stderr="${cluster_services_dir}/fcgiwrap.err.log"
+  local fcgiwrap_log_stdout="${cluster_services_dir}/fcgiwrap.out.log"
+  
+  _supervisor_append_once "program:fcgiwrap" "$(cat <<EOF
+[program:fcgiwrap]
+command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -F 4 -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
+umask=002
+autostart=true
+autorestart=true
+stdout_logfile=${fcgiwrap_log_stdout}
+stderr_logfile=${fcgiwrap_log_stderr}
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- rsyslogd ---
+  local rsyslog_conf="${cluster_services_dir}/rsyslog.conf"
+  local rsyslog_log_stderr="${cluster_services_dir}/rsyslog.err.log"
+  local rsyslog_log_stdout="${cluster_services_dir}/rsyslog.out.log"
+  
+  _supervisor_append_once "program:rsyslogd" "$(cat <<EOF
+[program:rsyslogd]
+command=/usr/sbin/rsyslogd -n -f ${rsyslog_conf}
+autostart=true
+autorestart=true
+stderr_logfile=${rsyslog_log_stderr}
+stdout_logfile=${rsyslog_log_stdout}
+stdout_events_enabled=true
+stderr_events_enabled=true
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- OpenSVC agent ---
+  install_opensvc_foreground_wrapper
+
+  _supervisor_append_once "program:opensvc" "$(cat <<EOF
+[program:opensvc]
+command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _opensvc_foreground_wrapper'
+autostart=true
+autorestart=true
+startsecs=2
+startretries=3
+stopsignal=TERM
+user=root
+directory=/
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- Event listener to run post_start ---
+  _supervisor_append_once "eventlistener:post_start_config" "$(cat <<EOF
+[eventlistener:post_start_config]
+command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _supervisor_post_start'
+events=PROCESS_STATE_RUNNING
+buffer_size=100
+autostart=true
+autorestart=unexpected
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # Final validation
+  if [[ ! -f "${supervisord_conf}" ]] || [[ ! -r "${supervisord_conf}" ]]; then
+    hps_log error "Supervisor configuration file validation failed: ${supervisord_conf}"
+    return 3
+  fi
+
+  hps_log info "Supervisor services config generated successfully"
+  return 0
+}

@@ -5,7 +5,12 @@ create_config_rsyslog () {
 
 local RSYSLOG_CONF="$(get_path_cluster_services_dir)/rsyslog.conf"
 
-RSYSLOG_LOG_DIR="${HPS_LOG_DIR}/rsyslog"
+local RSYSLOG_LOG_DIR
+RSYSLOG_LOG_DIR=$(hps_get_config log) || {
+  hps_log error "Cannot determine log directory"
+  return 1
+}
+
 
 mkdir -p ${RSYSLOG_LOG_DIR}
 
