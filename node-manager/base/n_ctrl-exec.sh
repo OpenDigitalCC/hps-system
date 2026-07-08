@@ -129,10 +129,18 @@ n_ctrl_exec_write_config() {
   mkdir -p "$CTRL_EXEC_AGENT_ETC" || return 1
 
   # Minimal agent config: serve on the default operational port; the executor
-  # is deferred (ADR 0003) so scripts run as the agent user.
+  # is deferred (ADR 0003) so scripts run as the agent user. A [profile default]
+  # block is still required: the agent fail-closes at startup if an allowlisted
+  # script references an undefined profile, and a script with no profile= (as
+  # hps-node below) resolves to 'default'. With executor_socket unset the
+  # profile fields are not enforced, but the block must exist and be valid.
   cat > "$CTRL_EXEC_AGENT_ETC/agent.conf" <<'EOF'
 # HPS-managed ctrl-exec agent config. Regenerated on each provisioning cycle.
-listen_port = 7443
+port = 7443
+
+[profile default]
+run_as = root
+no_new_privileges = yes
 EOF
 
   cat > "$CTRL_EXEC_AGENT_ETC/scripts.conf" <<'EOF'

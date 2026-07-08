@@ -1,5 +1,5 @@
 # Test report: hps-node (ce-agent-plugins)
-Generated: 2026-07-08T12:55:48Z
+Generated: 2026-07-08T13:10:08Z
 
   PASS  no subcommand -> nonzero exit (usage)
   PASS  unknown subcommand -> nonzero exit (usage)

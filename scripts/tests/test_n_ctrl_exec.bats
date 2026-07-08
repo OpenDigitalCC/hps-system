@@ -44,7 +44,9 @@ teardown() {
   run n_ctrl_exec_write_config
   [ "$status" -eq 0 ]
   [ -f "$CTRL_EXEC_AGENT_ETC/agent.conf" ]
-  grep -q "listen_port = 7443" "$CTRL_EXEC_AGENT_ETC/agent.conf"
+  grep -q "^port = 7443" "$CTRL_EXEC_AGENT_ETC/agent.conf"
+  # A [profile default] must exist or the agent fail-closes at startup.
+  grep -q "^\[profile default\]" "$CTRL_EXEC_AGENT_ETC/agent.conf"
   grep -q "^hps-node = /usr/local/sbin/hps-node$" "$CTRL_EXEC_AGENT_ETC/scripts.conf"
   # The allowlist exposes exactly one script name.
   run grep -c "=" "$CTRL_EXEC_AGENT_ETC/scripts.conf"
