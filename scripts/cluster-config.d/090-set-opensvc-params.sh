@@ -18,15 +18,15 @@ cli_info "Configure OpenSVC parameters" "OpenSVC Configuration"
 
 # Define defaults
 declare -A osvc_defaults=(
-  ["OSVC_LOG_LEVEL"]="info"
-  ["OSVC_LISTENER_PORT"]="1215"
-  ["OSVC_WEB_UI"]="yes"
-  ["OSVC_WEB_PORT"]="1214"
-  ["OSVC_HB_INTERVAL"]="5"
-  ["OSVC_HB_TIMEOUT"]="15"
-  ["OSVC_TEMPLATES_URL"]=""
-  ["OSVC_PACKAGES_URL"]=""
-  ["OSVC_HB_TYPE"]="multicast"
+  ["osvc_log_level"]="info"
+  ["osvc_listener_port"]="1215"
+  ["osvc_web_ui"]="yes"
+  ["osvc_web_port"]="1214"
+  ["osvc_hb_interval"]="5"
+  ["osvc_hb_timeout"]="15"
+  ["osvc_templates_url"]=""
+  ["osvc_packages_url"]=""
+  ["osvc_hb_type"]="unicast"
 )
 
 # Get current values
@@ -48,15 +48,15 @@ done
 if [[ "$config_exists" == "true" ]]; then
   cli_info "Current OpenSVC configuration:"
   echo "----------------------------"
-  echo "Log Level:          ${current_values[OSVC_LOG_LEVEL]}"
-  echo "Listener Port:      ${current_values[OSVC_LISTENER_PORT]}"
-  echo "Web UI Enabled:     ${current_values[OSVC_WEB_UI]}"
-  echo "Web UI Port:        ${current_values[OSVC_WEB_PORT]}"
-  echo "Heartbeat Interval: ${current_values[OSVC_HB_INTERVAL]} seconds"
-  echo "Heartbeat Timeout:  ${current_values[OSVC_HB_TIMEOUT]} seconds"
-  echo "Templates URL:      ${current_values[OSVC_TEMPLATES_URL]:-<none>}"
-  echo "Packages URL:       ${current_values[OSVC_PACKAGES_URL]:-<none>}"
-  echo "Heartbeat Type:     ${current_values[OSVC_HB_TYPE]}"
+  echo "Log Level:          ${current_values[osvc_log_level]}"
+  echo "Listener Port:      ${current_values[osvc_listener_port]}"
+  echo "Web UI Enabled:     ${current_values[osvc_web_ui]}"
+  echo "Web UI Port:        ${current_values[osvc_web_port]}"
+  echo "Heartbeat Interval: ${current_values[osvc_hb_interval]} seconds"
+  echo "Heartbeat Timeout:  ${current_values[osvc_hb_timeout]} seconds"
+  echo "Templates URL:      ${current_values[osvc_templates_url]:-<none>}"
+  echo "Packages URL:       ${current_values[osvc_packages_url]:-<none>}"
+  echo "Heartbeat Type:     ${current_values[osvc_hb_type]}"
   echo
   
   if [[ $(cli_prompt_yesno "Keep current OpenSVC configuration?" "y") == "y" ]]; then
@@ -71,15 +71,15 @@ else
   # Show defaults
   echo "Default OpenSVC parameters:"
   echo "----------------------------"
-  echo "Log Level:          ${osvc_defaults[OSVC_LOG_LEVEL]}"
-  echo "Listener Port:      ${osvc_defaults[OSVC_LISTENER_PORT]}"
-  echo "Web UI Enabled:     ${osvc_defaults[OSVC_WEB_UI]}"
-  echo "Web UI Port:        ${osvc_defaults[OSVC_WEB_PORT]}"
-  echo "Heartbeat Interval: ${osvc_defaults[OSVC_HB_INTERVAL]} seconds"
-  echo "Heartbeat Timeout:  ${osvc_defaults[OSVC_HB_TIMEOUT]} seconds"
-  echo "Templates URL:      ${osvc_defaults[OSVC_TEMPLATES_URL]:-<none>}"
-  echo "Packages URL:       ${osvc_defaults[OSVC_PACKAGES_URL]:-<none>}"
-  echo "Heartbeat Type:     ${osvc_defaults[OSVC_HB_TYPE]}"
+  echo "Log Level:          ${osvc_defaults[osvc_log_level]}"
+  echo "Listener Port:      ${osvc_defaults[osvc_listener_port]}"
+  echo "Web UI Enabled:     ${osvc_defaults[osvc_web_ui]}"
+  echo "Web UI Port:        ${osvc_defaults[osvc_web_port]}"
+  echo "Heartbeat Interval: ${osvc_defaults[osvc_hb_interval]} seconds"
+  echo "Heartbeat Timeout:  ${osvc_defaults[osvc_hb_timeout]} seconds"
+  echo "Templates URL:      ${osvc_defaults[osvc_templates_url]:-<none>}"
+  echo "Packages URL:       ${osvc_defaults[osvc_packages_url]:-<none>}"
+  echo "Heartbeat Type:     ${osvc_defaults[osvc_hb_type]}"
   echo
 fi
 
@@ -97,27 +97,27 @@ fi
 cli_info "Customize OpenSVC parameters"
 
 # Log Level
-log_level=$(cli_prompt "Log level (debug/info/warn/error)" "${current_values[OSVC_LOG_LEVEL]}" \
+log_level=$(cli_prompt "Log level (debug/info/warn/error)" "${current_values[osvc_log_level]}" \
   "^(debug|info|warn|error)$" "Invalid log level")
-CLUSTER_CONFIG_PENDING+=("OSVC_LOG_LEVEL:$log_level")
+CLUSTER_CONFIG_PENDING+=("osvc_log_level:$log_level")
 
 # Listener Port
-listener_port=$(cli_prompt "Listener port (1024-65535)" "${current_values[OSVC_LISTENER_PORT]}" \
+listener_port=$(cli_prompt "Listener port (1024-65535)" "${current_values[osvc_listener_port]}" \
   "^([1-9][0-9]{3,4})$" "Invalid port number")
 if [[ $listener_port -lt 1024 ]] || [[ $listener_port -gt 65535 ]]; then
   hps_log "error" "Port must be between 1024 and 65535"
   return 1
 fi
-CLUSTER_CONFIG_PENDING+=("OSVC_LISTENER_PORT:$listener_port")
+CLUSTER_CONFIG_PENDING+=("osvc_listener_port:$listener_port")
 
 # Web UI
-current_web_ui=$([[ "${current_values[OSVC_WEB_UI]}" == "yes" ]] && echo "y" || echo "n")
+current_web_ui=$([[ "${current_values[osvc_web_ui]}" == "yes" ]] && echo "y" || echo "n")
 web_ui=$(cli_prompt_yesno "Enable Web UI?" "$current_web_ui")
 if [[ "$web_ui" == "y" ]]; then
-  CLUSTER_CONFIG_PENDING+=("OSVC_WEB_UI:yes")
+  CLUSTER_CONFIG_PENDING+=("osvc_web_ui:yes")
   
   # Web Port (only if UI enabled)
-  web_port=$(cli_prompt "Web UI port (1024-65535)" "${current_values[OSVC_WEB_PORT]}" \
+  web_port=$(cli_prompt "Web UI port (1024-65535)" "${current_values[osvc_web_port]}" \
     "^([1-9][0-9]{3,4})$" "Invalid port number")
   if [[ $web_port -lt 1024 ]] || [[ $web_port -gt 65535 ]]; then
     hps_log "error" "Port must be between 1024 and 65535"
@@ -127,23 +127,23 @@ if [[ "$web_ui" == "y" ]]; then
     hps_log "error" "Web port cannot be the same as listener port"
     return 1
   fi
-  CLUSTER_CONFIG_PENDING+=("OSVC_WEB_PORT:$web_port")
+  CLUSTER_CONFIG_PENDING+=("osvc_web_port:$web_port")
 else
-  CLUSTER_CONFIG_PENDING+=("OSVC_WEB_UI:no")
-  CLUSTER_CONFIG_PENDING+=("OSVC_WEB_PORT:${current_values[OSVC_WEB_PORT]}")
+  CLUSTER_CONFIG_PENDING+=("osvc_web_ui:no")
+  CLUSTER_CONFIG_PENDING+=("osvc_web_port:${current_values[osvc_web_port]}")
 fi
 
 # Heartbeat Interval
-hb_interval=$(cli_prompt "Heartbeat interval in seconds (1-60)" "${current_values[OSVC_HB_INTERVAL]}" \
+hb_interval=$(cli_prompt "Heartbeat interval in seconds (1-60)" "${current_values[osvc_hb_interval]}" \
   "^[1-9][0-9]?$" "Invalid interval")
 if [[ $hb_interval -gt 60 ]]; then
   hps_log "error" "Heartbeat interval must be 60 seconds or less"
   return 1
 fi
-CLUSTER_CONFIG_PENDING+=("OSVC_HB_INTERVAL:$hb_interval")
+CLUSTER_CONFIG_PENDING+=("osvc_hb_interval:$hb_interval")
 
 # Heartbeat Timeout
-hb_timeout=$(cli_prompt "Heartbeat timeout in seconds (5-300)" "${current_values[OSVC_HB_TIMEOUT]}" \
+hb_timeout=$(cli_prompt "Heartbeat timeout in seconds (5-300)" "${current_values[osvc_hb_timeout]}" \
   "^[1-9][0-9]*$" "Invalid timeout")
 if [[ $hb_timeout -lt 5 ]] || [[ $hb_timeout -gt 300 ]]; then
   hps_log "error" "Heartbeat timeout must be between 5 and 300 seconds"
@@ -153,21 +153,21 @@ if [[ $hb_timeout -le $hb_interval ]]; then
   hps_log "error" "Heartbeat timeout must be greater than interval"
   return 1
 fi
-CLUSTER_CONFIG_PENDING+=("OSVC_HB_TIMEOUT:$hb_timeout")
+CLUSTER_CONFIG_PENDING+=("osvc_hb_timeout:$hb_timeout")
 
 # Templates URL (optional)
 cli_note "Leave blank to use default OpenSVC templates"
-templates_url=$(cli_prompt "Templates URL" "${current_values[OSVC_TEMPLATES_URL]}" "" "")
-CLUSTER_CONFIG_PENDING+=("OSVC_TEMPLATES_URL:$templates_url")
+templates_url=$(cli_prompt "Templates URL" "${current_values[osvc_templates_url]}" "" "")
+CLUSTER_CONFIG_PENDING+=("osvc_templates_url:$templates_url")
 
 # Packages URL (optional)
 cli_note "Leave blank to use default OpenSVC packages"
-packages_url=$(cli_prompt "Packages URL" "${current_values[OSVC_PACKAGES_URL]}" "" "")
-CLUSTER_CONFIG_PENDING+=("OSVC_PACKAGES_URL:$packages_url")
+packages_url=$(cli_prompt "Packages URL" "${current_values[osvc_packages_url]}" "" "")
+CLUSTER_CONFIG_PENDING+=("osvc_packages_url:$packages_url")
 
 # Heartbeat Type
-hb_type=$(cli_prompt "Heartbeat type (multicast/unicast)" "${current_values[OSVC_HB_TYPE]}" \
+hb_type=$(cli_prompt "Heartbeat type (multicast/unicast)" "${current_values[osvc_hb_type]}" \
   "^(multicast|unicast)$" "Invalid heartbeat type")
-CLUSTER_CONFIG_PENDING+=("OSVC_HB_TYPE:$hb_type")
+CLUSTER_CONFIG_PENDING+=("osvc_hb_type:$hb_type")
 
 cli_info "OpenSVC parameters configured"

@@ -28,7 +28,7 @@ n_initialise_opensvc_cluster() {
 
   # Get and set heartbeat type
   local hb_type
-  hb_type="$(n_remote_cluster_variable OSVC_HB_TYPE 2>/dev/null || true)"
+  hb_type="$(n_remote_cluster_variable osvc_hb_type 2>/dev/null || true)"
   om cluster set --kw "hb#1.type=${hb_type}" || return 1
 
   # Get node type for tags

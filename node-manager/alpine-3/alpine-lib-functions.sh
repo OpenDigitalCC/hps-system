@@ -15,9 +15,9 @@ n_start_modloop () {
 #   n_setup_ntp
 #
 # Behaviour:
-#   - Retrieves TIME_SERVER from cluster configuration
+#   - Retrieves network_time_server from cluster configuration
 #   - Configures /etc/conf.d/ntpd with the specified NTP server
-#   - Falls back to pool.ntp.org if TIME_SERVER is not set
+#   - Falls back to pool.ntp.org if network_time_server is not set
 #
 # Dependencies:
 #   - n_remote_cluster_variable function
@@ -43,9 +43,9 @@ n_setup_ntp() {
   # Fall back to default if not set
   if [[ -z "${ntp_server}" ]]; then
     ntp_server="pool.ntp.org"
-    n_remote_log "TIME_SERVER not set, using default: ${ntp_server}"
+    n_remote_log "network_time_server not set, using default: ${ntp_server}"
   else
-    n_remote_log "Using TIME_SERVER: ${ntp_server}"
+    n_remote_log "Using network_time_server: ${ntp_server}"
   fi
   
   # Create ntpd configuration

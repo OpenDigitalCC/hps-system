@@ -30,7 +30,7 @@ n_node_information() {
   
   # Get essential info
   local provisioning_node=$(n_get_provisioning_node 2>/dev/null || echo "unknown")
-  local dns_domain=$(n_remote_cluster_variable DNS_DOMAIN 2>/dev/null | tr -d '"' || echo "unknown")
+  local dns_domain=$(n_remote_cluster_variable network_dns_domain 2>/dev/null | tr -d '"' || echo "unknown")
   local mac_address=$(ip link show 2>/dev/null | awk '/ether/ {print $2; exit}' || echo "unknown")
   local uptime_display="unknown"
   if [[ -f /proc/uptime ]]; then

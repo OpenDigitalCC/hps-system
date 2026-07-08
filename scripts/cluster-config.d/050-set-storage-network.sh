@@ -1,7 +1,7 @@
 #!/bin/bash
 #===============================================================================
-# 040-storage-networks.sh
-# -----------------------
+# 050-set-storage-network.sh
+# --------------------------
 # Configuration fragment to set up storage network VLANs
 #
 # Behaviour:
@@ -11,14 +11,17 @@
 #   - Supports jumbo frames configuration
 #
 # Environment:
-#   - Requires DNS_DOMAIN to be set
+#   - Requires network_dns_domain to be set
 #   - Appends to CLUSTER_CONFIG_PENDING array
+#
+# Note:
+#   Boolean values (allocated) stored as JSON false (no quotes)
 #===============================================================================
 
 cli_info "Configure storage networks" "Storage Network Setup"
 
 # Get DNS domain (required)
-dns_domain=$(config_get_value "DNS_DOMAIN" "")
+dns_domain=$(config_get_value "network_dns_domain" "")
 if [[ -z "$dns_domain" ]]; then
   hps_log "error" "DNS domain not configured yet"
   return 1
@@ -71,6 +74,7 @@ if [[ "$current_count" -gt 0 ]]; then
       CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_gateway:$gateway")
       CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_netmask:$netmask")
       CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_domain:$domain")
+      # Store as JSON boolean (no quotes)
       CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_allocated:$allocated")
     done
     
@@ -165,6 +169,7 @@ for ((i=0; i<num_storage_networks; i++)); do
   CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_gateway:$gateway")
   CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_netmask:$netmask")
   CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_domain:$domain")
+  # IMPORTANT: Store as JSON boolean (no quotes) - commit_changes will handle it
   CLUSTER_CONFIG_PENDING+=("network_storage_vlan${vlan}_allocated:false")
   
   echo "  - Storage network $((i+1)): VLAN $vlan, subnet $subnet, domain $domain"

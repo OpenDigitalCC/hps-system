@@ -19,12 +19,12 @@
 cli_info "Configure DHCP interface"
 
 # Get current DHCP configuration
-current_enabled=$(config_get_value "DHCP_ENABLED" "true")
-current_iface=$(config_get_value "DHCP_IFACE" "")
-current_ip=$(config_get_value "DHCP_IP" "")
-current_cidr=$(config_get_value "DHCP_CIDR" "")
-current_network=$(config_get_value "NETWORK_CIDR" "")
-current_rangesize=$(config_get_value "DHCP_RANGESIZE" "100")
+current_enabled=$(config_get_value "network_dhcp_enabled" "true")
+current_iface=$(config_get_value "network_dhcp_iface" "")
+current_ip=$(config_get_value "network_dhcp_ip" "")
+current_cidr=$(config_get_value "network_dhcp_cidr" "")
+current_network=$(config_get_value "network_cidr" "")
+current_rangesize=$(config_get_value "network_dhcp_rangesize" "100")
 
 # Show current configuration if exists
 if [[ -n "$current_iface" ]] && [[ "$current_enabled" == "true" ]]; then
@@ -37,12 +37,12 @@ if [[ -n "$current_iface" ]] && [[ "$current_enabled" == "true" ]]; then
   
   if [[ $(cli_prompt_yesno "Keep current DHCP configuration?" "y") == "y" ]]; then
     # Re-add current configuration to pending
-    CLUSTER_CONFIG_PENDING+=("DHCP_ENABLED:$current_enabled")
-    CLUSTER_CONFIG_PENDING+=("DHCP_IFACE:$current_iface")
-    CLUSTER_CONFIG_PENDING+=("DHCP_IP:$current_ip")
-    CLUSTER_CONFIG_PENDING+=("DHCP_CIDR:$current_cidr")
-    CLUSTER_CONFIG_PENDING+=("NETWORK_CIDR:$current_network")
-    CLUSTER_CONFIG_PENDING+=("DHCP_RANGESIZE:$current_rangesize")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_enabled:$current_enabled")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_iface:$current_iface")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_ip:$current_ip")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_cidr:$current_cidr")
+    CLUSTER_CONFIG_PENDING+=("network_cidr:$current_network")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_rangesize:$current_rangesize")
     return 0
   fi
 fi
@@ -71,11 +71,11 @@ rangesize=$(cli_prompt "DHCP range size (number of IPs)" "$current_rangesize" "^
   "Invalid range size: must be a positive number")
 
 # Store configuration
-CLUSTER_CONFIG_PENDING+=("DHCP_ENABLED:true")
-CLUSTER_CONFIG_PENDING+=("DHCP_IFACE:$iface")
-CLUSTER_CONFIG_PENDING+=("DHCP_IP:$ipaddr")
-CLUSTER_CONFIG_PENDING+=("DHCP_CIDR:$ip_cidr")
-CLUSTER_CONFIG_PENDING+=("NETWORK_CIDR:$network_cidr")
-CLUSTER_CONFIG_PENDING+=("DHCP_RANGESIZE:$rangesize")
+CLUSTER_CONFIG_PENDING+=("network_dhcp_enabled:true")
+CLUSTER_CONFIG_PENDING+=("network_dhcp_iface:$iface")
+CLUSTER_CONFIG_PENDING+=("network_dhcp_ip:$ipaddr")
+CLUSTER_CONFIG_PENDING+=("network_dhcp_cidr:$ip_cidr")
+CLUSTER_CONFIG_PENDING+=("network_cidr:$network_cidr")
+CLUSTER_CONFIG_PENDING+=("network_dhcp_rangesize:$rangesize")
 
 cli_info "DHCP configuration complete"

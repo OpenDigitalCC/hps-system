@@ -8,7 +8,7 @@
 cli_info "Configure system services" "System Services"
 
 # Get DHCP IP as default for services
-dhcp_ip=$(config_get_value "DHCP_IP" "")
+dhcp_ip=$(config_get_value "network_dhcp_ip" "")
 
 if [[ -z "$dhcp_ip" ]]; then
   hps_log "error" "DHCP IP not found in configuration"
@@ -16,8 +16,8 @@ if [[ -z "$dhcp_ip" ]]; then
 fi
 
 # Get current values with DHCP IP as fallback default
-current_syslog=$(config_get_value "SYSLOG_SERVER" "$dhcp_ip")
-current_dns=$(config_get_value "NAME_SERVER" "$dhcp_ip")
+current_syslog=$(config_get_value "network_syslog_server" "$dhcp_ip")
+current_dns=$(config_get_value "network_name_server" "$dhcp_ip")
 current_ntp=$(config_get_value "NTP_SERVER" "$dhcp_ip")
 
 cli_note "The DHCP server IP ($dhcp_ip) can provide syslog, DNS, and NTP services"
@@ -32,9 +32,9 @@ echo
 # Ask if keeping current configuration
 if [[ $(cli_prompt_yesno "Keep current system service configuration?" "y") == "y" ]]; then
   # Keep current values
-  CLUSTER_CONFIG_PENDING+=("SYSLOG_SERVER:$current_syslog")
-  CLUSTER_CONFIG_PENDING+=("NAME_SERVER:$current_dns")
-  CLUSTER_CONFIG_PENDING+=("TIME_SERVER:$current_ntp")
+  CLUSTER_CONFIG_PENDING+=("network_syslog_server:$current_syslog")
+  CLUSTER_CONFIG_PENDING+=("network_name_server:$current_dns")
+  CLUSTER_CONFIG_PENDING+=("network_time_server:$current_ntp")
 else
   # Customize each service
   cli_info "Customize system service addresses"
@@ -45,12 +45,12 @@ else
   # Syslog server
   syslog_server=$(cli_prompt "Syslog server IP address" "$current_syslog" "$ip_regex" \
     "Invalid IP address format")
-  CLUSTER_CONFIG_PENDING+=("SYSLOG_SERVER:$syslog_server")
+  CLUSTER_CONFIG_PENDING+=("network_syslog_server:$syslog_server")
   
   # DNS server
   dns_server=$(cli_prompt "DNS server IP address" "$current_dns" "$ip_regex" \
     "Invalid IP address format")
-  CLUSTER_CONFIG_PENDING+=("NAME_SERVER:$dns_server")
+  CLUSTER_CONFIG_PENDING+=("network_name_server:$dns_server")
   
   # NTP server
   cli_note "NTP server can be an IP address or hostname (e.g., pool.ntp.org)"
@@ -62,7 +62,7 @@ else
       return 1
     fi
   fi
-  CLUSTER_CONFIG_PENDING+=("TIME_SERVER:$ntp_server")
+  CLUSTER_CONFIG_PENDING+=("network_time_server:$ntp_server")
   
   cli_info "System services configured:"
   echo "  - Syslog server: $syslog_server"

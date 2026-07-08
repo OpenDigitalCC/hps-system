@@ -11,7 +11,7 @@
 #
 # Behaviour:
 #   - Gets hostname from: n_remote_host_variable HOSTNAME
-#   - Gets domain from: n_remote_cluster_variable DNS_DOMAIN
+#   - Gets domain from: n_remote_cluster_variable network_dns_domain
 #   - Gets IP from: n_remote_host_variable IP
 #   - Sets hostname using hostnamectl if available (systemd systems)
 #   - Falls back to hostname command and distribution-specific files
@@ -35,7 +35,7 @@ n_set_hostname_and_hosts() {
         return 1
     }
     
-    domain=$(n_remote_cluster_variable DNS_DOMAIN) || {
+    domain=$(n_remote_cluster_variable network_dns_domain) || {
         echo "Warning: failed to get domain, proceeding without domain" >&2
         domain=""
     }

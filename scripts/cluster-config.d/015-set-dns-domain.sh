@@ -8,7 +8,7 @@
 cli_info "Configure DNS domain"
 
 # Get current value with precedence
-current_domain=$(config_get_value "DNS_DOMAIN" "cluster.local")
+current_domain=$(config_get_value "network_dns_domain" "cluster.local")
 
 # Explain DNS domain usage
 cli_note "Hosts will be known as <hostname>.<dnsdomain>"
@@ -49,4 +49,4 @@ done
 cli_info "DNS domain set to: $dnsdomain"
 
 # Store configuration
-CLUSTER_CONFIG_PENDING+=("DNS_DOMAIN:$dnsdomain")
+CLUSTER_CONFIG_PENDING+=("network_dns_domain:$dnsdomain")
