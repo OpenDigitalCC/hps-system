@@ -1,11 +1,7 @@
 
-#===============================================================================
-# Compatibility Aliases
-#===============================================================================
-host_config() {
-  host_registry "$@"
-}
-
+# The host_config compatibility alias (host_config -> host_registry) is defined
+# once, canonically, in lib/hps-registry.sh alongside host_registry. It was
+# previously duplicated here identically; removed to keep a single definition.
 
 #===============================================================================
 # process_host_audit

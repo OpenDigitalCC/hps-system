@@ -1,14 +1,8 @@
 
-#===============================================================================
-# cluster_config
-# --------------
-# Alias to cluster_registry for backward compatibility
-#===============================================================================
-cluster_config() {
-  cluster_registry "$@"
-}
-
-#!/bin/bash
+# The cluster_config compatibility alias (cluster_config -> cluster_registry)
+# is defined once, canonically, in lib/hps-registry.sh alongside
+# cluster_registry. It was previously duplicated here identically; removed to
+# keep a single definition.
 
 #===============================================================================
 # initialise_cluster
