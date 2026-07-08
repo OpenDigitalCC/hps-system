@@ -169,4 +169,9 @@ urlencode() {
   printf '%s\n' "$out"
 }
 
+# URL decode function 
+urldecode() {
+  local data="${1//+/ }"
+  printf '%b' "${data//%/\\x}"
+}
 

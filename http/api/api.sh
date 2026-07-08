@@ -183,9 +183,19 @@ parse_request() {
       exit 1
     fi
     
-    # Extract common fields
-    REQUEST_ACTION=$(echo "$REQUEST_JSON" | jq -r '.action // empty')
-    REQUEST_MAC=$(echo "$REQUEST_JSON" | jq -r '.mac // empty')
+    # Extract all common fields in a single jq call
+    eval "$(echo "$REQUEST_JSON" | jq -r '@sh "
+      REQUEST_ACTION=\(.action // "")
+      REQUEST_MAC=\(.mac // "")
+      REQUEST_REGISTRY=\(.registry // "")  
+      REQUEST_KEY=\(.key // "")
+      REQUEST_VALUE=\(.value // "")
+      REQUEST_NAME=\(.name // "")
+      REQUEST_OPERATION=\(.operation // "")
+      REQUEST_MESSAGE=\(.message // "")
+      REQUEST_FUNCTION=\(.function // "")
+      REQUEST_FIELD=\(.field // "")
+    "')"
     
     # Use provided MAC or detected MAC  
     REQUEST_MAC="${REQUEST_MAC:-$CLIENT_MAC}"
@@ -205,11 +215,19 @@ parse_request() {
 # Registry Action Handler
 #===============================================================================
 handle_registry_action() {
-  local registry=$(echo "$REQUEST_JSON" | jq -r '.registry // empty')
-  local operation=$(echo "$REQUEST_JSON" | jq -r '.operation // empty')
-  local key=$(echo "$REQUEST_JSON" | jq -r '.key // empty')
-  local value=$(echo "$REQUEST_JSON" | jq -r '.value // empty')
-  
+  # Variables already extracted by parse_request
+  local registry="$REQUEST_REGISTRY"
+  local operation="$REQUEST_OPERATION"
+  local key="$REQUEST_KEY"
+  local value="$REQUEST_VALUE"
+
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  } 
+   
   # Extract operation from action if needed (registry_get -> get)
   if [[ -z "$operation" ]] && [[ "$REQUEST_ACTION" =~ ^registry_ ]]; then
     operation="${REQUEST_ACTION#registry_}"
@@ -245,7 +263,7 @@ handle_registry_action() {
           return
         }
       else
-        result=$(cluster_registry get "$key" 2>&1) || {
+        result=$(cluster_registry "$cluster" get "$key" 2>&1) || {
           api_error 404 "Key not found" "$key"
           return
         }
@@ -280,13 +298,14 @@ handle_registry_action() {
           return
         }
       else
-        cluster_registry set "$key" "$value" >/dev/null 2>&1 || {
+        cluster_registry "$cluster" set "$key" "$value" >/dev/null 2>&1 || {
           api_error 500 "Failed to set value" "Registry write error"
           return
         }
       fi
       
-      api_success "{\"key\": \"$key\", \"action\": \"set\"}" 201
+      # Simple JSON response without jq
+      api_response 201 "{\"success\":true,\"data\":{\"key\":\"$key\",\"action\":\"set\"}}"
       ;;
       
     delete|unset)
@@ -298,10 +317,11 @@ handle_registry_action() {
       if [[ "$registry" == "host" ]]; then
         host_registry "$REQUEST_MAC" delete "$key" >/dev/null 2>&1
       else
-        cluster_registry delete "$key" >/dev/null 2>&1
+        cluster_registry "$cluster" delete "$key" >/dev/null 2>&1
       fi
       
-      api_success "{\"key\": \"$key\", \"action\": \"deleted\"}"
+      # Simple JSON response
+      api_response 200 "{\"success\":true,\"data\":{\"key\":\"$key\",\"action\":\"deleted\"}}"
       ;;
       
     list)
@@ -319,7 +339,7 @@ handle_registry_action() {
       if [[ "$registry" == "host" ]]; then
         view=$(host_registry "$REQUEST_MAC" view 2>/dev/null)
       else
-        view=$(cluster_registry view 2>/dev/null)
+        view=$(cluster_registry "$cluster" view 2>/dev/null)
       fi
       
       if [[ -z "$view" ]] || [[ "$view" == "{}" ]]; then
@@ -330,8 +350,9 @@ handle_registry_action() {
       ;;
       
     search)
-      local field=$(echo "$REQUEST_JSON" | jq -r '.field // empty')
-      local search_value=$(echo "$REQUEST_JSON" | jq -r '.value // empty')
+      # Field and value already extracted
+      local field="$REQUEST_FIELD"
+      local search_value="$REQUEST_VALUE"
       
       if [[ -z "$field" ]] || [[ -z "$search_value" ]]; then
         api_error 400 "Field and value required for search"
@@ -355,10 +376,19 @@ handle_registry_action() {
 # Legacy Action Handler
 #===============================================================================
 handle_legacy_action() {
+
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  } 
+   
   case "$REQUEST_ACTION" in
     log_message)
-      local message=$(echo "$REQUEST_JSON" | jq -r '.message // empty')
-      local function=$(echo "$REQUEST_JSON" | jq -r '.function // "unknown"')
+      # Variables already extracted
+      local message="$REQUEST_MESSAGE"
+      local function="${REQUEST_FUNCTION:-unknown}"
       
       if [[ -z "$message" ]]; then
         api_error 400 "Message required"
@@ -368,13 +398,15 @@ handle_legacy_action() {
       # Use existing log function
       log_from_host "${REQUEST_MAC:-unknown}" "$function" "$message"
       
-      api_success "\"Message logged\""
+      # Simple success response
+      api_response 200 "{\"success\":true,\"data\":\"Message logged\"}"
       ;;
       
     host_variable)
-      local name=$(echo "$REQUEST_JSON" | jq -r '.name // empty')
-      local value=$(echo "$REQUEST_JSON" | jq -r '.value // empty')
-      local operation=$(echo "$REQUEST_JSON" | jq -r '.operation // empty')
+      # Variables already extracted
+      local name="$REQUEST_NAME"
+      local value="$REQUEST_VALUE"
+      local operation="$REQUEST_OPERATION"
       
       if [[ -z "$name" ]]; then
         api_error 400 "Variable name required"
@@ -388,7 +420,7 @@ handle_legacy_action() {
       
       if [[ "$operation" == "unset" ]]; then
         host_registry "$REQUEST_MAC" delete "$name" >/dev/null 2>&1
-        api_success "{\"action\": \"unset\", \"name\": \"$name\"}"
+        api_response 200 "{\"success\":true,\"data\":{\"action\":\"unset\",\"name\":\"$name\"}}"
       elif echo "$REQUEST_JSON" | jq -e 'has("value")' >/dev/null; then
         # SET - wrap in quotes if not already JSON
         if ! echo "$value" | jq . >/dev/null 2>&1; then
@@ -398,7 +430,7 @@ handle_legacy_action() {
           api_error 500 "Failed to set variable"
           return
         }
-        api_success "{\"action\": \"set\", \"name\": \"$name\"}"
+        api_response 200 "{\"success\":true,\"data\":{\"action\":\"set\",\"name\":\"$name\"}}"
       else
         # GET
         local result
@@ -415,9 +447,10 @@ handle_legacy_action() {
       ;;
       
     cluster_variable)
-      local name=$(echo "$REQUEST_JSON" | jq -r '.name // empty')
-      local value=$(echo "$REQUEST_JSON" | jq -r '.value // empty')
-      local operation=$(echo "$REQUEST_JSON" | jq -r '.operation // empty')
+      # Variables already extracted
+      local name="$REQUEST_NAME"
+      local value="$REQUEST_VALUE"
+      local operation="$REQUEST_OPERATION"
       
       if [[ -z "$name" ]]; then
         api_error 400 "Variable name required"
@@ -425,22 +458,22 @@ handle_legacy_action() {
       fi
       
       if [[ "$operation" == "unset" ]]; then
-        cluster_registry delete "$name" >/dev/null 2>&1
-        api_success "{\"action\": \"unset\", \"name\": \"$name\"}"
+        cluster_registry "$cluster" delete "$name" >/dev/null 2>&1
+        api_response 200 "{\"success\":true,\"data\":{\"action\":\"unset\",\"name\":\"$name\"}}"
       elif echo "$REQUEST_JSON" | jq -e 'has("value")' >/dev/null; then
         # SET
         if ! echo "$value" | jq . >/dev/null 2>&1; then
           value="\"$value\""
         fi
-        cluster_registry set "$name" "$value" >/dev/null 2>&1 || {
+        cluster_registry "$cluster" set "$name" "$value" >/dev/null 2>&1 || {
           api_error 500 "Failed to set variable"
           return
         }
-        api_success "{\"action\": \"set\", \"name\": \"$name\"}"
+        api_response 200 "{\"success\":true,\"data\":{\"action\":\"set\",\"name\":\"$name\"}}"
       else
         # GET
         local result
-        result=$(cluster_registry get "$name" 2>&1) || {
+        result=$(cluster_registry "$cluster" get "$name" 2>&1) || {
           api_error 404 "Variable not found" "$name"
           return
         }

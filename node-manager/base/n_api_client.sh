@@ -126,30 +126,33 @@ n_api_request() {
   local action="${1:?Usage: n_api_request <action> [key=value ...]}"
   shift
   
-  # Start building JSON
-  local json="{\"action\": \"$action\""
+  # Start building JSON with simple string concatenation
+  local json="{\"action\":\"$action\""
   
   # Add MAC if available
   local mac
   mac=$(get_mac 2>/dev/null || echo "")
   if [[ -n "$mac" ]]; then
-    json+=", \"mac\": \"$mac\""
+    json+=",\"mac\":\"$mac\""
   fi
   
-  # Parse key=value parameters
+  # Parse key=value parameters with simple bash
   local param key value
   for param in "$@"; do
     if [[ "$param" =~ ^([^=]+)=(.*)$ ]]; then
       key="${BASH_REMATCH[1]}"
       value="${BASH_REMATCH[2]}"
       
-      # Check if value is already valid JSON
-      if echo "$value" | jq . >/dev/null 2>&1; then
-        json+=", \"$key\": $value"
+      # Quick check for already-JSON values (objects or arrays)
+      if [[ "$value" =~ ^\{.*\}$ ]] || [[ "$value" =~ ^\[.*\]$ ]] || 
+         [[ "$value" == "true" ]] || [[ "$value" == "false" ]] || 
+         [[ "$value" =~ ^[0-9]+$ ]]; then
+        json+=",\"$key\":$value"
       else
-        # Escape as JSON string
-        value=$(echo -n "$value" | jq -Rs .)
-        json+=", \"$key\": $value"
+        # Simple string escaping for common cases
+        value="${value//\\/\\\\}"
+        value="${value//\"/\\\"}"
+        json+=",\"$key\":\"$value\""
       fi
     fi
   done
@@ -162,7 +165,20 @@ n_api_request() {
     return $?
   fi
   
-  # Validate response is JSON
+  # Fast path for simple success responses
+  # Check for common simple format: {"success":true,"data":"..."}
+  if [[ "$response" =~ \{\"success\":true,\"data\":\"([^\"]+)\"\} ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  
+  # Check for object data: {"success":true,"data":{...}}
+  if [[ "$response" =~ \"success\":true.*\"data\":(\{[^}]+\}) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  
+  # Fall back to jq for complex responses
   if ! echo "$response" | jq . >/dev/null 2>&1; then
     echo "ERROR: Invalid JSON response from API" >&2
     echo "$response" >&2
