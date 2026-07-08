@@ -1,4 +1,3 @@
-
 # Disable patsub_replacement to ensure consistent string substitution
 shopt -u patsub_replacement 2>/dev/null || true
 
@@ -32,12 +31,15 @@ export HPS_SYSTEM_REGISTRY="${HPS_SYSTEM_REGISTRY:-/srv/hps-config/system.db}"
 #   json_registry <db_path> <command> <key> [value]
 #
 # Commands:
-#   get     - Retrieve JSON document (raw by default)
-#   set     - Store JSON document (validates JSON)
-#   delete  - Remove JSON document
-#   exists  - Check if key exists
-#   list    - List all keys
-#   view    - Aggregate all documents into single JSON object
+#   get       - Retrieve JSON document (raw by default)
+#   set       - Store JSON document (validates JSON)
+#   delete    - Remove JSON document
+#   exists    - Check if key exists
+#   list      - List all keys in this registry
+#   list_all  - List all registries of this type
+#   count     - Count all keys in this registry
+#   view      - Aggregate all documents into single JSON object
+#   destroy   - Remove entire registry directory
 #
 # Storage:
 #   <db_path>/
@@ -46,7 +48,7 @@ export HPS_SYSTEM_REGISTRY="${HPS_SYSTEM_REGISTRY:-/srv/hps-config/system.db}"
 #
 # Returns:
 #   0 on success
-#   1 if key not found (get/exists)
+#   1 if key not found (get/exists) or directory not found (destroy)
 #   2 if invalid JSON (set)
 #   3 if lock timeout
 #===============================================================================
@@ -56,14 +58,16 @@ json_registry() {
   local key="${3:-}"
   local value="${4:-}"
   
-  # Validate key format (alphanumeric, underscore, dash)
+  # Validate key format (alphanumeric, underscore, dash) - not needed for destroy
   if [[ -n "$key" ]] && [[ ! "$key" =~ ^[A-Za-z0-9_-]+$ ]]; then
     echo "ERROR: Invalid key format: $key" >&2
     return 2
   fi
   
-  # Ensure directories exist
-  mkdir -p "$db_path/.lock"
+  # Ensure directories exist (except for destroy)
+  if [[ "$cmd" != "destroy" ]]; then
+    mkdir -p "$db_path/.lock"
+  fi
   
   local file="$db_path/${key}.json"
   local lock="$db_path/.lock/${key}.lock"
@@ -142,6 +146,18 @@ json_registry() {
       return 0
       ;;
       
+    count)
+      find "$db_path" -maxdepth 1 -name "*.json" -type f 2>/dev/null | wc -l
+      return 0
+      ;;
+      
+    list_all)
+      # This command is handled by wrapper functions
+      # It lists all registries of this type, not keys within a registry
+      echo "ERROR: list_all must be called via wrapper (host_registry, cluster_registry, etc.)" >&2
+      return 2
+      ;;
+      
     view)
       # Aggregate all JSON files into single object
       echo "{"
@@ -156,6 +172,31 @@ json_registry() {
       done
       echo "}"
       return 0
+      ;;
+      
+    destroy)
+      # Check if registry directory exists
+      if [[ ! -d "$db_path" ]]; then
+        return 1
+      fi
+      
+      # Acquire lock for destroy operation
+      local destroy_lock="$db_path/.lock/.destroy.lock"
+      mkdir -p "$db_path/.lock"
+      
+      if ! acquire_lock "$destroy_lock" "destroy"; then
+        echo "ERROR: Cannot acquire lock for destroy operation" >&2
+        return 3
+      fi
+      
+      # Remove entire registry directory
+      if rm -rf "$db_path" 2>/dev/null; then
+        return 0
+      else
+        release_lock "$destroy_lock" 2>/dev/null
+        echo "ERROR: Failed to remove registry directory: $db_path" >&2
+        return 3
+      fi
       ;;
       
     *)
@@ -222,8 +263,28 @@ release_lock() {
 # Provides compatibility layer for existing host_config interface.
 #
 # Pure registry mode - no .conf file fallback.
+#
+# Usage:
+#   host_registry list_all                    # List all hosts
+#   host_registry <mac> <command> [key] [value]
 #===============================================================================
 host_registry() {
+  # Handle list_all specially - no MAC required
+  if [[ "${1:-}" == "list_all" ]]; then
+    local hosts_dir
+    hosts_dir=$(hps_get_config cluster_hosts) || {
+      echo "ERROR: Cannot determine cluster hosts directory" >&2
+      return 1
+    }
+    
+    find "$hosts_dir" -maxdepth 1 -type d -name "*.db" ! -name ".db" 2>/dev/null | \
+      while IFS= read -r db_path; do
+        basename "$db_path" .db
+      done | sort
+    return 0
+  fi
+  
+  # All other commands require MAC as first parameter
   local mac="${1:?Usage: host_registry <mac> <command> [key] [value]}"
   local cmd="${2:?}"
   local key="${3:-}"
@@ -238,8 +299,8 @@ host_registry() {
   
   # Get hosts directory
   local hosts_dir
-  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null) || {
-    echo "ERROR: Cannot determine active cluster hosts directory" >&2
+  hosts_dir=$(hps_get_config cluster_hosts) || {
+    echo "ERROR: Cannot determine cluster hosts directory" >&2
     return 1
   }
   
@@ -296,8 +357,18 @@ host_registry() {
       return $?
       ;;
       
+    count)
+      json_registry "$db_path" count
+      return $?
+      ;;
+      
     view)
       json_registry "$db_path" view
+      return $?
+      ;;
+      
+    destroy)
+      json_registry "$db_path" destroy
       return $?
       ;;
       
@@ -313,56 +384,176 @@ host_registry() {
 # ---------------
 # JSON registry for cluster configurations.
 # Pure registry mode - no .conf file fallback.
+#
+# Usage:
+#   cluster_registry <cluster_name> <command> <key> [value]
+#   cluster_registry list_all                              # Special command
+#   cluster_registry exists <cluster_name>                 # Special command
+#
+# Parameters:
+#   cluster_name - Name of cluster to operate on (e.g., "test-1", "prod")
+#   command      - Operation to perform (get, set, delete, exists, list, view, destroy)
+#   key          - Configuration key
+#   value        - Value to set (optional, only for set command)
+#
+# Special Commands (no cluster_name parameter):
+#   list_all     - List all cluster names
+#   exists       - Check if cluster exists (cluster_name becomes second parameter)
+#
+# Examples:
+#   # Get active cluster first
+#   CLUSTER=$(hps_get_config active_cluster) || return 1
+#   
+#   # Then use it explicitly
+#   cluster_registry "$CLUSTER" get network_dhcp_ip
+#   cluster_registry "$CLUSTER" set dns_domain "cluster.local"
+#   cluster_registry "$CLUSTER" list
+#   
+#   # List all clusters
+#   cluster_registry list_all
+#   
+#   # Check if specific cluster exists
+#   cluster_registry exists test-2
+#
+# Returns:
+#   0 on success
+#   1 if cluster not found or key not found
+#   2 if invalid parameters or JSON
+#   3 if lock timeout
+#
 #===============================================================================
 cluster_registry() {
-  local cmd="${1:?Usage: cluster_registry <command> <key> [value]}"
-  local key="${2:-}"
-  local value="${3:-}"
+  local first_arg="${1:-}"
   
-  # Get cluster directory
-  local cluster_dir
-  cluster_dir=$(get_active_cluster_dir) || {
-    echo "ERROR: Cannot determine active cluster directory" >&2
-    return 1
-  }
-  
-  local db_path="${cluster_dir}/cluster.db"
-  
-  case "$cmd" in
-    get|exists)
-      json_registry "$db_path" "$cmd" "$key"
-      return $?
+  # Handle special commands that don't follow cluster_name pattern
+  case "$first_arg" in
+    list_all)
+      # List all clusters (all cluster.db directories)
+      local config_base
+      config_base=$(hps_get_config config_base) || {
+        hps_log error "Cannot determine config base directory"
+        return 1
+      }
+      
+      local clusters_dir="${config_base}/clusters"
+      
+      find "$clusters_dir" -mindepth 2 -maxdepth 2 -type d -name "cluster.db" 2>/dev/null | \
+        while IFS= read -r db_path; do
+          basename "$(dirname "$db_path")"
+        done | sort
+      return 0
       ;;
       
-    set)
-      if ! echo "$value" | jq . >/dev/null 2>&1; then
-        value="\"$value\""
+    exists)
+      # Check if cluster exists: cluster_registry exists <cluster_name>
+      local cluster_name="${2:-}"
+      if [[ -z "$cluster_name" ]]; then
+        hps_log error "Usage: cluster_registry exists <cluster_name>"
+        return 2
       fi
-      json_registry "$db_path" set "$key" "$value"
+      
+      local config_base
+      config_base=$(hps_get_config config_base) || {
+        hps_log error "Cannot determine config base directory"
+        return 1
+      }
+      
+      local cluster_dir="${config_base}/clusters/${cluster_name}"
+      [[ -d "$cluster_dir/cluster.db" ]]
       return $?
       ;;
       
-    delete|unset)
-      json_registry "$db_path" delete "$key"
-      return $?
-      ;;
-      
-    list)
-      json_registry "$db_path" list
-      return $?
-      ;;
-      
-    view)
-      json_registry "$db_path" view
-      return $?
+    "")
+      hps_log error "Usage: cluster_registry <cluster_name> <command> [key] [value]"
+      return 2
       ;;
       
     *)
-      echo "ERROR: Unknown command: $cmd" >&2
-      return 2
+      # Normal operation: cluster_registry <cluster_name> <command> <key> [value]
+      local cluster_name="$first_arg"
+      local cmd="${2:-}"
+      local key="${3:-}"
+      local value="${4:-}"
+      
+      if [[ -z "$cmd" ]]; then
+        hps_log error "Usage: cluster_registry <cluster_name> <command> [key] [value]"
+        return 2
+      fi
+      
+      # Validate cluster name (alphanumeric, underscore, dash)
+      if [[ ! "$cluster_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        hps_log error "Invalid cluster name format: $cluster_name"
+        return 2
+      fi
+      
+      # Get config base
+      local config_base
+      config_base=$(hps_get_config config_base) || {
+        hps_log error "Cannot determine config base directory"
+        return 1
+      }
+      
+      # Build cluster directory path
+      local cluster_dir="${config_base}/clusters/${cluster_name}"
+      local db_path="${cluster_dir}/cluster.db"
+      
+      # Validate cluster exists (except for destroy which handles non-existent)
+      if [[ "$cmd" != "destroy" ]] && [[ ! -d "$cluster_dir" ]]; then
+        hps_log error "Cluster not found: $cluster_name"
+        return 1
+      fi
+      
+      # Execute command
+      case "$cmd" in
+        get|exists)
+          json_registry "$db_path" "$cmd" "$key"
+          return $?
+          ;;
+          
+        set)
+          # Wrap non-JSON values in quotes
+          if ! echo "$value" | jq . >/dev/null 2>&1; then
+            value="\"$value\""
+          fi
+          json_registry "$db_path" set "$key" "$value"
+          return $?
+          ;;
+          
+        delete|unset)
+          json_registry "$db_path" delete "$key"
+          return $?
+          ;;
+          
+        list)
+          json_registry "$db_path" list
+          return $?
+          ;;
+          
+        count)
+          json_registry "$db_path" count
+          return $?
+          ;;
+          
+        view)
+          json_registry "$db_path" view
+          return $?
+          ;;
+          
+        destroy)
+          json_registry "$db_path" destroy
+          return $?
+          ;;
+          
+        *)
+          hps_log error "Unknown command: $cmd"
+          return 2
+          ;;
+      esac
       ;;
   esac
 }
+
+
 
 #===============================================================================
 # system_registry
@@ -374,6 +565,7 @@ cluster_registry() {
 #   system_registry get <key>
 #   system_registry set <key> <value>
 #   system_registry exists <key>
+#   system_registry destroy
 #===============================================================================
 system_registry() {
   local cmd="${1:?Usage: system_registry <command> <key> [value]}"
@@ -390,8 +582,13 @@ system_registry() {
       fi
       json_registry "$db_path" set "$key" "$value"
       ;;
-    get|delete|exists|list|view)
+    get|delete|exists|list|count|view|destroy)
       json_registry "$db_path" "$cmd" "$key" "$value"
+      ;;
+    list_all)
+      # Not applicable for system registry (only one system registry exists)
+      echo "ERROR: list_all not applicable for system_registry" >&2
+      return 2
       ;;
     *)
       echo "ERROR: Unknown command: $cmd" >&2
@@ -410,6 +607,7 @@ system_registry() {
 #   os_registry <os_id> get <key>
 #   os_registry <os_id> set <key> <value>
 #   os_registry <os_id> exists <key>
+#   os_registry <os_id> destroy
 #   os_registry list
 #===============================================================================
 os_registry() {
@@ -496,7 +694,7 @@ os_registry() {
       
       json_registry "$db_path" set "$key" "$value"
       ;;
-    get|delete|list|view)
+    get|delete|list|count|view|destroy)
       json_registry "$db_path" "$cmd" "$key" "$value"
       ;;
     *)
@@ -528,7 +726,7 @@ registry_search() {
   case "$registry_type" in
     host)
       local hosts_dir
-      hosts_dir=$(get_active_cluster_hosts_dir)
+      hosts_dir=$(hps_get_config cluster_hosts)
       
       for db in "$hosts_dir"/*.db; do
         [[ -d "$db" ]] || continue
@@ -547,7 +745,7 @@ registry_search() {
       
     cluster)
       local cluster_dir
-      cluster_dir=$(get_active_cluster_dir) || return 1
+      cluster_dir=$(hps_get_config cluster_base) || return 1
       local db_path="${cluster_dir}/cluster.db"
       
       local json_file="$db_path/${field}.json"

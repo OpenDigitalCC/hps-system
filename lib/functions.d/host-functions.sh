@@ -1,18 +1,9 @@
 
-
 #===============================================================================
-# get_active_cluster_hosts_dir
-# ----------------------------
-# Get the hosts directory for the active cluster.
-#
-# Returns:
-#   Path via stdout
-#   1 if active cluster cannot be determined
+# Compatibility Aliases
 #===============================================================================
-get_active_cluster_hosts_dir() {
-  local cluster_dir
-  cluster_dir=$(get_active_cluster_dir 2>/dev/null) || return 1
-  echo "${cluster_dir}/hosts"
+host_config() {
+  host_registry "$@"
 }
 
 
@@ -184,7 +175,6 @@ get_host_os_version() {
   os_registry "$os_id" get "version"
 }
 
-
 #===============================================================================
 # host_initialise_config
 # ----------------------
@@ -193,54 +183,116 @@ get_host_os_version() {
 # Usage:
 #   host_initialise_config <mac> <arch>
 #
+# Behaviour:
+#   - Creates new host registry entry
+#   - Sets initial STATE to UNCONFIGURED
+#   - Sets architecture
+#   - Sets initialised_at timestamp
+#   - Fails if host already exists
+#
 # Parameters:
 #   mac  - MAC address of the host
 #   arch - Architecture (e.g., x86_64)
 #
 # Returns:
 #   0 on success
-#   1 if MAC not provided or initialization fails
+#   1 if MAC not provided
+#   2 if host already exists
+#   3 if initialization fails
+#
+# Example usage:
+#   host_initialise_config "00:11:22:33:44:55" "x86_64"
+#
 #===============================================================================
 host_initialise_config() {
   local mac="$1"
   local arch="$2"
   
-  # Validate MAC address is provided
-  if [[ -z "$mac" ]]; then
+  if [[ -z "${mac}" ]]; then
     hps_log error "MAC address not provided"
     return 1
   fi
   
-  # Get the hosts directory for the active cluster
-  local hosts_dir
-  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
-  
-  if [[ -z "$hosts_dir" ]]; then
-    hps_log error "Cannot determine active cluster hosts directory"
+  if [[ -z "${arch}" ]]; then
+    hps_log error "Architecture not provided"
     return 1
   fi
   
-  # Ensure the hosts directory exists
-  if [[ ! -d "$hosts_dir" ]]; then
-    if ! mkdir -p "$hosts_dir" 2>/dev/null; then
-      hps_log error "Failed to create hosts directory: $hosts_dir"
-      return 1
-    fi
-    hps_log debug "Created hosts directory: $hosts_dir"
+  # Check if host already exists
+  if host_registry "${mac}" exists; then
+    hps_log warning "Host already exists: ${mac}"
+    return 2
   fi
   
-  # Set initial state using host_registry (which will create the registry)
-  if ! host_registry "$mac" set STATE "UNCONFIGURED"; then
-    hps_log error "Failed to set initial state for MAC: $mac"
-    return 1
+  hps_log info "Initialising new host: ${mac} (${arch})"
+  
+  # Set initial values
+  if ! host_registry "${mac}" set STATE "UNCONFIGURED"; then
+    hps_log error "Failed to set STATE for: ${mac}"
+    return 3
   fi
   
-  if ! host_registry "$mac" set arch "$arch"; then
-    hps_log error "Failed to set arch for MAC: $mac"
-    return 1
+  if ! host_registry "${mac}" set arch "${arch}"; then
+    hps_log error "Failed to set arch for: ${mac}"
+    return 3
   fi
   
+  if ! host_registry "${mac}" set initialised_at "$(date -Iseconds)"; then
+    hps_log error "Failed to set initialised_at for: ${mac}"
+    return 3
+  fi
+  
+  hps_log info "Host initialised: ${mac}"
   return 0
+}
+
+#===============================================================================
+# host_config_delete
+# ------------------
+# Delete a host's configuration from registry.
+#
+# Usage:
+#   host_config_delete <mac>
+#
+# Behaviour:
+#   - Removes entire host registry using host_registry destroy
+#   - Logs deletion for audit purposes
+#
+# Parameters:
+#   mac - MAC address of the host
+#
+# Returns:
+#   0 on success (registry deleted)
+#   1 if MAC not provided or registry does not exist
+#   3 if deletion fails or lock timeout
+#
+# Example usage:
+#   host_config_delete "00:11:22:33:44:55"
+#
+#===============================================================================
+host_config_delete() {
+  local mac="$1"
+  
+  if [[ -z "${mac}" ]]; then
+    hps_log error "host_config_delete: MAC address not provided"
+    return 1
+  fi
+  
+  # Check if host registry exists
+  if ! host_registry "${mac}" exists; then
+    hps_log warning "[${mac}] Host registry not found"
+    return 1
+  fi
+  
+  # Destroy the host registry
+  if host_registry "${mac}" destroy; then
+    hps_log info "[${mac}] Deleted host registry"
+    return 0
+  else
+    local rc=$?
+    hps_log error "[${mac}] Failed to delete registry (error code: ${rc})"
+    return ${rc}
+  fi
 }
 
 
@@ -369,6 +421,12 @@ host_network_configure() {
   local macid="$1"
 
   local hosttype=$(host_registry "$macid" get TYPE 2>/dev/null)
+
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
   
   hps_log debug "host_network_configure called with MAC: $macid, TYPE: $hosttype"
   
@@ -385,9 +443,9 @@ host_network_configure() {
   
   # Get cluster network configuration
   local dhcp_ip dhcp_rangesize network_cidr
-  dhcp_ip=$(cluster_registry get DHCP_IP 2>/dev/null)
-  dhcp_rangesize=$(cluster_registry get DHCP_RANGESIZE 2>/dev/null)
-  network_cidr=$(cluster_registry get NETWORK_CIDR 2>/dev/null)
+  dhcp_ip=$(cluster_registry "$cluster" get network_dhcp_ip 2>/dev/null)
+  dhcp_rangesize=$(cluster_registry "$cluster" get network_dhcp_rangesize 2>/dev/null)
+  network_cidr=$(cluster_registry "$cluster" get network_cidr 2>/dev/null)
 
   hps_log debug "Configuring with network $network_cidr"
 
@@ -398,7 +456,7 @@ host_network_configure() {
   fi
   
   if ! validate_ip_address "$dhcp_ip" 2>/dev/null; then
-    hps_log error "Invalid DHCP_IP: $dhcp_ip"
+    hps_log error "Invalid network_dhcp_ip: $dhcp_ip"
     return 1
   fi
   
@@ -498,64 +556,7 @@ host_network_configure() {
 }
 
 
-#===============================================================================
-# host_config_delete
-# ------------------
-# Delete a host's configuration from registry.
-#
-# Usage:
-#   host_config_delete <mac>
-#
-# Parameters:
-#   mac - MAC address of the host
-#
-# Returns:
-#   0 on success (registry deleted)
-#   1 if MAC not provided
-#   2 if registry does not exist
-#   3 if deletion fails
-#===============================================================================
-host_config_delete() {
-  local mac="$1"
-  
-  # Validate MAC address is provided
-  if [[ -z "$mac" ]]; then
-    hps_log error "host_config_delete: MAC address not provided"
-    return 1
-  fi
-  
-  # Check if host registry exists
-  if ! host_registry "$mac" exists; then
-    hps_log warning "[$mac] Host registry not found"
-    return 2
-  fi
-  
-  # Get the hosts directory
-  local hosts_dir
-  hosts_dir=$(get_active_cluster_hosts_dir 2>/dev/null)
-  if [[ -z "$hosts_dir" ]]; then
-    hps_log error "[$mac] Cannot determine hosts directory"
-    return 1
-  fi
-  
-  # Normalize MAC for directory name
-  local mac_normalized
-  mac_normalized=$(normalise_mac "$mac") || {
-    hps_log error "[$mac] Failed to normalize MAC"
-    return 1
-  }
-  
-  local registry_dir="${hosts_dir}/${mac_normalized}.db"
-  
-  # Delete the entire registry directory
-  if rm -rf "$registry_dir" 2>/dev/null; then
-    hps_log info "[$mac] Deleted host registry: $registry_dir"
-    return 0
-  else
-    hps_log error "[$mac] Failed to delete registry directory: $registry_dir"
-    return 3
-  fi
-}
+
 
 
 #===============================================================================
@@ -677,15 +678,6 @@ host_post_config_hooks() {
     return 0
 }
 
-
-#===============================================================================
-# host_config
-# -----------
-# Alias to host_registry for backward compatibility
-#===============================================================================
-host_config() {
-  host_registry "$@"
-}
 
 #===============================================================================
 # get_host_mac_by_keyvalue

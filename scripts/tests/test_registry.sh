@@ -117,6 +117,23 @@ assert_exists() {
   fi
 }
 
+assert_not_exists() {
+  local path="$1"
+  local message="${2:-File should not exist}"
+  
+  ((TESTS_RUN++))
+  
+  if [[ ! -e "$path" ]]; then
+    echo "✓ $message: $path"
+    ((TESTS_PASSED++))
+    return 0
+  else
+    echo "✗ $message: $path"
+    ((TESTS_FAILED++))
+    return 1
+  fi
+}
+
 assert_return_code() {
   local expected_rc="$1"
   local actual_rc="$2"
@@ -410,6 +427,65 @@ test_host_registry() {
 }
 
 #===============================================================================
+# Test: Host Registry Destroy
+#===============================================================================
+test_host_registry_destroy() {
+  echo -e "\n=== Test: Host Registry Destroy ==="
+  
+  # Test 1: Create host with multiple keys
+  local test_mac="52:54:00:aa:bb:cc"
+  local test_mac_norm="525400aabbcc"
+  
+  host_registry "$test_mac" set "hostname" '"destroy-test"'
+  host_registry "$test_mac" set "type" '"SCH"'
+  host_registry "$test_mac" set "status" '"active"'
+  host_registry "$test_mac" set "config" '{"test": "data"}'
+  
+  # Verify host exists with all keys
+  assert_exists "$TEST_HOSTS_DIR/${test_mac_norm}.db" "Host DB created"
+  local count=$(host_registry "$test_mac" list | wc -l)
+  assert_equals 5 $count "Host has 5 keys (4 + UPDATED)"
+  
+  # Test 2: Destroy host registry
+  host_registry "$test_mac" destroy
+  assert_equals $? 0 "Destroy command succeeded"
+  
+  # Test 3: Verify complete removal
+  assert_not_exists "$TEST_HOSTS_DIR/${test_mac_norm}.db" "Host DB directory removed"
+  
+  # Test 4: Verify host no longer exists
+  host_registry "$test_mac" exists
+  assert_equals $? 1 "Host no longer exists after destroy"
+  
+  # Test 5: Destroy non-existent host (should succeed silently)
+  host_registry "$test_mac" destroy
+  assert_equals $? 1 "Destroy non-existent host returns 1"
+  
+  # Test 6: Destroy with concurrent lock simulation
+  local test_mac2="52:54:00:dd:ee:ff"
+  local test_mac2_norm="525400ddeeff"
+  
+  host_registry "$test_mac2" set "hostname" '"lock-test"'
+  
+  # Create a valid lock (current process)
+  local db_path="$TEST_HOSTS_DIR/${test_mac2_norm}.db"
+  local lock_file="$db_path/.lock/.destroy.lock"
+  mkdir -p "$db_path/.lock"
+  cat > "$lock_file" <<EOF
+ts:$(date +%s)
+pid:$$
+op:destroy
+host:$(hostname)
+EOF
+  
+  # Should still work (same process)
+  host_registry "$test_mac2" destroy
+  assert_equals $? 0 "Destroy with existing lock from same process"
+  
+  assert_not_exists "$TEST_HOSTS_DIR/${test_mac2_norm}.db" "Host removed despite lock"
+}
+
+#===============================================================================
 # Test: Registry Search Functions
 #===============================================================================
 test_registry_search() {
@@ -446,48 +522,6 @@ test_registry_search() {
   assert_equals "525400112233 525400445566 " "$results" "Search hosts by datacenter=dc1"
 }
 
-#===============================================================================
-# Test: Migration from KV to JSON
-#===============================================================================
-test_migration() {
-  echo -e "\n=== Test: Migration from KV to JSON ==="
-  
-  # Create legacy KV config file
-  local kv_file="$TEST_HOSTS_DIR/${TEST_MAC1_NORM}.conf"
-  cat > "$kv_file" <<EOF
-# Auto-generated host config
-# MAC: $TEST_MAC1
-HOSTNAME="legacy-node"
-TYPE="SCH"
-STATUS="active"
-NETWORK_INTERFACES="eth0,eth1,eth2"
-STORAGE_DISKS="sda,sdb,sdc"
-CPU_CORES="16"
-MEMORY_GB="64"
-BOOLEAN_TEST="true"
-UPDATED="2024-01-01T00:00:00Z"
-EOF
-  
-  assert_exists "$kv_file" "Legacy KV file created"
-  
-  # Test migration
-  migrate_host_to_registry "$TEST_MAC1"
-  assert_equals $? 0 "Migration completed"
-  
-  # Verify migrated data (returns raw values)
-  local result
-  result=$(host_registry "$TEST_MAC1" get "HOSTNAME")
-  assert_equals 'legacy-node' "$result" "String migrated correctly"
-  
-  result=$(host_registry "$TEST_MAC1" get "CPU_CORES")
-  assert_equals '16' "$result" "Number migrated correctly"
-  
-  result=$(host_registry "$TEST_MAC1" get "BOOLEAN_TEST")
-  assert_equals 'true' "$result" "Boolean migrated correctly"
-  
-  # Verify old file was archived with new extension
-  assert_exists "${kv_file}.pre-registry" "KV file archived"
-}
 
 #===============================================================================
 # Test: Error Handling and Recovery
@@ -576,8 +610,8 @@ run_all_tests() {
   test_json_registry_edge_cases
   test_json_registry_concurrent
   test_host_registry
+  test_host_registry_destroy
   test_registry_search
-  test_migration
   test_error_handling
   test_host_config_compatibility
   
@@ -588,7 +622,7 @@ run_all_tests() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # Source the registry functions first
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  source "$SCRIPT_DIR/../../lib/functions.d/hps-registry.sh" || {
+  source "$SCRIPT_DIR/../../lib/hps-registry.sh" || {
     echo "ERROR: Cannot source hps-registry.sh" >&2
     exit 1
   }
