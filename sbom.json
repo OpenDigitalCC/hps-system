@@ -1,0 +1,196 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "hps-system",
+      "description": "Host Provisioning Service - bash PXE/DHCP/TFTP/HTTP provisioning platform",
+      "licenses": [{ "license": { "id": "AGPL-3.0-or-later" } }]
+    },
+    "properties": [
+      {
+        "name": "hps:versioning",
+        "value": "Component versions track the debian:trixie-slim base image suite and are resolved at build time (no pinning); CVE scans should resolve against the trixie suite. See rules/release-workflow.md SBOM dependency rule."
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "bash",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/bash",
+      "description": "Command interpreter - the language HPS is written in; also present on Alpine/BusyBox nodes as pkg:apk/alpine/bash"
+    },
+    {
+      "type": "library",
+      "name": "jq",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/jq",
+      "description": "JSON processor - registry read/write and the API request/response path"
+    },
+    {
+      "type": "application",
+      "name": "dnsmasq",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/dnsmasq",
+      "description": "DHCP, TFTP and DNS server for PXE boot and cluster addressing"
+    },
+    {
+      "type": "application",
+      "name": "nginx",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/nginx",
+      "description": "HTTP server fronting the CGI boot manager, the JSON API, and the distro/package repositories"
+    },
+    {
+      "type": "application",
+      "name": "fcgiwrap",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/fcgiwrap",
+      "description": "FastCGI wrapper executing the bash CGI endpoints"
+    },
+    {
+      "type": "application",
+      "name": "spawn-fcgi",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/spawn-fcgi",
+      "description": "Spawns the fcgiwrap worker pool"
+    },
+    {
+      "type": "application",
+      "name": "supervisor",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/supervisor",
+      "description": "Process supervisor managing the IPS service set"
+    },
+    {
+      "type": "application",
+      "name": "rsyslog",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/rsyslog",
+      "description": "Logging sink for HPS and cluster nodes"
+    },
+    {
+      "type": "application",
+      "name": "tftpd-hpa",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/tftpd-hpa",
+      "description": "TFTP daemon package present in the image (TFTP is served by dnsmasq at runtime)"
+    },
+    {
+      "type": "application",
+      "name": "ipxe",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/ipxe",
+      "description": "iPXE boot firmware images chainloaded during PXE boot"
+    },
+    {
+      "type": "application",
+      "name": "createrepo-c",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/createrepo-c",
+      "description": "Builds RPM repository metadata for Rocky node package serving"
+    },
+    {
+      "type": "application",
+      "name": "libarchive-tools",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/libarchive-tools",
+      "description": "bsdtar and archive utilities for distro/image handling"
+    },
+    {
+      "type": "application",
+      "name": "curl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/curl",
+      "description": "HTTP client used by node-side API calls and downloads"
+    },
+    {
+      "type": "application",
+      "name": "rsync",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/rsync",
+      "description": "Repository and resource synchronisation"
+    },
+    {
+      "type": "application",
+      "name": "wget",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/wget",
+      "description": "Distro/package mirror downloads"
+    },
+    {
+      "type": "application",
+      "name": "gpg",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/gpg",
+      "description": "Signature verification for downloaded packages/repositories"
+    },
+    {
+      "type": "application",
+      "name": "openssl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/openssl",
+      "description": "TLS toolkit; underpins the ctrl-exec dispatcher CA and mTLS"
+    },
+    {
+      "type": "library",
+      "name": "perl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/perl",
+      "description": "Runtime for the ctrl-exec dispatcher hosted on the IPS"
+    },
+    {
+      "type": "library",
+      "name": "libwww-perl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/libwww-perl",
+      "description": "ctrl-exec dispatcher HTTP client dependency"
+    },
+    {
+      "type": "library",
+      "name": "liblwp-protocol-https-perl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/liblwp-protocol-https-perl",
+      "description": "ctrl-exec dispatcher HTTPS transport dependency"
+    },
+    {
+      "type": "library",
+      "name": "libio-socket-ssl-perl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/libio-socket-ssl-perl",
+      "description": "ctrl-exec mTLS socket dependency"
+    },
+    {
+      "type": "library",
+      "name": "libjson-perl",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/libjson-perl",
+      "description": "ctrl-exec JSON dependency"
+    },
+    {
+      "type": "application",
+      "name": "ctrl-exec",
+      "version": "0.12.3",
+      "purl": "pkg:generic/opendigital/ctrl-exec@0.12.3",
+      "description": "mTLS remote execution: dispatcher on the IPS, agent on each node - the node setup/exec mechanism (see docs/adr/0001-orchestration-split.md)"
+    },
+    {
+      "type": "application",
+      "name": "opensvc",
+      "version": "3",
+      "purl": "pkg:generic/opensvc/opensvc@3",
+      "description": "Cluster service/VM availability management retained for durable services and VM HA (iscsi-manager, heartbeat, labels)"
+    },
+    {
+      "type": "operating-system",
+      "name": "debian",
+      "version": "trixie-slim",
+      "purl": "pkg:deb/debian/base?distro=trixie",
+      "description": "Base image for the IPS container"
+    }
+  ]
+}
