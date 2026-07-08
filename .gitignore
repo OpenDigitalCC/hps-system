@@ -4,3 +4,6 @@
 log/
 local-commands.txt
 
+# Disposable one-off diagnostics and local gate wrappers (never committed)
+tmp/
+
