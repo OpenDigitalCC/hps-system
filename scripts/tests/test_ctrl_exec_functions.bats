@@ -155,3 +155,34 @@ seed_request() {
   run host_registry "52:54:00:11:22:33" get ctrl_exec_paired
   [ "$status" -ne 0 ]
 }
+
+@test "_ce_persist_dir symlinks an upstream path to persistent storage" {
+  local persist="$TEST_DIR/persist/conf"
+  local upstream="$TEST_DIR/etc/ctrl-exec"
+  run _ce_persist_dir "$persist" "$upstream"
+  [ "$status" -eq 0 ]
+  [ -L "$upstream" ]
+  [ "$(readlink "$upstream")" = "$persist" ]
+}
+
+@test "_ce_persist_dir migrates an existing real directory's content" {
+  local persist="$TEST_DIR/persist/state"
+  local upstream="$TEST_DIR/var/ctrl-exec"
+  mkdir -p "$upstream"
+  echo "keepme" > "$upstream/ca.crt"
+
+  run _ce_persist_dir "$persist" "$upstream"
+  [ "$status" -eq 0 ]
+  [ -L "$upstream" ]
+  [ -f "$upstream/ca.crt" ]
+  grep -q keepme "$persist/ca.crt"
+}
+
+@test "_ce_persist_dir is idempotent on an already-linked path" {
+  local persist="$TEST_DIR/persist/conf2"
+  local upstream="$TEST_DIR/etc/ctrl-exec2"
+  _ce_persist_dir "$persist" "$upstream"
+  run _ce_persist_dir "$persist" "$upstream"
+  [ "$status" -eq 0 ]
+  [ -L "$upstream" ]
+}

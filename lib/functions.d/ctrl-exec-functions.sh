@@ -24,6 +24,104 @@
 # Default pairing window, seconds. Matches the agent's
 # request-pairing --background --timeout in ctrl-exec.init.
 : "${CTRL_EXEC_PAIR_WINDOW:=300}"
+# Persistent bases on the /srv bind-mount so the CA and pairing/agent state
+# survive container image rebuilds. The upstream defaults (/etc/ctrl-exec,
+# /var/lib/ctrl-exec) are symlinked here at bring-up.
+: "${CTRL_EXEC_PERSIST_CONF:=/srv/ctrl-exec/conf}"
+: "${CTRL_EXEC_PERSIST_STATE:=/srv/ctrl-exec/state}"
+# Floating dispatcher tarball served from the IPS package repo (see the
+# node-side CTRL_EXEC_TARBALL note; the same latest-symlink convention).
+: "${CTRL_EXEC_DISPATCHER_TARBALL:=/srv/hps-resources/packages/ctrl-exec/ctrl-exec-latest.tar.gz}"
+
+#===============================================================================
+# _ce_persist_dir
+# ---------------
+# Ensure an upstream ctrl-exec path is backed by persistent storage on /srv:
+# create the persistent target and symlink the upstream path to it, unless the
+# upstream path is already a real (non-symlink) directory with content.
+#
+# Arguments: $1 persistent target, $2 upstream path
+#===============================================================================
+_ce_persist_dir() {
+  local target="$1" upstream="$2"
+  mkdir -p "$target" || return 1
+  # Already linked correctly.
+  if [[ -L "$upstream" && "$(readlink "$upstream")" == "$target" ]]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$upstream")" || return 1
+  # Migrate any existing real directory's content into the persistent target.
+  if [[ -d "$upstream" && ! -L "$upstream" ]]; then
+    cp -a "$upstream/." "$target/" 2>/dev/null || true
+    rm -rf "$upstream"
+  fi
+  ln -sfn "$target" "$upstream"
+}
+
+#===============================================================================
+# ce_dispatcher_bring_up
+# ----------------------
+# Idempotent IPS-side dispatcher bring-up, safe to call on every start:
+#   1. Back /etc/ctrl-exec and /var/lib/ctrl-exec with persistent /srv storage.
+#   2. Install the dispatcher from the HPS-served tarball if absent.
+#   3. Initialise the CA and the dispatcher cert once.
+#
+# Returns: 0 on success (or already up), non-zero on failure.
+#===============================================================================
+ce_dispatcher_bring_up() {
+  _ce_persist_dir "$CTRL_EXEC_PERSIST_CONF" /etc/ctrl-exec || {
+    hps_log error "ce_dispatcher_bring_up: cannot persist /etc/ctrl-exec"
+    return 1
+  }
+  _ce_persist_dir "$CTRL_EXEC_PERSIST_STATE" /var/lib/ctrl-exec || {
+    hps_log error "ce_dispatcher_bring_up: cannot persist /var/lib/ctrl-exec"
+    return 1
+  }
+
+  # Install the dispatcher if the CLI is not on PATH.
+  if ! command -v "$CTRL_EXEC_DISPATCHER" >/dev/null 2>&1; then
+    if [[ ! -f "$CTRL_EXEC_DISPATCHER_TARBALL" ]]; then
+      hps_log error "ce_dispatcher_bring_up: dispatcher tarball missing: $CTRL_EXEC_DISPATCHER_TARBALL"
+      return 1
+    fi
+    local work="/tmp/ce-dispatcher-install.$$"
+    mkdir -p "$work" || return 1
+    if ! tar -xzf "$CTRL_EXEC_DISPATCHER_TARBALL" -C "$work"; then
+      hps_log error "ce_dispatcher_bring_up: cannot unpack dispatcher tarball"
+      rm -rf "$work"
+      return 1
+    fi
+    local srcdir
+    srcdir="$(find "$work" -maxdepth 1 -type d -name 'ctrl-exec-*' | head -n1)"
+    if [[ -z "$srcdir" || ! -x "$srcdir/install.sh" ]]; then
+      hps_log error "ce_dispatcher_bring_up: install.sh not found in tarball"
+      rm -rf "$work"
+      return 1
+    fi
+    ( cd "$srcdir" && ./install.sh --dispatcher ) || {
+      hps_log error "ce_dispatcher_bring_up: dispatcher install failed"
+      rm -rf "$work"
+      return 1
+    }
+    rm -rf "$work"
+  fi
+
+  # Initialise the CA and dispatcher cert once (persisted under /srv).
+  if [[ ! -f /etc/ctrl-exec/ca.crt ]]; then
+    hps_log info "ce_dispatcher_bring_up: initialising ctrl-exec CA"
+    "$CTRL_EXEC_DISPATCHER" setup-ca || {
+      hps_log error "ce_dispatcher_bring_up: setup-ca failed"
+      return 1
+    }
+    "$CTRL_EXEC_DISPATCHER" setup-ctrl-exec || {
+      hps_log error "ce_dispatcher_bring_up: setup-ctrl-exec failed"
+      return 1
+    }
+  fi
+
+  hps_log info "ce_dispatcher_bring_up: dispatcher ready"
+  return 0
+}
 
 #===============================================================================
 # ce_pairing_window_open

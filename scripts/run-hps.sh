@@ -166,6 +166,14 @@ else
 fi
 
 #===============================================================================
+# Step 4b: Bring up the ctrl-exec dispatcher (CA + install), cluster-independent
+#===============================================================================
+if declare -f ce_dispatcher_bring_up >/dev/null 2>&1; then
+  hps_log info "Bringing up ctrl-exec dispatcher"
+  ce_dispatcher_bring_up || hps_log warn "ctrl-exec dispatcher bring-up failed; remote execution unavailable until resolved"
+fi
+
+#===============================================================================
 # Step 5: Prepare Services (if cluster configured)
 #===============================================================================
 if [[ "${CLUSTER_CONFIGURED}" == "true" ]]; then
