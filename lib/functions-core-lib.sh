@@ -1,15 +1,361 @@
+#!/bin/bash
+#===============================================================================
+# HPS Core Function Library
+#===============================================================================
+# Essential functions required before other libraries are loaded.
+#
+# Contents:
+#   - hps_log   - Bootstrap logging (minimal dependencies)
+#   - hps_log         - Full-featured logging (requires registry)
+#   - hps_get_config  - Configuration and path retrieval
+#   - hps_check_bash_syntax - Syntax validation with context
+#===============================================================================
 
-# NOTE:This file is not verified - be careful to not break anything here
 
 
-############### Core functions to support other functions
+#===============================================================================
+# hps_log (Full Version - With Error Call Stack)
+# -------
+# Full-featured logging with optional cluster-specific log files.
+#
+# Usage:
+#   hps_log <level> <message>
+#
+# Parameters:
+#   level   - Log level (info, warn, error, debug)
+#   message - Message to log
+#
+# Behaviour:
+#   - Always logs to system log: ${HPS_LOG}/hps-system.log
+#   - Additionally logs to cluster log if cluster configured
+#   - Includes hostname, function name, and client type
+#   - For ERROR level: includes call stack showing function chain
+#   - URL-decodes messages
+#   - Logs to rsyslog if available
+#   - Works with or without active cluster
+#
+# Returns:
+#   0 always
+#
+# Example usage:
+#   hps_log info "Host provisioned successfully"
+#   hps_log error "Failed to create storage volume"
+#
+# Example output (ERROR with call stack):
+#   [ips] [ERROR] [validate_storage] [create_host:45 → provision_node:120 → main:15] Storage pool not available
+#
+#===============================================================================
+hps_log() {
+  local level="${1^^}"
+  shift
+  local raw_msg="$*"
+  local ident="${HPS_LOG_IDENT:-hps}"
+  local ts
+  ts=$(date '+%Y-%m-%d %H:%M:%S')
+  
+  # Get log directory (use variable or default)
+  local logdir="${HPS_LOG:-/srv/hps-log}"
+  
+  # Default to system log (always available)
+  local system_log="${logdir}/hps-system.log"
+  
+  # Map HPS log levels to syslog priorities
+  local syslog_priority
+  case "$level" in
+    ERROR)   syslog_priority="err" ;;
+    WARN)    syslog_priority="warning" ;;
+    INFO)    syslog_priority="info" ;;
+    DEBUG)   syslog_priority="debug" ;;
+    *)       
+      syslog_priority="info"
+      level="INFO"
+      ;;
+  esac
+ 
+  # Get origin identifier - use hostname if configured
+  local origin_id=""
+  local origin_tag=""
+  
+  if declare -f hps_origin_tag >/dev/null 2>&1; then
+    origin_tag=$(hps_origin_tag 2>/dev/null) || origin_tag=""
+    
+    # Try to get hostname from registry if we have a MAC
+    if [[ -n "$origin_tag" ]] && declare -f host_registry >/dev/null 2>&1; then
+      if host_registry "$origin_tag" exists HOSTNAME 2>/dev/null; then
+        origin_id=$(host_registry "$origin_tag" get HOSTNAME 2>/dev/null) || origin_id=""
+      fi
+    fi
+  fi
+  
+  # Fallback to system hostname
+  if [[ -z "$origin_id" ]]; then
+    origin_id=$(hostname 2>/dev/null || echo "local")
+  fi
+  
+  # Detect client type if function available
+  local client_type=""
+  if declare -f detect_client_type >/dev/null 2>&1; then
+    client_type="($(detect_client_type))"
+  fi
+  
+  # URL decode function (for boot_manager compatibility)
+  urldecode() {
+    local data="${1//+/ }"
+    printf '%b' "${data//%/\\x}"
+  }
+  
+  # Build call stack for ERROR level
+  local call_stack=""
+  if [[ "$level" == "ERROR" ]]; then
+    # Build call stack (skip hps_log itself at index 0)
+    local stack_parts=()
+    local i
+    for ((i=1; i<${#FUNCNAME[@]}; i++)); do
+      # Stop at main or if we hit the script level
+      [[ "${FUNCNAME[$i]}" == "main" ]] && break
+      [[ "${FUNCNAME[$i]}" == "source" ]] && break
+      
+      # Add to stack: function:line
+      stack_parts+=("${FUNCNAME[$i]}:${BASH_LINENO[$((i-1))]}")
+      
+      # Limit depth to prevent huge logs (max 5 levels)
+      [[ $i -ge 5 ]] && break
+    done
+    
+    # Format as call chain with arrow separator
+    if [[ ${#stack_parts[@]} -gt 0 ]]; then
+      call_stack=" [$(IFS=' → '; echo "${stack_parts[*]}")]"
+    fi
+  fi
+  
+  # Build log message with context (add call stack for errors)
+  local msg="[${origin_id}] [${level}] [${FUNCNAME[1]}]${call_stack} ${client_type} $(urldecode "$raw_msg")"
+  
+  # Check if rsyslog is running
+  local rsyslog_running=false
+  if pgrep -x "rsyslogd" >/dev/null 2>&1 || [[ -S /dev/log ]]; then
+    rsyslog_running=true
+  fi
+ 
+  # Determine log destination (priority order)
+  local log_destination="stderr"
+  local logfile=""
+  
+  # Ensure log directory exists
+  if [[ ! -d "$logdir" ]]; then
+    mkdir -p "$logdir" 2>/dev/null || true
+  fi
+  
+  # Priority 1: Rsyslog (if available)
+  if [[ "$rsyslog_running" == "true" ]]; then
+    logger -t "$ident" -p "local0.${syslog_priority}" "$msg" 2>/dev/null && return 0
+    # If logger fails, fall through to file logging
+  fi
+  
+  # Priority 2: Cluster log (if cluster configured)
+  if declare -f system_registry >/dev/null 2>&1; then
+    if system_registry exists ACTIVE_CLUSTER 2>/dev/null; then
+      local cluster
+      cluster=$(system_registry get ACTIVE_CLUSTER 2>/dev/null)
+      
+      if [[ -n "$cluster" ]] && [[ "$cluster" != "null" ]]; then
+        logfile="${logdir}/cluster-${cluster}.log"
+        log_destination="cluster"
+      fi
+    fi
+  fi
+  
+  # Priority 3: System log (fallback if no cluster or cluster log fails)
+  if [[ -z "$logfile" ]]; then
+    logfile="${system_log}"
+    log_destination="system"
+  fi
+  
+  # Write to file (or stderr if file write fails)
+  if [[ -w "$logfile" ]] || [[ ! -e "$logfile" && -w "$logdir" ]]; then
+    echo "[${ts}] $msg" >> "$logfile" 2>/dev/null || echo "[${ts}] $msg" >&2
+  else
+    echo "[${ts}] $msg" >&2
+  fi
+  
+  return 0
+}
 
-__guard_source() {
-    local src="${BASH_SOURCE[1]}"
-    local _guard_var="_GUARD_$(basename "$src" | sed 's/[^a-zA-Z0-9_]/_/g')"
-    [[ -n "${!_guard_var:-}" ]] && return 1
-    declare "$_guard_var=1"
-    return 0
+
+
+#===============================================================================
+# hps_get_config
+# --------------
+# Single source for configuration values and paths.
+#
+# Usage:
+#   hps_get_config <key>
+#
+# Behaviour:
+#   - Returns the requested configuration value or path
+#   - Returns error code 1 if key is unknown
+#   - Logs errors using hps_log
+#   - No caching - direct lookups every time
+#   - Active cluster fetched from system_registry on each call
+#
+# Supported Keys:
+#   Active Configuration:
+#     active_cluster        - Current active cluster name
+#
+#   Static Paths (from hps.conf):
+#     system_base           - HPS_SYSTEM_BASE
+#     config_base           - HPS_CONFIG_BASE
+#     resources             - HPS_RESOURCES
+#     log                   - HPS_LOG
+#     tftp                  - TFTP root directory
+#     system_log            - System-wide log file
+#
+#   Dynamic Paths (computed):
+#     cluster_base          - Active cluster directory
+#     cluster_hosts         - Active cluster hosts directory
+#     cluster_services      - Active cluster services directory
+#     cluster_registry      - Active cluster registry database path
+#     cluster_log           - Active cluster log file
+#
+#   System Paths:
+#     system_registry       - System registry database path
+#     os_registry           - OS registry database path
+#     supervisord_dir       - Supervisor configuration directory
+#     supervisord_conf      - Supervisor configuration file
+#
+#   Network Configuration:
+#     ips_address           - IPS (DHCP/DNS/HTTP) IP address
+#
+# Returns:
+#   0 on success (value printed to stdout)
+#   1 if key is unknown or lookup fails
+#
+# Example usage:
+#   cluster=$(hps_get_config active_cluster) || return 1
+#   hosts_dir=$(hps_get_config cluster_hosts) || return 1
+#   log_file=$(hps_get_config cluster_log) || return 1
+#
+#===============================================================================
+hps_get_config() {
+  local key="${1:?Usage: hps_get_config <key>}"
+  
+  case "$key" in
+    # Active configuration
+    active_cluster)
+      local cluster
+      if declare -f system_registry >/dev/null 2>&1; then
+        cluster=$(system_registry get ACTIVE_CLUSTER 2>/dev/null) || {
+          hps_log error "Failed to get active cluster from registry"
+          return 1
+        }
+        echo "$cluster"
+      else
+        hps_log error "system_registry function not available"
+        return 1
+      fi
+      ;;
+    
+    # Static paths (from hps.conf)
+    system_base)
+      echo "${HPS_SYSTEM_BASE}"
+      ;;
+    config_base)
+      echo "${HPS_CONFIG_BASE}"
+      ;;
+    resources)
+      echo "${HPS_RESOURCES}"
+      ;;
+    log)
+      echo "${HPS_LOG}"
+      ;;
+    tftp)
+      echo "${HPS_CONFIG_BASE}/tftp"
+      ;;
+    system_log)
+      echo "${HPS_LOG}/hps-system.log"
+      ;;
+    
+    # Dynamic paths (computed - require active cluster)
+    cluster_base)
+      local cluster
+      cluster=$(hps_get_config active_cluster) || return 1
+      echo "${HPS_CONFIG_BASE}/clusters/${cluster}"
+      ;;
+    cluster_hosts)
+      local cluster_base
+      cluster_base=$(hps_get_config cluster_base) || return 1
+      echo "${cluster_base}/hosts"
+      ;;
+    cluster_services)
+      local cluster_base
+      cluster_base=$(hps_get_config cluster_base) || return 1
+      echo "${cluster_base}/services"
+      ;;
+    cluster_registry)
+      local cluster_base
+      cluster_base=$(hps_get_config cluster_base) || return 1
+      echo "${cluster_base}/cluster.db"
+      ;;
+    cluster_log)
+      local cluster
+      cluster=$(hps_get_config active_cluster) || return 1
+      echo "${HPS_LOG}/cluster-${cluster}.log"
+      ;;
+
+    # Script directories
+    scripts_dir)
+      echo "${HPS_SYSTEM_BASE}/scripts"
+      ;;
+    scripts_cluster_config)
+      echo "${HPS_SYSTEM_BASE}/scripts/cluster-config.d"
+      ;;
+    scripts_tests)
+      echo "${HPS_SYSTEM_BASE}/scripts/tests"
+      ;;
+    
+    # System paths
+    system_registry)
+      echo "${HPS_CONFIG_BASE}/system.db"
+      ;;
+    os_registry)
+      echo "${HPS_CONFIG_BASE}/os.db"
+      ;;
+    supervisord_dir)
+      echo "${HPS_CONFIG_BASE}/services"
+      ;;
+    supervisord_conf)
+      echo "${HPS_CONFIG_BASE}/services/supervisord.conf"
+      ;;
+    
+    # Network configuration
+    ips_address)
+      # Get active cluster first
+      local cluster
+      cluster=$(system_registry get ACTIVE_CLUSTER 2>/dev/null) || {
+        hps_log error "No active cluster configured (needed for IPS address)"
+        return 1
+      }
+
+      # Get config base
+      local config_base="${HPS_CONFIG_BASE:-/srv/hps-config}"
+
+      # Direct registry access (no function calls that might recurse)
+      local ips_ip
+      ips_ip=$(json_registry "${config_base}/clusters/${cluster}/cluster.db" get network_dhcp_ip 2>/dev/null) || {
+        hps_log error "IPS IP address not configured (network_dhcp_ip)"
+        return 1
+      }
+      echo "$ips_ip"
+      ;;
+
+    # Unknown key
+    *)
+      hps_log error "Unknown configuration key: ${key}"
+      return 1
+      ;;
+  esac
+  
+  return 0
 }
 
 
@@ -22,12 +368,23 @@ __guard_source() {
 #   hps_check_bash_syntax <file_or_stdin> [label]
 #
 # Parameters:
-#   $1 - File path or '-' for stdin
-#   $2 - Optional label for the code being checked
+#   file_or_stdin - File path or '-' for stdin
+#   label         - Optional label for the code being checked
+#
+# Behaviour:
+#   - Validates bash syntax using 'bash -n'
+#   - Shows context around errors (5 lines before/after)
+#   - Identifies which function contains the error
+#   - Provides helpful hints for common issues
 #
 # Returns:
 #   0 if syntax is valid
 #   1 if errors found
+#
+# Example usage:
+#   hps_check_bash_syntax /path/to/script.sh
+#   echo "$code" | hps_check_bash_syntax - "generated functions"
+#
 #===============================================================================
 hps_check_bash_syntax() {
   local input="${1:--}"
@@ -44,405 +401,111 @@ hps_check_bash_syntax() {
     tempfile="$input"
   fi
   
-  # Run syntax check and capture output
+  # Run syntax check
   local syntax_errors
   if syntax_errors=$(bash -n "$tempfile" 2>&1); then
     echo "[SYNTAX] ✓ Syntax check passed for $label" >&2
     [[ "$input" == "-" ]] && rm -f "$tempfile"
     return 0
-  else
-    echo "[SYNTAX] ✗ Syntax errors found in $label:" >&2
-    
-    # Load file into array for context
-    local -a lines
-    mapfile -t lines < "$tempfile"
-    
-    # Parse each error
-    while IFS= read -r error; do
-      # Extract line number from error message
-      if [[ "$error" =~ line[[:space:]]+([0-9]+): ]]; then
-        local error_line="${BASH_REMATCH[1]}"
-        local error_msg="${error#*: line $error_line: }"
-        
-        # Find which function contains this line
-        local func_name="(not in function)"
-        local current_func=""
-        local line_no=0
-        local func_start_line=0
-        
-        # First pass: find the function
-        for line_no in "${!lines[@]}"; do
-          local line="${lines[$line_no]}"
-          
-          # Check if we're at a function definition
-          if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]]; then
-            current_func="${BASH_REMATCH[1]}"
-            func_start_line=$line_no
-          fi
-          
-          # If we've reached the error line, we know which function
-          if [[ $((line_no + 1)) -eq $error_line ]]; then
-            func_name="${current_func:-"(top level)"}"
-            break
-          fi
-        done
-        
-        echo "" >&2
-        echo "  Error: $error_msg" >&2
-        echo "  Function: $func_name" >&2
-        [[ "$current_func" ]] && echo "  Function starts at line: $((func_start_line + 1))" >&2
-        echo "  Error at line $error_line" >&2
-        echo "" >&2
-        echo "  Context:" >&2
-        
-        # Show context (5 lines before and after)
-        local start=$((error_line - 6))
-        local end=$((error_line + 4))
-        [[ $start -lt 0 ]] && start=0
-        [[ $end -ge ${#lines[@]} ]] && end=$((${#lines[@]} - 1))
-        
-        for ((i=start; i<=end; i++)); do
-          local line_num=$((i + 1))
-          local prefix="    "
-          if [[ $line_num -eq $error_line ]]; then
-            prefix=">>> "
-            echo "${prefix}${line_num}: ${lines[$i]}" >&2
-          else
-            echo "${prefix}${line_num}: ${lines[$i]}" >&2
-          fi
-        done
-        echo "" >&2
-        
-      else
-        # Couldn't parse line number, show raw error
-        echo "  $error" >&2
-      fi
-    done <<< "$syntax_errors"
-    
-    # Add helpful hints
-    echo "[HINT] Common causes for ')' syntax errors:" >&2
-    echo "  - Missing opening '(' earlier in the function" >&2
-    echo "  - Unclosed quotes or command substitution before this line" >&2
-    echo "  - Missing 'then' in if statement or 'do' in loop" >&2
-    echo "  - Extra closing ')' from copy/paste error" >&2
-    
-    [[ "$input" == "-" ]] && rm -f "$tempfile"
-    return 1
-  fi
-}
-
-#===============================================================================
-# hps_find_syntax_pattern
-# ------------------------
-# Search for common syntax error patterns near an error line.
-#
-# Usage:
-#   hps_find_syntax_pattern <file> <error_line>
-#
-# Parameters:
-#   $1 - File to analyze
-#   $2 - Line number with error
-#===============================================================================
-hps_find_syntax_pattern() {
-  local file="$1"
-  local error_line="$2"
-  
-  echo "[PATTERN] Checking for common issues near line $error_line:" >&2
-  
-  # Check for unmatched quotes before error line
-  local quote_check=$(sed -n "1,${error_line}p" "$file" | grep -n "['\"]" | tail -5)
-  if [[ -n "$quote_check" ]]; then
-    echo "  Recent quotes (check for unclosed):" >&2
-    echo "$quote_check" | sed 's/^/    /' >&2
   fi
   
-  # Check for unmatched parentheses
-  local open_parens=$(sed -n "1,${error_line}p" "$file" | tr -cd '(' | wc -c)
-  local close_parens=$(sed -n "1,${error_line}p" "$file" | tr -cd ')' | wc -c)
-  if [[ $open_parens -ne $close_parens ]]; then
-    echo "  Parentheses mismatch: $open_parens '(' vs $close_parens ')'" >&2
-    echo "  Missing $(($open_parens - $close_parens)) closing parentheses" >&2
-  fi
+  echo "[SYNTAX] ✗ Syntax errors found in $label:" >&2
   
-  # Look for if/then/fi structure issues
-  local if_count=$(sed -n "1,${error_line}p" "$file" | grep -c "^[[:space:]]*if[[:space:]]")
-  local then_count=$(sed -n "1,${error_line}p" "$file" | grep -c "then")
-  local fi_count=$(sed -n "1,${error_line}p" "$file" | grep -c "^[[:space:]]*fi")
+  # Load file into array for context
+  local -a lines
+  mapfile -t lines < "$tempfile"
   
-  if [[ $if_count -ne $then_count ]]; then
-    echo "  Possible missing 'then': $if_count 'if' vs $then_count 'then'" >&2
-  fi
-}
-
-
-#===============================================================================
-# hps_debug_function_load
-# -------------------
-# Debug why a function file or eval fails to load.
-#
-# Usage:
-#   hps_debug_function_load <file_or_code> [label]
-#   hps_debug_function_load /path/to/functions.sh
-#   echo "$functions" | hps_debug_function_load - "node functions"
-#
-# Parameters:
-#   $1 - File path or '-' for stdin
-#   $2 - Optional label
-#
-# Returns:
-#   0 on success
-#   1 on failure
-#===============================================================================
-hps_debug_function_load() {
-  local input="${1:--}"
-  local label="${2:-function file}"
-  local tempfile
-  
-  echo "[DEBUG] Analyzing $label..." >&2
-  
-  # Handle input
-  if [[ "$input" == "-" ]]; then
-    tempfile="/tmp/debug-functions-$$"
-    cat > "$tempfile"
-  else
-    tempfile="$input"
-  fi
-  
-  # First, basic syntax check
-  if ! hps_check_bash_syntax "$tempfile" "$label"; then
-    echo "[DEBUG] Fix syntax errors before proceeding" >&2
-    [[ "$input" == "-" ]] && rm -f "$tempfile"
-    return 1
-  fi
-  
-  # List all functions found
-  echo "[DEBUG] Functions found in $label:" >&2
-  grep -E "^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\(\)" "$tempfile" | \
-    sed 's/().*//' | sed 's/^[[:space:]]*/  - /' >&2
-  
-  # Try to load function by function
-  echo "[DEBUG] Testing individual function loads..." >&2
-  local all_passed=true
-  local current_func=""
-  local func_body=""
-  local in_function=false
-  local brace_count=0
-  
-  while IFS= read -r line; do
-    # Detect function start
-    if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]] && [[ "$in_function" == false ]]; then
-      in_function=true
-      current_func="${BASH_REMATCH[1]}"
-      func_body="$line"$'\n'
-      brace_count=0
-      # Count braces on the same line
-      [[ "$line" =~ \{ ]] && ((brace_count++))
-      [[ "$line" =~ \} ]] && ((brace_count--))
-      continue
-    fi
-    
-    # Accumulate function body
-    if [[ "$in_function" == true ]]; then
-      func_body+="$line"$'\n'
+  # Parse each error
+  while IFS= read -r error; do
+    # Extract line number from error message
+    if [[ "$error" =~ line[[:space:]]+([0-9]+): ]]; then
+      local error_line="${BASH_REMATCH[1]}"
+      local error_msg="${error#*: line $error_line: }"
       
-      # Count braces
-      local temp="${line//[^\{]/}"
-      ((brace_count+=${#temp}))
-      temp="${line//[^\}]/}"
-      ((brace_count-=${#temp}))
+      # Find which function contains this line
+      local func_name="(top level)"
+      local current_func=""
+      local func_start_line=0
       
-      # Check if function is complete
-      if [[ $brace_count -eq 0 ]] && [[ "$line" =~ \} ]]; then
-        echo -n "  Testing $current_func... " >&2
-        if (eval "$func_body" 2>&1) >/dev/null; then
-          echo "✓ OK" >&2
-        else
-          echo "✗ FAILED" >&2
-          echo "    Error: $(eval "$func_body" 2>&1)" >&2
-          all_passed=false
+      for line_no in "${!lines[@]}"; do
+        local line="${lines[$line_no]}"
+        
+        # Check for function definition
+        if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\) ]]; then
+          current_func="${BASH_REMATCH[1]}"
+          func_start_line=$line_no
         fi
-        in_function=false
-        func_body=""
-      fi
+        
+        # Found the error line
+        if [[ $((line_no + 1)) -eq $error_line ]]; then
+          func_name="${current_func:-"(top level)"}"
+          break
+        fi
+      done
+      
+      echo "" >&2
+      echo "  Error: $error_msg" >&2
+      echo "  Function: $func_name" >&2
+      [[ -n "$current_func" ]] && echo "  Function starts at line: $((func_start_line + 1))" >&2
+      echo "  Error at line $error_line" >&2
+      echo "" >&2
+      echo "  Context:" >&2
+      
+      # Show context (5 lines before and after)
+      local start=$((error_line - 6))
+      local end=$((error_line + 4))
+      [[ $start -lt 0 ]] && start=0
+      [[ $end -ge ${#lines[@]} ]] && end=$((${#lines[@]} - 1))
+      
+      for ((i=start; i<=end; i++)); do
+        local line_num=$((i + 1))
+        if [[ $line_num -eq $error_line ]]; then
+          echo ">>> ${line_num}: ${lines[$i]}" >&2
+        else
+          echo "    ${line_num}: ${lines[$i]}" >&2
+        fi
+      done
+      echo "" >&2
+      
+    else
+      # Couldn't parse line number, show raw error
+      echo "  $error" >&2
     fi
-  done < "$tempfile"
+  done <<< "$syntax_errors"
   
-  # Try full load
-  echo "[DEBUG] Testing full file load..." >&2
-  if (source "$tempfile" 2>&1) >/dev/null; then
-    echo "[DEBUG] ✓ Full load successful" >&2
-  else
-    echo "[DEBUG] ✗ Full load failed:" >&2
-    (source "$tempfile" 2>&1) | sed 's/^/    /' >&2
-    all_passed=false
-  fi
+  # Helpful hints for common issues
+  echo "[HINT] Common syntax error causes:" >&2
+  echo "  - Missing 'then' after if statement" >&2
+  echo "  - Missing 'do' after for/while loop" >&2
+  echo "  - Unclosed quotes or command substitution" >&2
+  echo "  - Unmatched parentheses or braces" >&2
+  echo "  - Missing semicolon before closing brace" >&2
   
   [[ "$input" == "-" ]] && rm -f "$tempfile"
-  [[ "$all_passed" == true ]] && return 0 || return 1
+  return 1
 }
 
 #===============================================================================
-# hps_safe_eval
-# ---------
-# Safely evaluate code with automatic debugging on failure.
+# Compatibility Aliases
+#===============================================================================
+
+#===============================================================================
+# get_ips_address
+# ---------------
+# Alias for hps_get_config ips_address.
+# Get the IPS IP address from cluster registry.
 #
 # Usage:
-#   hps_safe_eval "$code" "description"
-#
-# Parameters:
-#   $1 - Code to evaluate
-#   $2 - Optional description
+#   get_ips_address
 #
 # Returns:
-#   0 on success
-#   1 on failure
-#===============================================================================
-hps_safe_eval() {
-  local code="$1"
-  local desc="${2:-code}"
-  
-  if eval "$code" 2>/dev/null; then
-    return 0
-  else
-    echo "[EVAL] Failed to evaluate $desc" >&2
-    echo "[EVAL] Running diagnostics..." >&2
-    echo "$code" | hps_debug_function_load - "$desc"
-    return 1
-  fi
-}
-
-#===============================================================================
-# hps_source_with_debug
-# ---------------------
-# Source a file with automatic debugging on failure.
+#   0 on success (IP address via stdout)
+#   1 if IP not configured
 #
-# Usage:
-#   hps_source_with_debug <file> [continue_on_error]
+# Example usage:
+#   ips_ip=$(get_ips_address)
 #
-# Parameters:
-#   $1 - File to source
-#   $2 - If "continue", don't exit on error (default: exit)
-#
-# Returns:
-#   0 on success
-#   1 on failure
 #===============================================================================
-hps_source_with_debug() {
-  local file="$1"
-  local continue_on_error="${2:-}"
-  
-  if source "$file" 2>/dev/null; then
-    return 0
-  else
-    echo "[ERROR] Failed to source: $file" >&2
-    
-    # Use debug function if available
-    if declare -f hps_debug_function_load >/dev/null 2>&1; then
-      hps_debug_function_load "$file"
-    elif declare -f hps_check_bash_syntax >/dev/null 2>&1; then
-      hps_check_bash_syntax "$file"
-    else
-      # Basic fallback
-      echo "[ERROR] Syntax check:" >&2
-      bash -n "$file" 2>&1 | sed 's/^/  /' >&2
-    fi
-    
-    if [[ "$continue_on_error" != "continue" ]]; then
-      return 1
-    fi
-  fi
+get_ips_address() {
+  hps_get_config ips_address
 }
-
-__guard_source || return
-
-
-
-#:name: hps_log
-#:group: logging
-#:synopsis: Log messages to syslog and file with context information.
-#:usage: hps_log <level> <message>
-#:description:
-#  Logs messages with timestamp, level, function name, and origin context.
-#  If the current host has a configured hostname, displays hostname instead of origin tag.
-#  URL-decodes messages and detects client type (script/ipxe/cli).
-#  If rsyslog is running, uses logger only; otherwise writes directly to file.
-#  Maps log levels to syslog priorities (invalid levels default to info).
-#:parameters:
-#  level   - Log level (info, warn, error, debug)
-#  message - Message to log (will be URL-decoded)
-#:returns:
-#  0 always
-hps_log() {
-  local level="${1^^}"; shift
-  local raw_msg="$*"
-  local ident="${HPS_LOG_IDENT:-hps}"
-  local logfile="${HPS_LOG_DIR}/hps-system.log"
-  local ts
-  ts=$(date '+%Y-%m-%d %H:%M:%S')
-  
-  # Map HPS log levels to syslog priorities
-  local syslog_priority
-  case "$level" in
-    ERROR)   syslog_priority="err"     ;;
-    WARN)    syslog_priority="warning" ;;
-    INFO)    syslog_priority="info"    ;;
-    DEBUG)   syslog_priority="debug"   ;;
-    *)       
-      syslog_priority="info"
-      level="INFO"  # Normalize display level
-      ;;
-  esac
-  
-  # URL decode function
-  url_decode() {
-    local data="${1//+/ }"
-    printf '%b' "${data//%/\\x}"
-  }
-  
-  # Get origin identifier - use hostname if configured, otherwise origin tag
-  local origin_id
-  local origin_tag
-  origin_tag=$(hps_origin_tag)
-  
-  if host_config "$origin_tag" exists HOSTNAME 2>/dev/null; then
-    origin_id=$(host_config "$origin_tag" get HOSTNAME 2>/dev/null)
-    [[ -z "$origin_id" ]] && origin_id="$origin_tag"
-  else
-    origin_id="$origin_tag"
-  fi
-  
-  # Decode the message
-  local msg
-  msg="[$origin_id] [$level] [${FUNCNAME[1]}] ($(detect_client_type)) $(url_decode "$raw_msg")"
-  
-  # Check if rsyslog is running (check various possible process names)
-  local rsyslog_running=false
-  if pgrep -x "rsyslogd" >/dev/null 2>&1 || \
-     pgrep -f "/usr/sbin/rsyslogd" >/dev/null 2>&1 || \
-     [[ -S /dev/log ]]; then
-    rsyslog_running=true
-  fi
-  
-  # If rsyslog is running, only use logger (rsyslog will handle file writing)
-  if [[ "$rsyslog_running" == "true" ]]; then
-    logger -t "$ident" -p "local0.${syslog_priority}" "$msg"
-  else
-    # No rsyslog - write directly to file and try logger anyway
-    logger -t "$ident" -p "local0.${syslog_priority}" "$msg" 2>/dev/null || true
-    
-    if [[ -w "$logfile" || ( ! -e "$logfile" && -w "$(dirname "$logfile")" ) ]]; then
-      echo "[${ts}] $msg" >> "$logfile"
-    else
-      # If we can't write to file and rsyslog isn't running, at least try stderr
-      echo "[${ts}] $msg" >&2
-    fi
-  fi
-  
-  return 0
-}
-
-
-
-
-
-
