@@ -38,7 +38,8 @@ Subcommands:
   run-init                Run this node's HPS_INIT_SEQUENCE
   set-status <state>      Report a lifecycle STATE back to the IPS
   opensvc-join <token>    Join the OpenSVC cluster with an IPS-minted token
-  vm-create <name> <spec> Create a KVM VM on this node (TCH KVM profile)
+  vm-create <id> [title] [desc]
+                          Create a KVM VM on this node (TCH KVM profile)
 
 Exit codes: 0 success, 1 operation error, 2 usage/config error.
 EOF
@@ -103,11 +104,11 @@ main() {
             n_opensvc_join "$token"
             ;;
         vm-create)
-            local name="${1:-}" spec="${2:-}"
-            [[ -n "$name" && -n "$spec" ]] || { echo "hps-node: vm-create needs <name> <spec>" >&2; exit 2; }
+            local vm_id="${1:-}" title="${2:-}" desc="${3:-}"
+            [[ -n "$vm_id" ]] || { echo "hps-node: vm-create needs <id>" >&2; exit 2; }
             load_bundle || exit $?
             require_fn n_vm_create || exit 1
-            n_vm_create "$name" "$spec"
+            n_vm_create "$vm_id" "$title" "$desc"
             ;;
         -h|--help|help)
             usage

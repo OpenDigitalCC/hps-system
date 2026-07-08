@@ -55,13 +55,13 @@ ok "set-status dispatches n_remote_host_variable" "n_remote_host_variable set ST
 rm -f "$WORK/called"; run opensvc-join tok123 >/dev/null
 ok "opensvc-join dispatches n_opensvc_join" "n_opensvc_join tok123" "$(cat "$WORK/called" 2>/dev/null)"
 
-rm -f "$WORK/called"; run vm-create vm1 spec1 >/dev/null
-ok "vm-create dispatches n_vm_create" "n_vm_create vm1 spec1" "$(cat "$WORK/called" 2>/dev/null)"
+rm -f "$WORK/called"; run vm-create vm1 "My VM" "a description" >/dev/null
+ok "vm-create dispatches n_vm_create with id/title/desc" "n_vm_create vm1 My VM a description" "$(cat "$WORK/called" 2>/dev/null)"
 
 # --- argument validation ---------------------------------------------------
 r=$(run set-status); ok "set-status without state -> exit 2" 2 "$r"
 r=$(run opensvc-join); ok "opensvc-join without token -> exit 2" 2 "$r"
-r=$(run vm-create vm1); ok "vm-create without spec -> exit 2" 2 "$r"
+r=$(run vm-create); ok "vm-create without id -> exit 2" 2 "$r"
 
 echo
 echo "Passed: $PASS  Failed: $FAIL"

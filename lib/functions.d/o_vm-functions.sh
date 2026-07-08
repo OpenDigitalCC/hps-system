@@ -1,111 +1,64 @@
 
 
 
+# shellcheck shell=bash
 #===============================================================================
 # o_vm_create
 # -----------
-# Create and start a VM on specified TCH node using transient OpenSVC service.
+# Create and start a VM on a TCH node, executing the node-side creation over
+# ctrl-exec (ADR 0001). OpenSVC is retained only for the health gate that
+# selects a placement-ready node; the exec transport is no longer a transient
+# OpenSVC task service.
 #
 # Usage:
-#   o_vm_create <vm_identifier> <target_node>
+#   o_vm_create <vm_identifier> <target_node> [title] [description]
 #
 # Parameters:
 #   vm_identifier - Unique VM identifier/GUID (required)
-#   target_node   - TCH node name (e.g., "tch-001") (required)
+#   target_node   - TCH node name / ctrl-exec agent host (e.g. "tch-001")
+#   title         - Optional VM title passed to n_vm_create
+#   description   - Optional VM description passed to n_vm_create
 #
-# Behavior:
-#   Step 1: Validate parameters (vm_identifier and target_node not empty)
-#   Step 2: Validate target node is healthy and ready
-#   Step 3: Log operation start
-#   Step 4: Create transient OpenSVC service named "vm-ops-create-${vm_identifier}"
-#           Service nodes: "ips ${target_node}" (IPS for management only)
-#   Step 5: Add task that executes "n_vm_create ${vm_identifier}" on target_node
-#   Step 6: Wait for service instance to be available on target node (max 30s)
-#   Step 7: Execute the task via o_task_run on target_node
-#   Step 8: Delete the transient service (cleanup)
-#   Step 9: Return appropriate exit code based on results
-#
-# Notes:
-#   - IPS is included in service nodes for management/cleanup only
-#   - Task always runs on target_node, never on IPS
-#   - 30-second timeout for instance availability
-#   - Node validation ensures OpenSVC daemon is running and healthy
+# Behaviour:
+#   Step 1: Validate parameters
+#   Step 2: Validate target node health via OpenSVC (o_vm_validate_node)
+#   Step 3: Run 'hps-node vm-create <id> [title] [desc]' on the node over mTLS
 #
 # Dependencies:
-#   - o_vm_validate_node: Validate node health and availability
-#   - o_task_create: Create OpenSVC service with task
-#   - o_task_run: Execute task on target node
-#   - o_task_delete: Delete OpenSVC service
-#   - o_log: System logging
-#   - n_vm_create: Node-side VM creation function (called by task)
+#   - o_vm_validate_node: OpenSVC health/placement gate (retained role)
+#   - ce_run: ctrl-exec execution wrapper (lib/functions.d/ctrl-exec-functions.sh)
+#   - n_vm_create: node-side VM creation, invoked via the hps-node plugin
 #
 # Returns:
-#   0: Complete success (VM created, service cleaned)
+#   0: VM created
 #   1: Parameter validation failure
-#   2: Target node validation failure (not in cluster)
-#   3: Target node not healthy (daemon not running)
+#   2: Target node not found in cluster
+#   3: Target node OpenSVC daemon not running
 #   4: Target node frozen or in error state
-#   5: Task service creation failure
-#   6: Instance availability timeout (service created but not ready on target node)
-#   7: Task execution failure (VM not created, service cleaned)
-#   8: Task succeeded but cleanup failed (VM created, orphaned service - EXCEPTIONAL)
-#   9: Task failed AND cleanup failed (VM not created, orphaned service - EXCEPTIONAL)
-#
-# Exceptional States (codes 8, 9):
-#   - Indicate inconsistent system state
-#   - Require manual investigation
-#   - Orphaned service may need manual deletion: om vm-ops-create-<vm_id> purge
-#   - Check OpenSVC daemon logs for cleanup failure reason
+#   5: ctrl-exec execution failure (VM not created)
 #
 # Example usage:
-#   # Basic usage with validation
-#   if o_vm_create "abc-123-def" "tch-001"; then
-#     echo "VM created successfully"
-#   else
-#     exit_code=$?
-#     case $exit_code in
-#       2|3|4) echo "Target node not healthy" ;;
-#       5) echo "Failed to create service" ;;
-#       6) echo "Timeout waiting for service" ;;
-#       7) echo "VM creation failed" ;;
-#       8|9) echo "CRITICAL: Orphaned service requires manual cleanup" ;;
-#     esac
-#   fi
-#
-#   # With node selection
-#   vm_id="abc-123-def"
-#   node=$(o_vm_select_node 4 8192)
-#   if [ $? -eq 0 ]; then
-#     o_vm_create "$vm_id" "$node"
-#   fi
+#   node=$(o_vm_select_node 4 8192) && o_vm_create "abc-123-def" "$node"
 #
 #===============================================================================
 o_vm_create() {
   local vm_identifier="$1"
   local target_node="$2"
-  
+  local vm_title="${3:-}"
+  local vm_description="${4:-}"
+
   # Step 1: Parameter Validation
-  if [ $# -ne 2 ]; then
-    o_log "o_vm_create: Usage: o_vm_create <vm_identifier> <target_node>" "err"
+  if [ -z "$vm_identifier" ] || [ -z "$target_node" ]; then
+    o_log "o_vm_create: Usage: o_vm_create <vm_identifier> <target_node> [title] [description]" "err"
     return 1
   fi
-  
-  if [ -z "$vm_identifier" ]; then
-    o_log "o_vm_create: vm_identifier cannot be empty" "err"
-    return 1
-  fi
-  
-  if [ -z "$target_node" ]; then
-    o_log "o_vm_create: target_node cannot be empty" "err"
-    return 1
-  fi
-  
-  # Step 2: Validate Target Node
+
+  # Step 2: Validate Target Node (OpenSVC health/placement gate - retained role)
   o_log "Validating target node ${target_node}" "info"
-  
+
   o_vm_validate_node "${target_node}"
   local validate_result=$?
-  
+
   if [ $validate_result -ne 0 ]; then
     case $validate_result in
       2)
@@ -126,92 +79,17 @@ o_vm_create() {
         ;;
     esac
   fi
-  
-  # Step 3: Log Operation Start
-  o_log "Creating VM ${vm_identifier} on node ${target_node}" "info"
-  
-  # Step 4: Define Service Name
-  local service_name="vm-ops-create-${vm_identifier}"
-  
-  # Step 5: Create OpenSVC Service with Task
-  # Include IPS in nodes for management, but task will only run on target_node
-  o_log "Creating task service ${service_name} (nodes: ips ${target_node})" "info"
-  
-  o_task_create "${service_name}" "create" "n_vm_create ${vm_identifier}" "ips ${target_node}"
-  local create_result=$?
-  
-  if [ $create_result -ne 0 ]; then
-    o_log "Failed to create task service for VM ${vm_identifier}" "err"
+
+  # Step 3: Execute node-side creation over ctrl-exec.
+  o_log "Creating VM ${vm_identifier} on node ${target_node} via ctrl-exec" "info"
+
+  if ! ce_run "${target_node}" hps-node vm-create "${vm_identifier}" "${vm_title}" "${vm_description}"; then
+    o_log "VM creation failed on ${target_node} for ${vm_identifier}" "err"
     return 5
   fi
-  
-  # Step 6: Wait for Instance Availability on Target Node
-  o_log "Waiting for service instance on ${target_node} (max 30s)" "info"
-  
-  local max_wait=30
-  local waited=0
-  local instance_ready=false
-  
-  while [ $waited -lt $max_wait ]; do
-    if om "$service_name" instance ls 2>/dev/null | grep -q "${target_node}"; then
-      instance_ready=true
-      o_log "Service instance available on ${target_node} (${waited}s)" "info"
-      break
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  
-  if [ "$instance_ready" = false ]; then
-    o_log "Timeout waiting for service instance on ${target_node}" "err"
-    o_log "Service may not have propagated to target node" "err"
-    
-    # Attempt cleanup even after timeout
-    o_task_delete "${service_name}"
-    return 6
-  fi
-  
-  # Step 7: Execute the Task
-  o_log "Executing VM creation task for ${vm_identifier} on ${target_node}" "info"
-  
-  o_task_run "${service_name}" "create" "${target_node}"
-  local run_result=$?
-  
-  if [ $run_result -ne 0 ]; then
-    o_log "Failed to execute VM creation for ${vm_identifier}" "err"
-    # Continue to cleanup step
-  fi
-  
-  # Step 8: Delete the Service
-  o_log "Cleaning up task service ${service_name}" "info"
-  
-  o_task_delete "${service_name}"
-  local delete_result=$?
-  
-  if [ $delete_result -ne 0 ]; then
-    o_log "Failed to cleanup service ${service_name}" "warning"
-  fi
-  
-  # Step 9: Determine Return Code
-  if [ $run_result -ne 0 ] && [ $delete_result -ne 0 ]; then
-    # Both task execution and cleanup failed
-    o_log "VM creation failed AND service cleanup failed (exceptional state)" "err"
-    o_log "Manual cleanup required: om ${service_name} purge" "err"
-    return 9
-  elif [ $run_result -ne 0 ] && [ $delete_result -eq 0 ]; then
-    # Task failed but cleanup succeeded
-    o_log "VM creation failed (service cleaned up)" "err"
-    return 7
-  elif [ $run_result -eq 0 ] && [ $delete_result -ne 0 ]; then
-    # Task succeeded but cleanup failed
-    o_log "VM created successfully but service cleanup failed (exceptional state)" "warning"
-    o_log "Manual cleanup required: om ${service_name} purge" "warning"
-    return 8
-  else
-    # Both succeeded
-    o_log "Successfully created VM ${vm_identifier} on ${target_node}" "info"
-    return 0
-  fi
+
+  o_log "Successfully created VM ${vm_identifier} on ${target_node}" "info"
+  return 0
 }
 
 
