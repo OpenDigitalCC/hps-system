@@ -41,17 +41,21 @@ n_initialise_opensvc_cluster() {
     n_remote_log "No TYPE in host_config; skipping node tags"
   fi
   
-  n_opensvc_join
-
-  n_remote_log "OpenSVC cluster initialisation complete: cluster='${cluster_name}' tags='${node_tags:-none}'"
+  # The cluster join is now IPS-driven over ctrl-exec: after this node's
+  # OpenSVC identity is configured, the IPS mints a short-lived join token
+  # locally and runs 'hps-node opensvc-join <token>' on this node (ADR 0001).
+  # It is no longer self-initiated here via the removed osvc_cmd CGI path.
+  n_remote_log "OpenSVC identity configured: cluster='${cluster_name}' tags='${node_tags:-none}'; awaiting IPS-driven join"
 }
 
 
 
-# Collect token from IPS, use straight away as it is short-lived
+# Join the OpenSVC cluster with a short-lived token minted on the IPS and
+# delivered over the authenticated ctrl-exec channel (see the hps-node plugin's
+# opensvc-join subcommand). The token must be used immediately.
 n_opensvc_join() {
+  local osvc_token="${1:?Usage: n_opensvc_join <token>}"
   local osvc_node="ips"
-  local osvc_token="$(n_ips_command osvc_cmd "osvc_cmd=get_auth_token")"
   n_remote_log "Joining cluster node: $osvc_node"
   if ! om cluster join --token "$osvc_token" --node "$osvc_node" --timeout 4s --debug; then
     n_remote_log "Failed to join cluster"

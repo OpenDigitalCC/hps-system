@@ -365,6 +365,27 @@ if [[ "$cmd" == "node_get_functions" ]]; then
 fi
 
 
+# Command: get a node plugin script (e.g. the hps-node ctrl-exec entry point)
+# Served over CGI because the node-manager tree is not web-exposed. The name is
+# validated to a safe charset and resolved only under node-manager/plugins.
+if [[ "$cmd" == "get_node_plugin" ]]; then
+  plugin_name="$(cgi_require_param name)"
+  if [[ ! "$plugin_name" =~ ^[a-z][a-z0-9-]*$ ]]; then
+    cgi_auto_fail "Invalid plugin name"
+    exit 1
+  fi
+  plugin_file="$(hps_get_config system_base)/node-manager/plugins/${plugin_name}/${plugin_name}.sh"
+  if [[ ! -f "$plugin_file" ]]; then
+    hps_log error "get_node_plugin: not found: $plugin_file"
+    cgi_auto_fail "Plugin not found: ${plugin_name}"
+    exit 1
+  fi
+  cgi_header_plain
+  cat "$plugin_file"
+  exit 0
+fi
+
+
 # Command: init - iPXE boot initialisation
 if [[ "$cmd" == "init" ]]; then
   ipxe_init_handler "$mac"

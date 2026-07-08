@@ -1,0 +1,6 @@
+#@METADATA os=alpine-3,rocky-10
+
+# Enrol this node with ctrl-exec: install the agent, start it, and pair
+# hands-free (registry-bound approval on the IPS). Runs before opensvc.init so
+# the mTLS channel is available for any IPS-driven setup that follows.
+n_ctrl_exec_enrol
