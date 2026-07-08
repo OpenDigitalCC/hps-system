@@ -6,7 +6,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../lib/functions.sh"
 
 mac="$(hps_origin_tag)"
 
-
 # Is a cluster configured?
 get_active_cluster_name >/dev/null 2>&1 || {
   echo "ERROR: No active cluster configured"
@@ -153,20 +152,25 @@ fi
 #   - If 'value' param missing: GET operation
 #
 # Example usage:
-#   GET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=DHCP_IP"
-#   SET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=DHCP_IP&value=10.0.0.1"
+#   GET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=network_dhcp_ip"
+#   SET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=network_dhcp_ip&value=10.0.0.1"
 #
 #===============================================================================
 if [[ "$cmd" == "cluster_variable" ]]; then
-  # Ensure dynamic paths are exported so cluster_registry points at active cluster
-  type export_dynamic_paths >/dev/null 2>&1 && export_dynamic_paths
 
+  # Get active cluster once (script top level: no local, exit not return)
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    cgi_auto_fail "no active cluster configured"
+    exit 1
+  }
+  
   name="$(cgi_require_param name)"
 
   if cgi_param exists value; then
     # SET path
     value="$(cgi_param get value)"
-    if cluster_registry set "$name" "$value" >/dev/null 2>&1; then
+    if cluster_registry "$cluster" set "$name" "$value" >/dev/null 2>&1; then
       cgi_success "cluster set $name to $value"
       exit 0
     else
@@ -175,7 +179,7 @@ if [[ "$cmd" == "cluster_variable" ]]; then
     fi
   else
     # GET path
-    if val="$(cluster_registry get "$name" 2>/dev/null)"; then
+    if val="$(cluster_registry "$cluster" get "$name" 2>/dev/null)"; then
       cgi_success "$val"
       exit 0
     else

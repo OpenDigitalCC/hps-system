@@ -76,19 +76,17 @@ osvc_configure_cluster() {
   
   # Set IPS node identity
   local osvc_nodename="ips"
-  
-  # Get cluster configuration
+
+  # Get active cluster once (if function needs it)
   local cluster_name
-  cluster_name="$(cluster_registry get CLUSTER_NAME 2>/dev/null)"
-  
-  if [[ -z "${cluster_name}" ]]; then
-    hps_log error "CLUSTER_NAME not set in cluster_config"
+  cluster_name=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
     return 1
-  fi
-  
+  }
+
   # Get heartbeat configuration
   local hb_type
-  hb_type="$(cluster_registry get OSVC_HB_TYPE 2>/dev/null)" || hb_type="multicast"
+  hb_type="$(cluster_registry "$cluster_name" get osvc_hb_type 2>/dev/null)" || hb_type="multicast"
   
   # Build configuration update arguments
   local config_updates=()

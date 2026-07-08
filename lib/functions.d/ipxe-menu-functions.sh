@@ -8,7 +8,7 @@ cgi_header_plain
 # Set some variables to be used in IPXE scripts
 
 local STATE="$(host_registry "$mac" get STATE)"
-local CLUSTER_NAME="$(cluster_registry get CLUSTER_NAME)"
+local CLUSTER_NAME="$(hps_get_config active_cluster)"
 
 TITLE_PREFIX="$CLUSTER_NAME \${mac:hexraw} \${net0/ip} $STATE:"
 
@@ -75,7 +75,7 @@ ipxe_init_handler() {
   arch="x86_64"
   
   # Initialise config if needed
-  if host_config_exists "$mac"; then
+  if host_registry "$mac" exists; then
     hps_log info "Found config for $mac"
   else
     hps_log info "No config found, initialising"
@@ -418,7 +418,14 @@ ipxe_network_boot() {
 # TODO: this could become more generic, merging in different O/S patterns
 ipxe_boot_alpine() {
   local alpine_version="$(get_host_os_version "$mac")"
-
+  
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
+  
   # Validate Alpine repository before attempting boot
   os_id=$(get_host_os_id "$mac")
   if ! validate_alpine_repository "$os_id" "main" ; then
@@ -429,8 +436,8 @@ ipxe_boot_alpine() {
   fi
 
   local client_ip=$(host_registry "$mac" get IP)
-  local ips_address=$(cluster_registry get DHCP_IP)
-  local network_cidr=$(cluster_registry get NETWORK_CIDR)
+  local ips_address=$(cluster_registry "$cluster" get network_dhcp_ip)
+  local network_cidr=$(cluster_registry "$cluster" get network_cidr)
   local hostname=$(host_registry "$mac" get HOSTNAME)
 
   # Extract netmask from CIDR (10.99.1.0/24 -> 255.255.255.0)
@@ -472,12 +479,18 @@ ipxe_installer-rocky () {
   # Select OS based on architecture and host type
   # First try architecture-specific config
   # this can be improved using the os_ functions
- 
+  
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
+
   local os_name=$(os_registry "$os_id" get "name")
-  local boot_server=$(cluster_registry get DHCP_IP)
+  local boot_server=$(cluster_registry "$cluster" get network_dhcp_ip)
   local distro_mount=$(get_distro_base_path "$os_id" "mount")
   local repo_base="http://${boot_server}/$(get_distro_base_path $os_id http)"
-
   # Define file locations based on OS type
   case "$os_name" in
     rocky|rockylinux|alma|almalinux)
@@ -614,6 +627,13 @@ EOF
 
 ipxe_show_info() {
   ipxe_header
+  
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
 
   local category="$1"
   case "$category" in
@@ -649,7 +669,7 @@ EOF
       if cluster_registry list >/dev/null 2>&1; then
         while IFS= read -r key; do
           local value
-          value=$(cluster_registry get "$key" 2>/dev/null)
+          value=$(cluster_registry "$cluster" get "$key" 2>/dev/null)
           echo "item --gap ${key}: ${value}"
         done < <(cluster_registry list | sort)
       else

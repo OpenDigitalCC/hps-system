@@ -8,17 +8,19 @@
 #:usage: install_opensvc_foreground_wrapper
 #:description:
 #  Writes an exec wrapper that:
-#    - ensures runtime dirs (/run/opensvc, /var/log/opensvc, /var/lib/opensvc, ${HPS_LOG_DIR}) exist
+#    - ensures runtime dirs (/run/opensvc, /var/log/opensvc, /var/lib/opensvc, ${HPS_LOG}) exist
 #    - verifies /etc/opensvc/agent.key exists and is non-empty (fails fast otherwise)
 #    - execs 'om daemon run' (OpenSVC v3) in the foreground
-#    - funnels agent stdout/stderr to ${HPS_LOG_DIR}/opensvc.{out,err}.log
+#    - funnels agent stdout/stderr to log
 #    - filters the noisy "zerolog … journal/socket" lines from stderr (no journald in container)
 #  Notes:
 #    - Idempotent: only rewrites the file if content changed.
 #    - No supervisorctl calls; service control is handled elsewhere.
 install_opensvc_foreground_wrapper() {
   local target="/usr/local/sbin/opensvc-foreground"
-  local logdir="${HPS_LOG_DIR:-/srv/hps-system/log}"
+
+  local logdir
+  logdir=$(hps_get_config log 2>/dev/null)
 
   mkdir -p "$(dirname "$target")" "$logdir"
 
@@ -63,8 +65,6 @@ EOF
   mv -f "$tmp" "$target"
   hps_log info "[opensvc] Installed wrapper: ${target}"
 }
-
-_osvc_setup_directories
 
 _opensvc_foreground_wrapper () {
   # Use HPS log dir if provided, fallback otherwise.
@@ -136,13 +136,18 @@ _osvc_create_conf() {
   local conf_file="/etc/opensvc/opensvc.conf"
   
   hps_log debug "Generating opensvc.conf"
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
   
   # Get DNS domain
   local dns_domain
-  dns_domain="$(cluster_registry get DNS_DOMAIN 2>/dev/null)" || dns_domain=""
+  dns_domain="$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null)" || dns_domain=""
   
   if [[ -z "${dns_domain}" ]]; then
-    hps_log error "DNS_DOMAIN not set in cluster_config"
+    hps_log error "network_dns_domain not set in cluster_config"
     return 1
   fi
   
@@ -195,9 +200,15 @@ _osvc_cluster_agent_key() {
   
   hps_log debug "Enforcing agent key policy"
   
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
+  
   # Read cluster key (if any)
   local cluster_key
-  cluster_key="$(cluster_registry get OPENSVC_AGENT_KEY 2>/dev/null)" || cluster_key=""
+  cluster_key="$(cluster_registry "$cluster" get OPENSVC_AGENT_KEY 2>/dev/null)" || cluster_key=""
   cluster_key="${cluster_key//$'\r'/}"  # Strip CR
   cluster_key="${cluster_key## }"       # Trim leading spaces
   cluster_key="${cluster_key%% }"       # Trim trailing spaces
@@ -232,7 +243,7 @@ _osvc_cluster_agent_key() {
     # No cluster key yet → adopt existing or generate new
     if [[ -n "${disk_key}" ]]; then
       # Adopt existing disk key into cluster config
-      cluster_registry set OPENSVC_AGENT_KEY "${disk_key}"
+      cluster_registry "$cluster" set OPENSVC_AGENT_KEY "${disk_key}"
       hps_log info "Adopted existing agent key into cluster config"
     else
       # Generate new key
@@ -244,7 +255,7 @@ _osvc_cluster_agent_key() {
         [[ -z "${new_key}" ]] && new_key="generated-fallback-key"
       fi
       
-      cluster_registry set OPENSVC_AGENT_KEY "${new_key}"
+      cluster_registry "$cluster" set OPENSVC_AGENT_KEY "${new_key}"
       printf '%s\n' "${new_key}" > "${key_file}"
       chmod 0600 "${key_file}"
       chown root:root "${key_file}"
@@ -277,7 +288,14 @@ _osvc_cluster_agent_key() {
 #===============================================================================
 _osvc_cluster_secrets() {
   local cluster_secret
-  cluster_secret="$(cluster_registry get OPENSVC_CLUSTER_SECRET 2>/dev/null)" || cluster_secret=""
+  
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }  
+  
+  cluster_secret="$(cluster_registry "$cluster" get OPENSVC_CLUSTER_SECRET 2>/dev/null)" || cluster_secret=""
   
   # IPS: Generate secret if not exists
   if [[ -z "${cluster_secret}" ]]; then
@@ -291,7 +309,7 @@ _osvc_cluster_secrets() {
       }
     fi
     
-    cluster_registry set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
+    cluster_registry "$cluster" set OPENSVC_CLUSTER_SECRET "${cluster_secret}"
     hps_log info "Generated and stored OPENSVC_CLUSTER_SECRET"
   fi
   
@@ -561,9 +579,10 @@ ensure_opensvc_installed() {
 
 
 ips_install_opensvc () {
+  local packages_dir=$(hps_get_config resources) || return 1
   # Verify presence, install, fix deps, and sanity-check 'om'
   # Check the .deb exists and is non-empty
-  OSVC_DEB="$(ls -t $HPS_PACKAGES_DIR/opensvc/*.deb | head -n 1)"
+  OSVC_DEB="$(ls -t ${packages_dir}/packages/opensvc/*.deb | head -n 1)"
 
   hps_log debug "Installing OSVC_DEB: $OSVC_DEB"
   test -s $OSVC_DEB || { 

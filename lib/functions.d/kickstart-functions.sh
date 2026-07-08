@@ -8,7 +8,15 @@ generate_ks() {
   hps_log info "[$macid]" "Requesting kickstart for $macid ${HOST_TYPE}"
   cgi_header_plain
 
-#  CLNAME=$(cluster_registry get CLUSTER_NAME)
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
+  
+
+#  CLNAME=$(cluster_registry "$cluster" get CLUSTER_NAME)
 #  host_registry "$macid" || {
 #    hps_log debug "[x] Failed to load host config for $macid"
 #    return 1
@@ -20,8 +28,8 @@ generate_ks() {
   export HOST_IP=$(host_registry "$macid" get IP)
   export HOST_NETMASK=$(host_registry "$macid" get NETMASK)
   export HOST_NAME=$(host_registry "$macid" get HOSTNAME)
-  export HOST_GATEWAY="$(cluster_registry get DHCP_IP)"
-  export HOST_DNS="$(cluster_registry get DHCP_IP)"
+  export HOST_GATEWAY="$(cluster_registry "$cluster" get network_dhcp_ip)"
+  export HOST_DNS="$(cluster_registry "$cluster" get network_dhcp_ip)"
   #TODO: /host-installer/rocky/kickstart requires variable for the o/s
   export HOST_TEMPLATE_DIR="${LIB_DIR}/host-installer/rocky/kickstart"
   export INSTALLER_TYPE=kickstart

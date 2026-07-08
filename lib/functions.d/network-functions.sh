@@ -2,10 +2,6 @@
 
 
 
-get_ips_address () {
-  echo "10.99.1.1"
-}
-
 
 #===============================================================================
 # ips_allocate_storage_ip
@@ -15,7 +11,7 @@ get_ips_address () {
 # Behaviour:
 #   - Validates arguments
 #   - Checks if storage network exists
-#   - Finds next available IP
+#   - Finds next available IP using registry search
 #   - Stores allocation in host_config
 #
 # Parameters:
@@ -85,7 +81,6 @@ ips_allocate_storage_ip() {
   local gateway=$(cluster_registry "get" "network_storage_vlan${vlan_id}_gateway")
   local mtu=$(cluster_registry "get" "network_storage_mtu")
   
-    
   # Extract network prefix
   local ip_prefix=$(network_subnet_to_prefix "$subnet")
   if [[ $? -ne 0 ]] || [[ -z "$ip_prefix" ]]; then
@@ -93,25 +88,29 @@ ips_allocate_storage_ip() {
     return 1
   fi
   
+  # Find used IPs using registry search
+  local used_ips=()
+  local hosts_dir
+  hosts_dir=$(hps_get_config cluster_hosts) || {
+    echo "ERROR: Cannot determine cluster hosts directory"
+    return 1
+  }
+  
+  # Search all host registries for this storage IP key
+  for host_db in "$hosts_dir"/*.db; do
+    [[ -d "$host_db" ]] || continue
+    
+    local ip_file="${host_db}/storage${storage_index}_ip.json"
+    if [[ -f "$ip_file" ]]; then
+      local stored_ip=$(jq -r . "$ip_file" 2>/dev/null)
+      [[ -n "$stored_ip" ]] && used_ips+=("$stored_ip")
+    fi
+  done
+  
   # Find next available IP (starting at .100)
   local ip_offset=100
-  # Build new IP
-  new_ip="${ip_prefix}.${ip_offset}"
-
-  
-  # Find used IPs - fixed to properly scan all hosts
-  local used_ips=()
-  local host_dir="$(get_active_cluster_hosts_dir)"
-  
-  if [[ -d "$host_dir" ]]; then
-    for host_file in "$host_dir"/*; do
-      [[ -f "$host_file" ]] || continue
-      local stored_ip=$(grep "^storage${storage_index}_ip=" "$host_file" 2>/dev/null | cut -d= -f2-)
-      [[ -n "$stored_ip" ]] && used_ips+=("$stored_ip")
-    done
-  fi
-  
   local new_ip
+  
   while [[ $ip_offset -lt 250 ]]; do
     new_ip="${ip_prefix}.${ip_offset}"
     
@@ -149,25 +148,23 @@ ips_allocate_storage_ip() {
   fi
 
   # Get cluster domain instead of storage-specific domain
-  local domain=$(cluster_registry "get" "DNS_DOMAIN")
+  local domain=$(cluster_registry "$cluster" "get" "network_dns_domain")
   domain=${domain:-"local"}
-    
-
+  
   # Register in DNS
   # Storage hostname format: hostname-storageN
   local storage_hostname="${hostname}-storage$((storage_index + 1))"
   dns_host_add "$new_ip" "$storage_hostname" "$domain"
   
-  
   # Also add a CNAME-style entry for the base hostname on storage network
-  dns_host_add "$new_ip" "$hostname" "$domain" "${hostname}-vlan${vlan_id}"
+  # (positions 4 and 5 are cluster and reload_service; aliases follow)
+  dns_host_add "$new_ip" "$hostname" "$domain" "" "true" "${hostname}-vlan${vlan_id}"
   
   hps_log "info" "Allocated $new_ip to $source_mac, DNS: ${storage_hostname}.${domain}"
   
   echo "${vlan_id}:${new_ip}:${netmask}:${gateway}:${mtu}"
   return 0
 }
-
 
 #===============================================================================
 # storage_register_dns
@@ -194,7 +191,7 @@ storage_register_dns() {
   fi
   
   # Get cluster domain
-  local cluster_domain=$(cluster_registry "get" "DNS_DOMAIN")
+  local cluster_domain=$(cluster_registry "$cluster" "get" "network_dns_domain")
   cluster_domain=${cluster_domain:-"local"}
   
   # Process each hostname
@@ -218,12 +215,9 @@ storage_register_dns() {
         local storage_hostname="${hostname,,}-storage$((i + 1))"
         
         # Register with cluster domain, not storage-specific subdomain
-        if ! dns_host_get "$storage_hostname" >/dev/null 2>&1; then
-          dns_host_add "$ip" "$storage_hostname" "$cluster_domain"
-          hps_log "info" "Registered DNS: ${storage_hostname}.${cluster_domain} -> $ip"
-        else
-          hps_log "debug" "DNS already registered: ${storage_hostname}.${cluster_domain}"
-        fi
+        # (dns_host_add is add-or-update, so no exists-check is needed)
+        dns_host_add "$ip" "$storage_hostname" "$cluster_domain"
+        hps_log "info" "Registered DNS: ${storage_hostname}.${cluster_domain} -> $ip"
       fi
     done
   done

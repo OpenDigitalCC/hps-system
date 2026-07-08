@@ -207,27 +207,29 @@ printf 'pid:%s user:%s host:%s' "$$" "$user" "$host"
 }
 
 
-
-get_path_cluster_services_dir () {
-  echo "$(get_active_cluster_dir)/services"
-}
-
-
-export_dynamic_paths() {
-  local cluster_name="${1:-}"
-  local base_dir="${HPS_CLUSTER_CONFIG_BASE_DIR:-/srv/hps-config/clusters}"
-  
-  if [[ -z "$cluster_name" ]]; then
-    cluster_name=$(get_active_cluster_name 2>/dev/null) || {
-      echo "[x] No active cluster and none specified." >&2
-      return 1
-    }
-  fi
-  
-  export CLUSTER_NAME="$cluster_name"
-  export HPS_CLUSTER_CONFIG_DIR="${base_dir}/${CLUSTER_NAME}"
-  export HPS_HOST_CONFIG_DIR="${HPS_CLUSTER_CONFIG_DIR}/hosts"
-  return 0
+#===============================================================================
+# get_path_cluster_services_dir
+# ------------------------------
+# Get the path to the active cluster's services directory.
+#
+# Usage:
+#   get_path_cluster_services_dir
+#
+# Behaviour:
+#   - Uses hps_get_config to get cluster services path
+#   - Returns full path to services directory
+#
+# Returns:
+#   0 on success (path via stdout)
+#   1 if cluster services path cannot be determined
+#
+# Example usage:
+#   services_dir=$(get_path_cluster_services_dir)
+#   supervisord_conf="$(get_path_cluster_services_dir)/supervisord.conf"
+#
+#===============================================================================
+get_path_cluster_services_dir() {
+  hps_get_config cluster_services
 }
 
 

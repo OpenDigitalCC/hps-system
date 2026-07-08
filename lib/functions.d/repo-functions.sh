@@ -97,9 +97,11 @@ validate_alpine_repository() {
     return 1
   fi
   
-  # Get the mount path for this OS
-  local mount_path=$(get_distro_base_path "$os_id" "mount")
-  local repo_dir="${mount_path}/apks/${repo_name}/x86_64"
+  # Derive the distro string for the packages path
+  local dist_string
+  dist_string=$(os_id_to_distro "$os_id") || return 1
+
+  local repo_dir="$(hps_get_config resources)/packages/${dist_string}/Repo"
   
   hps_log debug "Validating Alpine repository: ${repo_dir} for $os_id"
   

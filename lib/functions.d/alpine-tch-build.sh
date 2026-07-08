@@ -52,7 +52,14 @@ get_tch_apkovl_filepath() {
 tch_apkovol_create() {
   local output_file="${1:?Usage: tch_apkovol_create <output_file> <os_id>}"
   local os_id="${2:?Usage: tch_apkovol_create <output_file> <os_id>}"
-  
+
+  # Get active cluster once (if function needs it)
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "No active cluster configured"
+    return 1
+  }
+
   hps_log info "Creating Alpine apkovl: $output_file for OS: $os_id"
   
   # Validate os_id exists
@@ -62,7 +69,7 @@ tch_apkovol_create() {
   fi
   
   # Get configuration from os_config
-  local ips_address=$(cluster_registry get DHCP_IP)
+  local ips_address=$(cluster_registry "$cluster" get network_dhcp_ip)
   if [[ -z "$ips_address" ]]; then
     hps_log error "Failed to get gateway IP from cluster config"
     return 1
@@ -76,9 +83,9 @@ tch_apkovol_create() {
     return 1
   fi
   
-  local nameserver=$(cluster_registry get NAME_SERVER)
+  local nameserver=$(cluster_registry "$cluster" get network_name_server)
   if [[ -z "$nameserver" ]]; then
-    hps_log warn "NAME_SERVER not configured, using gateway IP for DNS"
+    hps_log warn "network_name_server not configured, using gateway IP for DNS"
     nameserver="$ips_address"
   fi
 

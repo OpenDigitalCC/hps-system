@@ -26,32 +26,35 @@
 #
 # Returns:
 #   Prints keysafe directory path to stdout on success
-#   Returns 1 if active cluster link not found
+#   Returns 1 if active cluster directory not found
 #   Returns 2 if directory creation fails
 #===============================================================================
 get_keysafe_dir() {
-    local cluster_dir="${HPS_CLUSTER_CONFIG_BASE_DIR}/active-cluster"
-    local keysafe_dir
-    
-    # Verify active cluster symlink exists
-    if [[ ! -L "$cluster_dir" ]]; then
-        echo "ERROR: Active cluster symlink not found: $cluster_dir" >&2
-        return 1
-    fi
-    
-    # Resolve and construct keysafe path
-    keysafe_dir="$(readlink -f "$cluster_dir")/keysafe"
-    
-    # Create directory structure if needed
-    if [[ ! -d "$keysafe_dir/tokens" ]]; then
-        if ! mkdir -p "$keysafe_dir/tokens"; then
-            echo "ERROR: Failed to create keysafe directory: $keysafe_dir" >&2
-            return 2
-        fi
-    fi
-    
-    echo "$keysafe_dir"
-    return 0
+
+  local cluster=$(hps_get_config active_cluster) || return 1
+  local cluster_dir=$(hps_get_config cluster_base)
+  local keysafe_dir
+  
+  # Verify active cluster directory exists (cluster_base is a plain
+  # directory in the registry layout; the active-cluster symlink is gone)
+  if [[ ! -d "$cluster_dir" ]]; then
+      echo "ERROR: Active cluster directory not found: $cluster_dir" >&2
+      return 1
+  fi
+
+  # Construct keysafe path
+  keysafe_dir="${cluster_dir}/keysafe"
+  
+  # Create directory structure if needed
+  if [[ ! -d "$keysafe_dir/tokens" ]]; then
+      if ! mkdir -p "$keysafe_dir/tokens"; then
+          echo "ERROR: Failed to create keysafe directory: $keysafe_dir" >&2
+          return 2
+      fi
+  fi
+  
+  echo "$keysafe_dir"
+  return 0
 }
 
 #===============================================================================
@@ -88,7 +91,14 @@ keysafe_issue_token() {
     local issued
     local expires
     local mode
-    
+
+    # Get active cluster once (if function needs it)
+    local cluster
+    cluster=$(hps_get_config active_cluster) || {
+      hps_log error "No active cluster configured"
+      return 1
+    }
+
     # Validate required arguments
     if [[ -z "$client_mac" || -z "$purpose" ]]; then
         echo "ERROR: Missing required arguments (client_mac, purpose)" >&2
@@ -99,7 +109,7 @@ keysafe_issue_token() {
     keysafe_dir=$(get_keysafe_dir) || return 1
   
   # Determine keysafe mode from cluster config
-    mode=$(cluster_registry get "HPS_KEYSAFE_MODE" 2>/dev/null)
+    mode=$(cluster_registry "$cluster" get "HPS_KEYSAFE_MODE" 2>/dev/null)
     mode="${mode:-open}"
 
     
@@ -231,7 +241,7 @@ keysafe_validate_token() {
 #   - Scans all token files in keysafe/tokens/
 #   - Sources each token file to read EXPIRES timestamp
 #   - Deletes tokens where current time exceeds EXPIRES
-#   - Logs cleanup actions if HPS_LOG_DIR is set
+#   - Logs cleanup actions
 #
 # Arguments:
 #   None
