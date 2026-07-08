@@ -1,0 +1,29 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "hps-node",
+      "version": "0.1.0",
+      "description": "ctrl-exec agent plugin routing IPS-driven operations to the HPS node function bundle"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "bash",
+      "version": "0",
+      "purl": "pkg:deb/debian/bash",
+      "description": "Command interpreter; also apk pkg:apk/alpine/bash on Alpine nodes"
+    },
+    {
+      "type": "application",
+      "name": "coreutils",
+      "version": "0",
+      "purl": "pkg:deb/debian/coreutils",
+      "description": "hostname, cat and friends"
+    }
+  ]
+}
