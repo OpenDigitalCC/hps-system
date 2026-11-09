@@ -18,6 +18,12 @@
 
   services.target.enable = true;
 
+  # The iSCSI portal. The NixOS firewall is on by default and 3260 was closed
+  # from the IPS after the first export (lab, 2026-11-09). Access control is
+  # the target's ACL (initiator IQN) and the address-bound portal; the
+  # network layout narrows this to the storage network in phase 4.
+  networking.firewall.allowedTCPPorts = [ 3260 ];
+
   boot.zfs.extraPools = [ ];
 
   environment.systemPackages = with pkgs; [
