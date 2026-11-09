@@ -130,20 +130,16 @@ fi
 #===============================================================================
 # cluster_variable command handler
 # --------------------------------
-# Get or set cluster variables via CGI interface.
+# Read a cluster variable via the CGI interface. Read-only: a request carrying
+# value= is refused with 403 (the boot channel is unauthenticated; cluster keys
+# are written on the IPS by cluster-bootstrap / hps-onboard).
 #
 # Parameters (via CGI):
 #   cmd=cluster_variable
 #   name=<variable_name>     (required)
-#   value=<variable_value>   (optional - if present, sets the value)
-#
-# Behaviour:
-#   - If 'value' param exists (even empty): SET operation
-#   - If 'value' param missing: GET operation
 #
 # Example usage:
 #   GET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=network_dhcp_ip"
-#   SET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=network_dhcp_ip&value=10.0.0.1"
 #
 #===============================================================================
 if [[ "$cmd" == "cluster_variable" ]]; then
@@ -158,15 +154,11 @@ if [[ "$cmd" == "cluster_variable" ]]; then
   name="$(cgi_require_param name)"
 
   if cgi_param exists value; then
-    # SET path
-    value="$(cgi_param get value)"
-    if cluster_registry "$cluster" set "$name" "$value" >/dev/null 2>&1; then
-      cgi_success "cluster set $name to $value"
-      exit 0
-    else
-      cgi_auto_fail "cluster set failed"
-      exit 1
-    fi
+    # Writes never come over the unauthenticated boot channel: cluster keys
+    # change through cluster-bootstrap / hps-onboard on the IPS (root, ctrl-exec).
+    hps_log warn "cluster_variable: refused write of '$name' from ${REMOTE_ADDR:-unknown}"
+    cgi_auto_fail "cluster_variable is read-only over CGI" 403 "Forbidden"
+    exit 1
   else
     # GET path
     if val="$(cluster_registry "$cluster" get "$name" 2>/dev/null)"; then

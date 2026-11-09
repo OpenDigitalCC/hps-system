@@ -171,7 +171,7 @@ case "$path $verb" in
     grep -vF "o- $3 " "$(key /backstores/block)" > "$L/tmp" || true; mv "$L/tmp" "$(key /backstores/block)" ;;
   "/iscsi create")
     echo "  o- $3 ...... [TPGs: 1]" >> "$L/_iscsi"
-    echo "  o- 0.0.0.0:3260 ...... [OK]" > "$(key "/iscsi/$3/tpg1/portals")" ;;
+    echo "  o- [::0]:3260 ...... [OK]" > "$(key "/iscsi/$3/tpg1/portals")" ;;
   "/iscsi delete")
     grep -vF "o- $3 " "$L/_iscsi" > "$L/tmp" || true; mv "$L/tmp" "$L/_iscsi"
     rm -f "$(key "/iscsi/$3/tpg1/luns")" "$(key "/iscsi/$3/tpg1/acls")" "$(key "/iscsi/$3/tpg1/portals")" ;;
@@ -183,7 +183,9 @@ case "$path $verb" in
   */tpg1/portals\ create)
     echo "  o- $3:3260 ...... [OK]" >> "$(key "$path")" ;;
   */tpg1/portals\ delete)
-    grep -vF "o- $3:$4 " "$(key "$path")" > "$L/tmp" || true; mv "$L/tmp" "$(key "$path")" ;;
+    # targetcli lists an IPv6 portal in brackets: delete ::0 3260 removes [::0]:3260
+    case "$3" in *:*) ip="[$3]" ;; *) ip="$3" ;; esac
+    grep -vF "o- $ip:$4 " "$(key "$path")" > "$L/tmp" || true; mv "$L/tmp" "$(key "$path")" ;;
 esac
 exit 0
 SHIM

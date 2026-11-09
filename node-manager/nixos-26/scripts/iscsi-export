@@ -13,7 +13,8 @@
 #   /iscsi              <target-iqn>
 #   .../tpg1/luns       the backstore
 #   .../tpg1/acls       <initiator-iqn>
-#   .../tpg1/portals    <ip>:3260, and the default 0.0.0.0:3260 portal removed
+#   .../tpg1/portals    the wildcard portal targetcli adds (0.0.0.0 or [::0]:3260)
+#                       removed first, then <ip>:3260
 # then targetcli saveconfig. No CHAP is configured; access is the ACL and the
 # portal address only.
 #
@@ -149,15 +150,21 @@ ensure_acl() {
 }
 
 ensure_portal() {
+  # targetcli adds a wildcard portal (0.0.0.0:3260 or [::0]:3260, by version)
+  # when the target is created. It must go before the address-bound portal
+  # is created: both use port 3260 and the second bind fails (EADDRINUSE).
   local ls
   ls=$(listing "/iscsi/$IQN/tpg1/portals")
+  if printf '%s\n' "$ls" | grep -qF "o- 0.0.0.0:3260 "; then
+    tc "/iscsi/$IQN/tpg1/portals" delete 0.0.0.0 3260
+  fi
+  if printf '%s\n' "$ls" | grep -qF "o- [::0]:3260 "; then
+    tc "/iscsi/$IQN/tpg1/portals" delete ::0 3260
+  fi
   if printf '%s\n' "$ls" | grep -qF "o- ${PORTAL}:3260 "; then
     log "portal $PORTAL:3260 already present"
   else
     tc "/iscsi/$IQN/tpg1/portals" create "$PORTAL"
-  fi
-  if printf '%s\n' "$ls" | grep -qF "o- 0.0.0.0:3260 "; then
-    tc "/iscsi/$IQN/tpg1/portals" delete 0.0.0.0 3260
   fi
 }
 

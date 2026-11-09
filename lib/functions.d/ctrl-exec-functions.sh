@@ -81,6 +81,56 @@ _ce_persist_dir() {
 }
 
 #===============================================================================
+# _ce_tarball_install <install.sh role flag>
+# -----------------------------------------
+# Unpack $CTRL_EXEC_DISPATCHER_TARBALL into a scratch directory and run its
+# install.sh with the given role flag (--dispatcher or --api). Logs and returns
+# 1 when the tarball, install.sh or the install itself fails.
+#===============================================================================
+_ce_tarball_install() {
+  local role="$1"
+  if [[ ! -f "$CTRL_EXEC_DISPATCHER_TARBALL" ]]; then
+    hps_log error "ce_dispatcher_bring_up: dispatcher tarball missing: $CTRL_EXEC_DISPATCHER_TARBALL"
+    return 1
+  fi
+  local work="/tmp/ce-dispatcher-install.$$"
+  mkdir -p "$work" || return 1
+  if ! tar -xzf "$CTRL_EXEC_DISPATCHER_TARBALL" -C "$work"; then
+    hps_log error "ce_dispatcher_bring_up: cannot unpack dispatcher tarball"
+    rm -rf "$work"
+    return 1
+  fi
+  local srcdir
+  srcdir="$(find "$work" -maxdepth 1 -type d -name 'ctrl-exec-*' | head -n1)"
+  if [[ -z "$srcdir" || ! -x "$srcdir/install.sh" ]]; then
+    hps_log error "ce_dispatcher_bring_up: install.sh not found in tarball"
+    rm -rf "$work"
+    return 1
+  fi
+  local binary
+  case "$role" in
+    --dispatcher) binary="$CTRL_EXEC_DISPATCHER" ;;
+    --api) binary="ctrl-exec-api" ;;
+    *) binary="" ;;
+  esac
+  if ! ( cd "$srcdir" && ./install.sh "$role" ); then
+    # install.sh --api ends with "systemctl daemon-reload": in the IPS
+    # container systemctl exists but systemd is not PID 1, so the install
+    # reports failure after the binary and library are in place (supervisord
+    # runs the API here; the unit is not used). The binary decides.
+    if [[ -n "$binary" ]] && command -v "$binary" >/dev/null 2>&1; then
+      hps_log warn "ce_dispatcher_bring_up: install.sh $role reported failure after installing $binary (no init system in the container; its service unit is unused here)"
+    else
+      hps_log error "ce_dispatcher_bring_up: install.sh $role failed"
+      rm -rf "$work"
+      return 1
+    fi
+  fi
+  rm -rf "$work"
+  return 0
+}
+
+#===============================================================================
 # ce_dispatcher_bring_up
 # ----------------------
 # Idempotent IPS-side dispatcher bring-up, safe to call on every start:
@@ -100,42 +150,33 @@ ce_dispatcher_bring_up() {
     return 1
   }
 
-  # Install the dispatcher if the CLI is not on PATH.
+  # The persisted config and state carry the group id of the image that
+  # wrote them; the current image's ctrl-exec group must own them or the
+  # API (user ctrl-exec) cannot read ctrl-exec.conf. Group only: owners
+  # (root for the config, ctrl-exec for dispatcher.key and the state) stay.
+  if getent group ctrl-exec > /dev/null 2>&1; then
+    local d
+    for d in "$CTRL_EXEC_DISPATCHER_CONF_DIR" "$CTRL_EXEC_DISPATCHER_STATE_DIR"; do
+      [[ -d "$d" ]] || continue
+      chgrp -R ctrl-exec "$d/" 2> /dev/null \
+        || hps_log warn "ce_dispatcher_bring_up: cannot set group ctrl-exec on $d"
+    done
+    if [[ -f "$CTRL_EXEC_DISPATCHER_CONF_DIR/dispatcher.key" ]]; then
+      chown ctrl-exec "$CTRL_EXEC_DISPATCHER_CONF_DIR/dispatcher.key" 2> /dev/null || true
+    fi
+  fi
+
+  # Install the dispatcher and the API server from the HPS-served tarball,
+  # each only when its binary is not on PATH. They are two roles of one
+  # tarball (install.sh --dispatcher, install.sh --api) and are checked
+  # separately: an image that already carries the dispatcher still needs
+  # the API (hps-jobs and hps-run.sh --input use it).
   if ! command -v "$CTRL_EXEC_DISPATCHER" >/dev/null 2>&1; then
-    if [[ ! -f "$CTRL_EXEC_DISPATCHER_TARBALL" ]]; then
-      hps_log error "ce_dispatcher_bring_up: dispatcher tarball missing: $CTRL_EXEC_DISPATCHER_TARBALL"
-      return 1
-    fi
-    local work="/tmp/ce-dispatcher-install.$$"
-    mkdir -p "$work" || return 1
-    if ! tar -xzf "$CTRL_EXEC_DISPATCHER_TARBALL" -C "$work"; then
-      hps_log error "ce_dispatcher_bring_up: cannot unpack dispatcher tarball"
-      rm -rf "$work"
-      return 1
-    fi
-    local srcdir
-    srcdir="$(find "$work" -maxdepth 1 -type d -name 'ctrl-exec-*' | head -n1)"
-    if [[ -z "$srcdir" || ! -x "$srcdir/install.sh" ]]; then
-      hps_log error "ce_dispatcher_bring_up: install.sh not found in tarball"
-      rm -rf "$work"
-      return 1
-    fi
-    ( cd "$srcdir" && ./install.sh --dispatcher ) || {
-      hps_log error "ce_dispatcher_bring_up: dispatcher install failed"
-      rm -rf "$work"
-      return 1
-    }
-    # The API server is a separate role of the same tarball (install.sh --api,
-    # after --dispatcher); hps-jobs and hps-run.sh --input need it.
-    if ! command -v ctrl-exec-api >/dev/null 2>&1; then
-      ( cd "$srcdir" && ./install.sh --api ) || {
-        hps_log error "ce_dispatcher_bring_up: ctrl-exec-api install failed"
-        rm -rf "$work"
-        return 1
-      }
-      hps_log info "ce_dispatcher_bring_up: ctrl-exec-api installed"
-    fi
-    rm -rf "$work"
+    _ce_tarball_install --dispatcher || return 1
+  fi
+  if ! command -v ctrl-exec-api >/dev/null 2>&1; then
+    _ce_tarball_install --api || return 1
+    hps_log info "ce_dispatcher_bring_up: ctrl-exec-api installed"
   fi
 
   # Initialise the CA and dispatcher cert once (persisted under /srv).

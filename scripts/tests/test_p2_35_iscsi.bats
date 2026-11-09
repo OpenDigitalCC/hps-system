@@ -50,11 +50,11 @@ creates() {
   grep -qxF "targetcli /iscsi/$IQN/tpg1/luns create /backstores/block/lab_enc_t0" "$SHIM_LOG"
   grep -qxF "targetcli /iscsi/$IQN/tpg1/acls create $INI" "$SHIM_LOG"
   grep -qxF "targetcli /iscsi/$IQN/tpg1/portals create $PORTAL" "$SHIM_LOG"
-  grep -qxF "targetcli /iscsi/$IQN/tpg1/portals delete 0.0.0.0 3260" "$SHIM_LOG"
+  grep -qxF "targetcli /iscsi/$IQN/tpg1/portals delete ::0 3260" "$SHIM_LOG"
   grep -qxF 'targetcli saveconfig' "$SHIM_LOG"
   local seq
   seq=$(grep -E ' (create|delete) |saveconfig' "$SHIM_LOG" | awk '{print $2 " " $3}' | tr '\n' ',')
-  [ "$seq" = "/backstores/block create,/iscsi create,/iscsi/$IQN/tpg1/luns create,/iscsi/$IQN/tpg1/acls create,/iscsi/$IQN/tpg1/portals create,/iscsi/$IQN/tpg1/portals delete,saveconfig ," ]
+  [ "$seq" = "/backstores/block create,/iscsi create,/iscsi/$IQN/tpg1/luns create,/iscsi/$IQN/tpg1/acls create,/iscsi/$IQN/tpg1/portals delete,/iscsi/$IQN/tpg1/portals create,saveconfig ," ]
 }
 
 @test "export: a second identical run changes nothing (idempotent), only saveconfig" {
