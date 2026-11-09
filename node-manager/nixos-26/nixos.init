@@ -1,8 +1,15 @@
 #@METADATA os=nixos-26
 #===============================================================================
 # nixos.init
-# Base initialization sequence for NixOS nodes. Intentionally empty in CS-1.4:
-# CS-1.6 adds the NixOS compat shims and the init lines. An init file with no
-# action lines contributes nothing to HPS_INIT_SEQUENCE (node-libraries-init.sh
-# _build_init_sequence) and does not break n_init_run.
+# Init sequence for a RAM-booted NixOS node. base/ inits run first (common-post
+# is os=*; its functions are safe or skip with a log line on NixOS). ctrl-exec
+# and opensvc inits are not selected for nixos: hps-node-init pairs the agent.
+#
+# Not added: syslog forwarding. Alpine's n_configure_syslog edits OpenRC files;
+# on NixOS the logger set-up belongs in the image (nix/modules). Until then
+# n_remote_log falls back to the IPS log_message call (no syslogd running), so
+# bundle-side messages reach the IPS from the first init action.
 #===============================================================================
+
+# Transient hostname from the registry; /etc/hostname and /etc/hosts untouched.
+n_set_hostname_and_hosts

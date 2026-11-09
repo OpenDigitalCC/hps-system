@@ -89,6 +89,8 @@ ipxe_init_handler() {
     host_initialise_config "$mac" "$arch" HELD
   fi
   
+  host_registry "$mac" set last_boot_at "$(date +%s)"  # ADR 0002 check 3
+
   # Get current state
   state=$(host_registry "$mac" get STATE 2>/dev/null) || state=""
   

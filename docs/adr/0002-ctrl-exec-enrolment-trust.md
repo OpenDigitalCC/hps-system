@@ -27,17 +27,25 @@ An IPS-side approver auto-approves pairing requests **only** when all of
 the following bind the request to a node HPS is actively provisioning:
 
 1. The reporting caller's MAC exists in the host registry and its STATE
-   is enrolment-eligible (INSTALLING or CONFIGURING).
+   is enrolment-eligible (INSTALLING, CONFIGURING, or NETWORK_BOOT for a
+   RAM-booted NixOS node).
 2. The pairing request visible in `ced list-requests --json` matches the
    registry allocation: hostname equals the allocated hostname, source IP
    equals the node's DHCP lease address.
-3. The request arrives within a short window of the node's state
-   transition (default 300 seconds, matching the agent's
-   `request-pairing --background --timeout`).
+3. The request arrives within a short window of the node's last
+   boot-script issue (default 300 seconds, `CTRL_EXEC_PAIR_WINDOW`,
+   matching the agent's `request-pairing --background --timeout`). The
+   time is the host key `last_boot_at` (epoch), written by
+   `ipxe_init_handler`; a missing or unreadable value refuses.
 4. No approval has already been granted for this host in this
    provisioning cycle (`ctrl_exec_paired` unset in the host registry).
 
 On approval, `ctrl_exec_paired=<epoch>` is recorded in the host registry.
+`ipxe_boot_nixos` clears `ctrl_exec_paired` and opens the dispatcher
+pairing window (`pairing-mode start`, one window at a time) when it issues
+a boot script, since a RAM node loses its certificate on every boot. The
+approver closes the window shortly after approval (delayed, so the
+dispatcher can deliver the certificate on the agent's next poll).
 Requests failing any check are denied and logged. The node reports its
 pairing reqid over the existing HPS API channel; the reqid itself is not
 treated as a secret.

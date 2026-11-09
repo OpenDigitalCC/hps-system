@@ -30,7 +30,10 @@ n_install_opensvc_packages() {
   n_remote_log "Installing OpenSVC packages..."
   
   # Detect OS and use appropriate package manager
-  if [[ -f /etc/alpine-release ]]; then
+  if n_os_is_nixos; then
+    n_nixos_skip "OpenSVC package install (packages come from the image)"
+    return 0
+  elif [[ -f /etc/alpine-release ]]; then
     # Alpine Linux - use apk
     n_install_apk_packages_from_ips opensvc-server opensvc-client
   elif [[ -f /etc/rocky-release ]] || [[ -f /etc/redhat-release ]]; then

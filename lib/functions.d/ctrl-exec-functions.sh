@@ -175,10 +175,14 @@ ce_pairing_window_close() {
 #===============================================================================
 # _ce_read_pair_request
 # ----------------------
-# Read a queued pairing request record by reqid. Emits the raw JSON on stdout.
-# The dispatcher stores one file per request; list-requests has no JSON mode,
-# so we read the file directly (the approver runs on the IPS where the
-# dispatcher's state lives).
+# Read a pending pairing request by reqid. Emits JSON {id,hostname,ip,
+# source_ip} on stdout.
+#
+# ctrl-exec 0.14.1 `list-requests` prints a table (ID, HOSTNAME, SOURCE IP, ...)
+# and has no --json mode, so the dispatcher CLI is read as that table first.
+# If the CLI is unavailable or does not list the reqid, the queue file the
+# dispatcher keeps (one JSON file per request, CTRL_EXEC_PAIRING_DIR) is the
+# fallback; the approver runs on the IPS where that state lives.
 #
 # Arguments:
 #   $1 - reqid
@@ -187,12 +191,71 @@ ce_pairing_window_close() {
 #===============================================================================
 _ce_read_pair_request() {
   local reqid="$1"
-  local req_file="${CTRL_EXEC_PAIRING_DIR}/${reqid}.json"
+  local row host ip
+  row=$("$CTRL_EXEC_DISPATCHER" list-requests 2>/dev/null \
+    | awk -v id="$reqid" '$1 == id { print $2 " " $3; exit }') || row=""
+  if [[ -n "$row" ]]; then
+    read -r host ip <<< "$row"
+    jq -n --arg id "$reqid" --arg h "$host" --arg ip "$ip" \
+      '{id: $id, hostname: $h, ip: $ip, source_ip: $ip}'
+    return 0
+  fi
 
+  local req_file="${CTRL_EXEC_PAIRING_DIR}/${reqid}.json"
   if [[ ! -f "$req_file" ]]; then
     return 1
   fi
   cat -- "$req_file"
+}
+
+#===============================================================================
+# _ce_within_pair_window
+# ----------------------
+# ADR 0002 check 3: the pairing request must arrive within CTRL_EXEC_PAIR_WINDOW
+# seconds of the host's last boot-script issue (host key last_boot_at, epoch,
+# written by ipxe_init_handler). A missing or non-numeric key is a refusal,
+# never a pass.
+#
+# Arguments:
+#   $1 - mac
+#
+# Returns: 0 inside the window; 1 outside it or when last_boot_at is unusable.
+#===============================================================================
+_ce_within_pair_window() {
+  local mac="$1"
+  local booted now age
+  booted=$(host_registry "$mac" get last_boot_at 2>/dev/null) || booted=""
+  if [[ ! "$booted" =~ ^[0-9]+$ ]]; then
+    hps_log error "ce_approve: ${mac} has no usable last_boot_at ('${booted}'); refusing"
+    return 1
+  fi
+  now=$(date +%s)
+  age=$((now - booted))
+  if (( age < 0 || age > CTRL_EXEC_PAIR_WINDOW )); then
+    hps_log error "ce_approve: ${mac} request ${age}s after boot script; window is ${CTRL_EXEC_PAIR_WINDOW}s"
+    return 1
+  fi
+  return 0
+}
+
+#===============================================================================
+# _ce_close_window_after_approval
+# -------------------------------
+# Close the dispatcher pairing listener once a node is approved. The per-request
+# handler in the listener delivers the signed certificate on the agent's next
+# poll, so the close is delayed by CTRL_EXEC_PAIR_CLOSE_DELAY seconds (default
+# 15) in a detached background job; 0 closes immediately. The dispatcher also
+# stops itself at the window timeout, so a failed close is only logged.
+#===============================================================================
+_ce_close_window_after_approval() {
+  local delay="${CTRL_EXEC_PAIR_CLOSE_DELAY:-15}"
+  if [[ ! "$delay" =~ ^[0-9]+$ ]] || (( delay == 0 )); then
+    ce_pairing_window_close > /dev/null 2>&1 || hps_log warn "ce_approve: pairing window close failed"
+    return 0
+  fi
+  ( sleep "$delay"; ce_pairing_window_close ) > /dev/null 2>&1 < /dev/null &
+  disown 2> /dev/null || true
+  return 0
 }
 
 #===============================================================================
@@ -207,10 +270,16 @@ _ce_read_pair_request() {
 #   $2 - reqid : pairing request id the node reported
 #
 # Checks (all must pass):
-#   1. Host registry entry exists for MAC and STATE is enrolment-eligible.
+#   1. Host registry entry exists for MAC and STATE is enrolment-eligible
+#      (INSTALLING, CONFIGURING, or NETWORK_BOOT for a RAM-booted node).
 #   2. Pairing request exists and its hostname + IP match the registry
 #      allocation.
-#   3. No prior approval this provisioning cycle (ctrl_exec_paired unset).
+#   3. The request arrives within CTRL_EXEC_PAIR_WINDOW seconds of the host's
+#      last boot-script issue (last_boot_at); a missing key refuses.
+#   4. No prior approval this provisioning cycle (ctrl_exec_paired unset).
+#
+# On approval the dispatcher pairing window is closed (after a short delay;
+# see _ce_close_window_after_approval). On a window refusal it is closed at once.
 #
 # Returns:
 #   0  approved (records ctrl_exec_paired=<epoch>)
@@ -235,14 +304,20 @@ ce_approve_pair_request() {
     return 1
   }
   case "$state" in
-    INSTALLING|CONFIGURING) ;;
+    INSTALLING|CONFIGURING|NETWORK_BOOT) ;;
     *)
       hps_log error "ce_approve: ${mac} STATE '${state}' not enrolment-eligible"
       return 1
       ;;
   esac
 
-  # Check 3 (cheap, do before reading files): one approval per cycle.
+  # Check 3: arrival within the window of the last boot-script issue.
+  if ! _ce_within_pair_window "$mac"; then
+    ce_pairing_window_close > /dev/null 2>&1 || true
+    return 1
+  fi
+
+  # Check 4 (cheap, do before reading files): one approval per cycle.
   local already
   already=$(host_registry "$mac" get ctrl_exec_paired 2>/dev/null) || already=""
   if [[ -n "$already" ]]; then
@@ -292,6 +367,7 @@ ce_approve_pair_request() {
   host_registry "$mac" set ctrl_exec_paired "$(date +%s)" || {
     hps_log warn "ce_approve: approved ${reqid} but failed to record ctrl_exec_paired for ${mac}"
   }
+  _ce_close_window_after_approval
   return 0
 }
 

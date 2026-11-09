@@ -175,3 +175,37 @@ urldecode() {
   printf '%b' "${data//%/\\x}"
 }
 
+
+
+# cgi_resolve_caller_mac
+# ----------------------
+# The caller's identity is the MAC derived from the connection (hps_origin_tag).
+# A MAC claimed in the JSON body or the X-HPS-MAC header is compared and logged
+# but never used: when a claim differs from the connection identity a warning is
+# logged and the connection identity is returned.
+#
+# Arguments:
+#   $1 - connection identity (MAC, or "localhost" for a loopback caller)
+#   $2 - MAC claimed in the request body (may be empty)
+#   $3 - MAC claimed in the X-HPS-MAC header (may be empty)
+#
+# Output: the connection identity on stdout.
+cgi_resolve_caller_mac() {
+  local conn="${1-}"
+  local body_claim="${2-}"
+  local header_claim="${3-}"
+  local conn_lc="${conn,,}"
+  local source claim
+
+  for source in body header; do
+    if [[ "$source" == body ]]; then
+      claim="$body_claim"
+    else
+      claim="$header_claim"
+    fi
+    if [[ -n "$claim" && "${claim,,}" != "$conn_lc" ]]; then
+      hps_log warn "caller ${conn:-<none>} sent a different ${source} MAC ${claim}; ignored" >&2
+    fi
+  done
+  printf '%s\n' "$conn"
+}

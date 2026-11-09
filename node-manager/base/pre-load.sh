@@ -1,6 +1,8 @@
 # This file is run first
 
-mkdir -p /lib/modules
+if ! n_os_is_nixos; then
+  mkdir -p /lib/modules
+fi
 
 
 ## TODO@ This should be more sensible - we can ask IPS for this

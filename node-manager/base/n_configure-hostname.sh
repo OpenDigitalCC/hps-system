@@ -28,6 +28,7 @@ n_set_hostname_and_hosts() {
     local domain
     local ip
     local fqdn
+    local root="${HPS_OS_ROOT:-}"
     
     # Get configuration values
     hostname=$(n_remote_host_variable HOSTNAME) || {
@@ -68,6 +69,25 @@ n_set_hostname_and_hosts() {
     
     echo "Setting hostname: ${hostname} (FQDN: ${fqdn}, IP: ${ip})"
     n_remote_log "Setting hostname: ${hostname} (FQDN: ${fqdn}, IP: ${ip})"
+
+    # NixOS: /etc/hostname and /etc/hosts are store-managed. Set the kernel
+    # hostname for this boot only and leave the files alone.
+    if n_os_is_nixos; then
+        if command -v hostnamectl >/dev/null 2>&1; then
+            hostnamectl set-hostname --transient "${hostname}" || {
+                echo "Error: hostnamectl --transient failed" >&2
+                return 2
+            }
+        else
+            hostname "${hostname}" || {
+                echo "Error: hostname command failed" >&2
+                return 2
+            }
+        fi
+        n_remote_log "nixos: hostname set transiently: ${hostname}"
+        n_nixos_skip "/etc/hostname and /etc/hosts writes"
+        return 0
+    fi
     
     # Set hostname using appropriate method
     if command -v hostnamectl >/dev/null 2>&1; then
@@ -86,31 +106,31 @@ n_set_hostname_and_hosts() {
         n_remote_log "Hostname set via hostname command: ${hostname}"
         
         # Persist hostname
-        echo "${hostname}" > /etc/hostname || {
+        echo "${hostname}" > "${root}/etc/hostname" || {
             echo "Error: failed to write /etc/hostname" >&2
             return 2
         }
         n_remote_log "Created /etc/hostname with: ${hostname}"
         
         # Alpine-specific
-        if [[ -f /etc/conf.d/hostname ]]; then
-            echo "hostname=\"${hostname}\"" > /etc/conf.d/hostname
+        if [[ -f "${root}/etc/conf.d/hostname" ]]; then
+            echo "hostname=\"${hostname}\"" > "${root}/etc/conf.d/hostname"
             n_remote_log "Updated Alpine /etc/conf.d/hostname"
         fi
         
         # RHEL/Rocky-specific
-        if [[ -f /etc/sysconfig/network ]]; then
-            if grep -q "^HOSTNAME=" /etc/sysconfig/network 2>/dev/null; then
-                sed -i "s/^HOSTNAME=.*/HOSTNAME=${hostname}/" /etc/sysconfig/network
+        if [[ -f "${root}/etc/sysconfig/network" ]]; then
+            if grep -q "^HOSTNAME=" "${root}/etc/sysconfig/network" 2>/dev/null; then
+                sed -i "s/^HOSTNAME=.*/HOSTNAME=${hostname}/" "${root}/etc/sysconfig/network"
             else
-                echo "HOSTNAME=${hostname}" >> /etc/sysconfig/network
+                echo "HOSTNAME=${hostname}" >> "${root}/etc/sysconfig/network"
             fi
             n_remote_log "Updated RHEL/Rocky /etc/sysconfig/network"
         fi
     fi
     
     # Create /etc/hosts
-    cat > /etc/hosts <<EOF
+    cat > "${root}/etc/hosts" <<EOF
 # IPv4
 127.0.0.1   localhost localhost.localdomain
 ${ip}       ${fqdn} ${hostname}

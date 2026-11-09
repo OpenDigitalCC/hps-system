@@ -39,6 +39,10 @@
 #
 #===============================================================================
 n_configure_bash_shell() {
+  if n_os_is_nixos; then
+    n_nixos_skip "bash as /bin/sh (store-managed; bash is already installed)"
+    return 0
+  fi
   n_remote_log "[INFO] Configuring bash as default shell"
   
   echo "Configuring bash as default shell..." >&2

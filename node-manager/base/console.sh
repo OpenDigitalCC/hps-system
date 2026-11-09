@@ -16,6 +16,10 @@
 #   0 on success
 #===============================================================================
 n_display_info_before_prompt() {
+    if n_os_is_nixos; then
+        n_nixos_skip "console info (/etc/issue and inittab are store-managed)"
+        return 0
+    fi
     n_remote_log "Displaying node information on console"
     
     # Check if getty is disabled
@@ -83,6 +87,10 @@ EOF
 #   0 on success
 #===============================================================================
 n_configure_motd() {
+    if n_os_is_nixos; then
+        n_nixos_skip "MOTD (/etc/motd and /etc/profile.d are store-managed)"
+        return 0
+    fi
     n_remote_log "Configuring MOTD with node information"
     
     # Create a script that generates dynamic MOTD

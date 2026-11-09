@@ -149,8 +149,9 @@ validate_request() {
   
   # Authenticate - must be a known host or localhost
   if [[ "$CLIENT_MAC" == "localhost" ]] || [[ "$CLIENT_IP" == "127.0.0.1" ]]; then
-    # Local access allowed
-    CLIENT_MAC="${HTTP_X_HPS_MAC:-localhost}"
+    # Local access allowed. A loopback caller has no MAC identity; X-HPS-MAC
+    # is not accepted as one (cgi_resolve_caller_mac logs it in parse_request).
+    CLIENT_MAC="localhost"
   elif [[ -n "$CLIENT_MAC" ]]; then
     # Check if this is a known host
     if ! host_config_exists "$CLIENT_MAC"; then
@@ -198,9 +199,11 @@ parse_request() {
       REQUEST_REQID=\(.reqid // "")
     "')"
     
-    # Use provided MAC or detected MAC  
-    REQUEST_MAC="${REQUEST_MAC:-$CLIENT_MAC}"
   fi
+
+  # Identity is the connection's MAC only. A body .mac or X-HPS-MAC header is
+  # compared and logged, never used.
+  REQUEST_MAC=$(cgi_resolve_caller_mac "$CLIENT_MAC" "${REQUEST_MAC:-}" "${HTTP_X_HPS_MAC:-}")
   
   # Validate action
   if [[ -z "$REQUEST_ACTION" ]]; then

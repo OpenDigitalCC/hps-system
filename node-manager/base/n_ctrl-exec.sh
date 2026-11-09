@@ -33,6 +33,10 @@
 # Returns: 0 on success, non-zero on failure.
 #===============================================================================
 n_install_ctrl_exec() {
+  if n_os_is_nixos; then
+    n_nixos_skip "ctrl-exec agent install (agent and hps-node plugin come from the image)"
+    return 0
+  fi
   n_remote_log "[ctrl-exec] Installing agent and dependencies"
 
   # Runtime dependencies: Perl agent + IO::Socket::SSL + JSON + openssl CLI.
@@ -273,6 +277,10 @@ n_ctrl_exec_pair() {
 # safe on diskless nodes that rebuild their root each boot (ADR 0003).
 #===============================================================================
 n_ctrl_exec_enrol() {
+  if n_os_is_nixos; then
+    n_nixos_skip "ctrl-exec enrol (hps-node-init pairs the NixOS node)"
+    return 0
+  fi
   n_install_ctrl_exec || return 1
   n_ctrl_exec_start || return 1
   n_ctrl_exec_pair || return 1

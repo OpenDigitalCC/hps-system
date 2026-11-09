@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test suite for the hps-node agent plugin. Run: bash test/run.sh
 #
 # Covers the ce-agent-plugins contract (no-args and unknown-subcommand exit

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # hps-node - ctrl-exec agent plugin: the single allowlisted entry point through
 # which the IPS drives node-manager operations over mTLS.
@@ -25,6 +25,12 @@
 set -euo pipefail
 
 # The HPS node function bundle is fetched and installed during PXE bootstrap.
+# HPS_BOOTSTRAP_LIB overrides the Alpine location. When it is not set and the
+# default is absent (NixOS), the bundle hps-node-init saved is used instead;
+# HPS_RUN_FUNCTIONS names that file.
+: "${HPS_RUN_FUNCTIONS:=/run/hps/functions.sh}"
+bootstrap_explicit=0
+[[ -n "${HPS_BOOTSTRAP_LIB+x}" ]] && bootstrap_explicit=1
 : "${HPS_BOOTSTRAP_LIB:=/usr/local/lib/hps-bootstrap-lib.sh}"
 
 usage() {
@@ -48,12 +54,24 @@ EOF
 # Load the HPS node function bundle into this shell. The bundle carries every
 # n_* node function plus the HPS_INIT_SEQUENCE for this node's role.
 load_bundle() {
-    if [[ ! -r "$HPS_BOOTSTRAP_LIB" ]]; then
-        echo "hps-node: bundle not found: $HPS_BOOTSTRAP_LIB" >&2
+    local lib="$HPS_BOOTSTRAP_LIB"
+    if [[ ! -r "$lib" && $bootstrap_explicit -eq 0 && -r "$HPS_RUN_FUNCTIONS" ]]; then
+        lib="$HPS_RUN_FUNCTIONS"
+    fi
+    if [[ ! -r "$lib" ]]; then
+        echo "hps-node: bundle not found: $HPS_BOOTSTRAP_LIB (also tried $HPS_RUN_FUNCTIONS)" >&2
         return 2
     fi
+    if [[ "$lib" == "$HPS_RUN_FUNCTIONS" && "$lib" != "$HPS_BOOTSTRAP_LIB" ]]; then
+        # The raw bundle runs top-level commands that are not -eu clean.
+        set +eu
+        # shellcheck source=/dev/null
+        source "$lib"
+        set -eu
+        return 0
+    fi
     # shellcheck source=/dev/null
-    source "$HPS_BOOTSTRAP_LIB"
+    source "$lib"
     if ! type hps_load_node_functions >/dev/null 2>&1; then
         echo "hps-node: bootstrap lib did not provide hps_load_node_functions" >&2
         return 2
@@ -82,7 +100,7 @@ main() {
     case "$subcommand" in
         ping)
             load_bundle || exit $?
-            echo "hps-node: bundle loaded on $(hostname)"
+            echo "hps-node: bundle loaded on $(hostname 2>/dev/null || cat /proc/sys/kernel/hostname)"
             ;;
         run-init)
             load_bundle || exit $?

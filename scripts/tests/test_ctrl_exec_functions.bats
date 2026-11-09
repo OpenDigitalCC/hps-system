@@ -17,6 +17,9 @@ setup() {
   export CTRL_EXEC_DISPATCHER="$TEST_DIR/fake-ced"
   cat > "$CTRL_EXEC_DISPATCHER" <<EOF
 #!/bin/bash
+# list-requests is a read: no output, not logged (the approver falls back to
+# the queue file).
+[[ "\$1" == list-requests ]] && exit 0
 echo "\$@" >> "$CE_APPROVE_LOG"
 exit \${FAKE_CED_RC:-0}
 EOF
@@ -51,6 +54,9 @@ EOF
   }
   export -f host_registry
 
+  # No delay: the approver closes the pairing window synchronously.
+  export CTRL_EXEC_PAIR_CLOSE_DELAY=0
+
   # Load the code under test.
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/ctrl-exec-functions.sh"
 }
@@ -64,6 +70,7 @@ seed_host() {
   local mac="$1" state="$2" ip="$3" hostname="${4:-}"
   host_registry "$mac" set STATE "$state"
   host_registry "$mac" set IP "$ip"
+  host_registry "$mac" set last_boot_at "$(date +%s)"
   [[ -n "$hostname" ]] && host_registry "$mac" set HOSTNAME "$hostname"
   return 0
 }
