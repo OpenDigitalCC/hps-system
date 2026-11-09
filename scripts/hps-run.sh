@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #===============================================================================
-# hps-run.sh <mac-or-hostname> <script> [args...]
+# hps-run.sh [--input [--json]] <mac-or-hostname> <script> [args...]
 # ------------------------------------------------
 # Run an allowlisted ctrl-exec script on a node, addressed the HPS way: by MAC
 # (any format: aa:bb:.., aa-bb-.., aabb.., case-insensitive) or by registry
@@ -26,8 +26,21 @@
 # ce_run in lib/functions.d/ctrl-exec-functions.sh). The resolution line goes to
 # stderr.
 #
+# --input: the script's stdin (an `input = raw` script, e.g. dataset-unlock) is
+# sent as confidential run input. `ced run` has no input option on 0.14.4; the
+# input goes through the dispatcher's API client instead:
+#     $CTRL_EXEC_CLI run <agent> --script <script> --input - [--json] -- args...
+# (default ctrl-exec-cli; it sends all of stdin as the one field "input" of
+# POST /run, and an `input = raw` script reads exactly that on its stdin). It
+# talks to the API named by CTRL_EXEC_API_SOCKET / CTRL_EXEC_API_URL. With
+# --json the client's JSON result (per-host exit, stdout, stderr) is printed
+# as is and its exit status is 0 unless the API call itself failed; without
+# it the client prints text and exits 1 if the script failed. The input never
+# appears in an argument or in this script's output.
+#
 # Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
-# $HPS_BASE/hps-system; CTRL_EXEC_DISPATCHER names the dispatcher CLI.
+# $HPS_BASE/hps-system; CTRL_EXEC_DISPATCHER names the dispatcher CLI;
+# CTRL_EXEC_CLI the API client used by --input (default ctrl-exec-cli).
 #
 # Exit: dispatcher's status; 2 usage; 3 MAC or hostname not in the registry;
 # 4 no registered agent under any candidate name; 1 function library missing or
@@ -36,8 +49,22 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: hps-run.sh <mac-or-hostname> <script> [args...]" >&2
+  echo "usage: hps-run.sh [--input [--json]] <mac-or-hostname> <script> [args...]" >&2
 }
+
+INPUT=0
+JSON=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --input) INPUT=1; shift ;;
+    --json) JSON=1; shift ;;
+    *) break ;;
+  esac
+done
+if [[ $JSON -eq 1 && $INPUT -eq 0 ]]; then
+  usage
+  exit 2
+fi
 
 if [[ $# -lt 2 || -z "$1" || -z "$2" ]]; then
   usage
@@ -158,6 +185,24 @@ AGENT=$(pick_agent "$CANDS" "$REGISTERED") || {
 }
 echo "hps-run: ${TARGET} -> agent ${AGENT}, script ${SCRIPT}" >&2
 
+# ce_run_input <agent> <script> [args...]: the script's stdin goes to ctrl-exec-cli.
+ce_run_input() {
+  local agent="$1" script="$2"
+  shift 2
+  local cmd=("${CTRL_EXEC_CLI:-ctrl-exec-cli}" run "$agent" --script "$script" --input -)
+  if [[ $JSON -eq 1 ]]; then
+    cmd+=(--json)
+  fi
+  if (( $# > 0 )); then
+    cmd+=(-- "$@")
+  fi
+  "${cmd[@]}"
+}
+
 rc=0
-ce_run "$AGENT" "$SCRIPT" "$@" || rc=$?
+if [[ $INPUT -eq 1 ]]; then
+  ce_run_input "$AGENT" "$SCRIPT" "$@" || rc=$?
+else
+  ce_run "$AGENT" "$SCRIPT" "$@" || rc=$?
+fi
 exit "$rc"

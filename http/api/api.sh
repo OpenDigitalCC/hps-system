@@ -222,6 +222,33 @@ parse_request() {
 }
 
 #===============================================================================
+# CS-2.3 hook: bring a paired storage node's pool up
+#===============================================================================
+# After a node has paired, a host whose TYPE contains SCH and whose registry has
+# storage_state (HPS created its pool before) gets `hps-storage <mac> up`:
+# import, unlock with the keysafe key, export. The job is detached (own session,
+# no inherited stdin/stdout/stderr, so the CGI response ends at once) and
+# logs through hps-storage itself. Anything else is a no-op with a log line.
+# HPS_STORAGE_CMD overrides the command (tests).
+api_storage_after_pair() {
+  local mac="$1" type state cmd
+  type=$(host_registry "$mac" get TYPE 2>/dev/null) || type=""
+  if [[ "$type" != *SCH* ]]; then
+    hps_log info "$API_LOG_PREFIX storage hook: $mac is not an SCH host; nothing to do"
+    return 0
+  fi
+  state=$(host_registry "$mac" get storage_state 2>/dev/null) || state=""
+  if [[ -z "$state" ]]; then
+    hps_log info "$API_LOG_PREFIX storage hook: $mac has no storage_state; nothing to do"
+    return 0
+  fi
+  cmd="${HPS_STORAGE_CMD:-${SCRIPT_DIR}/../../bin/hps-storage}"
+  hps_log info "$API_LOG_PREFIX storage hook: starting 'hps-storage $mac up --wait 120' detached"
+  setsid "$cmd" "$mac" up --wait 120 < /dev/null > /dev/null 2>&1 &
+  return 0
+}
+
+#===============================================================================
 # Registry Action Handler
 #===============================================================================
 handle_registry_action() {
@@ -549,6 +576,7 @@ handle_system_action() {
         return
       fi
       if ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID" "$CLIENT_IP"; then
+        api_storage_after_pair "$REQUEST_MAC"
         api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
       else
         api_error 403 "Pairing request denied" "$REQUEST_MAC"

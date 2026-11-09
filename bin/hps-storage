@@ -1,0 +1,131 @@
+#!/usr/bin/env perl
+# hps-storage: drive a node's storage role over ctrl-exec (HPS::Storage).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use POSIX qw(strftime);
+use HPS::Registry;
+use HPS::Keysafe;
+use HPS::Storage;
+
+# 0 ok, 1 failed, 2 usage, 3 refused (policy, approval, node refusal), 4 not found
+my %EXIT = (
+    usage => 2, refused => 3, perms => 3, tampered => 3, expired => 3,
+    malformed => 3, notfound => 4, failed => 1,
+);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-storage: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-storage <host> up|down|trim-check|status [--dry-run] [--json] [--wait SECONDS]
+  hps-storage <host> create <pool> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-storage <host> destroy <pool> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-storage <host> forget-key [--yes] [--dry-run] [--json]
+<host> is a MAC (any format) or a registry HOSTNAME. The pool is named after
+the active cluster; any other name needs --allow-any-pool-name.
+create and destroy need an unexpired approval (hps-approve pool-create|pool-destroy).
+--dry-run prints the node calls and redacted inputs and changes nothing.
+Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
+USAGE
+    return 2;
+}
+
+sub utc { return strftime('%Y-%m-%d %H:%M:%S UTC', gmtime($_[0])) }
+
+sub render_approval {
+    my ($a) = @_;
+    my $out = "Approval $a->{action} for pool $a->{pool} on host $a->{mac}\n";
+    $out .= "  Disks:\n" . join('', map {"    /dev/disk/by-id/$_\n"} map { s{^/dev/disk/by-id/}{}r } @{ $a->{disks} })
+        if @{ $a->{disks} };
+    $out .= "  Wipe:    " . ($a->{wipe} ? 'yes' : 'no') . "\n";
+    $out .= "  Expires: " . utc($a->{expires}) . "\n  By:      $a->{issued_by}\n";
+    return $out;
+}
+
+sub render_plan {
+    my ($plan) = @_;
+    my $out = '';
+    for my $s (@$plan) {
+        $out .= "  $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . "\n";
+        $out .= "     input: $s->{input}\n" if defined $s->{input};
+    }
+    return $out;
+}
+
+sub render_run {
+    my ($r) = @_;
+    my $out = '';
+    for my $s (@{ $r->{steps} }) {
+        $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . " (exit $s->{rc})\n";
+        $out .= $s->{stdout} . ($s->{stdout} =~ /\n\z/ || !length $s->{stdout} ? '' : "\n");
+    }
+    return $out . "$r->{op} ok: host $r->{mac}, pool $r->{pool}\n";
+}
+
+sub main {
+    my @argv = @_;
+    my ($json, $dry, $any, $yes, $wait);
+    GetOptionsFromArray(
+        \@argv, 'json' => \$json, 'dry-run' => \$dry, 'allow-any-pool-name' => \$any,
+        'yes' => \$yes, 'wait=i' => \$wait,
+    ) or return usage();
+    my $host = shift @argv // return usage('host required');
+    my $op   = shift @argv // return usage('operation required');
+    my $js   = JSON::PP->new->canonical->pretty->allow_nonref;
+    my $needs_pool = $op =~ /^(?:create|destroy)$/;
+    return usage("unknown operation '$op'") unless $needs_pool || $op eq 'forget-key' || grep { $_ eq $op } HPS::Storage::ops();
+    my $pool;
+    if ($needs_pool) {
+        return usage("$op needs a pool name") unless @argv == 1;
+        $pool = shift @argv;
+    }
+    return usage("$op takes no further arguments") if @argv;
+    return usage('--allow-any-pool-name is only for create and destroy') if $any && !$needs_pool;
+    return usage('--yes is only for forget-key') if $yes && $op ne 'forget-key';
+    return usage('--wait must be 0 or more seconds') if defined $wait && $wait < 0;
+
+    my $rc = eval {
+        my $st = HPS::Storage->new(host => $host, pool => $pool, allow_any_pool_name => $any, wait => $wait // 0);
+        if ($op eq 'forget-key') {
+            my $r = $st->forget_key(yes => $yes, dry_run => $dry);
+            print $json ? $js->encode($r) : $dry
+                ? ($r->{had_key} ? "Dry run: would delete the 'enc' key of host " . $st->mac . "\n" : "Dry run: no key held\n")
+                : ($r->{forgot} ? "Deleted the 'enc' key of host " . $st->mac . "\n" : "No key held for host " . $st->mac . "\n");
+            return 0;
+        }
+        my $plan = $st->plan($op);
+        my $appr = $st->approval_info;
+        if ($dry) {
+            if ($json) {
+                print $js->encode({ dry_run => 1, op => $op, mac => $st->mac, pool => $st->pool, approval => $appr, plan => $plan });
+            }
+            else {
+                print "Dry run: $op on host " . $st->mac . ", pool " . $st->pool . "; nothing is sent or changed.\n";
+                print render_approval($appr) if $appr;
+                print "Node calls:\n" . (@$plan ? render_plan($plan) : "  (none)\n");
+            }
+            return 0;
+        }
+        print render_approval($appr) if $appr && !$json;
+        my $r = $st->run($op);
+        $r->{approval} = $appr if $appr;
+        print $json ? $js->encode($r) : render_run($r);
+        return 0;
+    };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::Keysafe::Error')) {
+        print STDERR 'hps-storage: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    $err =~ s/\s+\z//;
+    print STDERR "hps-storage: $err\n";
+    return 1;
+}
+
+exit main(@ARGV);
