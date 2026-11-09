@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# vm-status - state of the guests on this node. Read-only.
+#
+# Usage: vm-status [<vm>]
+# virsh list --all, then for each guest (the named one, else every defined
+# one): virsh dominfo, virsh domblklist, and a line  VM <vm> <state>  where
+# state is what virsh domstate prints (running, shut off, paused, ...). The
+# last line is always a VM line, or "no VMs" when none is defined.
+# Exit: 0, 2 usage, 4 the named VM is not defined.
+
+set -euo pipefail
+
+log() {
+  printf '[vm-status] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-status [<vm>]
+Exit: 0 ok, 2 usage, 4 not defined.
+USAGE
+}
+
+report_one() {
+  local vm=$1 state
+  run virsh -c qemu:///system dominfo "$vm"
+  run virsh -c qemu:///system domblklist "$vm"
+  state=$(run virsh -c qemu:///system domstate "$vm")
+  printf 'VM %s %s\n' "$vm" "$state"
+}
+
+main() {
+  local vm names found=0
+  case $# in
+    0) ;;
+    1)
+      case "$1" in
+        -*) usage; exit 2 ;;
+      esac
+      [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+      ;;
+    *) usage; exit 2 ;;
+  esac
+  run virsh -c qemu:///system list --all
+  if [[ $# -eq 1 ]]; then
+    if ! run_q virsh -c qemu:///system dominfo "$1" > /dev/null; then
+      log "$1 is not defined"
+      exit 4
+    fi
+    report_one "$1"
+    return 0
+  fi
+  names=$(run virsh -c qemu:///system list --all --name)
+  while IFS= read -r vm; do
+    [[ -n "$vm" ]] || continue
+    report_one "$vm"
+    found=1
+  done <<< "$names"
+  if ((found == 0)); then
+    printf 'no VMs\n'
+  fi
+}
+
+main "$@"

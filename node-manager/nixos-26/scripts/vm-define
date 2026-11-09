@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+#
+# vm-define - define (not start) a libvirt guest from a template.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
+#          --net <bridge> [--net <bridge>...] --image <base qcow2>
+#          [--serial-log <path>] [--replace]
+#
+#   <vm>      ^[a-z0-9][a-z0-9-]{0,31}$
+#   --disk    the guest's disk: the md mirror device made by mirror-create
+#             (/dev/md/<name>); must exist, under /dev. Attached to virtio as raw.
+#   --net     a bridge (made by net-bridge-ensure); one virtio NIC per --net.
+#   --image   the base qcow2 the disk was filled from (vm-image-write). It is
+#             only RECORDED in the domain metadata; vm-define neither reads
+#             nor copies it, and never touches the disk.
+#   --serial-log  default /var/log/libvirt/qemu/<vm>-serial.log
+#
+# The domain: q35, OVMF UEFI, host-passthrough CPU, virtio disk (raw, cache
+# none), virtio NIC per bridge, serial console written to a log file, NO
+# graphics, NO spice, no video device.
+#
+# Firmware paths ASSUMED (unverified on a real node; nix is not available on
+# the development host): the compute profile (nixpkgs 26.05 libvirtd module)
+# links the QEMU firmware files into /run/libvirt/nix-ovmf/, so
+#   loader  /run/libvirt/nix-ovmf/edk2-x86_64-code.fd   (read-only pflash, raw)
+#   nvram template  /run/libvirt/nix-ovmf/edk2-i386-vars.fd
+#   nvram per guest /var/lib/libvirt/qemu/nvram/<vm>_VARS.fd
+# Override with HPS_OVMF_CODE, HPS_OVMF_VARS if the lab shows other names.
+#
+# Idempotent: the rendered definition's sha256 is stored in the domain metadata
+# (hps:spec). The same arguments again: nothing changes, exit 0. A different
+# definition of an already defined name is refused (3) unless --replace, which
+# redefines it (keeping the uuid) only while the guest is not running.
+#
+# Calls, in order: virsh dominfo; (if defined) virsh dumpxml; (--replace)
+# virsh domuuid, virsh domstate; virsh define.
+# Last line on success: VM <vm> defined
+# Exit: 0 defined or already identical, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+: "${HPS_OVMF_CODE:=/run/libvirt/nix-ovmf/edk2-x86_64-code.fd}"
+: "${HPS_OVMF_VARS:=/run/libvirt/nix-ovmf/edk2-i386-vars.fd}"
+: "${HPS_NVRAM_DIR:=/var/lib/libvirt/qemu/nvram}"
+: "${HPS_LIBVIRT_LOGDIR:=/var/log/libvirt/qemu}"
+
+VM=""
+MEMORY=""
+VCPUS=""
+DISK=""
+IMAGE=""
+SERIAL=""
+REPLACE=0
+NETS=()
+TMP=""
+
+log() {
+  printf '[vm-define] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
+         --net <bridge> [--net <bridge>...] --image <base qcow2>
+         [--serial-log <path>] [--replace]
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --memory | --vcpus | --disk | --net | --image | --serial-log)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        case "$1" in
+          --memory) MEMORY=$2 ;;
+          --vcpus) VCPUS=$2 ;;
+          --disk) DISK=$2 ;;
+          --net) NETS+=("$2") ;;
+          --image) IMAGE=$2 ;;
+          --serial-log) SERIAL=$2 ;;
+        esac
+        shift 2
+        ;;
+      --replace) REPLACE=1; shift ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  if [[ -z "$MEMORY" || -z "$VCPUS" || -z "$DISK" || -z "$IMAGE" || ${#NETS[@]} -eq 0 ]]; then
+    usage
+    exit 2
+  fi
+}
+
+check_args() {
+  local n
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
+  [[ "$MEMORY" =~ ^[0-9]{1,7}$ ]] || refuse "--memory '$MEMORY' is not a number of MiB"
+  [[ "$VCPUS" =~ ^[0-9]{1,3}$ ]] || refuse "--vcpus '$VCPUS' is not a number"
+  MEMORY=$((10#$MEMORY))
+  VCPUS=$((10#$VCPUS))
+  ((MEMORY >= 64)) || refuse "--memory $MEMORY is below 64 MiB"
+  ((VCPUS >= 1)) || refuse "--vcpus must be at least 1"
+  [[ "$DISK" =~ ^[A-Za-z0-9/_.:-]+$ && "$DISK" != *..* ]] || refuse "--disk '$DISK' has characters outside [A-Za-z0-9/_.:-] or contains .."
+  [[ "$DISK" == "$HPS_DEV"/* ]] || refuse "--disk '$DISK' is not under $HPS_DEV"
+  [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
+  for n in "${NETS[@]}"; do
+    [[ "$n" =~ ^[a-z][a-z0-9_.-]{0,14}$ ]] || refuse "--net '$n' is not a bridge name"
+  done
+  [[ "$IMAGE" =~ ^/[A-Za-z0-9/_.-]+\.qcow2$ && "$IMAGE" != *..* ]] || refuse "--image '$IMAGE' is not an absolute path ending .qcow2"
+  if [[ -z "$SERIAL" ]]; then
+    SERIAL="$HPS_LIBVIRT_LOGDIR/$VM-serial.log"
+  fi
+  [[ "$SERIAL" =~ ^/[A-Za-z0-9/_.-]+$ && "$SERIAL" != *..* ]] || refuse "--serial-log '$SERIAL' is not a plain absolute path"
+}
+
+# render_xml <uuid-or-empty>: the domain XML on stdout, the spec hash inside.
+render_xml() {
+  local uuid=$1 n body hash
+  body=$(
+    cat <<XML
+  <name>$VM</name>
+  <memory unit='MiB'>$MEMORY</memory>
+  <currentMemory unit='MiB'>$MEMORY</currentMemory>
+  <vcpu placement='static'>$VCPUS</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <loader readonly='yes' type='pflash' format='raw'>$HPS_OVMF_CODE</loader>
+    <nvram template='$HPS_OVMF_VARS' templateFormat='raw' format='raw'>$HPS_NVRAM_DIR/${VM}_VARS.fd</nvram>
+    <boot dev='hd'/>
+  </os>
+  <features><acpi/><apic/></features>
+  <cpu mode='host-passthrough' check='none'/>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native'/>
+      <source dev='$DISK'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+XML
+    for n in "${NETS[@]}"; do
+      cat <<XML
+    <interface type='bridge'>
+      <source bridge='$n'/>
+      <model type='virtio'/>
+    </interface>
+XML
+    done
+    cat <<XML
+    <serial type='file'>
+      <source path='$SERIAL'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
+    <console type='file'>
+      <source path='$SERIAL'/>
+      <target type='serial' port='0'/>
+    </console>
+    <video><model type='none'/></video>
+    <memballoon model='virtio'/>
+  </devices>
+XML
+  )
+  hash=$(printf '%s\n%s\n' "$body" "$IMAGE" | sha256sum)
+  hash=${hash%% *}
+  SPEC_HASH=$hash
+  printf "<domain type='kvm'>\n"
+  if [[ -n "$uuid" ]]; then
+    printf '  <uuid>%s</uuid>\n' "$uuid"
+  fi
+  printf '%s\n' "$body" | sed -n '1,/<\/os>/p'
+  printf "  <metadata>\n    <hps:vm xmlns:hps='urn:hps:vm'>\n      <hps:image>%s</hps:image>\n      <hps:spec>%s</hps:spec>\n    </hps:vm>\n  </metadata>\n" "$IMAGE" "$hash"
+  printf '%s\n' "$body" | sed -n '/<\/os>/,$p' | sed '1d'
+  printf '</domain>\n'
+}
+
+defined_spec() {
+  local xml
+  xml=$(run virsh -c qemu:///system dumpxml "$VM")
+  sed -n -E 's/.*<hps:spec>([0-9a-f]+)<\/hps:spec>.*/\1/p' <<< "$xml" | head -n 1
+}
+
+main() {
+  local have uuid="" state
+  parse_args "$@"
+  check_args
+  TMP=/tmp/vm-define-$$
+  mkdir -p "$TMP"
+  trap 'rm -rf "$TMP"' EXIT
+  render_xml "" > "$TMP/domain.xml"
+  if run_q virsh -c qemu:///system dominfo "$VM" > /dev/null; then
+    have=$(defined_spec)
+    if [[ "$have" == "$SPEC_HASH" ]]; then
+      log "$VM is already defined with this definition; nothing to do"
+      printf 'VM %s defined\n' "$VM"
+      return 0
+    fi
+    if ((REPLACE == 0)); then
+      refuse "$VM is defined differently (spec ${have:-none}, wanted $SPEC_HASH); use --replace to redefine"
+    fi
+    state=$(run virsh -c qemu:///system domstate "$VM")
+    if [[ "$state" == "running" || "$state" == "paused" ]]; then
+      refuse "$VM is $state; --replace needs it shut off"
+    fi
+    uuid=$(run virsh -c qemu:///system domuuid "$VM")
+    render_xml "$uuid" > "$TMP/domain.xml"
+  fi
+  run virsh -c qemu:///system define "$TMP/domain.xml"
+  printf 'VM %s defined\n' "$VM"
+}
+
+main "$@"

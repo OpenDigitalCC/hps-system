@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# image-fetch - fetch a base image from the IPS and verify it.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: image-fetch <name> --from <http://host[:port]/path> --sha256 <hex> --dest <dir>
+#
+#   <name>    ^[a-z0-9][a-z0-9._-]{0,63}$ ; the file becomes <dir>/<name>.qcow2
+#   --from    plain http only, on the IPS (it serves hps-resources/images/);
+#             no redirect is followed, so the transfer cannot leave that host.
+#             Any other scheme (https, ftp, file, ...) is refused.
+#   --sha256  64 hex digits; the download is verified before it gets its name
+#   --dest    an existing directory (the pool's images dataset mount)
+#
+# Downloads to <dir>/<name>.qcow2.part, checks the hash, renames. A file
+# already there with the right hash: nothing is fetched (exit 0). One with the
+# wrong hash is replaced by a verified download. A hash mismatch removes the
+# .part and exits 3; the final file is never left unverified.
+# Last line:  IMAGE <name> <sha256> <path>
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+NAME=""
+URL=""
+SUM=""
+DEST=""
+
+log() {
+  printf '[image-fetch] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: image-fetch <name> --from <http://host[:port]/path> --sha256 <hex> --dest <dir>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  NAME=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from | --sha256 | --dest)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        case "$1" in
+          --from) URL=$2 ;;
+          --sha256) SUM=$2 ;;
+          --dest) DEST=$2 ;;
+        esac
+        shift 2
+        ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  if [[ -z "$URL" || -z "$SUM" || -z "$DEST" ]]; then
+    usage
+    exit 2
+  fi
+}
+
+check_args() {
+  [[ "$NAME" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ && "$NAME" != *..* ]] || refuse "image name '$NAME' does not match ^[a-z0-9][a-z0-9._-]{0,63}\$"
+  [[ "$SUM" =~ ^[0-9a-f]{64}$ ]] || refuse "--sha256 is not 64 lowercase hex digits"
+  [[ "$URL" == http://* ]] || refuse "--from must be an http:// URL (got a different scheme)"
+  [[ "$URL" =~ ^http://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9/_.-]+$ && "$URL" != *..* ]] || refuse "--from is not http://<host>[:port]/<path> with a plain path"
+  [[ "$DEST" == /* && "$DEST" != *..* && -d "$DEST" ]] || refuse "--dest '$DEST' is not an existing absolute directory"
+}
+
+file_sum() {
+  local out
+  out=$(run sha256sum -- "$1")
+  printf '%s\n' "${out%% *}"
+}
+
+main() {
+  local final part got
+  parse_args "$@"
+  check_args
+  final="$DEST/$NAME.qcow2"
+  part="$final.part"
+  if [[ -f "$final" ]]; then
+    got=$(file_sum "$final")
+    if [[ "$got" == "$SUM" ]]; then
+      log "$final is already present with the right hash; nothing to do"
+      printf 'IMAGE %s %s %s\n' "$NAME" "$SUM" "$final"
+      return 0
+    fi
+    log "$final has a different hash ($got); fetching a verified copy"
+  fi
+  rm -f -- "$part"
+  run curl --fail --silent --show-error --proto =http --max-redirs 0 --output "$part" "$URL"
+  got=$(file_sum "$part")
+  if [[ "$got" != "$SUM" ]]; then
+    rm -f -- "$part"
+    refuse "sha256 mismatch: got $got, wanted $SUM"
+  fi
+  run mv -f -- "$part" "$final"
+  printf 'IMAGE %s %s %s\n' "$NAME" "$SUM" "$final"
+}
+
+main "$@"

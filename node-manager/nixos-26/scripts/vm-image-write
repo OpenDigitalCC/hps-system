@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+#
+# vm-image-write - put a base image on a VM's (fresh) disk.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force]
+#
+# Runs   qemu-img convert -f qcow2 -O raw <image> <disk>
+# ONLY when the first 512 bytes of the disk are all zero (a fresh mirror from
+# mirror-create). A disk with anything in its first sector is refused (3): it
+# has been written to, so a second run of this script changes nothing.
+# --force skips that check and overwrites a disk that has data. The IPS never
+# passes it on its own; it exists for an operator re-imaging a disk by hand.
+# Also refused (3): the VM is defined and not shut off (the disk is in use).
+# Logs the image's sha256 and, last, the line:  IMAGE <vm> <sha256> written
+#
+# Calls, in order: virsh domstate (undefined is fine); sha256sum; qemu-img convert.
+# Exit: 0 written, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+
+VM=""
+DISK=""
+IMAGE=""
+FORCE=0
+
+log() {
+  printf '[vm-image-write] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force]
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --disk | --image)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        if [[ "$1" == "--disk" ]]; then DISK=$2; else IMAGE=$2; fi
+        shift 2
+        ;;
+      --force) FORCE=1; shift ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  if [[ -z "$DISK" || -z "$IMAGE" ]]; then
+    usage
+    exit 2
+  fi
+}
+
+check_args() {
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
+  [[ "$DISK" =~ ^[A-Za-z0-9/_.:-]+$ && "$DISK" != *..* ]] || refuse "--disk '$DISK' has characters outside [A-Za-z0-9/_.:-] or contains .."
+  [[ "$DISK" == "$HPS_DEV"/* ]] || refuse "--disk '$DISK' is not under $HPS_DEV"
+  [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
+  [[ "$IMAGE" =~ ^/[A-Za-z0-9/_.-]+\.qcow2$ && "$IMAGE" != *..* ]] || refuse "--image '$IMAGE' is not an absolute path ending .qcow2"
+  [[ -f "$IMAGE" ]] || refuse "--image '$IMAGE' does not exist"
+}
+
+check_not_in_use() {
+  local state
+  printf '+ virsh -c qemu:///system domstate %s\n' "$VM" >&2
+  if state=$(virsh -c qemu:///system domstate "$VM" 2> /dev/null); then
+    if [[ "$state" != "shut off" ]]; then
+      refuse "$VM is $state; the disk is in use"
+    fi
+  fi
+}
+
+# first_sector_zero: true when the first 512 bytes of the disk are all zero.
+first_sector_zero() {
+  local nonzero
+  nonzero=$(head -c 512 -- "$DISK" | tr -d '\0' | wc -c)
+  [[ "$nonzero" -eq 0 ]]
+}
+
+main() {
+  local sum
+  parse_args "$@"
+  check_args
+  check_not_in_use
+  if ((FORCE == 0)) && ! first_sector_zero; then
+    refuse "$DISK has data in its first sector; it has been written to already"
+  fi
+  sum=$(run sha256sum -- "$IMAGE")
+  sum=${sum%% *}
+  log "image sha256 $sum"
+  run qemu-img convert -f qcow2 -O raw "$IMAGE" "$DISK"
+  printf 'IMAGE %s %s written\n' "$VM" "$sum"
+}
+
+main "$@"

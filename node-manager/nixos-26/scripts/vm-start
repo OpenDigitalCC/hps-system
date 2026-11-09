@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# vm-start - start a defined guest.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-start <vm>
+# Not defined: refused with 4. Already running: nothing to do, exit 0. Shut
+# off: virsh start, then wait up to 30 s (HPS_VM_WAIT) for the state "running".
+# Any other state (paused, crashed, ...) is refused (3). The mirror under the
+# guest must already be assembled (mirror-assemble/mirror-create): this script
+# does not touch it.
+# Last line on success: VM <vm> running
+# Exit: 0 running, 2 usage, 3 refused, 4 not defined, 1 failed or not running in time.
+
+set -euo pipefail
+
+: "${HPS_VM_WAIT:=30}"
+: "${HPS_VM_STEP:=1}"
+
+VM=""
+
+log() {
+  printf '[vm-start] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-start <vm>
+Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  [[ $# -eq 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
+}
+
+wait_running() {
+  local waited=0 state
+  while :; do
+    state=$(run virsh -c qemu:///system domstate "$VM")
+    if [[ "$state" == "running" ]]; then
+      return 0
+    fi
+    waited=$((waited + 1))
+    if ((waited > HPS_VM_WAIT)); then
+      log "$VM is '$state' after $HPS_VM_WAIT s"
+      exit 1
+    fi
+    sleep "$HPS_VM_STEP"
+  done
+}
+
+main() {
+  local state
+  parse_args "$@"
+  if ! state=$(run_q virsh -c qemu:///system domstate "$VM"); then
+    log "$VM is not defined"
+    exit 4
+  fi
+  case "$state" in
+    running)
+      log "$VM is already running; nothing to do"
+      printf 'VM %s running\n' "$VM"
+      return 0
+      ;;
+    "shut off") ;;
+    *) refuse "$VM is '$state', not shut off" ;;
+  esac
+  run virsh -c qemu:///system start "$VM"
+  wait_running
+  printf 'VM %s running\n' "$VM"
+}
+
+main "$@"

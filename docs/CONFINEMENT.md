@@ -116,3 +116,36 @@ the guest's QEMU process id, from `ps` or `virsh dominfo`).
 Record the results of 1 to 4 in the phase-3 report; a result of `dac` or
 `unconfined` in 1 or 3 is the finding that decision 4 in `plans/phase-3.md` §5
 needs.
+
+## Node script: vm-confinement-report
+
+`vm-confinement-report [$VM]` (ctrl-exec allowlisted, profile `node`, read-only)
+runs checks 1 to 5 above in one call and prints each as a labelled line:
+
+| Label | Check | Source |
+| --- | --- | --- |
+| `CHECK1 libvirt secmodels` / `CHECK1 dominfo $VM` | 1 | `virsh capabilities`, `virsh dominfo $VM` ("Security model") |
+| `CHECK2 $VM` | 2 | `/proc/$PID/status`: user (from `Uid`), `CapEff`, `CapPrm`, `NoNewPrivs`, `Seccomp` |
+| `CHECK3 $VM` | 3 | `/proc/$PID/attr/current` |
+| `CHECK4 apparmor kernel enabled`, `CHECK4 apparmor profiles` | 4 | `/sys/module/apparmor/parameters/enabled`, `/sys/kernel/security/apparmor/profiles` (counts of `libvirtd` and `libvirt-*` profiles) |
+| `CHECK5 qemu.conf` | 5 | the seccomp, capability, ownership, disk-format, `security_*`, `user` and `group` lines of `/var/lib/libvirt/qemu.conf` |
+
+The guest's QEMU process is the one whose command line holds `guest=$VM,`. With
+no `$VM` every running guest is examined. A guest that is not running is a
+result (`no guest running`), never a failure: the script exits 0 (2 only for a
+usage error).
+
+The last line is the one the IPS parses:
+
+```
+CONFINEMENT model=<apparmor|dac|none> qemu_user=<user|-> seccomp=<0|1|2|-> apparmor_kernel=<Y|N|-> label=<label|->
+```
+
+`model` is the guest's `dominfo` "Security model" (with no guest running, the
+first model `virsh capabilities` lists, else `none`). `label` is the AppArmor
+profile name without the ` (enforce)` suffix, `unconfined` when the process is
+not confined. A `-` means "not observed". Reading the line: `model=dac` or
+`label=unconfined` is the finding that decision 4 in `plans/phase-3.md` §5
+needs; `model=apparmor` with a `libvirt-<uuid>` label is confinement in effect.
+The script was tested against shimmed `virsh` and a fake `/proc` and `/sys`
+only; its output on a real node is unverified until the lab runsheet step 1.

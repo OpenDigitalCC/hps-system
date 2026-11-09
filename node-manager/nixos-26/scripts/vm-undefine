@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# vm-undefine - remove a guest's definition (and its UEFI variable store).
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-undefine <vm>
+# Not defined: nothing to do, exit 0. Refused (3) unless the guest is shut off.
+# Then virsh undefine --nvram. It does NOT touch the guest's disks, the md
+# mirror, the zvols or the images: destroying data is the IPS's
+# `hps-workload destroy`, which needs an approval, never this script.
+# Last line on success: VM <vm> undefined
+# Exit: 0 done, 2 usage, 3 refused (not shut off), 1 failed.
+
+set -euo pipefail
+
+VM=""
+
+log() {
+  printf '[vm-undefine] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-undefine <vm>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+main() {
+  local state
+  [[ $# -eq 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
+  if ! state=$(run_q virsh -c qemu:///system domstate "$VM"); then
+    log "$VM is not defined; nothing to do"
+    printf 'VM %s undefined\n' "$VM"
+    return 0
+  fi
+  if [[ "$state" != "shut off" ]]; then
+    refuse "$VM is '$state'; stop it first"
+  fi
+  run virsh -c qemu:///system undefine --nvram "$VM"
+  printf 'VM %s undefined\n' "$VM"
+}
+
+main "$@"

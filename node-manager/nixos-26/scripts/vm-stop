@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+#
+# vm-stop - stop a guest: a clean ACPI shutdown, a hard stop only on request.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-stop <vm> [--timeout <seconds, default 60>] [--force]
+# Not defined: 4. Already shut off: nothing to do, exit 0. Otherwise
+# virsh shutdown, then wait for "shut off". If the guest has not stopped when
+# the timeout is up: without --force the script exits 1 (the guest keeps
+# running; a later call can wait again); with --force it runs virsh destroy
+# (power off, like pulling the plug) and waits for "shut off".
+# Last line on success: VM <vm> shut off
+# Exit: 0 shut off, 2 usage, 4 not defined, 1 failed or still running.
+
+set -euo pipefail
+
+: "${HPS_VM_STEP:=1}"
+
+VM=""
+TIMEOUT=60
+FORCE=0
+
+log() {
+  printf '[vm-stop] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-stop <vm> [--timeout <seconds>] [--force]
+Exit: 0 ok, 2 usage, 4 not defined, 1 failed.
+USAGE
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --timeout)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        TIMEOUT=$2
+        shift 2
+        ;;
+      --force) FORCE=1; shift ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+  [[ "$TIMEOUT" =~ ^[0-9]{1,4}$ ]] || { log "bad --timeout"; usage; exit 2; }
+  TIMEOUT=$((10#$TIMEOUT))
+}
+
+# wait_off <seconds>: true when the guest is shut off within that time.
+wait_off() {
+  local limit=$1 waited=0 state
+  while :; do
+    state=$(run virsh -c qemu:///system domstate "$VM")
+    if [[ "$state" == "shut off" ]]; then
+      return 0
+    fi
+    if ((waited >= limit)); then
+      return 1
+    fi
+    waited=$((waited + 1))
+    sleep "$HPS_VM_STEP"
+  done
+}
+
+main() {
+  local state
+  parse_args "$@"
+  if ! state=$(run_q virsh -c qemu:///system domstate "$VM"); then
+    log "$VM is not defined"
+    exit 4
+  fi
+  if [[ "$state" == "shut off" ]]; then
+    log "$VM is already shut off; nothing to do"
+    printf 'VM %s shut off\n' "$VM"
+    return 0
+  fi
+  run virsh -c qemu:///system shutdown "$VM"
+  if wait_off "$TIMEOUT"; then
+    printf 'VM %s shut off\n' "$VM"
+    return 0
+  fi
+  if ((FORCE == 0)); then
+    log "$VM did not shut off within $TIMEOUT s; not forcing (use --force)"
+    exit 1
+  fi
+  run virsh -c qemu:///system destroy "$VM"
+  if ! wait_off 10; then
+    log "$VM is still not shut off after destroy"
+    exit 1
+  fi
+  printf 'VM %s shut off\n' "$VM"
+}
+
+main "$@"

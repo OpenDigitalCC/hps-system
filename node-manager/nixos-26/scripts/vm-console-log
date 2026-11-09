@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# vm-console-log - the tail of a guest's serial console log. Read-only.
+#
+# Usage: vm-console-log <vm> [--lines <n, default 200>]
+# Reads /var/log/libvirt/qemu/<vm>-serial.log (the vm-define default;
+# HPS_LIBVIRT_LOGDIR overrides the directory). A guest defined with another
+# --serial-log is not found here.
+# Exit: 0 ok, 2 usage, 4 no such log.
+
+set -euo pipefail
+
+: "${HPS_LIBVIRT_LOGDIR:=/var/log/libvirt/qemu}"
+
+VM=""
+LINES_N=200
+
+log() {
+  printf '[vm-console-log] %s\n' "$*" >&2
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-console-log <vm> [--lines <n>]
+Exit: 0 ok, 2 usage, 4 no log.
+USAGE
+}
+
+main() {
+  local file
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        LINES_N=$2
+        shift 2
+        ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+  [[ "$LINES_N" =~ ^[0-9]{1,5}$ ]] || { usage; exit 2; }
+  file="$HPS_LIBVIRT_LOGDIR/$VM-serial.log"
+  if [[ ! -r "$file" ]]; then
+    log "no serial log at $file"
+    exit 4
+  fi
+  printf '+ tail -n %s %s\n' "$LINES_N" "$file" >&2
+  tail -n "$LINES_N" -- "$file"
+}
+
+main "$@"

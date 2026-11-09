@@ -103,6 +103,25 @@ in
       mirror-stop.options.profile = "node";
       mirror-detach-leg.source = mkScript "mirror-detach-leg" (scriptsDir + "/mirror-detach-leg");
       mirror-detach-leg.options.profile = "node";
+      # CS-3.3: VM lifecycle, image fetch, confinement report (virsh and qemu-img come with the compute profile; curl must be on the system path).
+      image-fetch.source = mkScript "image-fetch" (scriptsDir + "/image-fetch");
+      image-fetch.options.profile = "node";
+      vm-define.source = mkScript "vm-define" (scriptsDir + "/vm-define");
+      vm-define.options.profile = "node";
+      vm-image-write.source = mkScript "vm-image-write" (scriptsDir + "/vm-image-write");
+      vm-image-write.options.profile = "node";
+      vm-start.source = mkScript "vm-start" (scriptsDir + "/vm-start");
+      vm-start.options.profile = "node";
+      vm-stop.source = mkScript "vm-stop" (scriptsDir + "/vm-stop");
+      vm-stop.options.profile = "node";
+      vm-status.source = mkScript "vm-status" (scriptsDir + "/vm-status");
+      vm-status.options.profile = "node";
+      vm-undefine.source = mkScript "vm-undefine" (scriptsDir + "/vm-undefine");
+      vm-undefine.options.profile = "node";
+      vm-console-log.source = mkScript "vm-console-log" (scriptsDir + "/vm-console-log");
+      vm-console-log.options.profile = "node";
+      vm-confinement-report.source = mkScript "vm-confinement-report" (scriptsDir + "/vm-confinement-report");
+      vm-confinement-report.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

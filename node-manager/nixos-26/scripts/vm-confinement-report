@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+#
+# vm-confinement-report - what confines the guests on this node. Read-only.
+#
+# ctrl-exec allowlisted node script. Prints checks 1 to 5 of docs/CONFINEMENT.md
+# ("Verify on the node"), each as a labelled line:
+#   CHECK1 ...  libvirt security models (virsh capabilities) and, per guest, the
+#               "Security model" line of virsh dominfo
+#   CHECK2 ...  per guest QEMU process: user, CapEff, CapPrm, NoNewPrivs, Seccomp
+#               (from /proc/<pid>/status)
+#   CHECK3 ...  per guest AppArmor label (/proc/<pid>/attr/current)
+#   CHECK4 ...  /sys/module/apparmor/parameters/enabled and the profiles list
+#   CHECK5 ...  the confinement settings in libvirt's qemu.conf
+# With no guest running the per-guest checks say "no guest running"; that is a
+# result, not a failure. The script has no failing exit for a missing guest.
+#
+# Usage: vm-confinement-report [<vm>]   (no <vm>: every running guest)
+#
+# Last line (the IPS parses it; values of the first guest examined):
+#   CONFINEMENT model=<apparmor|dac|none> qemu_user=<user|-> seccomp=<0|1|2|-> apparmor_kernel=<Y|N|-> label=<label|->
+# model: the guest's dominfo "Security model" (else the first model virsh
+# capabilities lists, else none); "-" values mean "not observed" (no guest
+# running, or the file is absent). label is the profile name without the
+# " (enforce)" suffix; "unconfined" is a real answer.
+# Test hooks: HPS_PROC (/proc), HPS_SYS (/sys), HPS_QEMU_CONF
+# (/var/lib/libvirt/qemu.conf).
+# Exit: 0, 2 usage.
+
+set -euo pipefail
+
+: "${HPS_PROC:=/proc}"
+: "${HPS_SYS:=/sys}"
+: "${HPS_QEMU_CONF:=/var/lib/libvirt/qemu.conf}"
+
+log() {
+  printf '[vm-confinement-report] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-confinement-report [<vm>]
+Exit: 0 ok, 2 usage.
+USAGE
+}
+
+# find_pid <vm>: the QEMU process whose command line names guest=<vm>.
+find_pid() {
+  local d cmd
+  for d in "$HPS_PROC"/[0-9]*; do
+    [[ -r "$d/cmdline" ]] || continue
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2> /dev/null || true)
+    if [[ "$cmd" == *qemu-system* && "$cmd" == *"guest=$1,"* ]]; then
+      printf '%s\n' "${d##*/}"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# status_field <pid> <Field>: the value of a /proc/<pid>/status line.
+status_field() {
+  sed -n -E "s/^$2:[[:space:]]*//p" "$HPS_PROC/$1/status" | head -n 1
+}
+
+uid_name() {
+  local uid=${1%%[[:space:]]*} ent
+  if ent=$(getent passwd "$uid" 2> /dev/null); then
+    printf '%s\n' "${ent%%:*}"
+  else
+    printf '%s\n' "$uid"
+  fi
+}
+
+# Results for the last line, set by the first guest examined.
+R_MODEL=""
+R_USER="-"
+R_SECCOMP="-"
+R_LABEL="-"
+R_AA="-"
+
+check1_capabilities() {
+  local caps models
+  if caps=$(run virsh -c qemu:///system capabilities 2> /dev/null); then
+    models=$(sed -n -E 's/.*<model>([^<]*)<\/model>.*/\1/p' <<< "$caps" | paste -sd, -)
+    printf 'CHECK1 libvirt secmodels: %s\n' "${models:-none listed}"
+    R_MODEL=${models%%,*}
+  else
+    printf 'CHECK1 libvirt secmodels: virsh capabilities failed\n'
+  fi
+}
+
+check1_dominfo() {
+  local vm=$1 sec line
+  if sec=$(run virsh -c qemu:///system dominfo "$vm" 2> /dev/null); then
+    line=$(grep -i 'security' <<< "$sec" || true)
+    printf 'CHECK1 dominfo %s: %s\n' "$vm" "${line:-no security line}"
+    if [[ -n "$line" && "$FIRST" -eq 1 ]]; then
+      R_MODEL=$(sed -n -E 's/^Security model:[[:space:]]*//Ip' <<< "$line" | head -n 1)
+    fi
+  else
+    printf 'CHECK1 dominfo %s: not defined\n' "$vm"
+  fi
+}
+
+check2_3_process() {
+  local vm=$1 pid uid user ce cp nn sc label
+  pid=$(find_pid "$vm")
+  if [[ -z "$pid" ]]; then
+    printf 'CHECK2 %s: no guest running\n' "$vm"
+    printf 'CHECK3 %s: no guest running\n' "$vm"
+    return 0
+  fi
+  uid=$(status_field "$pid" Uid)
+  user=$(uid_name "$uid")
+  ce=$(status_field "$pid" CapEff)
+  cp=$(status_field "$pid" CapPrm)
+  nn=$(status_field "$pid" NoNewPrivs)
+  sc=$(status_field "$pid" Seccomp)
+  label=$(tr -d '\0' < "$HPS_PROC/$pid/attr/current" 2> /dev/null || true)
+  label=${label%%[[:space:]]}
+  printf 'CHECK2 %s: pid=%s user=%s CapEff=%s CapPrm=%s NoNewPrivs=%s Seccomp=%s\n' "$vm" "$pid" "$user" "$ce" "$cp" "$nn" "$sc"
+  printf 'CHECK3 %s: label=%s\n' "$vm" "${label:-unreadable}"
+  if [[ "$FIRST" -eq 1 ]]; then
+    R_USER=$user
+    R_SECCOMP=${sc:--}
+    label=${label%% (*}
+    R_LABEL=${label:--}
+  fi
+}
+
+check4_apparmor() {
+  local en prof n lv gl
+  en=$(cat "$HPS_SYS/module/apparmor/parameters/enabled" 2> /dev/null || true)
+  printf 'CHECK4 apparmor kernel enabled: %s\n' "${en:-absent}"
+  R_AA=${en:--}
+  prof="$HPS_SYS/kernel/security/apparmor/profiles"
+  if [[ -r "$prof" ]]; then
+    n=$(wc -l < "$prof")
+    lv=$(grep -c '^libvirtd ' "$prof" || true)
+    gl=$(grep -c '^libvirt-' "$prof" || true)
+    printf 'CHECK4 apparmor profiles: total=%s libvirtd=%s guest=%s\n' "$n" "$lv" "$gl"
+  else
+    printf 'CHECK4 apparmor profiles: list unreadable\n'
+  fi
+}
+
+check5_qemu_conf() {
+  local line found=0
+  if [[ ! -r "$HPS_QEMU_CONF" ]]; then
+    printf 'CHECK5 qemu.conf: %s unreadable\n' "$HPS_QEMU_CONF"
+    return 0
+  fi
+  while IFS= read -r line; do
+    printf 'CHECK5 qemu.conf: %s\n' "$line"
+    found=1
+  done < <(grep -E 'seccomp|clear_emulator|dynamic_ownership|allow_disk_format|security_|^user|^group' "$HPS_QEMU_CONF" || true)
+  if ((found == 0)); then
+    printf 'CHECK5 qemu.conf: no confinement settings found\n'
+  fi
+}
+
+main() {
+  local vm vms names
+  FIRST=1
+  case $# in
+    0) ;;
+    1)
+      case "$1" in
+        -*) usage; exit 2 ;;
+      esac
+      [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+      ;;
+    *) usage; exit 2 ;;
+  esac
+  check1_capabilities
+  if [[ $# -eq 1 ]]; then
+    vms=$1
+  else
+    names=$(run virsh -c qemu:///system list --name 2> /dev/null || true)
+    vms=$names
+  fi
+  if [[ -z "$vms" ]]; then
+    printf 'CHECK1 dominfo: no guest running\n'
+    printf 'CHECK2: no guest running\n'
+    printf 'CHECK3: no guest running\n'
+  else
+    while IFS= read -r vm; do
+      [[ -n "$vm" ]] || continue
+      check1_dominfo "$vm"
+      check2_3_process "$vm"
+      FIRST=0
+    done <<< "$vms"
+  fi
+  check4_apparmor
+  check5_qemu_conf
+  printf 'CONFINEMENT model=%s qemu_user=%s seccomp=%s apparmor_kernel=%s label=%s\n' "${R_MODEL:-none}" "$R_USER" "$R_SECCOMP" "$R_AA" "$R_LABEL"
+}
+
+main "$@"
