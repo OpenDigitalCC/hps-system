@@ -88,7 +88,7 @@ build_flags() {
 
 nixpkgs_short_rev() {
   local rev
-  rev=$(run nix "${NIX_FLAGS[@]}" flake metadata "$SRC" --json \
+  rev=$(run nix "${NIX_FLAGS[@]}" flake metadata "path:$SRC" --json \
     | jq -r '.locks.nodes.nixpkgs.locked.rev // empty')
   if [[ -z "$rev" ]]; then
     echo "build.sh: cannot read the nixpkgs revision from flake metadata" >&2
@@ -104,7 +104,7 @@ build_profile() {
   if [[ $NO_CACHE -eq 1 ]]; then
     extra+=(--option substituters "" --rebuild)
   fi
-  run nix "${NIX_FLAGS[@]}" build "$SRC#$profile" --out-link "$link" "${extra[@]}"
+  run nix "${NIX_FLAGS[@]}" build "path:$SRC#$profile" --out-link "$link" "${extra[@]}"
   if [[ ! -f "$link/boot.json" ]]; then
     echo "build.sh: $profile built without boot.json" >&2
     return 1

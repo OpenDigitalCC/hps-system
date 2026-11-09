@@ -32,6 +32,10 @@
     # Serial first (iLO virtual serial / ttyS0), VGA second.
     boot.kernelParams = [ "console=ttyS0,115200n8" "console=tty0" ];
     boot.supportedFilesystems = [ "zfs" ];
+    # A normal boot imports the pool and never forces it (brief: pool safety);
+    # also the 26.11 default.
+    boot.zfs.forceImportRoot = false;
+    boot.zfs.forceImportAll = false;
     # ZFS refuses to build without a hostId. A fixed image-wide id is accepted
     # for phase 1 (read-only listing; no import). Per-node ids are a phase-2
     # item (plans/phase-1.md §6).
