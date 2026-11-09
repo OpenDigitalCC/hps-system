@@ -26,7 +26,7 @@ setup() {
   grep -q '"SCH"' "$f"
   grep -q 'boot.zfs.extraPools = \[ \];' "$f"
   local t
-  for t in targetcli mdadm smartmontools util-linux unixtools.xxd; do
+  for t in targetcli-fb mdadm smartmontools util-linux unixtools.xxd; do
     grep -q "^    $t\$" "$f"
   done
   run ! grep -E 'forceImportRoot *= *true|forceImportAll *= *true|extraPools *= *\[ *"' "$f"

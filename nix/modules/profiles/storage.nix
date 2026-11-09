@@ -3,7 +3,7 @@
 # ZFS is already on in hps-common.nix (boot.supportedFilesystems, forceImportRoot
 # and forceImportAll off). This module adds what the storage scripts call: the
 # LIO SCSI target (services.target restores /etc/target/saveconfig.json at boot;
-# iscsi-export writes it with targetcli saveconfig), targetcli, mdadm,
+# iscsi-export writes it with targetcli-fb saveconfig), targetcli, mdadm,
 # smartmontools, util-linux (lsblk, blkid, wipefs), xxd (raw key conversion) and
 # jq/openssl (approval verification) on the scripts' path.
 #
@@ -21,7 +21,7 @@
   boot.zfs.extraPools = [ ];
 
   environment.systemPackages = with pkgs; [
-    targetcli
+    targetcli-fb
     mdadm
     smartmontools
     util-linux

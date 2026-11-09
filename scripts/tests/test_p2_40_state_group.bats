@@ -142,9 +142,11 @@ in_state() {
   [ "${lines[2]#*:}" = "  supervisor_reload_core_config" ]
 }
 
-@test "keysafe directories are created 0700 by a private umask and named in a comment" {
-  grep -q 'umask 077 && mkdir -p "$keysafe_dir/tokens"' "$ROOT/lib/functions.d/keysafe-functions.sh"
-  grep -q 'root-only' "$ROOT/lib/functions.d/keysafe-functions.sh"
+@test "the keysafe store is root-only (Perl HPS::Keysafe, 0700/0600; the Bash keysafe is retired)" {
+  [ ! -e "$ROOT/lib/functions.d/keysafe-functions.sh" ]
+  grep -qE '0700' "$ROOT/lib/perl/HPS/Keysafe.pm"
+  grep -qE '0600' "$ROOT/lib/perl/HPS/Keysafe.pm"
+  grep -qE 'umask' "$ROOT/lib/perl/HPS/Keysafe.pm"
 }
 
 @test "the Dockerfile creates group hps and adds www-data to it" {
