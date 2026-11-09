@@ -93,6 +93,8 @@ create_config_dnsmasq() {
 # ---------------------------
 # System config
 # ---------------------------
+# Log to syslog (daemon facility); rsyslog files it per service
+log-facility=DAEMON
 # Bind only to this IP (set dynamically from cluster config)
 listen-address=${dhcp_ip}
 # Answer on this interface only (the IPS is host-networked)

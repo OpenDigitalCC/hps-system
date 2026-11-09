@@ -74,8 +74,9 @@ http {
   default_type  application/octet-stream;
   sendfile      on;
   keepalive_timeout  65;
-  access_log /dev/stdout;
-  error_log /dev/stderr warn;
+  # All logging through syslog (rsyslog files it under the IPS log tree)
+  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx,severity=info combined;
+  error_log syslog:server=unix:/dev/log,tag=nginx warn;
 
   server {
     listen ${listen_ip}:80 default_server;

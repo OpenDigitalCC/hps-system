@@ -151,14 +151,16 @@ EOF
 #===============================================================================
 # supervisor_configure_core_services
 # ----------------------------------
-# Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, rsyslog, and OpenSVC.
+# Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, rsyslog, chronyd and OpenSVC.
 #
 # Usage:
 #   supervisor_configure_core_services
 #
 # Description:
 #   Appends service blocks to /srv/hps-config/services/supervisord.conf.
-#   Logs are written to ${HPS_LOG}.
+#   Every program logs to syslog (stdout_logfile/stderr_logfile=syslog, tagged
+#   with the program name); rsyslog files it under ${HPS_LOG}/ips/<program>/.
+#   supervisord's own log stays a file: ${HPS_LOG}/supervisord.log.
 #   The function is idempotent: each program block is only added once.
 #   Service configs use cluster-specific paths for dnsmasq, nginx, rsyslog.
 #
@@ -236,42 +238,33 @@ supervisor_configure_core_services() {
 
   # --- dnsmasq ---
   local dnsmasq_conf="${cluster_services_dir}/dnsmasq.conf"
-  local dnsmasq_log_stderr="${cluster_services_dir}/dnsmasq.err.log"
-  local dnsmasq_log_stdout="${cluster_services_dir}/dnsmasq.out.log"
-  
-  touch "${dnsmasq_log_stderr}" "${dnsmasq_log_stdout}"
-  chown nobody:nogroup "${dnsmasq_log_stderr}" "${dnsmasq_log_stdout}" 2>/dev/null || true
 
   _supervisor_append_once "program:dnsmasq" "$(cat <<EOF
 [program:dnsmasq]
-command=/usr/sbin/dnsmasq -k --conf-file=${dnsmasq_conf} --log-facility=${dnsmasq_log_stdout}
+command=/usr/sbin/dnsmasq -k --conf-file=${dnsmasq_conf}
 autostart=true
 autorestart=true
-stdout_logfile=${dnsmasq_log_stdout}
-stderr_logfile=${dnsmasq_log_stderr}
+stdout_logfile=syslog
+stderr_logfile=syslog
 environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
   # --- nginx ---
   local nginx_conf="${cluster_services_dir}/nginx.conf"
-  local nginx_log_stderr="${cluster_services_dir}/nginx.err.log"
-  local nginx_log_stdout="${cluster_services_dir}/nginx.out.log"
   
   _supervisor_append_once "program:nginx" "$(cat <<EOF
 [program:nginx]
 command=/usr/sbin/nginx -g 'daemon off;' -c ${nginx_conf}
 autostart=true
 autorestart=true
-stdout_logfile=${nginx_log_stdout}
-stderr_logfile=${nginx_log_stderr}
+stdout_logfile=syslog
+stderr_logfile=syslog
 environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
   # --- fcgiwrap ---
-  local fcgiwrap_log_stderr="${cluster_services_dir}/fcgiwrap.err.log"
-  local fcgiwrap_log_stdout="${cluster_services_dir}/fcgiwrap.out.log"
   
   _supervisor_append_once "program:fcgiwrap" "$(cat <<EOF
 [program:fcgiwrap]
@@ -279,24 +272,23 @@ command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -
 umask=002
 autostart=true
 autorestart=true
-stdout_logfile=${fcgiwrap_log_stdout}
-stderr_logfile=${fcgiwrap_log_stderr}
+stdout_logfile=syslog
+stderr_logfile=syslog
 environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
   # --- rsyslogd ---
   local rsyslog_conf="${cluster_services_dir}/rsyslog.conf"
-  local rsyslog_log_stderr="${cluster_services_dir}/rsyslog.err.log"
-  local rsyslog_log_stdout="${cluster_services_dir}/rsyslog.out.log"
   
   _supervisor_append_once "program:rsyslogd" "$(cat <<EOF
 [program:rsyslogd]
 command=/usr/sbin/rsyslogd -n -f ${rsyslog_conf}
+priority=1
 autostart=true
 autorestart=true
-stderr_logfile=${rsyslog_log_stderr}
-stdout_logfile=${rsyslog_log_stdout}
+stderr_logfile=syslog
+stdout_logfile=syslog
 stdout_events_enabled=true
 stderr_events_enabled=true
 environment=$(_get_hps_environment)
@@ -308,16 +300,14 @@ EOF
   # host's kernel clock); -u root so the drift file in the services dir is
   # writable.
   local chrony_conf="${cluster_services_dir}/chrony.conf"
-  local chrony_log_stderr="${cluster_services_dir}/chrony.err.log"
-  local chrony_log_stdout="${cluster_services_dir}/chrony.out.log"
 
   _supervisor_append_once "program:chronyd" "$(cat <<EOF
 [program:chronyd]
 command=/usr/sbin/chronyd -d -x -u root -f ${chrony_conf}
 autostart=true
 autorestart=true
-stderr_logfile=${chrony_log_stderr}
-stdout_logfile=${chrony_log_stdout}
+stderr_logfile=syslog
+stdout_logfile=syslog
 environment=$(_get_hps_environment)
 EOF
 )" || return 3

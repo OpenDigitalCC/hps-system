@@ -33,8 +33,8 @@ global(
 # Load required modules
 module(load="imudp")    # UDP syslog reception
 module(load="imtcp")    # TCP syslog reception
-module(load="imuxsock") # Local system logging
-module(load="imklog")   # Kernel logging support
+module(load="imuxsock" SysSock.Name="/dev/log") # Local system logging (services, hps_log)
+# imklog is not loaded: a container has no kernel log of its own
 
 # Provide UDP syslog reception
 input(type="imudp" port="514")
@@ -63,21 +63,23 @@ template(name="RemoteLogFile" type="string"
   string="${RSYSLOG_LOG_DIR}/%fromhost-ip%/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
 )
 
-# Log by program name
+# One file per IPS service: ips/<programname>/<date>.log
 template(name="IPSServiceLogFile" type="string"
-  string="${RSYSLOG_LOG_DIR}/ips/%programname%-%\$YEAR%-%\$MONTH%-%\$DAY%.log"
+  string="${RSYSLOG_LOG_DIR}/ips/%programname%/%\$YEAR%-%\$MONTH%-%\$DAY%.log"
 )
 
 
 ## # Log message routing
 
-# Route marked program logs to separate file
-if \$programname == "nginx" then {
+# Route local IPS service logs to one file per program. The program names are a
+# fixed list (they become directory names); only local senders match, so a
+# node cannot write into the service tree.
+if (\$fromhost-ip == "127.0.0.1") and (\$programname == ["dnsmasq", "dnsmasq-dhcp", "dnsmasq-tftp", "nginx", "fcgiwrap", "chronyd", "supervisord", "hps"]) then {
   *.* action(type="omfile" dynaFile="IPSServiceLogFile" template="HPSLogFormat")
   stop
 }
 
-# Route all local logs to ips/* with the same format
+# Route all other local logs to ips/<date>.log with the same format
 if \$fromhost-ip == "127.0.0.1" then {
   *.* action(type="omfile" dynaFile="IPSLogFile" template="HPSLogFormat")
   stop

@@ -11,7 +11,7 @@
 #    - ensures runtime dirs (/run/opensvc, /var/log/opensvc, /var/lib/opensvc, ${HPS_LOG}) exist
 #    - verifies /etc/opensvc/agent.key exists and is non-empty (fails fast otherwise)
 #    - execs 'om daemon run' (OpenSVC v3) in the foreground
-#    - funnels agent stdout/stderr to log
+#    - funnels agent stdout/stderr to syslog (tag om)
 #    - filters the noisy "zerolog … journal/socket" lines from stderr (no journald in container)
 #  Notes:
 #    - Idempotent: only rewrites the file if content changed.
@@ -47,8 +47,8 @@ fi
 # Filter the noisy journald error lines from stderr; keep everything else.
 # Agent also writes its own file log as configured in /etc/opensvc/opensvc.conf.
 exec /usr/bin/om daemon run \
-  1>>"${LOGDIR}/opensvc.out.log" \
-  2> >(stdbuf -o0 awk '!/zerolog: could not write event: write unixgram .*journal\/socket/' >> "${LOGDIR}/opensvc.err.log")
+  1> >(logger -t om -p local0.info) \
+  2> >(stdbuf -o0 awk '!/zerolog: could not write event: write unixgram .*journal\/socket/' | logger -t om -p local0.err)
 EOF
 
   chmod 0755 "$tmp"
