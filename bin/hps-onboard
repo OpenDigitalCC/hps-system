@@ -1,0 +1,107 @@
+#!/usr/bin/env perl
+# hps-onboard: review held hosts and assign them a role.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::Onboard;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-onboard: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-onboard list [--json]
+  hps-onboard show <mac> [--json]
+  hps-onboard assign <mac> --type SCH,TCH,DRH --profile NAME \
+      --os arch:name:version --pin PIN [--storage "note"]
+Exit: 0 ok, 2 usage, 3 refused (host not HELD), 4 not found.
+USAGE
+    return 2;
+}
+
+sub render_list {
+    my (@held) = @_;
+    return "No held hosts.\n" unless @held;
+    my $out = sprintf("%-14s %-8s %s\n", 'MAC', 'AUDIT', 'AUDITED AT');
+    $out .= sprintf("%-14s %-8s %s\n", $_->{mac}, $_->{has_audit} ? 'yes' : 'none', $_->{audit_at} // '-') for @held;
+    return $out;
+}
+
+sub render_value {
+    my ($v, $indent) = @_;
+    my $pad = '  ' x $indent;
+    if (ref $v eq 'HASH') {
+        return join '', map {
+            my $x = $v->{$_};
+            ref $x ? "$pad$_:\n" . render_value($x, $indent + 1) : "$pad$_: " . (defined $x ? $x : '') . "\n"
+        } sort keys %$v;
+    }
+    if (ref $v eq 'ARRAY') {
+        return join '', map {
+            ref $_ ? "$pad-\n" . render_value($_, $indent + 1) : "$pad- $_\n"
+        } @$v;
+    }
+    return "$pad" . (defined $v ? $v : '') . "\n";
+}
+
+sub render_show {
+    my ($s) = @_;
+    my $out = "Host $s->{mac}\n  State: " . ($s->{state} // '-') . "\n\nIdentity\n";
+    $out .= render_value($s->{identity}, 1);
+    if (defined $s->{audit}) {
+        $out .= "\nAudit" . (defined $s->{audit_at} ? " ($s->{audit_at})" : '') . "\n";
+        $out .= render_value($s->{audit}, 1);
+    }
+    else {
+        $out .= "\nNo audit stored for this host.\n";
+    }
+    return $out;
+}
+
+sub main {
+    my @argv = @_;
+    my ($json, $type, $profile, $os, $pin, $storage);
+    my $cmd = shift @argv // return usage('command required');
+    GetOptionsFromArray(
+        \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage,
+    ) or return usage();
+    my $ob = HPS::Onboard->new;
+    my $js = JSON::PP->new->canonical->pretty->allow_nonref;
+    my $rc = eval {
+        if ($cmd eq 'list') {
+            return usage('list takes no arguments') if @argv;
+            my @held = $ob->list_held;
+            print $json ? $js->encode(\@held) : render_list(@held);
+        }
+        elsif ($cmd eq 'show') {
+            return usage('show needs one MAC') unless @argv == 1;
+            my $s = $ob->show($argv[0]);
+            print $json ? $js->encode($s) : render_show($s);
+        }
+        elsif ($cmd eq 'assign') {
+            return usage('assign needs one MAC') unless @argv == 1;
+            my $r = $ob->assign($argv[0], { type => $type, profile => $profile, os => $os, pin => $pin, storage_note => $storage });
+            print "Assigned $r->{mac}: state now $r->{state}\n";
+        }
+        else {
+            return usage("unknown command '$cmd'");
+        }
+        0;
+    };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::Onboard::Error')) {
+        print STDERR 'hps-onboard: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-onboard: $err";
+    return 1;
+}
+
+exit main(@ARGV);
