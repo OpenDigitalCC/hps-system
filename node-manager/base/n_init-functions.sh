@@ -65,8 +65,12 @@ n_init_run() {
       n_remote_log "Init [$i/$total]: Starting $action"
     fi
     
-    # Check if function exists
-    if ! type "$action" >/dev/null 2>&1; then
+    # Split "func arg..." into the function name and its arguments
+    local -a words=()
+    read -r -a words <<< "$action"
+
+    # Check if function exists (first word)
+    if [[ ${#words[@]} -eq 0 ]] || ! type "${words[0]}" >/dev/null 2>&1; then
       echo "[HPS] ERROR: Function not found: $action" >&2
       if type n_remote_log >/dev/null 2>&1; then
         n_remote_log "Init ERROR: Function not found: $action"
@@ -77,7 +81,7 @@ n_init_run() {
     fi
     
     # Execute the action
-    if "$action" 2>&1; then
+    if "${words[@]}" 2>&1; then
       echo "[HPS] [$i/$total] Success: $action" >&2
       if type n_remote_log >/dev/null 2>&1; then
         n_remote_log "Init [$i/$total]: Success: $action"

@@ -57,6 +57,10 @@ ipxe_boot_from_disk () {
 #   - Initialises host config if not exists
 #   - Checks for rescue mode override
 #   - Dispatches to appropriate handler based on STATE
+#   - CONFIGURED (type and network set, install not started) goes straight to
+#     ipxe_boot_installer, the same handler as INSTALLING. The type was chosen
+#     in the configure menu, so a second install menu would only repeat that
+#     choice; the installer re-uses the stored TYPE/IP/HOSTNAME.
 #
 # Arguments:
 #   $1: MAC address
@@ -108,8 +112,8 @@ ipxe_init_handler() {
       ;;
     
     CONFIGURED)
-      hps_log info "State: $state - offering install options"
-      ipxe_host_install_menu
+      hps_log info "State: $state - starting install"
+      ipxe_boot_installer "$mac"
       ;;
     
     INSTALLED|DISK_BOOT|UNMANAGED)
@@ -223,7 +227,7 @@ handle_menu_item() {
       if [[ "${item}" == "force_install_on" ]] 
        then
         host_registry "$mac" set FORCE_INSTALL YES
-        host_registry "$mac" set STATUS UNCONFIGURED
+        host_registry "$mac" set STATE UNCONFIGURED
         ipxe_goto_menu
        else
         host_registry "$mac" set FORCE_INSTALL NO
@@ -369,12 +373,19 @@ ipxe_boot_installer () {
   local host_profile="$(host_registry "$mac" get HOST_PROFILE)"
   local arch="$(host_registry "$mac" get arch)"
 
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "[ipxe_boot_installer] No active cluster"
+    return 1
+  }
+
   local lc_type=$(echo ${host_type} | tr '[:upper:]' '[:lower:]')
   os_key="os_${lc_type}_${arch}"
-  os_id=$(cluster_registry "get" "$os_key")
-  # Fallback to any OS for this arch/type
+  os_id=$(cluster_registry "$cluster" get "$os_key")
+  # Fallback to any OS for this arch/type. OS hps_types are stored upper-case
+  # ("TCH,SCH") and matched case-sensitively, so pass the type as stored.
   if [[ -z "$os_id" ]]; then
-    os_id=$(os_config_select "$arch" "$lc_type")
+    os_id=$(os_config_select "$arch" "$host_type")
   fi
   hps_log debug "os_key: $os_key os_id: $os_id"
 

@@ -118,13 +118,18 @@ get_host_os_id() {
   [[ -z "$arch" ]] && arch="x86_64"
   
   # Build the cluster config key
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "[get_host_os_id] No active cluster"
+    return 1
+  }
   local os_key="os_$(echo $host_type | tr '[:upper:]' '[:lower:]')_${arch}"
-  local os_id=$(cluster_registry "get" "$os_key")
+  local os_id=$(cluster_registry "$cluster" get "$os_key")
   
   # Fallback to non-architecture-specific if not found
   if [[ -z "$os_id" ]]; then
     os_key="os_$(echo $host_type | tr '[:upper:]' '[:lower:]')"
-    os_id=$(cluster_registry "get" "$os_key")
+    os_id=$(cluster_registry "$cluster" get "$os_key")
     
     # If found non-arch specific, prepend architecture
     if [[ -n "$os_id" ]] && [[ "$os_id" != *:* ]]; then
@@ -547,6 +552,13 @@ host_network_configure() {
     return 1
   }
   
+  # Rebuild DHCP/DNS files now rather than waiting for the next service start.
+  # host_post_config_hooks maps IP and HOSTNAME to update_dns_dhcp_files (one
+  # full rebuild, so one call covers both). A failure is logged and never
+  # aborts the boot script.
+  host_post_config_hooks IP "$assigned_ip" || \
+    hps_log warn "host_post_config_hooks failed for $macid (continuing)"
+
   hps_log info "Network configuration complete for $macid: $assigned_hostname ($assigned_ip)"
   return 0
 }

@@ -38,9 +38,15 @@ ips_allocate_storage_ip() {
     return 1
   fi
   
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    echo "ERROR: No active cluster"
+    return 1
+  }
+
   # Check if storage network is configured
-  local base_vlan=$(cluster_registry "get" "network_storage_base_vlan")
-  local storage_count=$(cluster_registry "get" "network_storage_count")
+  local base_vlan=$(cluster_registry "$cluster" get "network_storage_base_vlan")
+  local storage_count=$(cluster_registry "$cluster" get "network_storage_count")
   
   if [[ -z "$base_vlan" ]] || [[ -z "$storage_count" ]]; then
     echo "ERROR: Storage network not initialized"
@@ -57,7 +63,7 @@ ips_allocate_storage_ip() {
   local vlan_id=$((base_vlan + storage_index))
   
   # Check if this VLAN is configured
-  local subnet=$(cluster_registry "get" "network_storage_vlan${vlan_id}_subnet")
+  local subnet=$(cluster_registry "$cluster" get "network_storage_vlan${vlan_id}_subnet")
   if [[ -z "$subnet" ]]; then
     echo "ERROR: VLAN $vlan_id not configured"
     return 1
@@ -67,9 +73,9 @@ ips_allocate_storage_ip() {
   local existing_ip=$(host_registry "$source_mac" "get" "storage${storage_index}_ip")
   if [[ -n "$existing_ip" ]]; then
     # Return existing allocation
-    local netmask=$(cluster_registry "get" "network_storage_vlan${vlan_id}_netmask")
-    local gateway=$(cluster_registry "get" "network_storage_vlan${vlan_id}_gateway")
-    local mtu=$(cluster_registry "get" "network_storage_mtu")
+    local netmask=$(cluster_registry "$cluster" get "network_storage_vlan${vlan_id}_netmask")
+    local gateway=$(cluster_registry "$cluster" get "network_storage_vlan${vlan_id}_gateway")
+    local mtu=$(cluster_registry "$cluster" get "network_storage_mtu")
     
     hps_log "info" "Returning existing storage allocation for $source_mac: $existing_ip"
     echo "${vlan_id}:${existing_ip}:${netmask}:${gateway}:${mtu}"
@@ -77,9 +83,9 @@ ips_allocate_storage_ip() {
   fi
   
   # Get network configuration
-  local netmask=$(cluster_registry "get" "network_storage_vlan${vlan_id}_netmask")
-  local gateway=$(cluster_registry "get" "network_storage_vlan${vlan_id}_gateway")
-  local mtu=$(cluster_registry "get" "network_storage_mtu")
+  local netmask=$(cluster_registry "$cluster" get "network_storage_vlan${vlan_id}_netmask")
+  local gateway=$(cluster_registry "$cluster" get "network_storage_vlan${vlan_id}_gateway")
+  local mtu=$(cluster_registry "$cluster" get "network_storage_mtu")
   
   # Extract network prefix
   local ip_prefix=$(network_subnet_to_prefix "$subnet")
@@ -183,8 +189,14 @@ storage_register_dns() {
     return 1
   fi
   
+  local cluster
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log "error" "No active cluster"
+    return 1
+  }
+
   # Get storage network count
-  local storage_count=$(cluster_registry "get" "network_storage_count")
+  local storage_count=$(cluster_registry "$cluster" get "network_storage_count")
   if [[ -z "$storage_count" ]]; then
     hps_log "error" "Storage networks not configured"
     return 1

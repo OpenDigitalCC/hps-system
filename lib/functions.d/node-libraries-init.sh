@@ -37,7 +37,17 @@ hps_get_remote_functions() {
   
   # Get type, profile, state, rescue
   type=$(host_registry "$mac" get TYPE 2>/dev/null || echo "")
-  profile=$(host_registry "$mac" get PROFILE 2>/dev/null || echo "DEFAULT")
+  # The menu writes HOST_PROFILE; PROFILE is the older key, kept as a fallback.
+  local profile_key=HOST_PROFILE
+  if ! profile=$(host_registry "$mac" get HOST_PROFILE 2>/dev/null) || [[ -z "$profile" ]]; then
+    profile_key=PROFILE
+    profile=$(host_registry "$mac" get PROFILE 2>/dev/null || echo "")
+  fi
+  if [[ -z "$profile" ]]; then
+    profile_key=default
+    profile=DEFAULT
+  fi
+  hps_log info "  Profile read from ${profile_key}: $profile"
   state=$(host_registry "$mac" get STATE 2>/dev/null || echo "RUNNING")
   rescue=$(host_registry "$mac" get RESCUE 2>/dev/null || echo "false")
   
@@ -381,6 +391,7 @@ _build_init_sequence() {
 # _find_all_inits
 # ---------------
 # Find all *.init files in base and OS directories.
+# base/ files come first, then the OS tree; each group is sorted by path.
 #
 # Arguments:
 #   $1 - base_dir : node-manager base directory
@@ -400,11 +411,13 @@ _find_all_inits() {
     "$base_dir/$os_ver"
   )
   
+  # base/ inits first, then the OS tree's; each group sorted by path, so the
+  # order does not depend on how the OS directory name sorts against "base".
   for path in "${search_paths[@]}"; do
     if [[ -d "$path" ]]; then
-      find "$path" -name "*.init" -type f 2>/dev/null
+      find "$path" -name "*.init" -type f 2>/dev/null | sort
     fi
-  done | sort
+  done
 }
 
 
