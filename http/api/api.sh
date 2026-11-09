@@ -145,7 +145,13 @@ validate_request() {
   
   # Get client identity using HPS function
   CLIENT_MAC=$(hps_origin_tag)
-  CLIENT_IP="${HTTP_X_REAL_IP:-${HTTP_X_FORWARDED_FOR:-$REMOTE_ADDR}}"
+  # The connection address only. X-Real-IP / X-Forwarded-For are set by the
+  # caller (no proxy sits in front of the IPS CGI) and would let a node claim
+  # another address; the HELD-node pairing binding relies on this value.
+  CLIENT_IP="$REMOTE_ADDR"
+  if [[ -n "${HTTP_X_REAL_IP:-}${HTTP_X_FORWARDED_FOR:-}" ]]; then
+    hps_log warn "[API] ignoring X-Real-IP/X-Forwarded-For from ${REMOTE_ADDR}"
+  fi
   
   # Authenticate - must be a known host or localhost
   if [[ "$CLIENT_MAC" == "localhost" ]] || [[ "$CLIENT_IP" == "127.0.0.1" ]]; then

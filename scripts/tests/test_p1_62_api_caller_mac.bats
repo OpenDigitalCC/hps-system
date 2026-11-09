@@ -59,3 +59,8 @@ teardown() {
   ! grep -q 'CLIENT_MAC="${HTTP_X_HPS_MAC' "$api"
   ! grep -q 'REQUEST_MAC="${REQUEST_MAC:-$CLIENT_MAC}"' "$api"
 }
+
+@test "api.sh takes CLIENT_IP from the connection only; forwarded headers are ignored" {
+  grep -qE '^\s*CLIENT_IP="\$REMOTE_ADDR"' "$BATS_TEST_DIRNAME/../../http/api/api.sh"
+  ! grep -qE 'CLIENT_IP=.*HTTP_X_(REAL_IP|FORWARDED_FOR)' "$BATS_TEST_DIRNAME/../../http/api/api.sh"
+}
