@@ -119,6 +119,39 @@ Global config is saved in `/srv/hps-config/hps.conf` and sourced by:
 
 See the `hps-container` README for runtime container info.
 
+## NixOS nodes and the lab IPS
+
+HPS can netboot NixOS 26.05 nodes straight into RAM from the IPS. An unknown
+host is held (`STATE=HELD`) and boots an audit image, never a menu; a human
+then assigns it a role, and its next boot is the node image. The first
+hardware trial of this path is described in the project plan
+`plans/phase-1.md` (kept beside the repository, not in it).
+
+The usual sequence, with placeholders:
+
+1. Bootstrap the cluster non-interactively: `scripts/cluster-bootstrap.sh`
+   (network `$NETWORK`, IPS address `$IPS_IP`, DHCP interface `$IFACE`).
+2. Build the images in the builder container (`nix/build.sh`); the artefacts
+   land under `hps-resources/nixos/<pin>/<profile>/`.
+3. Power on `$NODE` on the provisioning network. Its audit appears under
+   `hps-onboard show $MAC`.
+4. Assign it: `hps-onboard assign $MAC --type $TYPE --profile $PROFILE --os $OS`.
+5. Reboot `$NODE`; it pairs with the IPS over ctrl-exec. Run node operations
+   with `scripts/hps-run.sh $NODE <script> [args]`.
+
+Where to read more:
+
+- `docs/LOGGING.md` – where every IPS service and every node logs.
+- `docs/SECURITY.md` – *Node identity at boot* (MAC on the provisioning
+  network, no secret in an image) and *Node scripts under the executor*.
+- `docs/adr/0002-ctrl-exec-enrolment-trust.md` – registry-bound approval of
+  node pairing, including the `HELD` audit image and the per-boot pairing
+  window.
+- `docs/adr/0003-ctrl-exec-agent-packaging.md` – agent delivery; the
+  2026-11-09 amendment covers NixOS nodes and the executor.
+- `CHANGELOG.md` – the phase 1 span, and `.nonfunctional-report.md` for the
+  state of the trial against the eight audit dimensions.
+
 ## Performance
 
 To install a new storage node on a virtual machine, using a commodity home PC takes about 7 minutes and 3 key-presses.

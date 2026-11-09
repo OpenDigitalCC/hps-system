@@ -1,18 +1,32 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "version": 1,
+  "version": 2,
   "metadata": {
     "component": {
       "type": "application",
       "name": "hps-system",
       "description": "Host Provisioning Service - bash PXE/DHCP/TFTP/HTTP provisioning platform",
-      "licenses": [{ "license": { "id": "AGPL-3.0-or-later" } }]
+      "licenses": [
+        {
+          "license": {
+            "id": "AGPL-3.0-or-later"
+          }
+        }
+      ]
     },
     "properties": [
       {
         "name": "hps:versioning",
         "value": "Component versions track the debian:trixie-slim base image suite and are resolved at build time (no pinning); CVE scans should resolve against the trixie suite. See rules/release-workflow.md SBOM dependency rule."
+      },
+      {
+        "name": "hps:nixos-versioning",
+        "value": "NixOS node components are taken from nixpkgs branch nixos-26.05 as locked at build time (the builder writes the nixpkgs revision into each image boot.json and the pin name). flake.lock is not yet committed; CVE scans resolve against the pinned nixpkgs revision of the served pin, not a version recorded here."
+      },
+      {
+        "name": "hps:scope-phase-1",
+        "value": "Phase 1 close-out (2026-11-09): adds chrony on the IPS and the NixOS node/audit image component set. Compute components (libvirt, QEMU, OVMF) and storage services beyond ZFS userland are not yet in the images and are not listed."
       }
     ]
   },
@@ -71,7 +85,7 @@
       "name": "rsyslog",
       "version": "trixie",
       "purl": "pkg:deb/debian/rsyslog",
-      "description": "Logging sink for HPS and cluster nodes"
+      "description": "Logging sink for HPS and cluster nodes: receives UDP/TCP 514 and /dev/log, files under hps-log (docs/LOGGING.md)"
     },
     {
       "type": "application",
@@ -141,7 +155,7 @@
       "name": "perl",
       "version": "trixie",
       "purl": "pkg:deb/debian/perl",
-      "description": "Runtime for the ctrl-exec dispatcher hosted on the IPS"
+      "description": "Runtime for the ctrl-exec dispatcher hosted on the IPS and for the HPS controller code (lib/perl/HPS, bin/hps-onboard)"
     },
     {
       "type": "library",
@@ -174,9 +188,9 @@
     {
       "type": "application",
       "name": "ctrl-exec",
-      "version": "0.12.3",
-      "purl": "pkg:generic/opendigital/ctrl-exec@0.12.3",
-      "description": "mTLS remote execution: dispatcher on the IPS, agent on each node - the node setup/exec mechanism (see docs/adr/0001-orchestration-split.md)"
+      "version": "0.14.4",
+      "purl": "pkg:generic/opendigital/ctrl-exec@0.14.4",
+      "description": "mTLS remote execution: dispatcher on the IPS (tarball from hps-resources/packages), agent on Alpine nodes (tarball) and on NixOS nodes (nixosModules.ctrl-exec-agent with the privileged executor); the node setup/exec mechanism (docs/adr/0001, 0002, 0003)"
     },
     {
       "type": "application",
@@ -191,6 +205,195 @@
       "version": "trixie-slim",
       "purl": "pkg:deb/debian/base?distro=trixie",
       "description": "Base image for the IPS container"
+    },
+    {
+      "type": "application",
+      "name": "chrony",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/chrony",
+      "description": "NTP server on the IPS: serves the cluster network, local stratum 10, optional upstream (create-config-chrony.sh); the enforced node time source"
+    },
+    {
+      "type": "library",
+      "name": "perl-modules-5.40",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/perl-modules-5.40",
+      "description": "Perl core modules used by HPS::Registry, HPS::Onboard and the tests: JSON::PP, Fcntl, File::Temp, File::Path, Test::More (core only, no CPAN)"
+    },
+    {
+      "type": "application",
+      "name": "git",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/git",
+      "description": "Present in the IPS image (Dockerfile); used for repository handling inside the container"
+    },
+    {
+      "type": "application",
+      "name": "ipcalc",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/ipcalc",
+      "description": "Network arithmetic helper in the IPS image"
+    },
+    {
+      "type": "application",
+      "name": "tcpdump",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/tcpdump",
+      "description": "Diagnostic packet capture in the IPS image"
+    },
+    {
+      "type": "application",
+      "name": "iputils-ping",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/iputils-ping",
+      "description": "Diagnostic ping in the IPS image"
+    },
+    {
+      "type": "data",
+      "name": "ca-certificates",
+      "version": "trixie",
+      "purl": "pkg:deb/debian/ca-certificates",
+      "description": "CA trust store for the IPS image HTTPS clients"
+    },
+    {
+      "type": "operating-system",
+      "name": "nixos",
+      "version": "26.05",
+      "purl": "pkg:generic/nixos/nixos@26.05",
+      "description": "Node and audit operating system, netbooted into RAM; built by nix/build.sh from flake.nix (nixpkgs nixos-26.05)"
+    },
+    {
+      "type": "application",
+      "name": "nix",
+      "version": "builder-image",
+      "purl": "pkg:docker/nixos/nix",
+      "description": "Build-time only: the nixos/nix container that builds the netboot images (lab/builder); not shipped in any image"
+    },
+    {
+      "type": "library",
+      "name": "systemd",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/systemd@nixos-26.05",
+      "description": "Node init, systemd-networkd (DHCP on the boot NIC only), systemd-timesyncd (time from the IPS), systemd-resolved, journald forwarding to rsyslog"
+    },
+    {
+      "type": "library",
+      "name": "rsyslog",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/rsyslog@nixos-26.05",
+      "description": "Node syslog forwarder to the IPS on TCP 514, target written at boot by hps-log-target"
+    },
+    {
+      "type": "library",
+      "name": "zfs",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/zfs@nixos-26.05",
+      "description": "ZFS userland and kernel module (boot.supportedFilesystems = zfs) for pool inspection and, in phase 2, storage; CDDL, see DOCUMENTATION/195-Governance/LEGAL_ISSUES.md"
+    },
+    {
+      "type": "library",
+      "name": "bash",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/bash@nixos-26.05",
+      "description": "Shell for all node scripts (shebang /usr/bin/env bash)"
+    },
+    {
+      "type": "library",
+      "name": "coreutils",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/coreutils@nixos-26.05",
+      "description": "Node script runtime"
+    },
+    {
+      "type": "library",
+      "name": "curl",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/curl@nixos-26.05",
+      "description": "Node-side API calls to the IPS (audit POST, bundle fetch)"
+    },
+    {
+      "type": "library",
+      "name": "jq",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/jq@nixos-26.05",
+      "description": "JSON handling in the audit and pairing scripts"
+    },
+    {
+      "type": "library",
+      "name": "iproute2",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/iproute2@nixos-26.05",
+      "description": "ip(8) for network facts and boot-NIC discovery"
+    },
+    {
+      "type": "library",
+      "name": "gawk",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/gawk@nixos-26.05",
+      "description": "Text processing in node scripts"
+    },
+    {
+      "type": "library",
+      "name": "gnutar",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/gnutar@nixos-26.05",
+      "description": "Bundle extraction on nodes"
+    },
+    {
+      "type": "library",
+      "name": "findutils",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/findutils@nixos-26.05",
+      "description": "Node script runtime"
+    },
+    {
+      "type": "library",
+      "name": "gnugrep",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/gnugrep@nixos-26.05",
+      "description": "Node script runtime"
+    },
+    {
+      "type": "library",
+      "name": "procps",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/procps@nixos-26.05",
+      "description": "Node script runtime"
+    },
+    {
+      "type": "library",
+      "name": "util-linux",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/util-linux@nixos-26.05",
+      "description": "lsblk, dmesg, hostnamectl-adjacent tools used by the audit"
+    },
+    {
+      "type": "library",
+      "name": "pciutils",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/pciutils@nixos-26.05",
+      "description": "lspci for the audit"
+    },
+    {
+      "type": "library",
+      "name": "usbutils",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/usbutils@nixos-26.05",
+      "description": "lsusb for the audit"
+    },
+    {
+      "type": "library",
+      "name": "smartmontools",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/smartmontools@nixos-26.05",
+      "description": "SMART data in the audit and disk scripts"
+    },
+    {
+      "type": "library",
+      "name": "numactl",
+      "version": "nixos-26.05",
+      "purl": "pkg:generic/nixpkgs/numactl@nixos-26.05",
+      "description": "NUMA topology in the audit"
     }
   ]
 }
