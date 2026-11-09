@@ -376,10 +376,14 @@ ce_approve_pair_request() {
   # checked above; ctrl-exec-dispatcher 0.14.x approve takes only <reqid>
   # (no --ip: it fails with "Too many arguments").
   hps_log info "ce_approve: approving ${reqid} for ${mac} (${reg_hostname:-$req_hostname} @ ${reg_ip})"
-  if ! "$CTRL_EXEC_DISPATCHER" approve "$reqid"; then
-    hps_log error "ce_approve: dispatcher approve failed for ${reqid}"
+  # The dispatcher prints its approval details on stdout; this function runs
+  # inside a CGI whose stdout is the HTTP response, so capture them.
+  local approve_out
+  if ! approve_out=$("$CTRL_EXEC_DISPATCHER" approve "$reqid" 2>&1); then
+    hps_log error "ce_approve: dispatcher approve failed for ${reqid}: ${approve_out}"
     return 1
   fi
+  hps_log info "ce_approve: dispatcher: $(printf '%s' "$approve_out" | tr '\n' ' ' | cut -c1-300)"
 
   host_registry "$mac" set ctrl_exec_paired "$(date +%s)" || {
     hps_log warn "ce_approve: approved ${reqid} but failed to record ctrl_exec_paired for ${mac}"
