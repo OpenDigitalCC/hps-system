@@ -102,3 +102,19 @@ teardown() {
   run awk '/location \/nix-cache\/ \{/{f=1} f&&/autoindex off;/{print "ok"; exit}' "$conf"
   [ "$output" = "ok" ]
 }
+
+@test "nginx listens on the IPS address only, never 0.0.0.0:80 (shared host)" {
+  run create_config_nginx
+  [ "$status" -eq 0 ]
+  conf="$TEST_DIR/services/nginx.conf"
+  grep -q 'listen 192.0.2.1:80 default_server;' "$conf"
+  ! grep -qE 'listen (80|0\.0\.0\.0:80)' "$conf"
+}
+
+@test "nginx generation fails clearly without network_dhcp_ip" {
+  cluster_registry() { return 1; }
+  export -f cluster_registry
+  run create_config_nginx
+  [ "$status" -ne 0 ]
+  [ ! -e "$TEST_DIR/services/nginx.conf" ]
+}

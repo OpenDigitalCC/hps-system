@@ -20,6 +20,20 @@ setup() {
   source "$TEST_DIR/fn.sh"
   n_ips_command() { echo "ips: $*" >> "$CALL_LOG"; }
   export -f n_ips_command
+  # Never look at the host's processes: on a host that runs an IPS container
+  # (host pid namespace) `pgrep syslogd` matches its rsyslogd and the function
+  # would pick logger. Shim pgrep (no syslogd unless FAKE_SYSLOGD=1) and logger.
+  mkdir -p "$TEST_DIR/bin"
+  cat > "$TEST_DIR/bin/pgrep" <<'SH'
+#!/bin/bash
+[ "${FAKE_SYSLOGD:-0}" = 1 ]
+SH
+  cat > "$TEST_DIR/bin/logger" <<'SH'
+#!/bin/bash
+echo "logger: $*" >> "$CALL_LOG"
+SH
+  chmod +x "$TEST_DIR/bin/pgrep" "$TEST_DIR/bin/logger"
+  export PATH="$TEST_DIR/bin:$PATH"
   caller() { n_remote_log "$@"; }
 }
 

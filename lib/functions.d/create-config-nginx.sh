@@ -46,6 +46,19 @@ create_config_nginx() {
   local nix_cache_dir="${resources}/nix-cache"
   
   local nginx_conf="${cluster_services}/nginx.conf"
+
+  # Bind to the IPS address only: the container is host-networked and the
+  # host may run its own web server on 0.0.0.0:80.
+  local cluster listen_ip
+  cluster=$(hps_get_config active_cluster) || {
+    hps_log error "create_config_nginx: no active cluster"
+    return 1
+  }
+  listen_ip=$(cluster_registry "$cluster" get network_dhcp_ip 2>/dev/null) || listen_ip=""
+  if [[ -z "$listen_ip" ]]; then
+    hps_log error "create_config_nginx: network_dhcp_ip not set in cluster registry"
+    return 1
+  fi
   
   hps_log info "Configuring nginx"
 
@@ -65,7 +78,7 @@ http {
   error_log /dev/stderr warn;
 
   server {
-    listen 80 default_server;
+    listen ${listen_ip}:80 default_server;
     server_name _;
     root ${http_config_dir}/;
 

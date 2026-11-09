@@ -275,7 +275,7 @@ EOF
   
   _supervisor_append_once "program:fcgiwrap" "$(cat <<EOF
 [program:fcgiwrap]
-command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -F 4 -s /var/run/fcgiwrap.socket -U www-data -G www-data /usr/sbin/fcgiwrap'
+command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data -- /usr/sbin/fcgiwrap -c 4'
 umask=002
 autostart=true
 autorestart=true
