@@ -411,7 +411,10 @@ sub call ($self, %c) {
     my @cmd = ($self->{hps_run}, ($has_input ? ('--input', '--json') : ()), $c{mac}, $c{script}, @{ $c{args} });
     my ($rc, $out, $err) = eval { $self->_spawn($c{input}, @cmd) };
     return { rc => 1, stdout => '', stderr => "cannot run $self->{hps_run}: " . ($@ =~ s/ at .*//sr) } unless defined $rc;
-    return { rc => $rc, stdout => $out, stderr => $err } unless $has_input && $rc == 0;
+    # The client exits non-zero when the node script fails, but its --json
+    # body still carries the script's exit, stdout and stderr: parse it
+    # whenever it parses, so a node failure is reported with its own words.
+    return { rc => $rc, stdout => $out, stderr => $err } unless $has_input;
     my $doc = eval { JSON::PP->new->utf8->decode($out) };
     my $res = ref $doc eq 'HASH' && ref $doc->{results} eq 'ARRAY' ? $doc->{results}[0] : undef;
     return { rc => 1, stdout => '', stderr => $err . "the dispatcher reply was not a run result\n" } unless ref $res eq 'HASH';
