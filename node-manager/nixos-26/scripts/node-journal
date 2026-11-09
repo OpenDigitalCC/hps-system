@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# node-journal - the systemd journal of this boot, for one unit or all,
+# capped at 500 lines.
+#
+# ctrl-exec allowlisted node script (read-only). Every command is logged to
+# stderr as "+ <command>" before it runs. Derived 2026-11-09 from a console
+# session reading libvirtd's journal (owner ruling: once derived, a command
+# becomes a ctrl-exec script).
+#
+# Usage: node-journal [unit] [--lines N] [--prio P]
+#   unit     a systemd unit name (letters, digits, - _ . @ : only, at most 64
+#            characters; ".service" is assumed when no suffix is given)
+#   --lines  1..500 (default 200): the newest N lines
+#   --prio   0..7 or emerg..debug: journalctl -p (default: all)
+#
+# Exit: 0 done, 2 usage or a bad value, 3 refused (unit name with a forbidden
+# character), 1 journalctl failed.
+
+set -euo pipefail
+
+UNIT=""
+LINES=200
+PRIO=""
+CAP=500
+
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: node-journal [unit] [--lines N] [--prio P]" >&2
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        if [[ ! "$2" =~ ^[0-9]{1,3}$ ]] || (( $2 < 1 || $2 > CAP )); then
+          echo "--lines must be 1..$CAP" >&2
+          exit 2
+        fi
+        LINES=$2
+        shift 2 ;;
+      --prio)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        if [[ ! "$2" =~ ^([0-7]|emerg|alert|crit|err|warning|notice|info|debug)$ ]]; then
+          echo "--prio must be 0..7 or emerg..debug" >&2
+          exit 2
+        fi
+        PRIO=$2
+        shift 2 ;;
+      -*)
+        usage
+        exit 2 ;;
+      *)
+        if [[ -n "$UNIT" ]]; then
+          usage
+          exit 2
+        fi
+        UNIT=$1
+        shift ;;
+    esac
+  done
+  if [[ -n "$UNIT" ]]; then
+    if [[ ${#UNIT} -gt 64 ]]; then
+      echo "refused: unit name longer than 64 characters" >&2
+      exit 3
+    fi
+    if [[ ! "$UNIT" =~ ^[A-Za-z0-9@:_.-]+$ ]]; then
+      echo "refused: unit name contains a character outside the allowed set" >&2
+      exit 3
+    fi
+    if [[ ! "$UNIT" =~ \.(service|socket|timer|target|mount|path|slice)$ ]]; then
+      UNIT="$UNIT.service"
+    fi
+  fi
+}
+
+main() {
+  parse_args "$@"
+  local -a cmd=(journalctl -b --no-pager -o short-monotonic -n "$LINES")
+  if [[ -n "$UNIT" ]]; then
+    cmd+=(-u "$UNIT")
+  fi
+  if [[ -n "$PRIO" ]]; then
+    cmd+=(-p "$PRIO")
+  fi
+  run "${cmd[@]}" || exit 1
+}
+
+main "$@"

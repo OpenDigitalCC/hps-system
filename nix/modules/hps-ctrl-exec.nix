@@ -51,6 +51,8 @@ in
       storage-disks.options.profile = "node";
       node-dmesg.source = mkScript "node-dmesg" (scriptsDir + "/node-dmesg");
       node-dmesg.options.profile = "node";
+      node-journal.source = mkScript "node-journal" (scriptsDir + "/node-journal");
+      node-journal.options.profile = "node";
       node-facts.source = mkScript "node-facts" (scriptsDir + "/node-facts");
       node-facts.options.profile = "node";
       storage-pool-import.source = mkScript "storage-pool-import" (scriptsDir + "/storage-pool-import");
