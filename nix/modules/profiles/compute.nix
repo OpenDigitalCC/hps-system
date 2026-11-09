@@ -55,6 +55,20 @@
     onShutdown = "shutdown";
   };
 
+  # libvirt 12.x ships virt-secret-init-encryption.service, which encrypts the
+  # secret-store key with systemd-creds (TPM2 or the host key). On a
+  # netboot-to-RAM node with no TPM it fails ("host key located on temporary
+  # file system") and libvirtd.service fails on the dependency (sch-001,
+  # 2026-11-09). HPS does not use libvirt secrets (guest disks are plain
+  # block devices; keys live in the IPS keysafe), so the unit is a no-op.
+  systemd.services.virt-secret-init-encryption = {
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = lib.mkForce "${pkgs.coreutils}/bin/true";
+    };
+  };
+
   boot.kernelModules = [ "kvm-intel" "kvm-amd" "vhost_net" "8021q" "bridge" ];
 
   # AppArmor in the kernel and the userspace parser. libvirt (built with the
