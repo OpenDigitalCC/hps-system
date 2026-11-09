@@ -121,12 +121,15 @@ teardown() {
   grep -q "copy --to file://$CACHE /nix/store/aaaa-nixos-system-audit$" "$NIX_LOG"
 }
 
-@test "CTRL_EXEC_FLAKE overrides the ctrl-exec input on every nix call" {
+@test "CTRL_EXEC_FLAKE overrides the ctrl-exec input on every flake evaluation" {
   CTRL_EXEC_FLAKE="path:/ctrl-exec" run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   run grep -c -- '--override-input ctrl-exec path:/ctrl-exec' "$NIX_LOG"
-  # metadata + 3 builds + 3 copies
-  [ "$output" -eq 7 ]
+  # metadata + 3 builds; nix copy takes no flake flags
+  [ "$output" -eq 4 ]
+  # the flag sits after the subcommand, where nix accepts it
+  run grep -c -E -- '(flake metadata|build) --no-write-lock-file --override-input' "$NIX_LOG"
+  [ "$output" -eq 4 ]
 }
 
 @test "without a flake.lock the lock file is not written; with one it is left alone" {

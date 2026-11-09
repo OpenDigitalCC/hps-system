@@ -31,6 +31,8 @@ PROFILES="audit node-base node-converged"
 NO_CACHE=0
 BUILD_DATE="${BUILD_DATE:-}"
 NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
+# Flags that belong after the subcommand (flake/build only, not copy).
+FLAKE_FLAGS=()
 
 usage() {
   grep '^#' "$0" | sed 's/^# \{0,1\}//'
@@ -79,16 +81,16 @@ parse_args() {
 build_flags() {
   if [[ ! -f "$SRC/flake.lock" ]]; then
     log "no flake.lock in $SRC: inputs resolve to their newest revisions (run 'nix flake lock' and commit it)"
-    NIX_FLAGS+=(--no-write-lock-file)
+    FLAKE_FLAGS+=(--no-write-lock-file)
   fi
   if [[ -n "${CTRL_EXEC_FLAKE:-}" ]]; then
-    NIX_FLAGS+=(--override-input ctrl-exec "$CTRL_EXEC_FLAKE")
+    FLAKE_FLAGS+=(--override-input ctrl-exec "$CTRL_EXEC_FLAKE")
   fi
 }
 
 nixpkgs_short_rev() {
   local rev
-  rev=$(run nix "${NIX_FLAGS[@]}" flake metadata "path:$SRC" --json \
+  rev=$(run nix "${NIX_FLAGS[@]}" flake metadata "${FLAKE_FLAGS[@]}" "path:$SRC" --json \
     | jq -r '.locks.nodes.nixpkgs.locked.rev // empty')
   if [[ -z "$rev" ]]; then
     echo "build.sh: cannot read the nixpkgs revision from flake metadata" >&2
@@ -104,7 +106,7 @@ build_profile() {
   if [[ $NO_CACHE -eq 1 ]]; then
     extra+=(--option substituters "" --rebuild)
   fi
-  run nix "${NIX_FLAGS[@]}" build "path:$SRC#$profile" --out-link "$link" "${extra[@]}"
+  run nix "${NIX_FLAGS[@]}" build "${FLAKE_FLAGS[@]}" "path:$SRC#$profile" --out-link "$link" "${extra[@]}"
   if [[ ! -f "$link/boot.json" ]]; then
     echo "build.sh: $profile built without boot.json" >&2
     return 1
