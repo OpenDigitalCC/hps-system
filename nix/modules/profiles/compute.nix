@@ -127,6 +127,7 @@
     mdadm
     openiscsi
     qemu_kvm
+    curl # image-fetch (CS-3.3)
     jq
     iproute2
     util-linux

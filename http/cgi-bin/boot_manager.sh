@@ -87,14 +87,24 @@ fi
 #
 # Example usage:
 #   GET:    curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging"
-#   SET:    curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging&value=enabled"
-#   UNSET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=host_variable&name=reboot_logging&action=unset"
+#   value= and action=unset are refused with 403: host keys are written on the
+#   IPS only (the set/unset branches below are unreachable and kept for the
+#   legacy node-manager's reading of the protocol).
 #
 #===============================================================================
 if [[ "$cmd" == "host_variable" ]]; then
   var_name="$(cgi_require_param name)"
   action="$(cgi_param get action || echo "")"
-  
+
+  # Writes never come over the unauthenticated boot channel: a node could
+  # otherwise rewrite its own STATE, system_pin or storage keys. Host keys
+  # change on the IPS (hps-onboard, hps-storage, the job runner).
+  if [[ "$action" == "unset" ]] || cgi_param exists value; then
+    hps_log warn "host_variable: refused write of '$var_name' for $mac from ${REMOTE_ADDR:-unknown}"
+    cgi_auto_fail "host_variable is read-only over CGI" 403 "Forbidden"
+    exit 1
+  fi
+
   if [[ "$action" == "unset" ]]; then
     # UNSET operation - remove the variable
     if host_registry "$mac" unset "$var_name" >/dev/null 2>&1; then

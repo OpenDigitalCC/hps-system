@@ -157,6 +157,25 @@ p3_degraded() {
   [ -e "$HPS_MIRROR_DIR/vm1-disk0.json" ]
 }
 
+@test "stop refuses while a running libvirt guest lists the device; no guest -> stops" {
+  cat > "$TEST_DIR/bin/virsh" <<'V'
+#!/usr/bin/env bash
+case "$1" in
+  list) printf 'vm1\n' ;;
+  domblklist) printf 'Target Source\n---\nvda /dev/md/vm1-disk0\n' ;;
+esac
+V
+  chmod +x "$TEST_DIR/bin/virsh"
+  run --separate-stderr bash "$S/mirror-stop" vm1-disk0
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"running guest vm1"* ]]
+  run ! grep -- '--stop' "$SHIM_LOG"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_DIR/bin/virsh"
+  run bash "$S/mirror-stop" vm1-disk0
+  [ "$status" -eq 0 ]
+  grep -q -- '--stop' "$SHIM_LOG"
+}
+
 @test "detach-leg: --fail then --remove of the leg's device" {
   run bash "$S/mirror-detach-leg" vm1-disk0 --leg "$P3_REM_SPEC"
   [ "$status" -eq 0 ]

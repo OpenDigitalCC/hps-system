@@ -5,10 +5,12 @@
 # ctrl-exec allowlisted node script.
 #
 # Usage: mirror-stop <name>
-# Refuses (3) while the array is in use: anything in /sys/block/md*/holders, or
-# a mount of it in /proc/mounts. (A running VM holds the device open without
-# showing up in either; the libvirt check joins in CS-3.3.) Otherwise mdadm --stop /dev/md/<name> and the sidecar is
-# removed. Not assembled: nothing to stop, the sidecar is removed, exit 0.
+# Refuses (3) while the array is in use: anything in /sys/block/md*/holders, a
+# mount of it in /proc/mounts, or a libvirt guest that is not shut off and has
+# the device in its block list (virsh list --name; virsh domblklist; a running
+# VM holds the device open without showing in holders or mounts). When virsh is
+# not on PATH the libvirt check is skipped and logged. Otherwise mdadm --stop
+# /dev/md/<name> and the sidecar is removed. Not assembled: nothing to stop, the sidecar is removed, exit 0.
 # Exit: 0 done, 2 usage, 3 refused (in use), 1 a command failed.
 
 set -euo pipefail
@@ -139,6 +141,23 @@ check_not_in_use() {
   if grep -qE "^(/dev/md/$NAME|$real) " "$HPS_PROC_MOUNTS"; then
     refuse "$NAME is mounted"
   fi
+  check_no_guest "$real"
+}
+
+# check_no_guest <real device>: refuse when a libvirt guest that is not shut
+# off lists /dev/md/<name> or its resolved device among its block devices.
+check_no_guest() {
+  local real="$1" dom
+  if ! command -v virsh > /dev/null 2>&1; then
+    log "virsh not on PATH; libvirt in-use check skipped"
+    return 0
+  fi
+  while IFS= read -r dom; do
+    [[ -n "$dom" ]] || continue
+    if virsh domblklist "$dom" 2> /dev/null | grep -qE "[[:space:]](/dev/md/$NAME|$real)\$"; then
+      refuse "$NAME is attached to running guest $dom"
+    fi
+  done < <(virsh list --name 2> /dev/null)
 }
 
 main() {
