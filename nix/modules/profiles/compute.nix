@@ -55,21 +55,42 @@
     onShutdown = "shutdown";
   };
 
-  # libvirt 12.x ships virt-secret-init-encryption.service, which encrypts the
-  # secret-store key with systemd-creds (TPM2 or the host key). On a
-  # netboot-to-RAM node with no TPM it fails ("host key located on temporary
-  # file system") and libvirtd.service fails on the dependency (sch-001,
-  # 2026-11-09). HPS does not use libvirt secrets (guest disks are plain
-  # block devices; keys live in the IPS keysafe), so the unit is a no-op.
-  # The unit comes from the libvirt package (systemd.packages), so this is a
-  # drop-in: the empty ExecStart= resets the package's command (a plain
-  # mkForce string only appended a second ExecStart and the first still ran
-  # and failed, pin 43e235c).
+  # libvirt 12.x encrypts its secret-store key with systemd-creds:
+  # virt-secret-init-encryption.service creates the key (TPM2 or the host
+  # key) and libvirtd.service / virtsecretd.service load it with
+  # LoadCredentialEncrypted=. On a netboot-to-RAM node with no TPM the
+  # creation fails ("host key located on temporary file system") and
+  # libvirtd fails first on the dependency, then at CREDENTIALS when the
+  # file is missing (sch-001, pins 43e235c and 64fee81, 2026-11-09). HPS
+  # uses no libvirt secrets (guest disks are plain block devices, keys live
+  # in the IPS keysafe), so the key is 32 random bytes written in the clear
+  # and handed to the daemons as a plain credential; it lives only in RAM.
+  # The units come from the libvirt package, so these are drop-ins and the
+  # empty first entry resets the package's setting.
   systemd.services.virt-secret-init-encryption = {
     overrideStrategy = "asDropin";
     serviceConfig = {
       RemainAfterExit = true;
-      ExecStart = [ "" "${pkgs.coreutils}/bin/true" ];
+      ExecStart = [
+        ""
+        (pkgs.writeShellScript "hps-virt-secret-key" '''
+          set -eu
+          umask 0077
+          mkdir -p /var/lib/libvirt/secrets
+          head -c 32 /dev/random > /var/lib/libvirt/secrets/secrets-encryption-key
+        ''')
+      ];
+    };
+  };
+  systemd.services.libvirtd.serviceConfig = {
+    LoadCredentialEncrypted = [ "" ];
+    LoadCredential = [ "secrets-encryption-key:/var/lib/libvirt/secrets/secrets-encryption-key" ];
+  };
+  systemd.services.virtsecretd = {
+    overrideStrategy = "asDropin";
+    serviceConfig = {
+      LoadCredentialEncrypted = [ "" ];
+      LoadCredential = [ "secrets-encryption-key:/var/lib/libvirt/secrets/secrets-encryption-key" ];
     };
   };
 
