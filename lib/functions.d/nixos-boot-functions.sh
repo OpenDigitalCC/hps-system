@@ -171,5 +171,19 @@ ipxe_boot_nixos() {
     return 1
   }
   hps_log info "[$mac] NixOS network boot: host profile ${host_profile} -> image ${image}"
-  nixos_emit_boot "$mac" "$image"
+  nixos_emit_boot "$mac" "$image" || return 1
+  nixos_open_pairing_window "$mac"
+}
+
+# nixos_open_pairing_window <mac>
+# A RAM-booted node pairs with ctrl-exec on every boot: clear the previous
+# pairing record and open the dispatcher's pairing window (ADR 0002). The
+# window is single and shared; a failure to open is logged, never fatal.
+nixos_open_pairing_window() {
+  local mac="$1"
+  host_registry "$mac" delete ctrl_exec_paired > /dev/null 2>&1 || true
+  if ! ce_pairing_window_open "${CTRL_EXEC_PAIR_WINDOW:-300}" > /dev/null 2>&1 < /dev/null; then
+    hps_log warn "[$mac] pairing window not opened (already open, or dispatcher error)"
+  fi
+  return 0
 }
