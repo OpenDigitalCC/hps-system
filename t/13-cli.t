@@ -5,7 +5,8 @@ use Test::More;
 use File::Temp qw(tempdir);
 use File::Path qw(make_path);
 use JSON::PP;
-use lib 'lib/perl';
+use FindBin qw($Bin);
+use lib "$Bin/../lib/perl";
 use HPS::Registry;
 
 my $base = tempdir(CLEANUP => 1);
@@ -21,7 +22,7 @@ $reg->host_set('52:54:00:00:00:01', 'audit', { disks => [ { id => 'ata-FAKE_1' }
 $reg->host_set('52:54:00:00:00:02', 'STATE', 'INSTALLED');
 
 sub run_cli {
-    my @cmd = ($^X, '-Ilib/perl', 'bin/hps-onboard', @_);
+    my @cmd = ($^X, "-I$Bin/../lib/perl", "$Bin/../bin/hps-onboard", @_);
     my $out = qx(@cmd 2>&1);
     return ($? >> 8, $out);
 }
