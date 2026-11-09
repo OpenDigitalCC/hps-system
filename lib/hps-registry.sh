@@ -64,10 +64,11 @@ json_registry() {
     return 2
   fi
   
-  # Ensure directories exist (except for destroy)
-  if [[ "$cmd" != "destroy" ]]; then
-    mkdir -p "$db_path/.lock"
-  fi
+  # Create the db directory only for writes; a read of an unknown key must
+  # not create a phantom host/cluster directory (it would show in list_all).
+  case "$cmd" in
+    set|delete|unset) mkdir -p "$db_path/.lock" ;;
+  esac
   
   local file="$db_path/${key}.json"
   local lock="$db_path/.lock/${key}.lock"
@@ -615,7 +616,7 @@ os_registry() {
   
   # Handle list command (no os_id required)
   if [[ "$os_id" == "list" ]]; then
-    local os_db="/srv/hps-config/os.db"
+    local os_db="${HPS_CONFIG_BASE:-/srv/hps-config}/os.db"
     
     # Find all .os directories and read the stored os_id
     find "$os_db" -maxdepth 1 -type d -name "*.os" 2>/dev/null | \
@@ -665,7 +666,7 @@ os_registry() {
   # Convert os_id to filesystem-safe name using tr (more reliable than ${var//://_})
   local os_safe
   os_safe=$(echo "$os_id" | tr ':' '_')
-  local db_path="/srv/hps-config/os.db/${os_safe}.os"
+  local db_path="${HPS_CONFIG_BASE:-/srv/hps-config}/os.db/${os_safe}.os"
   
   case "$cmd" in
     exists)

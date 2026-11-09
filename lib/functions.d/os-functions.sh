@@ -205,7 +205,7 @@ os_config_undefine_section() {
   # Convert OS ID to filesystem-safe name
   local os_safe
   os_safe=$(echo "$os_id" | tr ':' '_')
-  local db_path="/srv/hps-config/os.db/${os_safe}.os"
+  local db_path="${HPS_CONFIG_BASE:-/srv/hps-config}/os.db/${os_safe}.os"
   
   if [[ ! -d "$db_path" ]]; then
     hps_log error "OS configuration not found: $os_id"

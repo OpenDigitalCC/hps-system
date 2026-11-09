@@ -75,8 +75,8 @@ n_init_run() {
       if type n_remote_log >/dev/null 2>&1; then
         n_remote_log "Init ERROR: Function not found: $action"
       fi
-      ((failed++))
-      ((i++))
+      failed=$((failed + 1))
+      i=$((i + 1))
       continue
     fi
     
@@ -86,17 +86,17 @@ n_init_run() {
       if type n_remote_log >/dev/null 2>&1; then
         n_remote_log "Init [$i/$total]: Success: $action"
       fi
-      ((success++))
+      success=$((success + 1))
     else
       local exit_code=$?
       echo "[HPS] ERROR: Action failed with exit code $exit_code: $action" >&2
       if type n_remote_log >/dev/null 2>&1; then
         n_remote_log "Init ERROR [$i/$total]: Failed ($exit_code): $action"
       fi
-      ((failed++))
+      failed=$((failed + 1))
     fi
     
-    ((i++))
+    i=$((i + 1))
   done
   
   echo "[HPS] Init sequence complete: $success succeeded, $failed failed" >&2
