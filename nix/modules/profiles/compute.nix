@@ -73,12 +73,12 @@
       RemainAfterExit = true;
       ExecStart = [
         ""
-        (pkgs.writeShellScript "hps-virt-secret-key" '''
+        (pkgs.writeShellScript "hps-virt-secret-key" ''
           set -eu
           umask 0077
           mkdir -p /var/lib/libvirt/secrets
           head -c 32 /dev/random > /var/lib/libvirt/secrets/secrets-encryption-key
-        ''')
+        '')
       ];
     };
   };
