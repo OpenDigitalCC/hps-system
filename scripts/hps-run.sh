@@ -12,7 +12,11 @@
 # its FQDN (Net::Domain::hostfqdn). hps-pair (node-manager/nixos-26/boot) makes
 # the node's hostname <registry HOSTNAME, fallback hps-<mac without delimiters>>
 # followed by .<network_dns_domain>, and ce_approve_pair_request compares first
-# labels with the registry. The registered names are read from the dispatcher
+# labels with the registry. With ctrl-exec 0.14.3 hps-pair passes the agent
+# --name <name>.<domain>, so the first candidate below is what registers; the
+# others serve nodes paired by older images. A re-pair replaces the old
+# registration (approve --replace); names starting "stale-" are never matched.
+# The registered names are read from the dispatcher
 # (list-agents) and the first of these that exists is used:
 #     <name>.<network_dns_domain>   (only when the cluster has a domain)
 #     <name>
@@ -108,7 +112,7 @@ cluster_domain() {
 
 # registered_agents: first column of `list-agents` (the HOSTNAME column).
 registered_agents() {
-  "$CTRL_EXEC_DISPATCHER" list-agents | awk 'NR > 2 && $1 != "" { print $1 }'
+  "$CTRL_EXEC_DISPATCHER" list-agents | awk 'NR > 2 && $1 != "" && $1 !~ /^stale-/ { print $1 }'
 }
 
 # candidates <base> <domain>: names to try, in order: <base>.<domain> (when the
@@ -128,6 +132,7 @@ candidates() {
 pick_agent() {
   local cand
   while IFS= read -r cand; do
+    [[ "$cand" == stale-* ]] && continue
     if grep -qxF -- "$cand" <<< "$2"; then
       printf '%s\n' "$cand"
       return 0

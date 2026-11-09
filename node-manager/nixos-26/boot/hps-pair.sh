@@ -28,6 +28,13 @@
 #      X-HPS-MAC) at once - the IPS approves only after that - then wait for
 #      the certificate and for the request-pairing process to end, and
 #      restart the agent
+#      With ctrl-exec 0.14.3 or later the agent is told the name to register
+#      under (request-pairing --name <the transient hostname>), so the
+#      registration is exactly <label>.<hps.domain> whatever hostfqdn() would
+#      make of a DHCP-supplied domain. Support is detected from the agent's own
+#      usage text (a feature probe: it needs no version parsing and holds for
+#      a backport or a build whose version string is unusual); an older agent
+#      gets the call without --name and registers as before.
 #
 # Usage: hps-pair [--no-hostname]
 # Exit: 0 paired or already paired, 1 pairing failed, 2 usage.
@@ -153,6 +160,7 @@ ensure_hostname() {
   name=$(fqdn_of "$name")
   set_hostname "$name"
   check_self_resolves "$name"
+  REGISTER_NAME="$name"
 }
 
 # Same request shape as node-manager/base/n_api_client.sh n_api_call.
@@ -216,15 +224,35 @@ await_reqid() {
   return 1
 }
 
+# agent_supports_name: true when ctrl-exec-agent request-pairing knows --name
+# (0.14.3+). An unknown option makes the agent print its usage and exit; the
+# text is captured first (grep -q on a pipe could SIGPIPE the producer under
+# pipefail).
+agent_supports_name() {
+  local help
+  help=$(ctrl-exec-agent request-pairing --help 2>&1 || true)
+  [[ "$help" == *--name* ]]
+}
+
 pair() {
   local ips="$1"
   local mac="$2"
+  local name="${3:-}"
   local reqid pid out rc=0
+  local -a name_args=()
+  if [[ -n "$name" ]]; then
+    if agent_supports_name; then
+      name_args=(--name "$name")
+      log "agent supports --name: registering as $name"
+    else
+      log "agent has no request-pairing --name (before ctrl-exec 0.14.3): registering under its own FQDN"
+    fi
+  fi
   out="${TMPDIR:-/tmp}/hps-pair-$$.out"
   : > "$out"
-  log "+ ctrl-exec-agent request-pairing --background --timeout $HPS_PAIR_TIMEOUT --dispatcher $ips (background, stdout in $out)"
+  log "+ ctrl-exec-agent request-pairing --background --timeout $HPS_PAIR_TIMEOUT --dispatcher $ips ${name_args[*]} (background, stdout in $out)"
   ctrl-exec-agent request-pairing --background \
-    --timeout "$HPS_PAIR_TIMEOUT" --dispatcher "$ips" > "$out" &
+    --timeout "$HPS_PAIR_TIMEOUT" --dispatcher "$ips" "${name_args[@]}" > "$out" &
   pid=$!
   if ! reqid=$(await_reqid "$pid" "$out"); then
     if kill -0 "$pid" 2> /dev/null; then
@@ -257,6 +285,9 @@ pair() {
   return 0
 }
 
+# The name just set as the transient hostname (empty with --no-hostname).
+REGISTER_NAME=""
+
 main() {
   local ips mac set_name=1
   case "${1:-}" in
@@ -281,7 +312,7 @@ main() {
   if [[ $set_name -eq 1 ]]; then
     ensure_hostname "$ips" "$mac"
   fi
-  pair "$ips" "$mac"
+  pair "$ips" "$mac" "$REGISTER_NAME"
 }
 
 main "$@"

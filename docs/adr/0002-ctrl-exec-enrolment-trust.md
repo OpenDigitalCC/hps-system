@@ -78,5 +78,9 @@ the exposure is confined to the pairing window.
   approval never crosses the network.
 - Re-provisioning a node requires clearing `ctrl_exec_paired` (and
   unpairing/revoking the old cert) as part of the reinstall path.
+- From ctrl-exec 0.14.3 the agent registers under the HPS-chosen name
+  (`request-pairing --name`) and the approver passes `approve --replace`,
+  so re-pairing a node replaces its previous registration; older agents
+  and dispatchers are detected and used without those options.
 - ctrl-exec's short pairing timeout means the approver must poll promptly;
   it is triggered by the node's report rather than by periodic scan.

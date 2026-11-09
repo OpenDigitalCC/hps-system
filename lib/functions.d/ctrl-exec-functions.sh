@@ -259,6 +259,19 @@ _ce_close_window_after_approval() {
 }
 
 #===============================================================================
+# _ce_dispatcher_supports_replace
+# -------------------------------
+# True when the dispatcher's usage text lists approve --replace (0.14.3+). A
+# feature probe on the usage text: an unknown option makes the dispatcher print
+# it and exit before it touches its config.
+#===============================================================================
+_ce_dispatcher_supports_replace() {
+  local help
+  help=$("$CTRL_EXEC_DISPATCHER" --help 2>&1 || true)
+  [[ "$help" == *--replace* ]]
+}
+
+#===============================================================================
 # ce_approve_pair_request
 # -----------------------
 # Registry-bound auto-approval. Approves a node's pairing request ONLY when
@@ -378,12 +391,25 @@ ce_approve_pair_request() {
   hps_log info "ce_approve: approving ${reqid} for ${mac} (${reg_hostname:-$req_hostname} @ ${reg_ip})"
   # The dispatcher prints its approval details on stdout; this function runs
   # inside a CGI whose stdout is the HTTP response, so capture them.
+  # ctrl-exec 0.14.3+ takes --replace: a node that re-pairs (new boot, same
+  # source address) unregisters its previous registration, so one node is one
+  # registration. An older dispatcher gets the plain approve.
   local approve_out
-  if ! approve_out=$("$CTRL_EXEC_DISPATCHER" approve "$reqid" 2>&1); then
+  local -a approve_args=(approve "$reqid")
+  if _ce_dispatcher_supports_replace; then
+    approve_args+=(--replace)
+  else
+    hps_log info "ce_approve: dispatcher has no approve --replace; approving without it"
+  fi
+  if ! approve_out=$("$CTRL_EXEC_DISPATCHER" "${approve_args[@]}" 2>&1); then
     hps_log error "ce_approve: dispatcher approve failed for ${reqid}: ${approve_out}"
     return 1
   fi
   hps_log info "ce_approve: dispatcher: $(printf '%s' "$approve_out" | tr '\n' ' ' | cut -c1-300)"
+  local replaced_line
+  while IFS= read -r replaced_line; do
+    [[ -n "$replaced_line" ]] && hps_log info "ce_approve: replaced registration: ${replaced_line}"
+  done < <(printf '%s\n' "$approve_out" | grep -E 'REPLACED_BY|Replaced:' || true)
 
   host_registry "$mac" set ctrl_exec_paired "$(date +%s)" || {
     hps_log warn "ce_approve: approved ${reqid} but failed to record ctrl_exec_paired for ${mac}"
