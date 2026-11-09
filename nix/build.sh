@@ -30,6 +30,7 @@ CACHE=""
 PROFILES="audit node-base node-converged"
 NO_CACHE=0
 BUILD_DATE="${BUILD_DATE:-}"
+mkdir -p "${TMPDIR:-/tmp}"
 NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
 # Flags that belong after the subcommand (flake/build only, not copy).
 FLAKE_FLAGS=()
