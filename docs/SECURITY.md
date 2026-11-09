@@ -92,11 +92,24 @@ DHCP server under host networking is a specific risk if the container is ever
 attached to a non-isolated network — verify the interface binding before first
 start.
 
-**Elevation of privilege.** The ctrl-exec agent currently runs node scripts as
-its own user with no namespace/capability sandbox (the privileged C executor is
-deferred — `docs/adr/0003`); the `hps-node` allowlist is the containment
-boundary until the executor is adopted. The `osvc_cmd` eval-style CGI path has
-been removed.
+**Elevation of privilege.** On Alpine nodes the ctrl-exec agent runs node
+scripts as its own user with no namespace/capability sandbox (the privileged C
+executor is deferred — `docs/adr/0003`); the `hps-node` allowlist is the
+containment boundary there. See *Node scripts under the executor* for NixOS. The `osvc_cmd`
+eval-style CGI path has been removed.
+
+## Node scripts under the executor
+
+Node scripts run as root with capabilities through the ctrl-exec executor;
+the allowlist and the per-script arguments are the control, not the sandbox.
+On NixOS images every HPS script is allowlisted under the profile `node`
+(`run_as = root`, `no_new_privileges`, a fixed list of `CAP_*` names; no
+`writable` list, so the filesystem is as on the console). The scripts are the
+readable manual runbook, so a `ced run` of `$SCRIPT` on `$NODE` does what the
+same commands do by hand as root, and recovery by hand matches it. A script
+reaches the profile only by being added to the allowlist in the image; `default`
+stays the restrictive baseline for anything that names no profile. The control
+directories of the agent stay read-only to every profile.
 
 ## Verification method
 

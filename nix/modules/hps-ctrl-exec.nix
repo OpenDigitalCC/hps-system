@@ -15,7 +15,7 @@
 # unit fails once (exit 78, not paired) and /etc/hps/hps-pair restarts it after
 # the certificate arrives. hps-node-init (node images) and hps-audit-pair (audit
 # image) both call hps-pair.
-{ config, pkgs, ctrl-exec, ... }:
+{ config, lib, pkgs, ctrl-exec, ... }:
 
 let
   scriptsDir = ../../node-manager/nixos-26/scripts;
@@ -39,12 +39,20 @@ in
     openFirewall = true;
     scriptPath = "/run/wrappers/bin:/run/current-system/sw/bin";
     # The plugin's shebang is #!/usr/bin/env bash (CS-1.6); NixOS has no /bin/bash.
+    # Every HPS script runs under profile "node" (see the profile below):
+    # scriptType has no profile field, so the module's `options` attrset carries
+    # profile=node onto each scripts.conf line (one options line per script).
     scripts = {
       hps-node.source = mkScript "hps-node" ../../node-manager/plugins/hps-node/hps-node.sh;
+      hps-node.options.profile = "node";
       storage-pool-inspect.source = mkScript "storage-pool-inspect" (scriptsDir + "/storage-pool-inspect");
+      storage-pool-inspect.options.profile = "node";
       storage-disks.source = mkScript "storage-disks" (scriptsDir + "/storage-disks");
+      storage-disks.options.profile = "node";
       node-dmesg.source = mkScript "node-dmesg" (scriptsDir + "/node-dmesg");
+      node-dmesg.options.profile = "node";
       node-facts.source = mkScript "node-facts" (scriptsDir + "/node-facts");
+      node-facts.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself
@@ -57,6 +65,38 @@ in
     profiles.default = {
       run_as = "root";
       no_new_privileges = "yes";
+    };
+    # Profile "node": HPS node operations (zpool/zfs, dmesg, lsblk, smartctl,
+    # hostnamectl, systemctl, later mdadm, virsh, targetcli, network changes).
+    # The node scripts are the readable manual runbook and are meant to run as
+    # full root, so a recovery by hand at the console and a `ced run` do the
+    # same thing. The executor drops every capability a profile does not list,
+    # even for run_as root: ZFS ioctls need CAP_SYS_ADMIN and dmesg needs
+    # CAP_SYSLOG, so root with no caps saw "no pools available to import" and
+    # "read kernel buffer failed". The list below is the set storage, compute
+    # and network actions need in phases 1-3. The executor has no `all` value:
+    # caps takes CAP_* names separated by commas or whitespace, at most 32, and
+    # no inline comments on the value line.
+    # `writable` is left out on purpose: setting it makes the whole filesystem
+    # read-only except the listed paths, while omitting it leaves the
+    # filesystem as it is (only /etc/ctrl-exec-agent and /var/lib/ctrl-exec-agent
+    # are read-only to every profile). The scripts write /run/hps, /etc/zfs
+    # (zpool.cache), /var/lib and /dev, so no path list could be both short and
+    # complete. `default` above stays the restrictive baseline for any script
+    # that names no profile; the allowlist and each script's argument checks are
+    # the control, not the sandbox (docs/SECURITY.md).
+    profiles.node = {
+      run_as = "root";
+      no_new_privileges = "yes";
+      caps = lib.concatStringsSep "," [
+        "CAP_SYS_ADMIN" "CAP_SYSLOG" "CAP_SYS_RAWIO"
+        "CAP_DAC_OVERRIDE" "CAP_DAC_READ_SEARCH" "CAP_FOWNER" "CAP_CHOWN" "CAP_FSETID"
+        "CAP_MKNOD" "CAP_SYS_MODULE"
+        "CAP_NET_ADMIN" "CAP_NET_RAW" "CAP_NET_BIND_SERVICE"
+        "CAP_KILL" "CAP_SETUID" "CAP_SETGID"
+        "CAP_SYS_RESOURCE" "CAP_SYS_NICE" "CAP_IPC_LOCK" "CAP_SYS_BOOT"
+        "CAP_SYS_PTRACE" "CAP_LINUX_IMMUTABLE"
+      ];
     };
   };
 
