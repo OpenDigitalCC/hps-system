@@ -17,6 +17,7 @@ supervisor_prepare_services () {
   create_config_dnsmasq
   update_dns_dhcp_files
   create_config_rsyslog
+  create_config_chrony
   # No OpenSVC package (lab IPS): log and continue, the services above do not need it.
   osvc_prepare_cluster || hps_log warn "supervisor_prepare_services: OpenSVC not prepared (continuing without it)"
 }

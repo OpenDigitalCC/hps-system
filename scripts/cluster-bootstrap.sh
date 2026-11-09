@@ -12,7 +12,16 @@
 # Usage:
 #   cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr> \
 #       --ips-ip <ip> --dhcp-range <start>-<end> [--dns-domain <d>] \
-#       [--description <s>] [--storage-network <cidr>] [--force]
+#       [--description <s>] [--storage-network <cidr>] \
+#       [--time-upstream "<servers>"] [--force]
+#
+# Time: nodes take time only from the IPS (cluster key network_time_server =
+# the IPS address; the node images consult no public pool). The IPS runs
+# chrony and serves its own clock at stratum 10. --time-upstream sets the
+# cluster key network_time_upstream, a space-separated list of NTP servers or
+# pools the IPS itself syncs from (create_config_chrony writes one
+# "server <name> iburst" line each). Empty by default: no upstream, the lab
+# has no NTP egress.
 #
 # Environment:
 #   HPS_BASE         base path (default /srv); hps.conf lives here
@@ -37,6 +46,7 @@ ARG_RANGE=""
 ARG_DOMAIN="cluster.local"
 ARG_DESC=""
 ARG_STORAGE=""
+ARG_TIME_UPSTREAM=""
 ARG_FORCE=0
 
 # Filled by validation
@@ -51,7 +61,8 @@ usage() {
   cat <<'EOF'
 Usage: cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr>
          --ips-ip <ip> --dhcp-range <start>-<end> [--dns-domain <d>]
-         [--description <s>] [--storage-network <cidr>] [--force]
+         [--description <s>] [--storage-network <cidr>]
+         [--time-upstream "<servers>"] [--force]
 
   --name             cluster name (DNS label: letters, digits, hyphens)
   --dhcp-iface       interface dnsmasq answers on (syntax checked only)
@@ -62,6 +73,9 @@ Usage: cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr>
   --dns-domain       default cluster.local
   --description      default: the cluster name
   --storage-network  optional, A.B.0.0/N (N 16-28), one storage network
+  --time-upstream    NTP servers/pools the IPS syncs from, space separated
+                     (cluster key network_time_upstream); default empty = the
+                     IPS serves its own clock. Nodes always use the IPS only.
   --force            overwrite an existing cluster (keys are rewritten,
                      other keys and hosts are kept)
 EOF
@@ -92,6 +106,7 @@ parse_args() {
       --dns-domain)      ARG_DOMAIN="${2:?--dns-domain needs a value}"; shift 2 ;;
       --description)     ARG_DESC="${2:?--description needs a value}"; shift 2 ;;
       --storage-network) ARG_STORAGE="${2:?--storage-network needs a value}"; shift 2 ;;
+      --time-upstream)   ARG_TIME_UPSTREAM="${2?--time-upstream needs a value (may be empty)}"; shift 2 ;;
       --force)           ARG_FORCE=1; shift ;;
       -h|--help)         usage; exit 0 ;;
       *)                 bad_usage "unknown argument: $1" ;;
@@ -187,6 +202,14 @@ validate_network() {
   NET_CIDR="$ARG_NETWORK"
 }
 
+# Each upstream is a host name or address (letters, digits, dots, hyphens).
+validate_time_upstream() {
+  local name
+  for name in $ARG_TIME_UPSTREAM; do
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail "invalid --time-upstream entry '$name'"
+  done
+}
+
 # Address must be a usable host address of the cluster network.
 in_network() {
   local n
@@ -195,6 +218,7 @@ in_network() {
 }
 
 validate_ips_ip() {
+  validate_time_upstream
   valid_ipv4 "$ARG_IPS_IP" || fail "invalid --ips-ip '$ARG_IPS_IP'"
   in_network "$ARG_IPS_IP" || fail "--ips-ip $ARG_IPS_IP is not a usable host address inside $NET_CIDR"
 }
@@ -323,6 +347,7 @@ pending_system_services() {
   CLUSTER_CONFIG_PENDING+=("network_syslog_server:$ARG_IPS_IP")
   CLUSTER_CONFIG_PENDING+=("network_name_server:$ARG_IPS_IP")
   CLUSTER_CONFIG_PENDING+=("network_time_server:$ARG_IPS_IP")
+  CLUSTER_CONFIG_PENDING+=("network_time_upstream:$ARG_TIME_UPSTREAM")
 }
 
 # 090 defaults (the "customize? n" path).

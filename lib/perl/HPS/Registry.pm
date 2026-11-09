@@ -18,10 +18,11 @@ my $KEY_RE = qr/^[A-Za-z0-9_-]+$/;
 
 # new(%opt): config_base, system_registry (db dir), lock_timeout (seconds).
 # Defaults come from HPS_CONFIG_BASE / HPS_SYSTEM_REGISTRY like
-# hps_get_config; HPS_SYSTEM_REGISTRY defaults to /srv/hps-config/system.db.
+# hps_get_config; HPS_CONFIG_BASE defaults to /srv/hps-config (as in Bash) and
+# HPS_SYSTEM_REGISTRY to /srv/hps-config/system.db.
 sub new ($class, %opt) {
     my $self = {
-        config_base     => $opt{config_base}     // $ENV{HPS_CONFIG_BASE},
+        config_base     => $opt{config_base}     // $ENV{HPS_CONFIG_BASE} // '/srv/hps-config',
         system_registry => $opt{system_registry} // $ENV{HPS_SYSTEM_REGISTRY}
                            // '/srv/hps-config/system.db',
         lock_timeout    => $opt{lock_timeout} // 5,

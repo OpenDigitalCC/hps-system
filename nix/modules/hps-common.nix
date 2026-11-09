@@ -29,8 +29,14 @@
     system.stateVersion = "26.05";
     nixpkgs.hostPlatform = "x86_64-linux";
 
-    # Serial first (iLO virtual serial / ttyS0), VGA second.
-    boot.kernelParams = [ "console=ttyS0,115200n8" "console=tty0" ];
+    # Consoles. The kernel log goes to every console= device; the LAST one is
+    # /dev/console (systemd status, the audit banner). The DL360 iLO Virtual
+    # Serial Port is COM2 = ttyS1, so ttyS1 is last and is the primary; ttyS0
+    # (COM1) and VGA still receive the kernel log. Gettys on both serial ports
+    # are enabled below.
+    boot.kernelParams = [ "console=tty0" "console=ttyS0,115200n8" "console=ttyS1,115200n8" ];
+    systemd.services."serial-getty@ttyS0" = { enable = true; wantedBy = [ "getty.target" ]; };
+    systemd.services."serial-getty@ttyS1" = { enable = true; wantedBy = [ "getty.target" ]; };
     boot.supportedFilesystems = [ "zfs" ];
     # A normal boot imports the pool and never forces it (brief: pool safety);
     # also the 26.11 default.
@@ -45,6 +51,10 @@
     # transient hostname from the registry.
     networking.hostName = "";
     networking.useDHCP = lib.mkDefault true;
+    # Only HPS names the node (hps-node-init, from the registry). Without this
+    # dhcpcd sets the hostname from the DHCP reply and logs "Could not set
+    # transient hostname: Access denied".
+    networking.dhcpcd.extraConfig = "nohook hostname";
 
     environment.systemPackages = with pkgs; [
       bash curl jq iproute2 gawk gnutar findutils util-linux
@@ -91,6 +101,39 @@
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-log-target";
+      };
+    };
+
+    # ---- time ------------------------------------------------------------------
+    # A netboot node has no trustworthy RTC and ctrl-exec pairing is mTLS.
+    # hps-time points timesyncd at the IPS (runtime drop-in under /run) and
+    # steps a wrong clock once from the IPS HTTP Date header; the IPS runs
+    # chrony. No NTP server is baked into the image.
+    services.timesyncd.enable = true;
+    services.timesyncd.servers = [ ];
+    services.timesyncd.fallbackServers = [ ];
+
+    environment.etc."hps/hps-time" = {
+      source = ../../node-manager/nixos-26/boot/hps-time.sh;
+      mode = "0755";
+    };
+
+    systemd.services.hps-time = {
+      description = "HPS: set the clock and the time server from the IPS";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      # Not Before=systemd-timesyncd: that unit is in sysinit.target and this one
+      # is after network-online, so the pair would be an ordering cycle. The
+      # script restarts timesyncd once the drop-in is written instead.
+      before = [ "hps-audit.service" "hps-node-init.service" ];
+      path = with pkgs; [ bash coreutils gawk iproute2 curl config.systemd.package ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        StandardOutput = "journal+console";
+        StandardError = "journal+console";
+        ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-time";
       };
     };
 

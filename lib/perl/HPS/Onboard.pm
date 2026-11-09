@@ -158,29 +158,111 @@ sub _pci_storage ($a) {
     return @names;
 }
 
+my $PCI_ADDR_RE = qr/^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/i;
+my %SMART_ARRAY_DRIVER = (hpsa => 1, smartpqi => 1);
+
+# Disks (lsblk type disk) as [{name, model}].
+sub _lsblk_disks ($a) {
+    my $bd = ref $a->{block} eq 'HASH' && ref $a->{block}{blockdevices} eq 'ARRAY' ? $a->{block}{blockdevices} : [];
+    return grep { ref $_ eq 'HASH' && ($_->{type} // '') eq 'disk' } @$bd;
+}
+
+# The Smart Array driver (hpsa/smartpqi) bound to a PCI device, or undef:
+# a PCI address in /sys/bus/pci/drivers/<drv>/, else a SCSI host whose
+# proc_name is that driver.
+sub _smart_array_driver ($a) {
+    my $sc = ref $a->{storage_controllers} eq 'HASH' ? $a->{storage_controllers} : {};
+    my $drv = ref $sc->{pci_drivers} eq 'HASH' ? $sc->{pci_drivers} : {};
+    for my $name (sort keys %SMART_ARRAY_DRIVER) {
+        my $list = $drv->{$name};
+        next unless ref $list eq 'ARRAY';
+        my @bound = grep { defined && /$PCI_ADDR_RE/ } @$list;
+        return "$name bound to " . join(', ', @bound) if @bound;
+    }
+    for my $h (ref $sc->{scsi_hosts} eq 'ARRAY' ? @{ $sc->{scsi_hosts} } : ()) {
+        next unless ref $h eq 'HASH' && defined $h->{driver} && $SMART_ARRAY_DRIVER{ $h->{driver} };
+        return "$h->{driver} SCSI host " . ($h->{host} // '?');
+    }
+    return undef;
+}
+
+# Controller mode from the evidence available. Returns {verdict, evidence[]}.
+#   RAID    any LOGICAL VOLUME disk, or a host reporting hba_mode_enabled=0
+#   HBA     a host reports hba_mode_enabled=1, or (Smart Array driver bound,
+#           no LOGICAL VOLUME, at least one disk with a native vendor model)
+#   UNKNOWN otherwise
+# hpsa on some firmware reports no hba_mode_enabled file at all, so the second
+# HBA rule is what identifies the common case.
+sub controller_verdict ($a) {
+    my $sc = ref $a->{storage_controllers} eq 'HASH' ? $a->{storage_controllers} : {};
+    my @hosts = grep { ref $_ eq 'HASH' } (ref $sc->{scsi_hosts} eq 'ARRAY' ? @{ $sc->{scsi_hosts} } : ());
+    my @hba1 = grep { defined $_->{hba_mode_enabled} && $_->{hba_mode_enabled} eq '1' } @hosts;
+    my @hba0 = grep { defined $_->{hba_mode_enabled} && $_->{hba_mode_enabled} eq '0' } @hosts;
+    my @disks = _lsblk_disks($a);
+    my @lv = grep { ($_->{model} // '') =~ /LOGICAL VOLUME/i } @disks;
+    my $lv = (@lv || $sc->{raid_mode_indicator}) ? 1 : 0;
+    my @native = grep { defined $_->{model} && length $_->{model} && $_->{model} !~ /LOGICAL VOLUME/i } @disks;
+    my $driver = _smart_array_driver($a);
+
+    my @ev;
+    push @ev, 'hba_mode_enabled=1 on ' . join(', ', map { $_->{host} // '?' } @hba1) if @hba1;
+    push @ev, 'hba_mode_enabled=0 on ' . join(', ', map { $_->{host} // '?' } @hba0) if @hba0;
+    push @ev, 'a LOGICAL VOLUME disk is present' if $lv;
+
+    if ($lv || @hba0) {
+        push @ev, 'hba_mode_enabled=1 is also reported: conflicting evidence, treated as RAID' if @hba1;
+        return { verdict => 'RAID', evidence => \@ev };
+    }
+    return { verdict => 'HBA', evidence => \@ev } if @hba1;
+    if ($driver && @native) {
+        my %seen;
+        my @models = grep { !$seen{$_}++ } map { $_->{model} } @native;
+        push @ev, "driver $driver; no LOGICAL VOLUME disk; native disk model(s): " . join(', ', @models)
+                . ' (inferred: no hba_mode_enabled attribute was reported)';
+        return { verdict => 'HBA', evidence => \@ev };
+    }
+    push @ev, $driver ? "driver $driver but no disk with a native model is visible" : 'no Smart Array driver binding found';
+    return { verdict => 'UNKNOWN', evidence => \@ev };
+}
+
 sub _audit_controllers ($a) {
     my $sc = ref $a->{storage_controllers} eq 'HASH' ? $a->{storage_controllers} : {};
     my $out = "Storage controllers\n";
     $out .= "  PCI: $_\n" for _pci_storage($a);
     my @hosts = ref $sc->{scsi_hosts} eq 'ARRAY' ? @{ $sc->{scsi_hosts} } : ();
-    my $raid = 0;
+    my $reported = 0;
     for my $h (@hosts) {
         next unless ref $h eq 'HASH';
         my $m = $h->{hba_mode_enabled};
+        $reported = 1 if defined $m;
         my $word = !defined $m ? 'mode not reported'
                  : $m eq '1'   ? 'HBA mode'
                  : $m eq '0'   ? 'RAID mode - NOT acceptable, see brief'
                  :               "mode value '$m'";
-        $raid = 1 if defined $m && $m eq '0';
-        $out .= '  ' . _unk($h->{host}) . ' (' . _unk($h->{driver}) . "): $word\n";
+        my @extra = map { "$_ $h->{$_}" } grep { defined $h->{$_} && length $h->{$_} } qw(transport_mode firmware_revision);
+        $out .= '  ' . _unk($h->{host}) . ' (' . _unk($h->{driver}) . "): $word" . (@extra ? ' [' . join(', ', @extra) . ']' : '') . "\n";
     }
-    $out .= "  No controller reported hba_mode_enabled.\n" unless @hosts;
-    if ($sc->{raid_mode_indicator}) {
-        $raid = 1;
-        $out .= "  A LOGICAL VOLUME disk is present: controller in RAID mode - NOT acceptable, see brief\n";
-    }
-    $out .= $raid ? "  Verdict: RAID mode detected\n" : "  Verdict: no RAID-mode indicator\n";
+    $out .= "  No controller reported hba_mode_enabled.\n" unless $reported;
+    $out .= "  A LOGICAL VOLUME disk is present: controller in RAID mode - NOT acceptable, see brief\n"
+        if $sc->{raid_mode_indicator};
+    my $v = controller_verdict($a);
+    my $text = $v->{verdict} eq 'RAID' ? 'RAID mode detected'
+             : $v->{verdict} eq 'HBA'  ? 'HBA mode'
+             :                           'unknown (no RAID indicator, no HBA evidence)';
+    $out .= "  Verdict: $text\n";
+    $out .= "    evidence: $_\n" for @{ $v->{evidence} };
     return $out;
+}
+
+# Kernel messages from hpsa about devices it added, removed, masked or skipped:
+# the usual reason a drive the iLO reports healthy is absent from the OS.
+sub _audit_hidden_drives ($a) {
+    my $dm = ref $a->{dmesg} eq 'ARRAY' ? $a->{dmesg} : [];
+    my @hit = grep { defined && !ref && /hpsa.*(?:scsi|dev|added|removed|masked|unknown|skip)/i } @$dm;
+    return '' unless @hit;
+    @hit = @hit[ ($#hit >= 11 ? $#hit - 11 : 0) .. $#hit ];
+    return "Drives the OS cannot see (last " . scalar(@hit) . " hpsa kernel messages about devices)\n"
+         . join('', map { "  $_\n" } @hit);
 }
 
 # by-id names per kernel device name, from `ls -l /dev/disk/by-id` text.
@@ -255,8 +337,9 @@ sub _audit_nics ($a) {
 
 sub render_audit ($audit) {
     return "No audit data.\n" unless ref $audit eq 'HASH';
-    return join "\n", _audit_dmi($audit), _audit_cpu_mem($audit),
-        _audit_controllers($audit), _audit_disks($audit), _audit_nics($audit);
+    return join "\n", grep { length } _audit_dmi($audit), _audit_cpu_mem($audit),
+        _audit_controllers($audit), _audit_disks($audit), _audit_hidden_drives($audit),
+        _audit_nics($audit);
 }
 
 1;

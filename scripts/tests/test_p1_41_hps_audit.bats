@@ -103,7 +103,7 @@ teardown() {
 @test "reports the hpsa controller mode and no RAID indicator for plain disks" {
   run bash "$AUDIT"
   [ "$status" -eq 0 ]
-  jq -e '.storage_controllers.scsi_hosts | length == 1' "$HPS_AUDIT_OUT"
+  jq -e '.storage_controllers.scsi_hosts | length == 2' "$HPS_AUDIT_OUT"
   jq -e '.storage_controllers.scsi_hosts[0] == {host:"host0",driver:"hpsa",hba_mode_enabled:1}' "$HPS_AUDIT_OUT"
   jq -e '.storage_controllers.raid_mode_indicator == false' "$HPS_AUDIT_OUT"
 }

@@ -64,6 +64,7 @@ teardown() {
   create_config_dnsmasq() { :; }
   update_dns_dhcp_files() { :; }
   create_config_rsyslog() { :; }
+  create_config_chrony() { :; }
   osvc_prepare_cluster() { :; }
   run supervisor_prepare_services
   [ "$status" -eq 0 ]

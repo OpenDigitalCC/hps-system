@@ -17,6 +17,7 @@ setup() {
   create_config_dnsmasq() { echo dnsmasq >> "$CALLS"; }
   update_dns_dhcp_files() { echo dns_dhcp >> "$CALLS"; }
   create_config_rsyslog() { echo rsyslog >> "$CALLS"; }
+  create_config_chrony() { echo chrony >> "$CALLS"; }
   osvc_prepare_cluster() { echo osvc_prepare >> "$CALLS"; return "${FAKE_OSVC_RC:-0}"; }
   osvc_configure_cluster() { echo osvc_configure >> "$CALLS"; return "${FAKE_OSVC_RC:-0}"; }
 }

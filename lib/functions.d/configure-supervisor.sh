@@ -303,6 +303,25 @@ environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
+  # --- chronyd (time server for the cluster network) ---
+  # -d foreground; -x never adjust the system clock (the container shares the
+  # host's kernel clock); -u root so the drift file in the services dir is
+  # writable.
+  local chrony_conf="${cluster_services_dir}/chrony.conf"
+  local chrony_log_stderr="${cluster_services_dir}/chrony.err.log"
+  local chrony_log_stdout="${cluster_services_dir}/chrony.out.log"
+
+  _supervisor_append_once "program:chronyd" "$(cat <<EOF
+[program:chronyd]
+command=/usr/sbin/chronyd -d -x -u root -f ${chrony_conf}
+autostart=true
+autorestart=true
+stderr_logfile=${chrony_log_stderr}
+stdout_logfile=${chrony_log_stdout}
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
   # --- OpenSVC agent ---
   install_opensvc_foreground_wrapper
 
