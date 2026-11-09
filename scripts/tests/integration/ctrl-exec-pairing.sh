@@ -16,7 +16,7 @@
 
 set -u
 
-CE_SRC="${CE_SRC:-/srv/projects/ctrl-exec}"
+CE_SRC="${CE_SRC:-/srv/projects/ctrl-exec/core}"
 HPS_SRC="${HPS_SRC:-/srv/projects/hps/hps-system}"
 
 # Re-exec into a rootless user+mount namespace so the hardcoded ctrl-exec paths

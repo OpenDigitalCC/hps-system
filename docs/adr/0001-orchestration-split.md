@@ -25,7 +25,7 @@ manager:
 
 OpenSVC's core purpose is service health and availability management;
 HPS's primary need is remotely setting up systems. ctrl-exec
-(/srv/projects/ctrl-exec, mTLS remote script execution with per-node
+(/srv/projects/ctrl-exec/core, mTLS remote script execution with per-node
 script allowlists, no shell, structured results) matches that need
 directly.
 
