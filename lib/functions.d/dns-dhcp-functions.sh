@@ -532,11 +532,13 @@ _ips_resolv_conf_update() {
     return 1
   }
   
-  cat > /etc/resolv.conf <<EOF
+  # HPS_RESOLV_CONF redirects the write (tests, bootstrap on a non-IPS host)
+  local resolv_conf="${HPS_RESOLV_CONF:-/etc/resolv.conf}"
+  cat > "$resolv_conf" <<EOF
 nameserver ${ips_ip}
 search ${dns_domain}
 EOF
   
-  hps_log info "Created /etc/resolv.conf with nameserver ${ips_ip} and search ${dns_domain}"
+  hps_log info "Created $resolv_conf with nameserver ${ips_ip} and search ${dns_domain}"
   return 0
 }

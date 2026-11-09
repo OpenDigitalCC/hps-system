@@ -17,7 +17,8 @@ supervisor_prepare_services () {
   create_config_dnsmasq
   update_dns_dhcp_files
   create_config_rsyslog
-  osvc_prepare_cluster
+  # No OpenSVC package (lab IPS): log and continue, the services above do not need it.
+  osvc_prepare_cluster || hps_log warn "supervisor_prepare_services: OpenSVC not prepared (continuing without it)"
 }
 
 
@@ -57,6 +58,10 @@ supervisor_populate_tftp () {
 
 # Functions to run straight after supervisor has started
 _supervisor_post_start () {
+  if ! command -v om >/dev/null 2>&1; then
+    hps_log warn "_supervisor_post_start: OpenSVC (om) not installed, skipping osvc_configure_cluster"
+    return 0
+  fi
   osvc_configure_cluster
 }
 

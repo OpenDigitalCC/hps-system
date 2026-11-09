@@ -71,6 +71,16 @@ create_config_dnsmasq() {
   dhcp_rangesize=$(cluster_registry "$cluster" get network_dhcp_rangesize 2>/dev/null)
   dhcp_rangesize=${dhcp_rangesize:-50}
   
+  # Explicit range (set by cluster-bootstrap.sh) wins over the computed one.
+  local dhcp_range_start dhcp_range_end dhcp_range
+  dhcp_range_start=$(cluster_registry "$cluster" get network_dhcp_range_start 2>/dev/null) || dhcp_range_start=""
+  dhcp_range_end=$(cluster_registry "$cluster" get network_dhcp_range_end 2>/dev/null) || dhcp_range_end=""
+  if [[ -n "$dhcp_range_start" && -n "$dhcp_range_end" ]]; then
+    dhcp_range="${dhcp_range_start},${dhcp_range_end},1h"
+  else
+    dhcp_range=$(generate_dhcp_range_simple "${network_cidr}" "${dhcp_ip}" "${dhcp_rangesize}")
+  fi
+
   local dns_domain
   dns_domain=$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null)
   dns_domain=${dns_domain:-local}
@@ -93,7 +103,7 @@ bind-interfaces
 # DHCP configuration
 # ---------------------------
 # Enable DHCP
-dhcp-range=$(generate_dhcp_range_simple "${network_cidr}" "${dhcp_ip}" "${dhcp_rangesize}")
+dhcp-range=${dhcp_range}
 # Optional: Log DHCP requests
 log-dhcp
 # DHCP reservations file

@@ -25,6 +25,8 @@ current_ip=$(config_get_value "network_dhcp_ip" "")
 current_cidr=$(config_get_value "network_dhcp_cidr" "")
 current_network=$(config_get_value "network_cidr" "")
 current_rangesize=$(config_get_value "network_dhcp_rangesize" "100")
+current_range_start=$(config_get_value "network_dhcp_range_start" "")
+current_range_end=$(config_get_value "network_dhcp_range_end" "")
 
 # Show current configuration if exists
 if [[ -n "$current_iface" ]] && [[ "$current_enabled" == "true" ]]; then
@@ -43,6 +45,8 @@ if [[ -n "$current_iface" ]] && [[ "$current_enabled" == "true" ]]; then
     CLUSTER_CONFIG_PENDING+=("network_dhcp_cidr:$current_cidr")
     CLUSTER_CONFIG_PENDING+=("network_cidr:$current_network")
     CLUSTER_CONFIG_PENDING+=("network_dhcp_rangesize:$current_rangesize")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_range_start:$current_range_start")
+    CLUSTER_CONFIG_PENDING+=("network_dhcp_range_end:$current_range_end")
     return 0
   fi
 fi
@@ -77,5 +81,8 @@ CLUSTER_CONFIG_PENDING+=("network_dhcp_ip:$ipaddr")
 CLUSTER_CONFIG_PENDING+=("network_dhcp_cidr:$ip_cidr")
 CLUSTER_CONFIG_PENDING+=("network_cidr:$network_cidr")
 CLUSTER_CONFIG_PENDING+=("network_dhcp_rangesize:$rangesize")
+# A new interface/size supersedes any explicit range from cluster-bootstrap.sh
+CLUSTER_CONFIG_PENDING+=("network_dhcp_range_start:")
+CLUSTER_CONFIG_PENDING+=("network_dhcp_range_end:")
 
 cli_info "DHCP configuration complete"

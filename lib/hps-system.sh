@@ -189,10 +189,12 @@ hps_ensure_config() {
   hps_log info "Creating HPS configuration: ${hps_conf}"
   
   # Define base paths (absolute, resolved from HPS_BASE)
-  local system_base="${HPS_BASE}/hps-system"
-  local config_base="${HPS_BASE}/hps-config"
-  local resources="${HPS_BASE}/hps-resources"
-  local log="${HPS_BASE}/hps-log"
+  # HPS_SYSTEM_PATH / HPS_CONFIG_BASE / HPS_RESOURCES / HPS_LOG, when set,
+  # relocate that one path (tests, lab bootstrap); unset keeps the HPS_BASE layout.
+  local system_base="${HPS_SYSTEM_PATH:-${HPS_BASE}/hps-system}"
+  local config_base="${HPS_CONFIG_BASE:-${HPS_BASE}/hps-config}"
+  local resources="${HPS_RESOURCES:-${HPS_BASE}/hps-resources}"
+  local log="${HPS_LOG:-${HPS_BASE}/hps-log}"
   
   # Write configuration file
   cat > "$hps_conf" <<EOF

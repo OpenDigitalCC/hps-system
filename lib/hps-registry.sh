@@ -20,7 +20,7 @@ shopt -u patsub_replacement 2>/dev/null || true
 export HPS_REGISTRY_RAW_MODE="${HPS_REGISTRY_RAW_MODE:-true}"
 
 # System registry location
-export HPS_SYSTEM_REGISTRY="${HPS_SYSTEM_REGISTRY:-/srv/hps-config/system.db}"
+export HPS_SYSTEM_REGISTRY="${HPS_SYSTEM_REGISTRY:-${HPS_CONFIG_BASE:-/srv/hps-config}/system.db}"
 
 #===============================================================================
 # json_registry

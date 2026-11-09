@@ -25,7 +25,7 @@ WARNINGS=0
 #===============================================================================
 # Determine HPS_BASE
 export HPS_BASE="${HPS_BASE:-/srv}"
-SYSTEM_PATH="${HPS_BASE}/hps-system"
+SYSTEM_PATH="${HPS_SYSTEM_PATH:-${HPS_BASE}/hps-system}"
 
 # Load function libraries
 if [[ -f "${SYSTEM_PATH}/lib/functions.sh" ]]; then
@@ -130,7 +130,7 @@ if [[ -n "$ACTIVE_CLUSTER" ]]; then
     local key="$1"
     local required="$2"
     local value
-    value=$(cluster_registry get "$key" 2>/dev/null) || value=""
+    value=$(cluster_registry "$ACTIVE_CLUSTER" get "$key" 2>/dev/null) || value=""
     
     if [[ -z "$value" ]]; then
       if [[ "$required" == "required" ]]; then
@@ -151,7 +151,7 @@ if [[ -n "$ACTIVE_CLUSTER" ]]; then
   check_cluster_key "network_cidr" "required"
   
   # Optional cluster keys
-  check_cluster_key "dns_domain" "optional"
+  check_cluster_key "network_dns_domain" "optional"
   check_cluster_key "network_dhcp_iface" "optional"
   check_cluster_key "network_dhcp_rangesize" "optional"
 else
