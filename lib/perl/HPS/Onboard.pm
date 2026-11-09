@@ -55,7 +55,7 @@ sub show ($self, $mac) {
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my %identity;
     for my $key ($reg->host_list($m)) {
-        next if $key eq 'audit';
+        next if $key eq 'audit' || $key eq 'nets';
         $identity{$key} = $reg->host_get($m, $key);
     }
     return {
@@ -64,7 +64,66 @@ sub show ($self, $mac) {
         identity => \%identity,
         audit    => $reg->host_get_json($m, 'audit'),
         audit_at => $identity{audit_at},
+        nets     => $reg->host_get_json($m, 'nets'),
     };
+}
+
+#--- network attachment --------------------------------------------------------
+# The network layout is the cluster key network_layout (cluster-bootstrap
+# --network-add): {"<name>": {cidr, vlan, bridge, purpose, nic?}}. The implicit
+# 'provisioning' network is not in it and is not attachable. A host's attached
+# networks are the host key nets, a JSON list of layout names; the node reads
+# both and builds the bridges (net-bridge-ensure).
+
+# The layout hash of the active cluster, or undef when none was defined.
+sub network_layout ($self) {
+    my $reg = $self->{registry};
+    return $reg->cluster_get_json($reg->active_cluster, 'network_layout');
+}
+
+# attach_nets($mac, \@names): REPLACE the host's attached networks with @names
+# (an empty list clears the key). Every name must be in the layout. Returns
+# {mac, nets => [names]}. Nothing is written when any name is refused.
+sub attach_nets ($self, $mac, $names) {
+    my $reg = $self->{registry};
+    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    _fail('usage', "Invalid MAC address: $mac") unless defined $m;
+    _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
+    my @names = @{ $names // [] };
+    my %seen;
+    for my $n (@names) {
+        _fail('usage', "network name '$n' must match ^[a-z][a-z0-9-]*\$") unless $n =~ /^[a-z][a-z0-9-]*$/;
+        _fail('usage', "'provisioning' is the implicit network; it is not attached") if $n eq 'provisioning';
+        _fail('usage', "network '$n' given twice") if $seen{$n}++;
+    }
+    if (@names) {
+        my $layout = $self->network_layout;
+        _fail('notfound', 'The cluster has no network layout (cluster-bootstrap --network-add)')
+            unless ref $layout eq 'HASH';
+        for my $n (@names) {
+            _fail('notfound', "Network '$n' is not in the network layout (" . join(', ', sort keys %$layout) . ')')
+                unless exists $layout->{$n};
+        }
+        $reg->host_set($m, 'nets', [@names]);
+    }
+    elsif ($reg->host_exists($m, 'nets')) {
+        $reg->host_unset($m, 'nets');
+    }
+    return { mac => $m, nets => [@names] };
+}
+
+# nets($mac): [{name, cidr, vlan, bridge, purpose}] for the attached networks
+# (layout fields; a name no longer in the layout shows with undef fields).
+sub nets ($self, $mac) {
+    my $reg = $self->{registry};
+    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    _fail('usage', "Invalid MAC address: $mac") unless defined $m;
+    _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
+    my $attached = $reg->host_get_json($m, 'nets');
+    return [] unless ref $attached eq 'ARRAY';
+    my $layout = $self->network_layout;
+    $layout = {} unless ref $layout eq 'HASH';
+    return [ map { { name => $_, %{ $layout->{$_} // {} } } } @$attached ];
 }
 
 sub _validate_args ($self, $a) {

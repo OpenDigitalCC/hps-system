@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# net-status - READ-ONLY view of the bridges, VLAN sub-interfaces and their
+# members on this node.
+#
+# ctrl-exec allowlisted node script. Usage: net-status    (no arguments)
+# Prints one line per bridge (state, members), one per VLAN sub-interface
+# (id, parent, bridge) and the addresses seen on them (a workload bridge should
+# show none). Changes nothing.
+#
+# Exit: 0 shown, 2 usage, 1 a command failed.
+
+set -euo pipefail
+
+log() {
+  printf '[net-status] %s\n' "$*" >&2
+}
+
+main() {
+  local json
+  if [[ $# -ne 0 ]]; then
+    log "takes no arguments"
+    exit 2
+  fi
+  printf '+ ip -j -d link show\n' >&2
+  json=$(ip -j -d link show)
+  printf '\n=== bridges ===\n'
+  printf '%s' "$json" | jq -r '
+    . as $all
+    | [.[] | select(.linkinfo.info_kind == "bridge")] | if length == 0 then "none" else .[] | .ifname as $b
+      | "bridge \($b) state \(.operstate // "UNKNOWN") members: "
+        + (([$all[] | select(.master == $b) | .ifname] | join(",")) | if . == "" then "none" else . end) end'
+  printf '\n=== vlans ===\n'
+  printf '%s' "$json" | jq -r '
+    [.[] | select(.linkinfo.info_kind == "vlan")] | if length == 0 then "none" else .[]
+      | "vlan \(.ifname) id \(.linkinfo.info_data.id) parent \(.link // "?") bridge \(.master // "none") state \(.operstate // "UNKNOWN")" end'
+  printf '\n=== addresses on bridges and vlans ===\n'
+  printf '+ ip -j -d addr show\n' >&2
+  ip -j -d addr show | jq -r '
+    [.[] | select(.linkinfo.info_kind == "bridge" or .linkinfo.info_kind == "vlan" or .master != null)
+         | select((.addr_info // []) | length > 0)
+         | "\(.ifname): " + ([.addr_info[] | "\(.local)/\(.prefixlen)"] | join(" "))]
+    | if length == 0 then "none" else .[] end'
+}
+
+main "$@"

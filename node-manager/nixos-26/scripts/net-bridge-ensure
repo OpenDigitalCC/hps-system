@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+#
+# net-bridge-ensure - make the bridges for the networks attached to this host.
+#
+# ctrl-exec allowlisted node script (also called by hps-node-init after the
+# hostname step). Usage: net-bridge-ensure     (no arguments)
+#
+# The IPS holds the network layout (cluster key network_layout, one JSON object
+# {"<name>": {"cidr","vlan","bridge","purpose","nic"?}}) and, per host, the list
+# of attached networks (host key nets). This script reads both from the IPS
+# (boot_manager.sh cmd=host_variable / cmd=cluster_variable, read-only) and
+# ensures, idempotently, one bridge per attached network:
+#
+#   VLAN network      a VLAN sub-interface <bootnic>.<vlan> on the boot NIC,
+#                     enslaved to bridge <bridge>
+#   untagged network  the bridge alone; a physical NIC joins it only when the
+#                     layout names one (nic=<mac>), never the boot NIC
+#
+# No address is ever configured on a workload bridge or its members (guests get
+# addresses from their own networks), and IPv6 link-local generation is turned
+# off on them (addrgenmode none). The boot NIC's own addressing is untouched:
+# it belongs to systemd-networkd (hps-net.sh).
+#
+# One mechanism: runtime `ip` commands do the work (idempotent, immediate, no
+# reload needed to take effect), and an "Unmanaged=yes" .network file under
+# /run/systemd/network (05-hps-<bridge>.network, sorted before hps-net's 10-)
+# tells networkd to leave those links alone. hps-net already marks every
+# non-boot link unmanaged; the 05 file keeps that true in its fallback mode
+# (hps.mac absent, DHCP on every interface), where networkd would otherwise
+# DHCP on the bridges. No .netdev files: networkd must not create or fight the
+# devices. Bridges of networks no longer attached are not removed.
+#
+# Exit: 0 done (also: nothing attached), 1 a command failed, 2 usage,
+#       3 refused (network not in the layout, layout missing, name clash, ...).
+# Nothing is changed when a refusal is possible: every attached network is
+# checked against the layout before the first ip command.
+#
+# Overrides for tests: HPS_CMDLINE (file), HPS_NETWORK_DIR.
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_NETWORK_DIR:=/run/systemd/network}"
+
+IPS=""
+BOOT_MAC=""
+BOOT_NIC=""
+LAYOUT=""
+NETS=()
+UNMANAGED_CHANGED=0
+
+log() {
+  printf '[net-bridge-ensure] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# normalise_mac <text>: aa:bb:cc:dd:ee:ff or fail.
+normalise_mac() {
+  local raw="${1//:/}"
+  raw="${raw,,}"
+  [[ "$raw" =~ ^[0-9a-f]{12}$ ]] || return 1
+  printf '%s:%s:%s:%s:%s:%s\n' "${raw:0:2}" "${raw:2:2}" "${raw:4:2}" \
+    "${raw:6:2}" "${raw:8:2}" "${raw:10:2}"
+}
+
+discover_ips() {
+  local ips
+  ips=$(cmdline_value hps.ips || true)
+  if [[ -z "$ips" ]]; then
+    log "hps.ips absent from the command line; using the default gateway"
+    ips=$(run ip -j route | jq -r '[.[] | select(.dst == "default")][0].gateway // empty')
+  fi
+  [[ -n "$ips" ]] || refuse "no IPS address (hps.ips= or a default gateway)"
+  IPS="$ips"
+}
+
+# Name of the link carrying a MAC, or nothing.
+nic_of_mac() {
+  run ip -j link show | jq -r --arg m "$1" '[.[] | select((.address // "" | ascii_downcase) == $m)][0].ifname // empty'
+}
+
+discover_boot_nic() {
+  local raw
+  raw=$(cmdline_value hps.mac || true)
+  BOOT_MAC=$(normalise_mac "$raw" || true)
+  [[ -n "$BOOT_MAC" ]] || refuse "hps.mac absent or malformed on the command line: cannot tell which NIC is the boot NIC"
+  BOOT_NIC=$(nic_of_mac "$BOOT_MAC")
+  [[ -n "$BOOT_NIC" ]] || refuse "no interface carries the boot MAC $BOOT_MAC"
+  log "boot NIC $BOOT_NIC ($BOOT_MAC): left to systemd-networkd"
+}
+
+# fetch_key <host_variable|cluster_variable> <name>: print the value.
+# Returns 0 found, 4 key absent (HTTP error status), 1 any other failure.
+fetch_key() {
+  local cmd="$1" name="$2" out rc
+  set +e
+  out=$(run curl -fsS "http://${IPS}/cgi-bin/boot_manager.sh?cmd=${cmd}&name=${name}")
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    printf '%s' "$out"
+    return 0
+  fi
+  if [[ $rc -eq 22 ]]; then
+    return 4
+  fi
+  log "curl exited $rc reading $cmd $name from $IPS"
+  return 1
+}
+
+# parse_names <text>: one network name per line from a JSON array or a
+# comma/space separated string.
+parse_names() {
+  local text="$1"
+  if printf '%s' "$text" | jq -e 'type == "array"' > /dev/null 2>&1; then
+    printf '%s' "$text" | jq -r '.[]'
+    return 0
+  fi
+  printf '%s\n' "$text" | tr -s ', ' '\n' | grep -v '^$' || true
+}
+
+load_attached() {
+  local text rc=0 name
+  text=$(fetch_key host_variable nets) || rc=$?
+  if [[ $rc -eq 4 ]]; then
+    log "no networks attached to this host (host key nets not set)"
+    return 0
+  fi
+  [[ $rc -eq 0 ]] || exit 1
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] || refuse "attached network name '$name' is not valid"
+    NETS+=("$name")
+  done < <(parse_names "$text")
+}
+
+load_layout() {
+  local rc=0
+  LAYOUT=$(fetch_key cluster_variable network_layout) || rc=$?
+  if [[ $rc -eq 4 ]]; then
+    refuse "networks are attached (${NETS[*]}) but the cluster has no network_layout"
+  fi
+  [[ $rc -eq 0 ]] || exit 1
+  printf '%s' "$LAYOUT" | jq -e 'type == "object"' > /dev/null 2>&1 \
+    || refuse "network_layout is not a JSON object"
+}
+
+# net_field <name> <field>: the layout field, empty when null or absent.
+net_field() {
+  printf '%s' "$LAYOUT" | jq -r --arg n "$1" --arg f "$2" '.[$n][$f] // empty'
+}
+
+# check_net <name>: refuse a network the layout does not define or cannot be built.
+check_net() {
+  local name="$1" bridge vlan nic purpose
+  printf '%s' "$LAYOUT" | jq -e --arg n "$name" 'has($n) and (.[$n] | type == "object")' > /dev/null 2>&1 \
+    || refuse "network '$name' is not in the network layout"
+  bridge=$(net_field "$name" bridge)
+  vlan=$(net_field "$name" vlan)
+  nic=$(net_field "$name" nic)
+  purpose=$(net_field "$name" purpose)
+  [[ "$bridge" =~ ^[a-z][a-z0-9-]{0,14}$ ]] || refuse "network '$name': bridge '$bridge' is not a valid interface name"
+  if [[ -n "$vlan" ]]; then
+    [[ "$vlan" =~ ^[0-9]+$ ]] || refuse "network '$name': vlan '$vlan' is not 1-4094"
+    (( vlan >= 1 && vlan <= 4094 )) || refuse "network '$name': vlan '$vlan' is not 1-4094"
+    (( ${#BOOT_NIC} + ${#vlan} + 1 <= 15 )) \
+      || refuse "network '$name': ${BOOT_NIC}.${vlan} is longer than the 15 characters of an interface name"
+  fi
+  if [[ -n "$vlan" && -n "$nic" ]]; then
+    refuse "network '$name' names both a vlan and a nic"
+  fi
+  if [[ -n "$nic" ]]; then
+    nic=$(normalise_mac "$nic" || true)
+    [[ -n "$nic" ]] || refuse "network '$name': nic is not a MAC address"
+    [[ "$nic" != "$BOOT_MAC" ]] || refuse "network '$name': nic is the boot NIC; it is never put in a bridge"
+  fi
+  [[ "$purpose" == "workload" || "$purpose" == "storage" ]] \
+    || refuse "network '$name': purpose '$purpose' is not workload or storage"
+}
+
+# link_json <name>: the link as JSON, failing when it does not exist.
+link_json() {
+  ip -j -d link show dev "$1" 2> /dev/null
+}
+
+link_field() {
+  link_json "$1" | jq -r "$2"
+}
+
+link_is_up() {
+  [[ "$(link_field "$1" '.[0].flags | index("UP") != null')" == "true" ]]
+}
+
+# write_unmanaged <file-name> <match-lines>: logged, only when the content changes.
+write_unmanaged() {
+  local file="$HPS_NETWORK_DIR/$1" body="$2" current=""
+  body="[Match]
+${body}
+
+[Link]
+Unmanaged=yes
+"
+  if [[ -f "$file" ]]; then
+    current=$(cat "$file")
+    current="${current}"$'\n'
+  fi
+  if [[ "$current" == "$body" ]]; then
+    return 0
+  fi
+  log "+ write $file"
+  printf '%s' "$body" > "$file"
+  UNMANAGED_CHANGED=1
+}
+
+write_unmanaged_for() {
+  local name="$1" bridge vlan nic names
+  bridge=$(net_field "$name" bridge)
+  vlan=$(net_field "$name" vlan)
+  nic=$(net_field "$name" nic)
+  names="Name=${bridge}"
+  if [[ -n "$vlan" ]]; then
+    names="Name=${bridge} ${BOOT_NIC}.${vlan}"
+  fi
+  write_unmanaged "05-hps-${bridge}.network" "$names"
+  if [[ -n "$nic" ]]; then
+    write_unmanaged "05-hps-${bridge}-nic.network" "MACAddress=$(normalise_mac "$nic")"
+  fi
+}
+
+reload_networkd() {
+  if [[ $UNMANAGED_CHANGED -eq 1 ]] && command -v networkctl > /dev/null 2>&1; then
+    run networkctl reload || log "networkctl reload failed (continuing)"
+  fi
+}
+
+ensure_bridge() {
+  local bridge="$1" kind
+  if link_json "$bridge" > /dev/null; then
+    kind=$(link_field "$bridge" '.[0].linkinfo.info_kind // ""')
+    [[ "$kind" == "bridge" ]] || refuse "interface $bridge exists and is a '${kind:-plain}' link, not a bridge"
+  else
+    run ip link add name "$bridge" addrgenmode none type bridge
+  fi
+  if ! link_is_up "$bridge"; then
+    run ip link set dev "$bridge" up
+  fi
+}
+
+# enslave <link> <bridge>
+enslave() {
+  local link="$1" bridge="$2" master
+  master=$(link_field "$link" '.[0].master // ""')
+  if [[ "$master" != "$bridge" ]]; then
+    run ip link set dev "$link" master "$bridge"
+  fi
+  if ! link_is_up "$link"; then
+    run ip link set dev "$link" up
+  fi
+}
+
+ensure_vlan() {
+  local sub="$1" vlan="$2" bridge="$3" kind id parent
+  if link_json "$sub" > /dev/null; then
+    kind=$(link_field "$sub" '.[0].linkinfo.info_kind // ""')
+    id=$(link_field "$sub" '.[0].linkinfo.info_data.id // ""')
+    parent=$(link_field "$sub" '.[0].link // ""')
+    [[ "$kind" == "vlan" && "$id" == "$vlan" && "$parent" == "$BOOT_NIC" ]] \
+      || refuse "interface $sub exists but is not vlan $vlan on $BOOT_NIC"
+  else
+    run ip link add link "$BOOT_NIC" name "$sub" addrgenmode none type vlan id "$vlan"
+  fi
+  enslave "$sub" "$bridge"
+}
+
+ensure_nic() {
+  local mac="$1" bridge="$2" dev
+  dev=$(nic_of_mac "$(normalise_mac "$mac")")
+  [[ -n "$dev" ]] || refuse "no interface carries the layout nic $mac"
+  [[ "$dev" != "$BOOT_NIC" ]] || refuse "layout nic $mac is the boot NIC"
+  enslave "$dev" "$bridge"
+}
+
+ensure_net() {
+  local name="$1" bridge vlan nic
+  bridge=$(net_field "$name" bridge)
+  vlan=$(net_field "$name" vlan)
+  nic=$(net_field "$name" nic)
+  ensure_bridge "$bridge"
+  if [[ -n "$vlan" ]]; then
+    ensure_vlan "${BOOT_NIC}.${vlan}" "$vlan" "$bridge"
+  elif [[ -n "$nic" ]]; then
+    ensure_nic "$nic" "$bridge"
+  fi
+  printf 'network %s: bridge %s ready%s\n' "$name" "$bridge" "${vlan:+ (vlan $vlan on $BOOT_NIC)}"
+}
+
+main() {
+  local name
+  if [[ $# -ne 0 ]]; then
+    log "takes no arguments"
+    exit 2
+  fi
+  discover_ips
+  load_attached
+  if [[ ${#NETS[@]} -eq 0 ]]; then
+    exit 0
+  fi
+  load_layout
+  discover_boot_nic
+  for name in "${NETS[@]}"; do
+    check_net "$name"
+  done
+  mkdir -p "$HPS_NETWORK_DIR"
+  for name in "${NETS[@]}"; do
+    write_unmanaged_for "$name"
+  done
+  reload_networkd
+  for name in "${NETS[@]}"; do
+    ensure_net "$name"
+  done
+}
+
+main "$@"

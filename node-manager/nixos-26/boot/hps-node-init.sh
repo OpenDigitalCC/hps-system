@@ -10,6 +10,9 @@
 #   2. transient hostname from the registry (cmd=host_variable&name=HOSTNAME;
 #      fallback hps-<mac without colons>), as <name>.<hps.domain> when the
 #      command line carries hps.domain (see hps-pair for why)
+#      then net-bridge-ensure builds the bridges for the networks attached to
+#      this host in the registry (non-fatal: a missing script or a failure is
+#      logged and boot goes on)
 #   3. fetch the node function bundle (cmd=get_remote_functions) to
 #      /run/hps/functions.sh and run n_init_run from it (compat path; the
 #      NixOS shims are CS-1.6 - a failure here is logged, not fatal)
@@ -24,6 +27,7 @@ set -euo pipefail
 : "${HPS_CMDLINE:=/proc/cmdline}"
 : "${HPS_RUN_DIR:=/run/hps}"
 : "${HPS_PAIR:=/etc/hps/hps-pair}"
+: "${HPS_NET_BRIDGE_ENSURE:=/opt/ctrl-exec-scripts/net-bridge-ensure}"
 
 log() {
   printf '[hps-node-init] %s\n' "$*" >&2
@@ -99,6 +103,16 @@ set_hostname() {
   run hostname "$name"
 }
 
+# The allowlisted node script, run here once so the bridges exist before any
+# workload; later runs go through ctrl-exec. Never stops the boot.
+ensure_bridges() {
+  if [[ ! -x "$HPS_NET_BRIDGE_ENSURE" ]]; then
+    log "$HPS_NET_BRIDGE_ENSURE not present; no bridges built"
+    return 0
+  fi
+  run "$HPS_NET_BRIDGE_ENSURE" || log "net-bridge-ensure exited $? (continuing)"
+}
+
 fetch_bundle() {
   local ips="$1"
   mkdir -p "$HPS_RUN_DIR"
@@ -154,6 +168,7 @@ main() {
   set_hostname "$name"
   mkdir -p "$HPS_RUN_DIR"
   printf '%s\n' "${profile}" > "$HPS_RUN_DIR/profile"
+  ensure_bridges
 
   if fetch_bundle "$ips"; then
     run_bundle_init

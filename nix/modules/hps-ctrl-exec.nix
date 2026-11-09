@@ -81,6 +81,11 @@ in
       storage-zvol-list.options.profile = "node";
       storage-status.source = mkScript "storage-status" (scriptsDir + "/storage-status");
       storage-status.options.profile = "node";
+      # CS-3.1
+      net-bridge-ensure.source = mkScript "net-bridge-ensure" (scriptsDir + "/net-bridge-ensure");
+      net-bridge-ensure.options.profile = "node";
+      net-status.source = mkScript "net-status" (scriptsDir + "/net-status");
+      net-status.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

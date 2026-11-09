@@ -14,6 +14,7 @@
 #       --ips-ip <ip> --dhcp-range <start>-<end> [--dns-domain <d>] \
 #       [--static-range <start>-<end>] [--reserve <ip>[,<ip>...]] \
 #       [--description <s>] [--storage-network <cidr>] \
+#       [--network-add <name>:<cidr>[:vlan=<id>][:bridge=<br>][:purpose=workload|storage][:nic=<mac>]]... \
 #       [--time-upstream "<servers>"] [--force]
 #
 # Static addresses: hosts assigned by hps-onboard get their address from the
@@ -22,6 +23,15 @@
 # the DHCP range start - 1 (IPS .1 and DHCP .100-.199 in a /24 give .10-.99).
 # network_reserved lists addresses the allocator must skip (--reserve), such
 # as one an outside device already uses on the cluster network.
+#
+# Network layout: --network-add (repeatable) defines a workload or storage
+# network. The implicit 'provisioning' network is the --network above and is
+# already configured. All additions are written as ONE JSON cluster key,
+# network_layout: {"<name>": {"cidr":..., "vlan":<id>|null, "bridge":...,
+# "purpose":"workload"|"storage", "nic":<mac> (optional)}}. Nodes build the
+# bridges for the networks attached to them (net-bridge-ensure); HPS never
+# configures a switch. Names ^[a-z][a-z0-9-]*$, VLAN ids 1-4094 and bridge
+# names unique, no CIDR overlapping another or --network/--storage-network.
 #
 # Time: nodes take time only from the IPS (cluster key network_time_server =
 # the IPS address; the node images consult no public pool). The IPS runs
@@ -58,6 +68,8 @@ ARG_TIME_UPSTREAM=""
 ARG_STATIC=""
 ARG_RESERVE=""
 ARG_FORCE=0
+ARG_NETS=()
+LAYOUT_JSON=""
 
 # Filled by validation
 RANGE_START=""
@@ -76,6 +88,7 @@ Usage: cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr>
          --ips-ip <ip> --dhcp-range <start>-<end> [--dns-domain <d>]
          [--static-range <start>-<end>] [--reserve <ip>[,<ip>...]]
          [--description <s>] [--storage-network <cidr>]
+         [--network-add <name>:<cidr>[:vlan=<id>][:bridge=<br>][:purpose=workload|storage][:nic=<mac>]]...
          [--time-upstream "<servers>"] [--force]
 
   --name             cluster name (DNS label: letters, digits, hyphens)
@@ -96,6 +109,16 @@ Usage: cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr>
   --dns-domain       default cluster.local
   --description      default: the cluster name
   --storage-network  optional, A.B.0.0/N (N 16-28), one storage network
+  --network-add      repeatable. A workload/storage network for the network
+                     layout (cluster key network_layout, one JSON object):
+                     <name>:<cidr>[:vlan=<id>][:bridge=<br>][:purpose=...]
+                     [:nic=<mac>]. name ^[a-z][a-z0-9-]*$ (not 'provisioning',
+                     the implicit network of --network); cidr in network-address
+                     form (prefix 8-30); vlan 1-4094; bridge default br-<name>
+                     (max 15 characters); purpose workload (default) or storage;
+                     nic: a physical NIC the untagged bridge takes (no vlan).
+                     VLAN ids and bridge names are unique; no CIDR overlaps
+                     --network, --storage-network or another addition.
   --time-upstream    NTP servers/pools the IPS syncs from, space separated
                      (cluster key network_time_upstream); default empty = the
                      IPS serves its own clock. Nodes always use the IPS only.
@@ -131,6 +154,7 @@ parse_args() {
       --dns-domain)      ARG_DOMAIN="${2:?--dns-domain needs a value}"; shift 2 ;;
       --description)     ARG_DESC="${2:?--description needs a value}"; shift 2 ;;
       --storage-network) ARG_STORAGE="${2:?--storage-network needs a value}"; shift 2 ;;
+      --network-add)     ARG_NETS+=("${2:?--network-add needs a value}"); shift 2 ;;
       --time-upstream)   ARG_TIME_UPSTREAM="${2?--time-upstream needs a value (may be empty)}"; shift 2 ;;
       --force)           ARG_FORCE=1; shift ;;
       -h|--help)         usage; exit 0 ;;
@@ -328,6 +352,117 @@ validate_storage() {
   fi
 }
 
+# Split a --network-add spec on ":" into name, cidr and key=value fields. A
+# nic MAC contains colons, so a piece without "=" belongs to the previous field.
+# Sets NA_NAME, NA_CIDR and the NA_FIELDS array of "key=value".
+split_network_spec() {
+  local spec="$1" piece i
+  local -a parts
+  NA_FIELDS=()
+  IFS=: read -r -a parts <<< "$spec"
+  NA_NAME="${parts[0]:-}"
+  NA_CIDR="${parts[1]:-}"
+  for (( i = 2; i < ${#parts[@]}; i++ )); do
+    piece="${parts[$i]}"
+    if [[ "$piece" == *=* ]]; then
+      NA_FIELDS+=("$piece")
+    elif (( ${#NA_FIELDS[@]} > 0 )); then
+      NA_FIELDS[${#NA_FIELDS[@]}-1]+=":$piece"
+    else
+      fail "invalid --network-add '$spec': '$piece' is not key=value"
+    fi
+  done
+}
+
+# nic=<mac> to aa:bb:cc:dd:ee:ff, or fail.
+normalise_nic() {
+  local raw="${1//[:-]/}"
+  raw="${raw,,}"
+  [[ "$raw" =~ ^[0-9a-f]{12}$ ]] || return 1
+  printf '%s:%s:%s:%s:%s:%s\n' "${raw:0:2}" "${raw:2:2}" "${raw:4:2}" \
+    "${raw:6:2}" "${raw:8:2}" "${raw:10:2}"
+}
+
+# Validate one --network-add spec; on success append it to LAYOUT_JSON and its
+# range to the overlap lists. Arguments: spec. Uses the SEEN_* state.
+validate_one_network() {
+  local spec="$1" field key val bounds lo hi
+  local vlan="" bridge="" purpose="workload" nic="" vlan_given=0
+  split_network_spec "$spec"
+  [[ "$NA_NAME" =~ ^[a-z][a-z0-9-]*$ ]] \
+    || fail "invalid --network-add name '$NA_NAME' in '$spec': ^[a-z][a-z0-9-]*\$"
+  [[ "$NA_NAME" != provisioning ]] \
+    || fail "--network-add name 'provisioning' is the implicit network (--network); choose another"
+  [[ -z "${SEEN_NAME[$NA_NAME]:-}" ]] || fail "--network-add '$NA_NAME' given twice"
+  bounds=$(cidr_bounds "$NA_CIDR" 8 30) \
+    || fail "invalid cidr '$NA_CIDR' for network '$NA_NAME': expected network-address CIDR (prefix 8-30, host bits zero)"
+  read -r lo hi _ <<< "$bounds"
+  for field in "${NA_FIELDS[@]}"; do
+    key="${field%%=*}"
+    val="${field#*=}"
+    case "$key" in
+      vlan)    vlan="$val"; vlan_given=1 ;;
+      bridge)  bridge="$val" ;;
+      purpose) purpose="$val" ;;
+      nic)     nic="$val" ;;
+      *)       fail "network '$NA_NAME': unknown field '$key' (vlan, bridge, purpose, nic)" ;;
+    esac
+  done
+  if (( vlan_given == 1 )); then
+    [[ "$vlan" =~ ^[1-9][0-9]{0,3}$ ]] \
+      || fail "network '$NA_NAME': vlan '$vlan' is not an id from 1 to 4094"
+    (( vlan <= 4094 )) || fail "network '$NA_NAME': vlan '$vlan' is not an id from 1 to 4094"
+    [[ -z "${SEEN_VLAN[$vlan]:-}" ]] \
+      || fail "network '$NA_NAME': vlan $vlan is already used by '${SEEN_VLAN[$vlan]}'"
+  fi
+  [[ -n "$bridge" ]] || bridge="br-$NA_NAME"
+  [[ "$bridge" =~ ^[a-z][a-z0-9-]{0,14}$ ]] \
+    || fail "network '$NA_NAME': bridge '$bridge' is not a valid name (^[a-z][a-z0-9-]{0,14}\$; give bridge= for a long network name)"
+  [[ -z "${SEEN_BRIDGE[$bridge]:-}" ]] \
+    || fail "network '$NA_NAME': bridge '$bridge' is already used by '${SEEN_BRIDGE[$bridge]}'"
+  [[ "$purpose" == workload || "$purpose" == storage ]] \
+    || fail "network '$NA_NAME': purpose '$purpose' is not workload or storage"
+  if [[ -n "$nic" ]]; then
+    [[ -z "$vlan" ]] || fail "network '$NA_NAME': nic and vlan are exclusive (a nic joins an untagged bridge)"
+    nic=$(normalise_nic "$nic") || fail "network '$NA_NAME': nic is not a MAC address"
+  fi
+  if (( lo <= NET_HI && NET_LO <= hi )); then
+    fail "network '$NA_NAME' $NA_CIDR overlaps the provisioning network $NET_CIDR"
+  fi
+  if [[ -n "$ARG_STORAGE" ]]; then
+    local slo shi
+    read -r slo shi _ <<< "$(cidr_bounds "$ARG_STORAGE" 16 28)"
+    if (( lo <= shi && slo <= hi )); then
+      fail "network '$NA_NAME' $NA_CIDR overlaps --storage-network $ARG_STORAGE"
+    fi
+  fi
+  local other
+  for other in "${!SEEN_RANGE[@]}"; do
+    if (( lo <= ${SEEN_RANGE[$other]#*-} && ${SEEN_RANGE[$other]%-*} <= hi )); then
+      fail "network '$NA_NAME' $NA_CIDR overlaps network '$other'"
+    fi
+  done
+  SEEN_NAME[$NA_NAME]=1
+  SEEN_BRIDGE[$bridge]="$NA_NAME"
+  [[ -z "$vlan" ]] || SEEN_VLAN[$vlan]="$NA_NAME"
+  SEEN_RANGE[$NA_NAME]="$lo-$hi"
+  LAYOUT_JSON=$(jq -c --arg n "$NA_NAME" --arg c "$NA_CIDR" --argjson v "${vlan:-null}" \
+    --arg b "$bridge" --arg p "$purpose" --arg nic "$nic" \
+    '. + {($n): ({cidr: $c, vlan: $v, bridge: $b, purpose: $p} + (if $nic == "" then {} else {nic: $nic} end))}' \
+    <<< "$LAYOUT_JSON") || fail "cannot build the network layout JSON"
+}
+
+validate_networks() {
+  local spec
+  declare -A SEEN_NAME=() SEEN_VLAN=() SEEN_BRIDGE=() SEEN_RANGE=()
+  [[ ${#ARG_NETS[@]} -gt 0 ]] || return 0
+  command -v jq > /dev/null 2>&1 || fail "--network-add needs jq"
+  LAYOUT_JSON="{}"
+  for spec in "${ARG_NETS[@]}"; do
+    validate_one_network "$spec"
+  done
+}
+
 validate_args() {
   validate_name
   validate_iface
@@ -339,6 +474,7 @@ validate_args() {
   validate_static
   validate_reserve
   validate_storage
+  validate_networks
 }
 
 #-------------------------------------------------------------------------------
@@ -465,6 +601,22 @@ clear_storage_keys() {
   done < <(cluster_registry "$ARG_NAME" list)
 }
 
+# network_layout is one JSON key written after commit_changes (which handles
+# "key:value" strings, not JSON objects). --force without --network-add drops a
+# stale layout, as clear_storage_keys drops stale storage keys.
+write_network_layout() {
+  if [[ -n "$LAYOUT_JSON" ]]; then
+    hps_log info "bootstrap: set network_layout (cluster $ARG_NAME)"
+    cluster_registry "$ARG_NAME" set network_layout "$LAYOUT_JSON" \
+      || fail "cannot write network_layout"
+    return 0
+  fi
+  if cluster_registry "$ARG_NAME" exists network_layout > /dev/null 2>&1; then
+    hps_log info "bootstrap: delete network_layout (cluster $ARG_NAME)"
+    cluster_registry "$ARG_NAME" delete network_layout
+  fi
+}
+
 create_or_reuse_cluster() {
   if cluster_registry exists "$ARG_NAME"; then
     (( ARG_FORCE == 1 )) || fail "cluster '$ARG_NAME' already exists; use --force to rewrite its keys"
@@ -519,9 +671,11 @@ main() {
   for item in "${CLUSTER_CONFIG_PENDING[@]}"; do
     SUMMARY_KEYS+=("${item%%:*}")
   done
+  [[ -z "$LAYOUT_JSON" ]] || SUMMARY_KEYS+=(network_layout)
 
   create_or_reuse_cluster
   commit_changes || fail "commit_changes failed"
+  write_network_layout
   activate_cluster
   run_pre_start_checks || exit 1
   print_summary

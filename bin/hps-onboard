@@ -26,6 +26,10 @@ Usage:
   hps-onboard assign <mac> --type SCH,TCH,DRH --profile NAME \
       --os arch:name:version --pin PIN [--storage "note"]
   hps-onboard repin <mac> (--pin PIN | --to-latest)
+  hps-onboard nets <mac> [--attach NAME[,NAME...]] [--json]
+      without --attach: the networks attached to the host. With --attach:
+      REPLACE the list (names from the cluster network layout; an empty
+      --attach '' clears it).
 Exit: 0 ok, 2 usage, 3 refused (assign: host not HELD; repin: host HELD
 or already on that pin), 4 not found (host, OS, or pin artefacts).
 USAGE
@@ -72,16 +76,28 @@ sub render_show {
     else {
         $out .= "\nNo audit stored for this host.\n";
     }
+    if (ref $s->{nets} eq 'ARRAY' && @{ $s->{nets} }) {
+        $out .= "\nNetworks attached: " . join(', ', @{ $s->{nets} }) . "\n";
+    }
     return $out;
+}
+
+sub render_nets {
+    my ($r) = @_;
+    return "No networks attached.\n" unless @$r;
+    return join '', map {
+        sprintf("%-16s %-18s vlan %-5s bridge %-15s %s\n", $_->{name}, $_->{cidr} // '?',
+            defined $_->{vlan} ? $_->{vlan} : '-', $_->{bridge} // '?', $_->{purpose} // '?')
+    } @$r;
 }
 
 sub main {
     my @argv = @_;
-    my ($json, $type, $profile, $os, $pin, $storage, $to_latest);
+    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
-        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach,
     ) or return usage();
     my $ob = HPS::Onboard->new;
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
@@ -100,6 +116,18 @@ sub main {
             return usage('assign needs one MAC') unless @argv == 1;
             my $r = $ob->assign($argv[0], { type => $type, profile => $profile, os => $os, pin => $pin, storage_note => $storage });
             print "Assigned $r->{mac}: state now $r->{state}\n";
+        }
+        elsif ($cmd eq 'nets') {
+            return usage('nets needs one MAC') unless @argv == 1;
+            if (defined $attach) {
+                my @names = grep { length } split /,/, $attach;
+                my $r = $ob->attach_nets($argv[0], \@names);
+                print "Networks for $r->{mac}: " . (@{ $r->{nets} } ? join(', ', @{ $r->{nets} }) : '(none)') . "\n";
+            }
+            else {
+                my $r = $ob->nets($argv[0]);
+                print $json ? $js->encode($r) : render_nets($r);
+            }
         }
         elsif ($cmd eq 'repin') {
             return usage('repin needs one MAC') unless @argv == 1;
