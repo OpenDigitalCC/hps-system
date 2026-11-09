@@ -1,10 +1,11 @@
 package HPS::Onboard;
-# Onboarding of held hosts: list, show the stored audit, assign a role.
+# Onboarding of held hosts: list, show the stored audit, assign a role, repin.
 use strict;
 use warnings;
 use feature qw(signatures);
 no warnings 'experimental::signatures';
 
+use JSON::PP ();
 use HPS::Registry;
 
 package HPS::Onboard::Error {
@@ -18,10 +19,18 @@ my %TYPES = map { $_ => 1 } qw(SCH TCH DRH);
 
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
-    return bless { registry => $reg }, $class;
+    return bless { registry => $reg, resources => $opt{resources} }, $class;
 }
 
 sub registry ($self) { return $self->{registry} }
+
+# Directory of the NixOS pins: <resources>/nixos. Resources default as
+# lib/hps-system.sh: HPS_RESOURCES, else ${HPS_BASE:-/srv}/hps-resources.
+sub nixos_dir ($self) {
+    my $res = $self->{resources} // $ENV{HPS_RESOURCES}
+        // (($ENV{HPS_BASE} // '/srv') . '/hps-resources');
+    return "$res/nixos";
+}
 
 sub _fail ($kind, $msg) { die HPS::Onboard::Error->new($kind, $msg) }
 
@@ -110,6 +119,65 @@ sub assign ($self, $mac, $a) {
     }
     $reg->host_set($m, 'STATE', 'NETWORK_BOOT');
     return { mac => $m, state => 'NETWORK_BOOT' };
+}
+
+# The pin named by <nixos>/latest; fails (notfound) when it is missing or empty.
+sub _latest_pin ($self) {
+    my $file = $self->nixos_dir . '/latest';
+    open my $fh, '<', $file or _fail('notfound', "No latest pin: cannot read $file");
+    my $pin = <$fh> // '';
+    close $fh;
+    $pin =~ s/\s+//g;
+    _fail('notfound', "No latest pin: $file is empty") unless length $pin;
+    return $pin;
+}
+
+# A pin is usable when its directory holds at least one profile directory and
+# every profile directory has a boot.json that parses.
+sub _check_pin_artefacts ($self, $pin) {
+    my $dir = $self->nixos_dir . "/$pin";
+    _fail('notfound', "Pin $pin does not exist under " . $self->nixos_dir) unless -d $dir;
+    opendir my $dh, $dir or _fail('failed', "Cannot read $dir: $!");
+    my @profiles = sort grep { !/^\./ && -d "$dir/$_" } readdir $dh;
+    closedir $dh;
+    _fail('notfound', "Pin $pin has no profile directories") unless @profiles;
+    for my $prof (@profiles) {
+        my $file = "$dir/$prof/boot.json";
+        _fail('notfound', "Pin $pin is incomplete: $prof has no boot.json") unless -f $file;
+        open my $fh, '<', $file or _fail('failed', "Cannot read $file: $!");
+        my $text = do { local $/; <$fh> };
+        close $fh;
+        my $ok = eval { JSON::PP::decode_json($text); 1 };
+        _fail('notfound', "Pin $pin is incomplete: $prof/boot.json is not valid JSON") unless $ok;
+    }
+    return 1;
+}
+
+# repin($mac, {pin => P} | {to_latest => 1}): change an assigned host's
+# system_pin. Rollout and rollback are this registry change. The previous pin
+# is kept as system_pin_previous. Returns {mac, from, to}.
+sub repin ($self, $mac, $a) {
+    my $reg = $self->{registry};
+    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    _fail('usage', "Invalid MAC address: $mac") unless defined $m;
+    my $pin = $a->{pin};
+    _fail('usage', 'give exactly one of pin and to_latest')
+        if ($a->{to_latest} && defined $pin) || (!$a->{to_latest} && !defined $pin);
+    $pin = $self->_latest_pin if $a->{to_latest};
+    _fail('usage', "pin '$pin' must match ^[a-z0-9][a-z0-9.-]+\$") unless $pin =~ /^[a-z0-9][a-z0-9.-]+$/;
+    _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
+    my $state = $reg->host_get($m, 'STATE');
+    _fail('refused', "Host $m has no STATE; only assigned hosts can be repinned") unless defined $state && length $state;
+    _fail('refused', "Host $m is HELD; assign it first") if $state eq 'HELD';
+    my $old = $reg->host_get($m, 'system_pin');
+    _fail('refused', "Host $m is already pinned to $pin") if defined $old && $old eq $pin;
+    $self->_check_pin_artefacts($pin);
+
+    if (defined $old && length $old) { $reg->host_set($m, 'system_pin_previous', $old) }
+    else                             { $reg->host_unset($m, 'system_pin_previous') if $reg->host_exists($m, 'system_pin_previous') }
+    $reg->host_set($m, 'system_pin',  $pin);
+    $reg->host_set($m, 'repinned_at', $reg->timestamp);
+    return { mac => $m, from => $old, to => $pin };
 }
 
 #--- audit presentation -------------------------------------------------------

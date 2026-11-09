@@ -12,8 +12,16 @@
 # Usage:
 #   cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr> \
 #       --ips-ip <ip> --dhcp-range <start>-<end> [--dns-domain <d>] \
+#       [--static-range <start>-<end>] [--reserve <ip>[,<ip>...]] \
 #       [--description <s>] [--storage-network <cidr>] \
 #       [--time-upstream "<servers>"] [--force]
+#
+# Static addresses: hosts assigned by hps-onboard get their address from the
+# static pool, cluster keys network_static_start/_end, never from the DHCP
+# range and never next to the IPS. Default pool: from the IPS address + 9 up to
+# the DHCP range start - 1 (IPS .1 and DHCP .100-.199 in a /24 give .10-.99).
+# network_reserved lists addresses the allocator must skip (--reserve), such
+# as one an outside device already uses on the cluster network.
 #
 # Time: nodes take time only from the IPS (cluster key network_time_server =
 # the IPS address; the node images consult no public pool). The IPS runs
@@ -47,11 +55,16 @@ ARG_DOMAIN="cluster.local"
 ARG_DESC=""
 ARG_STORAGE=""
 ARG_TIME_UPSTREAM=""
+ARG_STATIC=""
+ARG_RESERVE=""
 ARG_FORCE=0
 
 # Filled by validation
 RANGE_START=""
 RANGE_END=""
+STATIC_START=""
+STATIC_END=""
+RESERVED=""
 NET_CIDR=""
 NET_PREFIX=""
 NET_LO=0
@@ -61,6 +74,7 @@ usage() {
   cat <<'EOF'
 Usage: cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr>
          --ips-ip <ip> --dhcp-range <start>-<end> [--dns-domain <d>]
+         [--static-range <start>-<end>] [--reserve <ip>[,<ip>...]]
          [--description <s>] [--storage-network <cidr>]
          [--time-upstream "<servers>"] [--force]
 
@@ -70,6 +84,15 @@ Usage: cluster-bootstrap.sh --name <cluster> --dhcp-iface <if> --network <cidr>
   --ips-ip           IPS address, inside --network
   --dhcp-range       first and last lease address, inside --network, not
                      containing --ips-ip
+  --static-range     pool for static host addresses (cluster keys
+                     network_static_start/_end): inside --network, not
+                     overlapping --dhcp-range, not containing --ips-ip.
+                     Default: from --ips-ip + 9 up to the --dhcp-range start
+                     - 1 (10.100.1.0/24, IPS .1, DHCP .100-.199 gives
+                     .10-.99); refused when that is empty
+  --reserve          addresses the allocator must skip, comma separated,
+                     inside --network (cluster key network_reserved,
+                     space separated); default none
   --dns-domain       default cluster.local
   --description      default: the cluster name
   --storage-network  optional, A.B.0.0/N (N 16-28), one storage network
@@ -103,6 +126,8 @@ parse_args() {
       --network)         ARG_NETWORK="${2:?--network needs a value}"; shift 2 ;;
       --ips-ip)          ARG_IPS_IP="${2:?--ips-ip needs a value}"; shift 2 ;;
       --dhcp-range)      ARG_RANGE="${2:?--dhcp-range needs a value}"; shift 2 ;;
+      --static-range)    ARG_STATIC="${2:?--static-range needs a value}"; shift 2 ;;
+      --reserve)         ARG_RESERVE="${2:?--reserve needs a value}"; shift 2 ;;
       --dns-domain)      ARG_DOMAIN="${2:?--dns-domain needs a value}"; shift 2 ;;
       --description)     ARG_DESC="${2:?--description needs a value}"; shift 2 ;;
       --storage-network) ARG_STORAGE="${2:?--storage-network needs a value}"; shift 2 ;;
@@ -242,6 +267,54 @@ validate_range() {
   fi
 }
 
+# Static pool: explicit, or derived from the IPS address and the DHCP range.
+validate_static() {
+  local s e ips ds de
+  ips=$(ipv4_to_int "$ARG_IPS_IP")
+  ds=$(ipv4_to_int "$RANGE_START")
+  de=$(ipv4_to_int "$RANGE_END")
+  if [[ -n "$ARG_STATIC" ]]; then
+    [[ "$ARG_STATIC" =~ ^([0-9.]+)-([0-9.]+)$ ]] \
+      || fail "invalid --static-range '$ARG_STATIC': expected <start>-<end>"
+    STATIC_START="${BASH_REMATCH[1]}"
+    STATIC_END="${BASH_REMATCH[2]}"
+    valid_ipv4 "$STATIC_START" || fail "invalid static range start '$STATIC_START'"
+    valid_ipv4 "$STATIC_END"   || fail "invalid static range end '$STATIC_END'"
+  else
+    s=$(( ips + 9 ))
+    e=$(( ds - 1 ))
+    (( s <= e && e <= NET_HI )) \
+      || fail "no default static range: IPS + 9 up to the DHCP range start - 1 is empty; give --static-range"
+    STATIC_START=$(int_to_ipv4 "$s")
+    STATIC_END=$(int_to_ipv4 "$e")
+  fi
+  in_network "$STATIC_START" || fail "static range start $STATIC_START is not inside $NET_CIDR"
+  in_network "$STATIC_END"   || fail "static range end $STATIC_END is not inside $NET_CIDR"
+  s=$(ipv4_to_int "$STATIC_START")
+  e=$(ipv4_to_int "$STATIC_END")
+  (( s <= e )) || fail "static range start $STATIC_START is after static range end $STATIC_END"
+  if (( ips >= s && ips <= e )); then
+    fail "static range $STATIC_START-$STATIC_END contains the IPS address $ARG_IPS_IP"
+  fi
+  if (( s <= de && ds <= e )); then
+    fail "static range $STATIC_START-$STATIC_END overlaps --dhcp-range $ARG_RANGE"
+  fi
+}
+
+# Reserved addresses: valid host addresses of the cluster network.
+validate_reserve() {
+  local ip
+  local -a items
+  RESERVED=""
+  [[ -z "$ARG_RESERVE" ]] && return 0
+  IFS=, read -r -a items <<< "$ARG_RESERVE"
+  for ip in "${items[@]}"; do
+    valid_ipv4 "$ip" || fail "invalid --reserve entry '$ip'"
+    in_network "$ip" || fail "--reserve $ip is not inside $NET_CIDR"
+    RESERVED="${RESERVED:+$RESERVED }$ip"
+  done
+}
+
 validate_storage() {
   local bounds s_lo s_hi
   [[ -z "$ARG_STORAGE" ]] && return 0
@@ -263,6 +336,8 @@ validate_args() {
   validate_network
   validate_ips_ip
   validate_range
+  validate_static
+  validate_reserve
   validate_storage
 }
 
@@ -313,6 +388,9 @@ pending_dhcp() {
   CLUSTER_CONFIG_PENDING+=("network_dhcp_rangesize:$size")
   CLUSTER_CONFIG_PENDING+=("network_dhcp_range_start:$RANGE_START")
   CLUSTER_CONFIG_PENDING+=("network_dhcp_range_end:$RANGE_END")
+  CLUSTER_CONFIG_PENDING+=("network_static_start:$STATIC_START")
+  CLUSTER_CONFIG_PENDING+=("network_static_end:$STATIC_END")
+  CLUSTER_CONFIG_PENDING+=("network_reserved:$RESERVED")
 }
 
 pending_storage() {

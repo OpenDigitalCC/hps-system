@@ -25,7 +25,9 @@ Usage:
   hps-onboard show <mac> [--json]
   hps-onboard assign <mac> --type SCH,TCH,DRH --profile NAME \
       --os arch:name:version --pin PIN [--storage "note"]
-Exit: 0 ok, 2 usage, 3 refused (host not HELD), 4 not found.
+  hps-onboard repin <mac> (--pin PIN | --to-latest)
+Exit: 0 ok, 2 usage, 3 refused (assign: host not HELD; repin: host HELD
+or already on that pin), 4 not found (host, OS, or pin artefacts).
 USAGE
     return 2;
 }
@@ -75,11 +77,11 @@ sub render_show {
 
 sub main {
     my @argv = @_;
-    my ($json, $type, $profile, $os, $pin, $storage);
+    my ($json, $type, $profile, $os, $pin, $storage, $to_latest);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
-        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest,
     ) or return usage();
     my $ob = HPS::Onboard->new;
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
@@ -98,6 +100,11 @@ sub main {
             return usage('assign needs one MAC') unless @argv == 1;
             my $r = $ob->assign($argv[0], { type => $type, profile => $profile, os => $os, pin => $pin, storage_note => $storage });
             print "Assigned $r->{mac}: state now $r->{state}\n";
+        }
+        elsif ($cmd eq 'repin') {
+            return usage('repin needs one MAC') unless @argv == 1;
+            my $r = $ob->repin($argv[0], { pin => $pin, to_latest => $to_latest });
+            print "Repinned $r->{mac}: " . ($r->{from} // '(none)') . " -> $r->{to}\n";
         }
         else {
             return usage("unknown command '$cmd'");

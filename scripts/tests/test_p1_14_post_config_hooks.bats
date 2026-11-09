@@ -18,6 +18,8 @@ setup() {
     case "$3" in
       network_dhcp_ip) echo "10.99.1.1" ;;
       network_dhcp_rangesize) echo "20" ;;
+      network_static_start) echo "10.99.1.10" ;;
+      network_static_end) echo "10.99.1.19" ;;
       network_cidr) echo "24" ;;
     esac
   }

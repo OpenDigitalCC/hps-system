@@ -154,6 +154,8 @@ if [[ -n "$ACTIVE_CLUSTER" ]]; then
   check_cluster_key "network_dns_domain" "optional"
   check_cluster_key "network_dhcp_iface" "optional"
   check_cluster_key "network_dhcp_rangesize" "optional"
+  check_cluster_key "network_static_start" "optional"
+  check_cluster_key "network_static_end" "optional"
 else
   hps_log info "4. Skipping cluster registry checks (no cluster configured)"
 fi

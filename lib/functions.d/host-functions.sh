@@ -313,64 +313,81 @@ host_config_delete() {
 #===============================================================================
 # _find_available_ip
 # ------------------
-# Find an available IP address in DHCP range.
+# Find a free address in the cluster's static pool.
 #
 # Usage:
-#   _find_available_ip <mac> <dhcp_ip> <dhcp_rangesize>
+#   _find_available_ip <mac> <static_start> <static_end> [reserved] [ips_ip]
 #
 # Parameters:
-#   mac            - MAC address of host (to check current IP)
-#   dhcp_ip        - DHCP server IP (start of range)
-#   dhcp_rangesize - Size of DHCP range
+#   mac           - MAC address of host (its own current IP stays allocatable)
+#   static_start  - first address of the static pool (network_static_start)
+#   static_end    - last address of the static pool (network_static_end)
+#   reserved      - space-separated addresses to skip (network_reserved)
+#   ips_ip        - IPS address, skipped even if the pool were to contain it
+#
+# Skips reserved addresses and every IP already in a host registry. There is
+# no fallback outside the pool: a missing or invalid pool, or a full one, logs
+# an error and returns 1 with no output.
 #
 # Returns:
 #   0 on success (outputs IP to stdout)
-#   1 if no available IPs found
+#   1 if the pool is invalid or exhausted
 #===============================================================================
 _find_available_ip() {
   local mac="$1"
-  local dhcp_ip="$2"
-  local dhcp_rangesize="$3"
-  
+  local static_start="${2:-}"
+  local static_end="${3:-}"
+  local reserved="${4:-}"
+  local ips_ip="${5:-}"
+
+  if [[ -z "$static_start" || -z "$static_end" ]]; then
+    hps_log error "[$mac] static pool not declared (network_static_start/_end unset); re-run cluster-bootstrap with --static-range"
+    return 1
+  fi
+
+  local start_int end_int
+  start_int=$(ip_to_int "$static_start" 2>/dev/null) || start_int=""
+  end_int=$(ip_to_int "$static_end" 2>/dev/null) || end_int=""
+  if [[ -z "$start_int" || -z "$end_int" ]] || (( start_int > end_int )); then
+    hps_log error "[$mac] static pool $static_start-$static_end is invalid"
+    return 1
+  fi
+
   # Get all currently assigned IPs
   local assigned_ips
-  assigned_ips=$(get_cluster_host_ips 2>/dev/null)
-  
+  assigned_ips=$(get_cluster_host_ips 2>/dev/null) || assigned_ips=""
+
   # Get current host's IP if it already has one
   local current_host_ip
   current_host_ip=$(host_registry "$mac" get IP 2>/dev/null) || current_host_ip=""
-  
-  # Convert DHCP start IP to integer
-  local dhcp_start_int
-  dhcp_start_int=$(ip_to_int "$dhcp_ip" 2>/dev/null) || return 1
-  
-  # Scan range for available IP
-  local try_ip
-  for ((i=0; i<dhcp_rangesize; i++)); do
-    try_ip=$(int_to_ip $((dhcp_start_int + i)) 2>/dev/null)
+
+  local n try_ip skip existing_ip r
+  for ((n=start_int; n<=end_int; n++)); do
+    try_ip=$(int_to_ip "$n" 2>/dev/null) || continue
     [[ -z "$try_ip" ]] && continue
-    
-    # Skip DHCP server IP
-    [[ "$try_ip" == "$dhcp_ip" ]] && continue
-    
-    # Check if IP is in use by another host
-    local ip_in_use=0
+    [[ -n "$ips_ip" && "$try_ip" == "$ips_ip" ]] && continue
+
+    skip=0
+    for r in $reserved; do
+      [[ "$r" == "$try_ip" ]] && skip=1
+    done
+    [[ $skip -eq 1 ]] && continue
+
+    # In use by another host (its own current IP is fine: reconfiguring)
     while IFS= read -r existing_ip; do
       [[ -z "$existing_ip" ]] && continue
-      if [[ "$existing_ip" == "$try_ip" ]]; then
-        # OK if it's our current IP (reconfiguring)
-        [[ "$current_host_ip" != "$try_ip" ]] && ip_in_use=1
+      if [[ "$existing_ip" == "$try_ip" && "$current_host_ip" != "$try_ip" ]]; then
+        skip=1
         break
       fi
     done <<< "$assigned_ips"
-    
-    # Found available IP
-    if [[ $ip_in_use -eq 0 ]]; then
-      echo "$try_ip"
-      return 0
-    fi
+    [[ $skip -eq 1 ]] && continue
+
+    echo "$try_ip"
+    return 0
   done
-  
+
+  hps_log error "[$mac] static pool $static_start-$static_end exhausted (reserved: ${reserved:-none})"
   return 1
 }
 
@@ -458,15 +475,17 @@ host_network_configure() {
   fi
   
   # Get cluster network configuration
-  local dhcp_ip dhcp_rangesize network_cidr
+  local dhcp_ip network_cidr static_start static_end reserved
   dhcp_ip=$(cluster_registry "$cluster" get network_dhcp_ip 2>/dev/null)
-  dhcp_rangesize=$(cluster_registry "$cluster" get network_dhcp_rangesize 2>/dev/null)
   network_cidr=$(cluster_registry "$cluster" get network_cidr 2>/dev/null)
+  static_start=$(cluster_registry "$cluster" get network_static_start 2>/dev/null) || static_start=""
+  static_end=$(cluster_registry "$cluster" get network_static_end 2>/dev/null) || static_end=""
+  reserved=$(cluster_registry "$cluster" get network_reserved 2>/dev/null) || reserved=""
 
   hps_log debug "Configuring with network $network_cidr"
 
   # Validate cluster config
-  if [[ -z "$dhcp_ip" ]] || [[ -z "$dhcp_rangesize" ]] || [[ -z "$network_cidr" ]]; then
+  if [[ -z "$dhcp_ip" ]] || [[ -z "$network_cidr" ]]; then
     hps_log error "Missing required cluster network configuration"
     return 1
   fi
@@ -504,10 +523,10 @@ host_network_configure() {
   # Allocate IP if not already set
   if [[ -z "$assigned_ip" ]]; then
     hps_log debug "No existing IP, allocating new one"
-    assigned_ip=$(_find_available_ip "$macid" "$dhcp_ip" "$dhcp_rangesize")
+    assigned_ip=$(_find_available_ip "$macid" "$static_start" "$static_end" "$reserved" "$dhcp_ip") || assigned_ip=""
     
     if [[ -z "$assigned_ip" ]]; then
-      hps_log error "No available IPs in DHCP range"
+      hps_log error "[$macid] no static address available (pool ${static_start:-unset}-${static_end:-unset})"
       return 1
     fi
     
