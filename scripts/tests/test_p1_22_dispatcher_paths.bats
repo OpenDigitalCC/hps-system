@@ -109,3 +109,8 @@ EOS
   run ce_dispatcher_bring_up
   [ "$status" -eq 1 ]
 }
+
+@test "bring-up also installs ctrl-exec-api from the tarball when it is absent" {
+  grep -q 'install.sh --api' "$BATS_TEST_DIRNAME/../../lib/functions.d/ctrl-exec-functions.sh"
+  grep -q 'command -v ctrl-exec-api' "$BATS_TEST_DIRNAME/../../lib/functions.d/ctrl-exec-functions.sh"
+}

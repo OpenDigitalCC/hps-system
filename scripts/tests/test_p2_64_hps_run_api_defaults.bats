@@ -30,7 +30,7 @@ EOT
   cat > "$TEST_DIR/bin/ctrl-exec-cli" <<'EOT'
 #!/usr/bin/env bash
 cat > /dev/null
-echo "socket=${CTRL_EXEC_API_SOCKET:-unset} url=${CTRL_EXEC_API_URL:-unset}" > "$TEST_DIR/cli.env"
+echo "$*" > "$TEST_DIR/cli.env"
 EOT
   chmod +x "$CTRL_EXEC_DISPATCHER" "$TEST_DIR/bin/ctrl-exec-cli"
   unset CTRL_EXEC_CLI CTRL_EXEC_API_SOCKET CTRL_EXEC_API_URL
@@ -44,19 +44,19 @@ teardown() {
 @test "ctrl-exec-cli on PATH is used with the IPS API socket by default" {
   run bash -c "echo doc | bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc"
   [ "$status" -eq 0 ]
-  [ "$(cat "$TEST_DIR/cli.env")" = "socket=/run/ctrl-exec-api/api.sock url=unset" ]
+  [[ "$(cat "$TEST_DIR/cli.env")" == "--socket /run/ctrl-exec-api/api.sock run "* ]]
 }
 
 @test "a socket named by the caller is kept" {
   run bash -c "echo doc | CTRL_EXEC_API_SOCKET=/x/api.sock bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc"
   [ "$status" -eq 0 ]
-  [ "$(cat "$TEST_DIR/cli.env")" = "socket=/x/api.sock url=unset" ]
+  [[ "$(cat "$TEST_DIR/cli.env")" == "--socket /x/api.sock run "* ]]
 }
 
 @test "a URL named by the caller means no socket is set" {
   run bash -c "echo doc | CTRL_EXEC_API_URL=http://h:7445 bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc"
   [ "$status" -eq 0 ]
-  [ "$(cat "$TEST_DIR/cli.env")" = "socket=unset url=http://h:7445" ]
+  [[ "$(cat "$TEST_DIR/cli.env")" == "--url http://h:7445 run "* ]]
 }
 
 @test "without ctrl-exec-cli on PATH the plugins .deb location is tried" {

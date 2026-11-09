@@ -52,7 +52,7 @@
 # root and the state group call it; the API runs as ctrl-exec, which bring-up
 # adds to hps so it may own a socket of that group.
 : "${CTRL_EXEC_API_SOCKET:=/run/ctrl-exec-api/api.sock}"
-: "${CTRL_EXEC_API_SOCKET_GROUP:=hps}"
+: "${CTRL_EXEC_API_SOCKET_GROUP:=ctrl-exec}"
 : "${CTRL_EXEC_DISPATCHER_CONF:=${CTRL_EXEC_DISPATCHER_CONF_DIR}/ctrl-exec.conf}"
 
 #===============================================================================
@@ -125,6 +125,16 @@ ce_dispatcher_bring_up() {
       rm -rf "$work"
       return 1
     }
+    # The API server is a separate role of the same tarball (install.sh --api,
+    # after --dispatcher); hps-jobs and hps-run.sh --input need it.
+    if ! command -v ctrl-exec-api >/dev/null 2>&1; then
+      ( cd "$srcdir" && ./install.sh --api ) || {
+        hps_log error "ce_dispatcher_bring_up: ctrl-exec-api install failed"
+        rm -rf "$work"
+        return 1
+      }
+      hps_log info "ce_dispatcher_bring_up: ctrl-exec-api installed"
+    fi
     rm -rf "$work"
   fi
 
@@ -170,6 +180,27 @@ ce_api_bring_up() {
         return 1
       }
       hps_log info "ce_api_bring_up: api_socket set in $conf"
+    fi
+    # Socket only: with no TCP listener the auth hook can treat every
+    # non-socket request as ced.
+    if ! grep -qE '^[[:space:]]*api_port[[:space:]]*=' "$conf"; then
+      printf 'api_port = off\n' >> "$conf" || hps_log warn "ce_api_bring_up: cannot set api_port"
+    fi
+    # The authorisation hook: only the root job runner, on the unix socket,
+    # may call the API (scripts/ctrl-exec-auth-hook.sh). Installed as a real
+    # root-owned file; named in ctrl-exec.conf once.
+    local hook_src="${HPS_SYSTEM_PATH:-/srv/hps-system}/scripts/ctrl-exec-auth-hook.sh"
+    local hook_dst="$CTRL_EXEC_DISPATCHER_CONF_DIR/auth-hook-hps"
+    if [[ -f "$hook_src" ]]; then
+      if ! cmp -s "$hook_src" "$hook_dst" 2>/dev/null; then
+        install -m 0755 -o 0 -g 0 "$hook_src" "$hook_dst" || hps_log warn "ce_api_bring_up: cannot install $hook_dst"
+      fi
+      if ! grep -qE '^[[:space:]]*auth_hook[[:space:]]*=' "$conf"; then
+        printf 'auth_hook = %s\n' "$hook_dst" >> "$conf" || hps_log warn "ce_api_bring_up: cannot set auth_hook"
+        hps_log info "ce_api_bring_up: auth_hook set to $hook_dst"
+      fi
+    else
+      hps_log warn "ce_api_bring_up: $hook_src missing; the API will deny every request (api_auth_default=deny)"
     fi
   else
     hps_log warn "ce_api_bring_up: $conf not found; api_socket not set"

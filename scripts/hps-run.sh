@@ -200,10 +200,16 @@ ce_run_input() {
       cli=/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli
     fi
   fi
-  if [[ -z "${CTRL_EXEC_API_URL:-}" ]]; then
-    export CTRL_EXEC_API_SOCKET="${CTRL_EXEC_API_SOCKET:-/run/ctrl-exec-api/api.sock}"
+  # ctrl-exec-cli selects the transport by its own global options, not by
+  # environment: --socket PATH (unix socket, api_socket) or --url. Without
+  # --socket it talks TCP to 127.0.0.1 and the IPS auth hook denies it.
+  local -a transport=()
+  if [[ -n "${CTRL_EXEC_API_URL:-}" ]]; then
+    transport=(--url "$CTRL_EXEC_API_URL")
+  else
+    transport=(--socket "${CTRL_EXEC_API_SOCKET:-/run/ctrl-exec-api/api.sock}")
   fi
-  local cmd=("$cli" run "$agent" --script "$script" --input -)
+  local cmd=("$cli" "${transport[@]}" run "$agent" --script "$script" --input -)
   if [[ $JSON -eq 1 ]]; then
     cmd+=(--json)
   fi

@@ -52,7 +52,7 @@ teardown() {
   run ce_api_bring_up
   [ "$status" -eq 0 ]
   grep -qx "api_socket = $TEST_DIR/run/api.sock" "$CTRL_EXEC_DISPATCHER_CONF"
-  grep -qx 'api_socket_group = hps' "$CTRL_EXEC_DISPATCHER_CONF"
+  grep -qx 'api_socket_group = ctrl-exec' "$CTRL_EXEC_DISPATCHER_CONF"
   grep -qx 'port = 7443' "$CTRL_EXEC_DISPATCHER_CONF"
 }
 
@@ -136,4 +136,11 @@ teardown() {
   run ce_dispatcher_bring_up
   [ "$status" -eq 0 ]
   grep -qx 'api-bring-up-called' "$CALLS"
+}
+
+@test "bring-up installs the HPS auth hook and names it in ctrl-exec.conf once" {
+  grep -q 'auth-hook-hps' "$BATS_TEST_DIRNAME/../../lib/functions.d/ctrl-exec-functions.sh"
+  grep -q 'auth_hook' "$BATS_TEST_DIRNAME/../../lib/functions.d/ctrl-exec-functions.sh"
+  [ -x "$BATS_TEST_DIRNAME/../ctrl-exec-auth-hook.sh" ]
+  grep -q 'ENVEXEC_PEER_UID' "$BATS_TEST_DIRNAME/../ctrl-exec-auth-hook.sh"
 }

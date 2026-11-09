@@ -2,7 +2,7 @@
 #
 # CS-2.3: scripts/hps-run.sh --input sends its stdin to an `input = raw` node
 # script. ced 0.14.4 has no input option, so the real script hands the document
-# to the API client:  ctrl-exec-cli run <agent> --script <s> --input - [--json] -- args
+# to the API client:  ctrl-exec-cli --socket <api.sock> run <agent> --script <s> --input - [--json] -- args
 # which posts it as the one field "input" of POST /run. Here ced and
 # ctrl-exec-cli are shims; the function library is a fake tree over a file
 # registry (as in test_p1_104). The last test drives the Perl runner through the
@@ -83,20 +83,20 @@ teardown() {
   [ "$(wc -c < "$TEST_DIR/node.stdin")" -eq "${#KEY_DOC}" ]
 }
 
-@test "the client is called as: run <agent> --script <script> --input - -- args" {
+@test "the client is called as: --socket <api.sock> run <agent> --script <script> --input - -- args" {
   printf '%s' "$KEY_DOC" | bash "$RUN" --input AA:BB:CC:DD:EE:FF dataset-unlock lab/enc
-  [ "$(tail -n 1 "$CLI_LOG")" = "run held01 --script dataset-unlock --input - -- lab/enc" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script dataset-unlock --input - -- lab/enc" ]
 }
 
 @test "no script arguments: no '--' is sent" {
   printf '%s' "$KEY_DOC" | bash "$RUN" --input held01 iscsi-status
-  [ "$(tail -n 1 "$CLI_LOG")" = "run held01 --script iscsi-status --input -" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script iscsi-status --input -" ]
 }
 
 @test "--input --json adds --json and prints the client's JSON untouched" {
   run bash -c "printf '%s' '$KEY_DOC' | bash '$RUN' --input --json aabbccddeeff dataset-unlock lab/enc 2>/dev/null"
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CLI_LOG")" = "run held01 --script dataset-unlock --input - --json -- lab/enc" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script dataset-unlock --input - --json -- lab/enc" ]
   [[ "$output" == '{"ok":1,"results":[{"host":"held01","exit":0,'* ]]
 }
 
@@ -148,7 +148,7 @@ teardown() {
   ' "$doc"
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_DIR/node.stdin")" = "$doc" ]
-  [ "$(tail -n 1 "$CLI_LOG")" = "run held01 --script storage-pool-create --input - --json -- lab --disk ata-A --disk ata-B --approval-file -" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script storage-pool-create --input - --json -- lab --disk ata-A --disk ata-B --approval-file -" ]
   [[ "$output" == *'"rc":0'* ]]
   [[ "$output" == *'"stdout":"unlocked\n"'* ]]
   FAKE_NODE_EXIT=3 run perl -I"$ROOT/lib/perl" -MHPS::Storage -MJSON::PP -e '
