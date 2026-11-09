@@ -82,3 +82,20 @@ EOT
   run bats "$BATS_TEST_DIRNAME/test_p1_43_no_secrets.bats"
   [ "$status" -eq 0 ]
 }
+
+@test "hps.hostname on the command line becomes rsyslog's localHostname, before the action" {
+  echo "hps.ips=10.0.0.1 hps.hostname=sch-1.lab.hps hps.mac=aa:bb:cc:dd:ee:01" > "$HPS_CMDLINE"
+  run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  run sed -n 1p "$HPS_RUN_DIR/rsyslog-target.conf"
+  [ "$output" = 'global(localHostname="sch-1.lab.hps")' ]
+  grep -q 'target="10.0.0.1"' "$HPS_RUN_DIR/rsyslog-target.conf"
+}
+
+@test "a malformed hps.hostname is ignored" {
+  echo 'hps.ips=10.0.0.1 hps.hostname=bad")$(x hps.mac=aa:bb:cc:dd:ee:01' > "$HPS_CMDLINE"
+  run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! grep -q 'localHostname' "$HPS_RUN_DIR/rsyslog-target.conf"
+  grep -q 'target="10.0.0.1"' "$HPS_RUN_DIR/rsyslog-target.conf"
+}

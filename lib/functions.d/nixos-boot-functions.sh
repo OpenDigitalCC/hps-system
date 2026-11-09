@@ -108,6 +108,13 @@ nixos_boot_lines() {
     args="${args:+${args} }init=${init}"
   fi
   args="${args} hps.ips=${ips} hps.mac=${mac} hps.profile=${profile} hps.pin=${pin}"
+  # Registry hostname, when assigned: lets the node name its logs from the
+  # first line (hps-log-target reads it); held/audit nodes have none.
+  local hostname
+  hostname="$(host_registry "$mac" get HOSTNAME 2>/dev/null)" || hostname=""
+  if [[ "$hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$ ]]; then
+    args="${args} hps.hostname=${hostname}"
+  fi
   printf 'kernel %s/bzImage %s\n' "$base" "$args"
   printf 'initrd %s/initrd\n' "$base"
   printf 'boot\n'

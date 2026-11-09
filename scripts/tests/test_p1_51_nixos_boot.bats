@@ -119,3 +119,15 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"/nixos/p1/audit/bzImage "* ]]
 }
+
+@test "an assigned host's registry HOSTNAME rides on the command line; a held host has none" {
+  p1_50_manifest hostpin node-base
+  p1_50_host "$MAC" system_pin hostpin
+  run nixos_boot_lines "$MAC" node-base
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" != *"hps.hostname="* ]]
+  p1_50_host "$MAC" HOSTNAME sch-1
+  run nixos_boot_lines "$MAC" node-base
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == *" hps.pin=hostpin hps.hostname=sch-1" ]]
+}
