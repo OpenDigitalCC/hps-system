@@ -237,3 +237,35 @@ os_config_undefine_section() {
     return 1
   fi
 }
+
+#===============================================================================
+# os_seed_nixos
+# -------------
+# Create the NixOS entry in the OS registry if it is missing. Idempotent: an
+# existing entry is left exactly as it is (an operator may have edited it).
+#
+# boot=manifest means kernel and initrd come from a builder manifest
+# (nixos/<pin>/<profile>/boot.json), not from a distro repository.
+#
+# Returns:
+#   0 present or created, 1 on a write failure
+#===============================================================================
+os_seed_nixos() {
+  local os_id="x86_64:nixos:26.05"
+  local pair key value
+
+  if os_config_exists "$os_id"; then
+    hps_log debug "os_seed_nixos: ${os_id} already present"
+    return 0
+  fi
+  for pair in hps_types=SCH,TCH,DRH arch=x86_64 name=nixos version=26.05 status=prod boot=manifest; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    os_config_set "$os_id" "$key" "$value" || {
+      hps_log error "os_seed_nixos: could not set ${key} on ${os_id}"
+      return 1
+    }
+  done
+  hps_log info "os_seed_nixos: created ${os_id}"
+  return 0
+}

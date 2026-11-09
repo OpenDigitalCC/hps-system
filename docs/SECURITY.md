@@ -43,6 +43,23 @@ inherent to the problem rather than defects:
    "open" mode issues UUID tokens and is explicitly marked insecure in the
    code — a hardening item, not a shipped guarantee.
 
+## Node identity at boot
+
+A booting node is identified by its **MAC address on the dedicated
+provisioning VLAN** (`$MAC`). The IPS looks the MAC up in the registry and
+delivers that node's keys and identity from the registry; a MAC the registry
+does not know is held (`STATE=HELD`) and boots only the audit image, never a
+menu or an install. Once running, the node authenticates with its ctrl-exec
+identity (mutual TLS, per-node certificate issued by the IPS-hosted CA); the
+MAC is not used as a credential after enrolment. No secret is part of a boot
+image. Where the site requires it, MAC and port security are applied at the
+switch, outside HPS.
+
+The provisioning VLAN is the security boundary for this identity. Physical
+breach – someone plugging a device into the provisioning network, or cloning
+a node's MAC address – is **out of scope** for HPS; it is a physical and
+network-security matter for the site.
+
 ## Threat model (STRIDE)
 
 A structured pass over the trust boundaries above. Each item is either

@@ -386,6 +386,14 @@ if [[ "$cmd" == "get_node_plugin" ]]; then
 fi
 
 
+# Command: node_audit - a held node posts its hardware audit (hps-audit/1 JSON)
+# POST only, size-capped, caller must be STATE=HELD (see host_audit_intake)
+if [[ "$cmd" == "node_audit" ]]; then
+  host_audit_intake "$mac"
+  exit $?
+fi
+
+
 # Command: init - iPXE boot initialisation
 if [[ "$cmd" == "init" ]]; then
   ipxe_init_handler "$mac"

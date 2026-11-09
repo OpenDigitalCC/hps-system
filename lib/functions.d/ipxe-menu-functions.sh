@@ -56,6 +56,8 @@ ipxe_boot_from_disk () {
 # Behaviour:
 #   - Initialises host config if not exists
 #   - Checks for rescue mode override
+#   - Unknown MAC is registered with STATE=HELD; HELD boots the audit image
+#     (ipxe_boot_audit) and is never offered a menu
 #   - Dispatches to appropriate handler based on STATE
 #   - CONFIGURED (type and network set, install not started) goes straight to
 #     ipxe_boot_installer, the same handler as INSTALLING. The type was chosen
@@ -83,7 +85,8 @@ ipxe_init_handler() {
     hps_log info "Found config for $mac"
   else
     hps_log info "No config found, initialising"
-    host_initialise_config "$mac" "$arch"
+    # Unknown hosts are held for onboarding: no menu, audit image only.
+    host_initialise_config "$mac" "$arch" HELD
   fi
   
   # Get current state
@@ -101,6 +104,11 @@ ipxe_init_handler() {
   
   # Dispatch based on state
   case "$state" in
+    HELD)
+      hps_log info "State: $state - audit boot (no menu)"
+      ipxe_boot_audit "$mac"
+      ;;
+
     NETWORK_BOOT)
       hps_log info "State: $state - network boot"
       ipxe_network_boot "$mac"
@@ -418,7 +426,7 @@ ipxe_network_boot() {
   hps_log debug "Net booting $os_name"
   local boot_func="ipxe_boot_${os_name}"
   if declare -f "$boot_func" >/dev/null; then 
-    "$boot_func"
+    "$boot_func" "$mac"
   else
     ipxe_cgi_fail "$os_name does not exist or $boot_func invalid"
   fi

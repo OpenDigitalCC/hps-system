@@ -8,6 +8,12 @@ use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::Onboard;
 
+# Network hook for assign: the IPS script, unless the caller overrides it
+# (HPS_ONBOARD_NETCONF_CMD set to a path, or to the empty string for none).
+my $netconf_hook = "$RealBin/../scripts/hps-netconf-hook.sh";
+$ENV{HPS_ONBOARD_NETCONF_CMD} = $netconf_hook
+    if !defined $ENV{HPS_ONBOARD_NETCONF_CMD} && -x $netconf_hook;
+
 my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
 
 sub usage {
@@ -55,7 +61,11 @@ sub render_show {
     $out .= render_value($s->{identity}, 1);
     if (defined $s->{audit}) {
         $out .= "\nAudit" . (defined $s->{audit_at} ? " ($s->{audit_at})" : '') . "\n";
-        $out .= render_value($s->{audit}, 1);
+        my $a = $s->{audit};
+        $out .= "\n";
+        $out .= (ref $a eq 'HASH' && ($a->{schema} // '') eq 'hps-audit/1')
+            ? HPS::Onboard::render_audit($a)
+            : render_value($a, 1);   # unknown shape: plain dump
     }
     else {
         $out .= "\nNo audit stored for this host.\n";

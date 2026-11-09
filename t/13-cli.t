@@ -12,7 +12,7 @@ use HPS::Registry;
 my $base = tempdir(CLEANUP => 1);
 local $ENV{HPS_CONFIG_BASE}      = $base;
 local $ENV{HPS_SYSTEM_REGISTRY}  = "$base/system.db";
-delete local $ENV{HPS_ONBOARD_NETCONF_CMD};
+local $ENV{HPS_ONBOARD_NETCONF_CMD} = '';   # no hook (bin defaults to scripts/hps-netconf-hook.sh)
 my $reg = HPS::Registry->new;
 make_path("$base/clusters/lab/cluster.db", "$base/clusters/lab/hosts");
 $reg->system_set('ACTIVE_CLUSTER', 'lab');

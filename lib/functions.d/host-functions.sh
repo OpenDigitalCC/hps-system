@@ -86,6 +86,7 @@ process_host_audit() {
 # Get the configured OS identifier for a host based on MAC address.
 #
 # Behaviour:
+#   - Uses the host's own os_id key when set and present in the OS registry
 #   - Looks up host type and architecture from host config
 #   - Returns the appropriate OS ID from cluster config
 #   - Falls back through architecture-specific → generic → error
@@ -103,6 +104,15 @@ process_host_audit() {
 #===============================================================================
 get_host_os_id() {
   local mac="$1"
+
+  # An explicit per-host os_id (written by hps-onboard assign) wins over the
+  # cluster-wide os_<type>_<arch> default; TYPE may be a comma list there.
+  local host_os_id
+  host_os_id=$(host_registry "$mac" get os_id 2>/dev/null) || host_os_id=""
+  if [[ -n "$host_os_id" ]] && os_registry "$host_os_id" exists; then
+    echo "$host_os_id"
+    return 0
+  fi
   
   # Get host info
   local host_type=$(host_registry "$mac" "get" "TYPE")
@@ -194,6 +204,8 @@ get_host_os_version() {
 # Parameters:
 #   mac  - MAC address of the host
 #   arch - Architecture (e.g., x86_64)
+#   state - initial STATE (optional, default UNCONFIGURED; unknown MACs at boot
+#           are registered HELD)
 #
 # Returns:
 #   0 on success
@@ -208,6 +220,7 @@ get_host_os_version() {
 host_initialise_config() {
   local mac="$1"
   local arch="$2"
+  local state="${3:-UNCONFIGURED}"
   
   if [[ -z "${mac}" ]]; then
     hps_log error "MAC address not provided"
@@ -228,7 +241,7 @@ host_initialise_config() {
   hps_log info "Initialising new host: ${mac} (${arch})"
   
   # Set initial values
-  if ! host_registry "${mac}" set STATE "UNCONFIGURED"; then
+  if ! host_registry "${mac}" set STATE "${state}"; then
     hps_log error "Failed to set STATE for: ${mac}"
     return 3
   fi
@@ -378,12 +391,14 @@ _find_available_ip() {
 #===============================================================================
 _find_available_hostname() {
   local hosttype="$1"
+  # TYPE may be a comma list (SCH,TCH): the name prefix is the first element.
+  hosttype="${hosttype%%,*}"
   local hosttype_lower=$(echo "$hosttype" | tr '[:upper:]' '[:lower:]')
   local next_number=1
   
   # Get all existing hostnames of this type
   local existing_hostnames
-  existing_hostnames=$(get_cluster_host_hostnames "" "$hosttype_lower" 2>/dev/null)
+  existing_hostnames=$(get_cluster_host_hostnames "" "" 2>/dev/null)
   
   # Find highest existing number
   while IFS= read -r existing_hostname; do
@@ -794,4 +809,98 @@ has_sch_host() {
   else
     return 1
   fi
+}
+
+
+#===============================================================================
+# host_audit_refuse
+# -----------------
+# Refuse a node_audit request: HTTP status line, plain-text message, log line.
+#
+# Parameters:
+#   $1 - status, e.g. "403 Forbidden"
+#   $2 - message
+#===============================================================================
+host_audit_refuse() {
+  local status="$1"
+  local msg="$2"
+  echo "Status: ${status}"
+  cgi_fail "node_audit refused: ${msg}"
+}
+
+#===============================================================================
+# host_audit_intake
+# -----------------
+# Receive a hardware audit (schema hps-audit/1) POSTed by a held node.
+#
+# Behaviour:
+#   - POST only; body read up to HPS_AUDIT_MAX_BYTES (default 262144)
+#   - body must be JSON with .schema == "hps-audit/1"
+#   - the caller (MAC) must exist and be STATE=HELD
+#   - stores the JSON as host key "audit" and the time as "audit_at"
+#   - replies "ok" (plain text)
+#
+# Parameters:
+#   $1 - MAC of the caller
+#
+# Returns:
+#   0 stored, 1 refused
+#===============================================================================
+host_audit_intake() {
+  local mac="${1:-}"
+  local max="${HPS_AUDIT_MAX_BYTES:-262144}"
+  local tmp="/tmp/hps-audit-in-$$"
+  local size state schema detail
+
+  if [[ "${REQUEST_METHOD:-}" != "POST" ]]; then
+    host_audit_refuse "405 Method Not Allowed" "POST required"
+    return 1
+  fi
+
+  if [[ -z "$mac" ]] || ! host_registry "$mac" exists; then
+    hps_log warn "node_audit refused: unknown caller '${mac}'"
+    host_audit_refuse "403 Forbidden" "caller is not a known host"
+    return 1
+  fi
+  state="$(host_registry "$mac" get STATE 2>/dev/null)" || state=""
+  if [[ "$state" != "HELD" ]]; then
+    hps_log warn "[$mac] node_audit refused: STATE is '${state}', not HELD"
+    host_audit_refuse "403 Forbidden" "host is not held"
+    return 1
+  fi
+
+  if [[ "${CONTENT_LENGTH:-}" =~ ^[0-9]+$ ]] && (( CONTENT_LENGTH > max )); then
+    hps_log warn "[$mac] node_audit refused: Content-Length ${CONTENT_LENGTH} over ${max}"
+    host_audit_refuse "413 Payload Too Large" "body over ${max} bytes"
+    return 1
+  fi
+  head -c $((max + 1)) > "$tmp"
+  size="$(wc -c < "$tmp")"
+  if (( size > max )); then
+    rm -f "$tmp"
+    hps_log warn "[$mac] node_audit refused: body over ${max} bytes"
+    host_audit_refuse "413 Payload Too Large" "body over ${max} bytes"
+    return 1
+  fi
+
+  schema="$(jq -r '.schema // empty' "$tmp" 2>/dev/null)" || schema=""
+  if [[ "$schema" != "hps-audit/1" ]]; then
+    rm -f "$tmp"
+    hps_log warn "[$mac] node_audit refused: bad or missing schema"
+    host_audit_refuse "400 Bad Request" "body is not an hps-audit/1 document"
+    return 1
+  fi
+
+  detail="$(jq -r '"controllers=" + ((.storage_controllers.scsi_hosts // []) | map(.hba_mode_enabled | tostring) | join(",") | if . == "" then "none" else . end) + " disks=" + ([.block.blockdevices[]? | select(.type == "disk")] | length | tostring)' "$tmp" 2>/dev/null)" || detail=""
+  if ! host_registry "$mac" set audit "$(cat "$tmp")"; then
+    rm -f "$tmp"
+    hps_log error "[$mac] node_audit: could not store the audit"
+    host_audit_refuse "500 Internal Server Error" "could not store the audit"
+    return 1
+  fi
+  rm -f "$tmp"
+  host_registry "$mac" set audit_at "$(make_timestamp)"
+  hps_log info "[$mac] node_audit stored: ${size} bytes ${detail} (hba_mode_enabled per controller)"
+  cgi_success "ok"
+  return 0
 }

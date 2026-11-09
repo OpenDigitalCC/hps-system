@@ -12,6 +12,7 @@ _supervisor_pre_start () {
 supervisor_prepare_services () {
 #  _set_ips_hostname
   supervisor_populate_tftp
+  os_seed_nixos || hps_log warn "supervisor_prepare_services: os_seed_nixos failed (continuing)"
   create_config_nginx
   create_config_dnsmasq
   update_dns_dhcp_files
