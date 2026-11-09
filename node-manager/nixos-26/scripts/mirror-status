@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# mirror-status - state of the VM-disk mirrors on this node. Read-only.
+#
+# Usage: mirror-status [<name>]
+# For each mirror (the named one, else every sidecar in /run/hps/mirrors/):
+# mdadm --detail, the bitmap line, one "LEG <spec> kind=<local|remote> ..." line
+# per leg from the sidecar, and a line "MIRROR <name> <state>" where state is
+# one of clean, degraded, resyncing, absent (not assembled), unknown. The last
+# line printed is always a MIRROR line (or "no mirrors" when there are none).
+# Exit: 0, 2 usage, 3 a named mirror is not known here.
+
+set -euo pipefail
+
+NAME=""
+
+log() {
+  printf '[mirror-status] %s\n' "$*" >&2
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: mirror-status [<name>]
+Exit: 0 ok, 2 usage, 3 unknown mirror.
+USAGE
+}
+
+: "${HPS_MIRROR_DIR:=/run/hps/mirrors}"
+
+# derive_state <detail-text>
+derive_state() {
+  local detail=$1 state
+  state=$(sed -n -E '/^[[:space:]]*State[[:space:]]*:/{s/^[^:]*:[[:space:]]*//;p;q}' <<< "$detail")
+  if grep -qE '^[[:space:]]*(Rebuild|Resync|Reshape) Status' <<< "$detail" || [[ "$state" == *resync* || "$state" == *recover* ]]; then
+    printf 'resyncing\n'
+  elif [[ "$state" == *degraded* ]]; then
+    printf 'degraded\n'
+  elif [[ "$state" == *clean* || "$state" == *active* ]]; then
+    printf 'clean\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+report_one() {
+  local name=$1 side detail state
+  side="$HPS_MIRROR_DIR/$name.json"
+  printf '+ mdadm --detail /dev/md/%s\n' "$name" >&2
+  if detail=$(mdadm --detail "/dev/md/$name" 2> /dev/null); then
+    printf '%s\n' "$detail"
+    state=$(derive_state "$detail")
+  else
+    state=absent
+  fi
+  if [[ -r "$side" ]]; then
+    jq -r '.legs[] | "LEG \(.spec) kind=\(.kind) dev=\(.dev) write_mostly=\(.write_mostly)"' "$side"
+  fi
+  printf 'MIRROR %s %s\n' "$name" "$state"
+}
+
+main() {
+  local f n found=0
+  case $# in
+    0) ;;
+    1) NAME=$1 ;;
+    *) usage; exit 2 ;;
+  esac
+  case "$NAME" in
+    -*) usage; exit 2 ;;
+  esac
+  if [[ -n "$NAME" ]]; then
+    if [[ ! "$NAME" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then
+      log "refused: bad mirror name"
+      exit 3
+    fi
+    if [[ ! -e "$HPS_MIRROR_DIR/$NAME.json" ]] && ! mdadm --detail "/dev/md/$NAME" > /dev/null 2>&1; then
+      log "refused: $NAME is not a mirror on this node"
+      exit 3
+    fi
+    report_one "$NAME"
+    return 0
+  fi
+  for f in "$HPS_MIRROR_DIR"/*.json; do
+    [[ -e "$f" ]] || continue
+    n=$(basename "$f" .json)
+    report_one "$n"
+    found=1
+  done
+  if ((found == 0)); then
+    printf 'no mirrors\n'
+  fi
+}
+
+main "$@"

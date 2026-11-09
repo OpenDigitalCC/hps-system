@@ -1,0 +1,419 @@
+#!/usr/bin/env bash
+#
+# mirror-assemble - assemble the md RAID1 of a VM disk from its legs.
+#
+# ctrl-exec allowlisted node script (input=raw: stdin is read ONLY for a
+# peer-gone declaration).
+#
+# Usage: mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1]
+#                        [--declaration-file <path|->]
+#
+# Both legs resolved (leg-resolve), both superblocks read (mdadm --examine) BEFORE
+# anything is assembled:
+#   - the legs DIVERGED (rule below) -> prints
+#       DIVERGED <name> legA events=.. time=.. legB events=.. time=..
+#     on stdout, changes nothing, exit 3. There is no override here.
+#   - otherwise: mdadm --assemble /dev/md/<name> <dev> <dev>   (never --force)
+# One leg missing (device absent, LUN not coming up): refused unless
+# --declaration-file carries a valid peer-gone declaration from the IPS (the
+# approval document of storage-pool-destroy: action peer-gone, pool = the mirror
+# name, disks = the two leg specs, mac = this node); then
+#   mdadm --assemble --run /dev/md/<name> <present-dev>   (degraded; never --force)
+# An array that is already assembled is left alone (exit 0). Writes the sidecar
+# /run/hps/mirrors/<name>.json.
+#
+# Divergence rule (all values from `mdadm --examine` of each leg):
+#   Events, Update Time, Device Role ("Active device N" = slot N), Array State
+#   (one character per slot as that leg last saw the array: A, ., R).
+#   Leg X "left" leg Y when X's Array State has anything but A at Y's slot.
+#   DIVERGED when each left the other, or when one left the other and the other
+#   still has MORE Events. Update Time is reported, it does not decide. A stale
+#   leg that merely lags (the other left it, its Events are lower or equal) is
+#   not divergence: mdadm decides, without --force, and mirror-rejoin brings
+#   it back from the bitmap. Different Array UUIDs, a missing superblock or a
+#   role other than "Active device N" are refused (3) as well.
+# Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+NAME=""
+LEGS=()
+REMOTE_INDEX=""
+APPROVAL_FILE=""
+APPROVAL_WHAT="declaration"
+PAYLOAD=""
+HMAC_KEY=""
+DEVS=()
+
+log() {
+  printf '[mirror-assemble] %s\n' "$*" >&2
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--declaration-file <path|->]
+Exit: 0 ok, 2 usage, 3 refused (incl. DIVERGED), 1 failed.
+USAGE
+}
+
+# --- shared helpers (copied into each mirror script; no runtime sourcing) ---
+
+: "${HPS_MIRROR_DIR:=/run/hps/mirrors}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_LEG_RESOLVE:=$(dirname "$0")/leg-resolve}"
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+check_name() {
+  if [[ ! "$NAME" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then
+    refuse "mirror name '$NAME' does not match ^[A-Za-z][A-Za-z0-9_-]*\$"
+  fi
+}
+
+check_spec() {
+  case "$1" in
+    local:* | iscsi:*) ;;
+    *) refuse "leg spec '$1' is neither local:... nor iscsi:..." ;;
+  esac
+}
+
+leg_kind() {
+  case "$1" in
+    local:*) printf 'local\n' ;;
+    *) printf 'remote\n' ;;
+  esac
+}
+
+# resolve_leg <spec>: prints the device path (leg-resolve is the only code that
+# knows the two kinds of leg).
+resolve_leg() {
+  run "$HPS_LEG_RESOLVE" "$1"
+}
+
+# pick_remote_index: REMOTE_INDEX stays as given; unset, it is the index of the
+# only iscsi: leg, and empty (no write-mostly leg) when that is not unique.
+pick_remote_index() {
+  local i n=0 found=""
+  if [[ -n "$REMOTE_INDEX" ]]; then
+    if [[ "$(leg_kind "${LEGS[$REMOTE_INDEX]}")" != remote ]]; then
+      refuse "--remote-index $REMOTE_INDEX names a local leg"
+    fi
+    return 0
+  fi
+  for i in 0 1; do
+    if [[ "${LEGS[$i]}" == iscsi:* ]]; then
+      n=$((n + 1))
+      found=$i
+    fi
+  done
+  if ((n == 1)); then
+    REMOTE_INDEX=$found
+  fi
+}
+
+sidecar_path() {
+  printf '%s/%s.json\n' "$HPS_MIRROR_DIR" "$NAME"
+}
+
+# sidecar_write: LEGS[], DEVS[] (an empty device = leg not present), REMOTE_INDEX.
+sidecar_write() {
+  local i path wm legs="[]"
+  path=$(sidecar_path)
+  mkdir -p "$HPS_MIRROR_DIR"
+  for i in 0 1; do
+    wm=0
+    if [[ "$REMOTE_INDEX" == "$i" ]]; then wm=1; fi
+    legs=$(jq -c --arg s "${LEGS[$i]}" --arg d "${DEVS[$i]:-}" --arg k "$(leg_kind "${LEGS[$i]}")" --argjson w "$wm" \
+      '. + [{spec:$s,dev:$d,kind:$k,write_mostly:$w}]' <<< "$legs")
+  done
+  printf '+ write %s\n' "$path" >&2
+  jq -n -c --arg n "$NAME" --argjson l "$legs" --arg r "$REMOTE_INDEX" \
+    '{name:$n,remote_index:(if $r == "" then null else ($r | tonumber) end),legs:$l}' > "$path"
+}
+
+array_present() {
+  mdadm --detail "/dev/md/$NAME" > /dev/null 2>&1
+}
+
+parse_args() {
+  local arg
+  while [[ $# -gt 0 ]]; do
+    arg=$1
+    case "$arg" in
+      --leg | --remote-index | --declaration-file)
+        [[ $# -ge 2 ]] || { log "$arg needs a value"; usage; exit 2; }
+        case "$arg" in
+          --leg) LEGS+=("$2") ;;
+          --remote-index) REMOTE_INDEX=$2 ;;
+          --declaration-file) APPROVAL_FILE=$2 ;;
+        esac
+        shift 2
+        ;;
+      --secret-from-stdin) shift ;;
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$NAME" ]]; then
+          log "only one mirror name is accepted"
+          usage
+          exit 2
+        fi
+        NAME=$arg
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$NAME" && ${#LEGS[@]} -eq 2 ]] || { usage; exit 2; }
+  if [[ -n "$REMOTE_INDEX" && ! "$REMOTE_INDEX" =~ ^[01]$ ]]; then
+    log "--remote-index must be 0 or 1"
+    usage
+    exit 2
+  fi
+  check_name
+  check_spec "${LEGS[0]}"
+  check_spec "${LEGS[1]}"
+  if [[ "${LEGS[0]}" == "${LEGS[1]}" ]]; then
+    refuse "the two legs are the same"
+  fi
+  pick_remote_index
+}
+
+# --- approval document (same canonical JSON + HMAC as storage-pool-destroy) ---
+
+read_payload() {
+  log "reading the $APPROVAL_WHAT document from ${APPROVAL_FILE/#-/stdin}"
+  if [[ "$APPROVAL_FILE" == "-" ]]; then
+    PAYLOAD=$(cat)
+  else
+    PAYLOAD=$(cat -- "$APPROVAL_FILE")
+  fi
+  if ! printf '%s' "$PAYLOAD" | jq -e 'type == "object"' > /dev/null 2>&1; then
+    refuse "the $APPROVAL_WHAT input is not a JSON object"
+  fi
+}
+
+payload_field() {
+  printf '%s' "$PAYLOAD" | jq -r "$1"
+}
+
+# hmac_sha256_hex <key-hex>: HMAC-SHA256 of stdin, as hex, computed from the
+# definition so the key never appears on a command line.
+hmac_sha256_hex() {
+  local key=$1 i b ipad="" opad="" inner msg
+  msg=$(cat)
+  for ((i = 0; i < 64; i++)); do
+    if ((i < 32)); then
+      b=$((16#${key:$((i * 2)):2}))
+    else
+      b=0
+    fi
+    ipad+=$(printf '%02x' $((b ^ 0x36)))
+    opad+=$(printf '%02x' $((b ^ 0x5c)))
+  done
+  inner=$({ printf '%s' "$ipad" | xxd -r -p; printf '%s' "$msg"; } | openssl dgst -sha256 -r | awk '{print $1}')
+  { printf '%s' "$opad" | xxd -r -p; printf '%s' "$inner" | xxd -r -p; } | openssl dgst -sha256 -r | awk '{print $1}'
+}
+
+this_mac() {
+  local word
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == hps.mac=* ]]; then
+      printf '%s\n' "${word#hps.mac=}" | tr -d ':' | tr 'A-F' 'a-f'
+      return 0
+    fi
+  done
+  return 1
+}
+
+# verify_approval <action>: HMAC, expiry, action, this node, pool == mirror
+# name, disks == the two leg specs of the request.
+verify_approval() {
+  local want_action=$1 full canon want got now exp mac thismac approved have
+  log "+ verifying the $APPROVAL_WHAT (HMAC-SHA256 over the canonical JSON; key not logged)"
+  if ! printf '%s' "$PAYLOAD" | jq -e '.approval | type == "object" and (keys == ["action","disks","expires","hmac","issued_by","mac","pool","wipe"])' > /dev/null 2>&1; then
+    refuse "$APPROVAL_WHAT must carry exactly: action, disks, expires, issued_by, mac, pool, wipe"
+  fi
+  HMAC_KEY=$(payload_field '.secret // ""')
+  if [[ ! "$HMAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    refuse "$APPROVAL_WHAT key must be 64 hex characters"
+  fi
+  full=$(printf '%s' "$PAYLOAD" | jq -S -c '.approval')
+  want=$(printf '%s' "$full" | grep -oE '"hmac":"[0-9a-f]{64}",' | sed -e 's/^"hmac":"//' -e 's/",$//') || want=""
+  canon=$(printf '%s' "$full" | sed -E 's/"hmac":"[0-9a-f]{64}",//')
+  got=$(printf '%s' "$canon" | hmac_sha256_hex "$HMAC_KEY")
+  # cmp over both strings: no short-circuit on the first differing character.
+  if [[ -z "$want" ]] || ! cmp -s <(printf '%s' "$want") <(printf '%s' "$got"); then
+    refuse "$APPROVAL_WHAT HMAC does not match"
+  fi
+  now=$(date +%s)
+  exp=$(payload_field '.approval.expires')
+  if [[ ! "$exp" =~ ^[0-9]+$ ]] || ((exp <= now)); then
+    refuse "$APPROVAL_WHAT has expired"
+  fi
+  if [[ "$(payload_field '.approval.action')" != "$want_action" ]]; then
+    refuse "$APPROVAL_WHAT action is not $want_action"
+  fi
+  mac=$(payload_field '.approval.mac' | tr -d ':' | tr 'A-F' 'a-f')
+  thismac=$(this_mac) || refuse "hps.mac is not on the kernel command line"
+  if [[ "$mac" != "$thismac" ]]; then
+    refuse "$APPROVAL_WHAT is for a different node"
+  fi
+  if [[ "$(payload_field '.approval.pool')" != "$NAME" ]]; then
+    refuse "$APPROVAL_WHAT is for a different mirror"
+  fi
+  approved=$(payload_field '.approval.disks | sort | join(",")')
+  have=$(printf '%s\n' "${LEGS[@]}" | LC_ALL=C sort | paste -sd, -)
+  if [[ "$have" != "$approved" ]]; then
+    refuse "$APPROVAL_WHAT names legs ($approved) that are not this request's legs ($have)"
+  fi
+  log "$APPROVAL_WHAT verified: issued_by $(payload_field '.approval.issued_by')"
+}
+
+# --- superblock reading and the divergence rule ---
+#
+# Per leg, from `mdadm --examine`: Array UUID, Events, Update Time, Device Role
+# ("Active device N" gives the slot N) and Array State (one character per slot
+# as THAT leg last saw the array: A active, . missing, R replacing).
+#
+# A leg X "left" leg Y when X's Array State has anything but A at Y's slot: X
+# kept running (and kept counting Events) without Y. Legs are DIVERGED when
+#   - each left the other (both ran apart from each other), or
+#   - one left the other and the other still has MORE Events than it (the
+#     other was written to after the separation point).
+# Every other pair is consistent: equal or one-sided-behind Events, a leg that
+# merely lags (mdadm re-adds it from the bitmap or leaves it out, without
+# --force). Update Time is reported and never decides. Anything unreadable
+# (no superblock, role not "Active device N", UUIDs differ) is refused too.
+
+SB_EV=()
+SB_UT=()
+SB_SLOT=()
+SB_STATE=()
+SB_UUID=()
+
+sb_field() {
+  # sb_field <examine-text> <label>
+  sed -n -E "/^[[:space:]]*$2[[:space:]]*:/{s/^[^:]*:[[:space:]]*//;p;q}" <<< "$1"
+}
+
+# read_sb <idx> <device> <spec>
+read_sb() {
+  local i=$1 dev=$2 spec=$3 out role st ut
+  printf '+ mdadm --examine %s\n' "$dev" >&2
+  if ! out=$(mdadm --examine "$dev" 2> /dev/null); then
+    refuse "UNREADABLE $NAME: no md superblock on $spec ($dev)"
+  fi
+  SB_EV[i]=$(sb_field "$out" Events)
+  SB_UUID[i]=$(sb_field "$out" 'Array UUID')
+  role=$(sb_field "$out" 'Device Role')
+  st=$(sb_field "$out" 'Array State')
+  ut=$(sb_field "$out" 'Update Time')
+  SB_STATE[i]=${st%% *}
+  SB_UT[i]=$(date -d "$ut" +%s 2> /dev/null || printf '%s' "${ut// /_}")
+  if [[ ! "${SB_EV[$i]}" =~ ^[0-9]+$ ]]; then
+    refuse "UNREADABLE $NAME: no Events counter on $spec"
+  fi
+  if [[ ! "$role" =~ ^Active\ device\ ([0-9]+)$ ]]; then
+    refuse "UNREADABLE $NAME: $spec is '$role', not an active device; this is a human decision"
+  fi
+  SB_SLOT[i]=${BASH_REMATCH[1]}
+  if [[ -z "${SB_STATE[$i]}" ]]; then
+    refuse "UNREADABLE $NAME: no Array State on $spec"
+  fi
+  log "superblock $spec: events=${SB_EV[$i]} time=${SB_UT[$i]} slot=${SB_SLOT[$i]} state=${SB_STATE[$i]}"
+}
+
+# left <x> <y>: 0 when leg x's superblock does not show leg y as active.
+left() {
+  local x=$1 y=$2
+  [[ "${SB_STATE[$x]:${SB_SLOT[$y]}:1}" != "A" ]]
+}
+
+# check_consistent <legA-spec> <legB-spec>: refuses (3) when diverged.
+check_consistent() {
+  local bad=0
+  if [[ "${SB_UUID[0]}" != "${SB_UUID[1]}" ]]; then
+    refuse "MISMATCH $NAME: the two legs belong to different arrays (${SB_UUID[0]} / ${SB_UUID[1]})"
+  fi
+  if [[ "${SB_SLOT[0]}" == "${SB_SLOT[1]}" ]]; then
+    refuse "UNREADABLE $NAME: both legs claim slot ${SB_SLOT[0]}"
+  fi
+  if left 0 1 && left 1 0; then bad=1; fi
+  if left 0 1 && ((${SB_EV[1]} > ${SB_EV[0]})); then bad=1; fi
+  if left 1 0 && ((${SB_EV[0]} > ${SB_EV[1]})); then bad=1; fi
+  if ((bad == 1)); then
+    printf 'DIVERGED %s legA events=%s time=%s legB events=%s time=%s\n' \
+      "$NAME" "${SB_EV[0]}" "${SB_UT[0]}" "${SB_EV[1]}" "${SB_UT[1]}"
+    log "legA=$1 legB=$2: both advanced while apart; nothing was changed. A human decides (phase 4 adds the snapshot rollback path)"
+    exit 3
+  fi
+}
+
+# try_resolve <idx>: DEVS[idx] = the device, or empty when the leg is missing.
+try_resolve() {
+  local i=$1 dev
+  if dev=$(resolve_leg "${LEGS[$i]}"); then
+    DEVS[i]=$dev
+  else
+    DEVS[i]=""
+    log "leg ${LEGS[$i]} is missing"
+  fi
+}
+
+assemble_both() {
+  read_sb 0 "${DEVS[0]}" "${LEGS[0]}"
+  read_sb 1 "${DEVS[1]}" "${LEGS[1]}"
+  check_consistent "${LEGS[0]}" "${LEGS[1]}"
+  run mdadm --assemble "/dev/md/$NAME" "${DEVS[0]}" "${DEVS[1]}"
+}
+
+assemble_degraded() {
+  local present=0
+  if [[ -z "${DEVS[0]}" ]]; then present=1; fi
+  if [[ -z "${DEVS[0]}" && -z "${DEVS[1]}" ]]; then
+    refuse "neither leg of $NAME is present"
+  fi
+  if [[ -z "$APPROVAL_FILE" ]]; then
+    refuse "leg ${LEGS[$((1 - present))]} of $NAME is missing; a peer-gone declaration from the IPS is needed to assemble degraded"
+  fi
+  read_payload
+  verify_approval peer-gone
+  printf '+ mdadm --examine %s\n' "${DEVS[$present]}" >&2
+  if ! mdadm --examine "${DEVS[$present]}" > /dev/null 2>&1; then
+    refuse "no md superblock on ${LEGS[$present]}"
+  fi
+  run mdadm --assemble --run "/dev/md/$NAME" "${DEVS[$present]}"
+}
+
+main() {
+  parse_args "$@"
+  if array_present; then
+    log "/dev/md/$NAME is already assembled; nothing to do"
+    if [[ ! -e "$(sidecar_path)" ]]; then
+      try_resolve 0
+      try_resolve 1
+      sidecar_write
+    fi
+    return 0
+  fi
+  try_resolve 0
+  try_resolve 1
+  if [[ -n "${DEVS[0]}" && -n "${DEVS[1]}" ]]; then
+    assemble_both
+  else
+    assemble_degraded
+  fi
+  sidecar_write
+  run mdadm --detail "/dev/md/$NAME"
+  log "mirror $NAME assembled"
+}
+
+main "$@"

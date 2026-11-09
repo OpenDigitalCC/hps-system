@@ -11,12 +11,16 @@ use JSON::PP;
 use HPS::Registry;
 use HPS::Keysafe;
 
-my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe zvol-destroy);
+my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe zvol-destroy peer-gone mirror-create);
 my $POOL_RE = qr/^[A-Za-z][A-Za-z0-9_-]*$/;
 # zvol-destroy carries the dataset <pool>/enc/<name> in the 'pool' member; no '__'
 # so the registry key (which maps '/' to '__') stays unambiguous.
 my $DATASET_RE = qr{^(?!.*__)[A-Za-z][A-Za-z0-9_-]*/enc/[A-Za-z0-9_-]+$};
 my $DISK_RE = qr{^(?:/dev/disk/by-id/)?[A-Za-z0-9][A-Za-z0-9_.:+-]*$};
+# peer-gone and mirror-create list mirror legs, not disks: the two leg specs
+# (local:<pool>/enc/vm/<name> or iscsi:<ip>:<iqn>) of the mirror named in pool.
+my $LEG_RE  = qr{^(?:local|iscsi):[A-Za-z0-9][A-Za-z0-9_.:/+-]*$};
+my %LEG_ACTIONS = map { $_ => 1 } qw(peer-gone mirror-create);
 my $USER_RE = qr/^[A-Za-z0-9_][A-Za-z0-9_.@-]*$/;
 
 sub _fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
@@ -56,8 +60,14 @@ sub _normalise ($f) {
     my $disks = $f->{disks} // [];
     _fail('usage', 'disks must be a list') unless ref $disks eq 'ARRAY';
     my %seen;
+    my $legs = $LEG_ACTIONS{$action};
+    _fail('usage', "$action needs exactly two legs") if $legs && @$disks != 2;
     for my $d (@$disks) {
-        _fail('usage', 'disk ids must be by-id names') unless defined $d && !ref $d && $d =~ $DISK_RE;
+        if ($legs) {
+            _fail('usage', 'legs must be local:... or iscsi:... specs') unless defined $d && !ref $d && $d =~ $LEG_RE;
+        } else {
+            _fail('usage', 'disk ids must be by-id names') unless defined $d && !ref $d && $d =~ $DISK_RE;
+        }
         _fail('usage', "disk listed twice: $d") if $seen{$d}++;
     }
     _fail('usage', "$action needs at least one disk") if $action eq 'pool-create' && !@$disks;
@@ -200,8 +210,11 @@ HPS::Approval - HMAC-signed human approvals for storage actions
 =head1 CANONICAL FORM
 
 An approval is a JSON object with exactly these members: C<action>
-(C<pool-create>, C<pool-destroy>, C<dataset-wipe> or C<zvol-destroy>), C<disks> (array of
-by-id names or C</dev/disk/by-id/...> paths, sorted bytewise, unique),
+(C<pool-create>, C<pool-destroy>, C<dataset-wipe>, C<zvol-destroy>,
+C<peer-gone> or C<mirror-create>), C<disks> (array of by-id names or
+C</dev/disk/by-id/...> paths, sorted bytewise, unique; for C<peer-gone> and
+C<mirror-create> exactly the two leg specs of the mirror, C<local:...> or
+C<iscsi:...>, with the mirror name in C<pool>),
 C<expires> (epoch seconds, JSON integer), C<issued_by> (string), C<mac> (12
 lower-case hex digits, no separators), C<pool> (string), C<wipe> (JSON
 integer 0 or 1).

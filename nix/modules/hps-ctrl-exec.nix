@@ -86,6 +86,23 @@ in
       net-bridge-ensure.options.profile = "node";
       net-status.source = mkScript "net-status" (scriptsDir + "/net-status");
       net-status.options.profile = "node";
+      # CS-3.2: legs and md mirrors (mdadm and open-iscsi come with the compute profile, CS-3.1).
+      leg-resolve.source = mkScript "leg-resolve" (scriptsDir + "/leg-resolve");
+      leg-resolve.options.profile = "node";
+      mirror-create.source = mkScript "mirror-create" (scriptsDir + "/mirror-create");
+      mirror-create.options.profile = "node";
+      mirror-create.options.input = "raw";
+      mirror-assemble.source = mkScript "mirror-assemble" (scriptsDir + "/mirror-assemble");
+      mirror-assemble.options.profile = "node";
+      mirror-assemble.options.input = "raw";
+      mirror-status.source = mkScript "mirror-status" (scriptsDir + "/mirror-status");
+      mirror-status.options.profile = "node";
+      mirror-rejoin.source = mkScript "mirror-rejoin" (scriptsDir + "/mirror-rejoin");
+      mirror-rejoin.options.profile = "node";
+      mirror-stop.source = mkScript "mirror-stop" (scriptsDir + "/mirror-stop");
+      mirror-stop.options.profile = "node";
+      mirror-detach-leg.source = mkScript "mirror-detach-leg" (scriptsDir + "/mirror-detach-leg");
+      mirror-detach-leg.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+#
+# mirror-rejoin - bring a returning leg back into a running mirror.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: mirror-rejoin <name> --leg <spec>
+# The mirror must be assembled (and known: /run/hps/mirrors/<name>.json). The
+# returning leg is resolved (leg-resolve); if it is already a member nothing is
+# done (exit 0). Its superblock and the other leg's are compared with the
+# divergence rule of mirror-assemble; a diverged pair is refused (exit 3, prints
+# the DIVERGED line, changes nothing): that is a human decision (phase 4 adds the
+# ZFS-snapshot rollback path). Otherwise
+#   mdadm /dev/md/<name> --re-add <dev>
+# resyncs from the write-intent bitmap only. If the re-add is not possible this
+# script never falls back to --add (a full resync is a human decision): exit 1.
+# Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+NAME=""
+LEGS=()
+DEVS=()
+REMOTE_INDEX=""
+
+log() {
+  printf '[mirror-rejoin] %s\n' "$*" >&2
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: mirror-rejoin <name> --leg <spec>
+Exit: 0 ok, 2 usage, 3 refused (incl. DIVERGED), 1 failed.
+USAGE
+}
+
+# --- shared helpers (copied into each mirror script; no runtime sourcing) ---
+
+: "${HPS_MIRROR_DIR:=/run/hps/mirrors}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_LEG_RESOLVE:=$(dirname "$0")/leg-resolve}"
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+check_name() {
+  if [[ ! "$NAME" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then
+    refuse "mirror name '$NAME' does not match ^[A-Za-z][A-Za-z0-9_-]*\$"
+  fi
+}
+
+check_spec() {
+  case "$1" in
+    local:* | iscsi:*) ;;
+    *) refuse "leg spec '$1' is neither local:... nor iscsi:..." ;;
+  esac
+}
+
+leg_kind() {
+  case "$1" in
+    local:*) printf 'local\n' ;;
+    *) printf 'remote\n' ;;
+  esac
+}
+
+# resolve_leg <spec>: prints the device path (leg-resolve is the only code that
+# knows the two kinds of leg).
+resolve_leg() {
+  run "$HPS_LEG_RESOLVE" "$1"
+}
+
+# pick_remote_index: REMOTE_INDEX stays as given; unset, it is the index of the
+# only iscsi: leg, and empty (no write-mostly leg) when that is not unique.
+pick_remote_index() {
+  local i n=0 found=""
+  if [[ -n "$REMOTE_INDEX" ]]; then
+    if [[ "$(leg_kind "${LEGS[$REMOTE_INDEX]}")" != remote ]]; then
+      refuse "--remote-index $REMOTE_INDEX names a local leg"
+    fi
+    return 0
+  fi
+  for i in 0 1; do
+    if [[ "${LEGS[$i]}" == iscsi:* ]]; then
+      n=$((n + 1))
+      found=$i
+    fi
+  done
+  if ((n == 1)); then
+    REMOTE_INDEX=$found
+  fi
+}
+
+sidecar_path() {
+  printf '%s/%s.json\n' "$HPS_MIRROR_DIR" "$NAME"
+}
+
+# sidecar_write: LEGS[], DEVS[] (an empty device = leg not present), REMOTE_INDEX.
+sidecar_write() {
+  local i path wm legs="[]"
+  path=$(sidecar_path)
+  mkdir -p "$HPS_MIRROR_DIR"
+  for i in 0 1; do
+    wm=0
+    if [[ "$REMOTE_INDEX" == "$i" ]]; then wm=1; fi
+    legs=$(jq -c --arg s "${LEGS[$i]}" --arg d "${DEVS[$i]:-}" --arg k "$(leg_kind "${LEGS[$i]}")" --argjson w "$wm" \
+      '. + [{spec:$s,dev:$d,kind:$k,write_mostly:$w}]' <<< "$legs")
+  done
+  printf '+ write %s\n' "$path" >&2
+  jq -n -c --arg n "$NAME" --argjson l "$legs" --arg r "$REMOTE_INDEX" \
+    '{name:$n,remote_index:(if $r == "" then null else ($r | tonumber) end),legs:$l}' > "$path"
+}
+
+array_present() {
+  mdadm --detail "/dev/md/$NAME" > /dev/null 2>&1
+}
+
+parse_args() {
+  local arg spec=""
+  while [[ $# -gt 0 ]]; do
+    arg=$1
+    case "$arg" in
+      --leg)
+        [[ $# -ge 2 ]] || { log "$arg needs a value"; usage; exit 2; }
+        spec=$2
+        shift 2
+        ;;
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$NAME" ]]; then
+          log "only one mirror name is accepted"
+          usage
+          exit 2
+        fi
+        NAME=$arg
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$NAME" && -n "$spec" ]] || { usage; exit 2; }
+  check_name
+  check_spec "$spec"
+  RETURNING=$spec
+}
+
+# --- superblock reading and the divergence rule ---
+#
+# Per leg, from `mdadm --examine`: Array UUID, Events, Update Time, Device Role
+# ("Active device N" gives the slot N) and Array State (one character per slot
+# as THAT leg last saw the array: A active, . missing, R replacing).
+#
+# A leg X "left" leg Y when X's Array State has anything but A at Y's slot: X
+# kept running (and kept counting Events) without Y. Legs are DIVERGED when
+#   - each left the other (both ran apart from each other), or
+#   - one left the other and the other still has MORE Events than it (the
+#     other was written to after the separation point).
+# Every other pair is consistent: equal or one-sided-behind Events, a leg that
+# merely lags (mdadm re-adds it from the bitmap or leaves it out, without
+# --force). Update Time is reported and never decides. Anything unreadable
+# (no superblock, role not "Active device N", UUIDs differ) is refused too.
+
+SB_EV=()
+SB_UT=()
+SB_SLOT=()
+SB_STATE=()
+SB_UUID=()
+
+sb_field() {
+  # sb_field <examine-text> <label>
+  sed -n -E "/^[[:space:]]*$2[[:space:]]*:/{s/^[^:]*:[[:space:]]*//;p;q}" <<< "$1"
+}
+
+# read_sb <idx> <device> <spec>
+read_sb() {
+  local i=$1 dev=$2 spec=$3 out role st ut
+  printf '+ mdadm --examine %s\n' "$dev" >&2
+  if ! out=$(mdadm --examine "$dev" 2> /dev/null); then
+    refuse "UNREADABLE $NAME: no md superblock on $spec ($dev)"
+  fi
+  SB_EV[i]=$(sb_field "$out" Events)
+  SB_UUID[i]=$(sb_field "$out" 'Array UUID')
+  role=$(sb_field "$out" 'Device Role')
+  st=$(sb_field "$out" 'Array State')
+  ut=$(sb_field "$out" 'Update Time')
+  SB_STATE[i]=${st%% *}
+  SB_UT[i]=$(date -d "$ut" +%s 2> /dev/null || printf '%s' "${ut// /_}")
+  if [[ ! "${SB_EV[$i]}" =~ ^[0-9]+$ ]]; then
+    refuse "UNREADABLE $NAME: no Events counter on $spec"
+  fi
+  if [[ ! "$role" =~ ^Active\ device\ ([0-9]+)$ ]]; then
+    refuse "UNREADABLE $NAME: $spec is '$role', not an active device; this is a human decision"
+  fi
+  SB_SLOT[i]=${BASH_REMATCH[1]}
+  if [[ -z "${SB_STATE[$i]}" ]]; then
+    refuse "UNREADABLE $NAME: no Array State on $spec"
+  fi
+  log "superblock $spec: events=${SB_EV[$i]} time=${SB_UT[$i]} slot=${SB_SLOT[$i]} state=${SB_STATE[$i]}"
+}
+
+# left <x> <y>: 0 when leg x's superblock does not show leg y as active.
+left() {
+  local x=$1 y=$2
+  [[ "${SB_STATE[$x]:${SB_SLOT[$y]}:1}" != "A" ]]
+}
+
+# check_consistent <legA-spec> <legB-spec>: refuses (3) when diverged.
+check_consistent() {
+  local bad=0
+  if [[ "${SB_UUID[0]}" != "${SB_UUID[1]}" ]]; then
+    refuse "MISMATCH $NAME: the two legs belong to different arrays (${SB_UUID[0]} / ${SB_UUID[1]})"
+  fi
+  if [[ "${SB_SLOT[0]}" == "${SB_SLOT[1]}" ]]; then
+    refuse "UNREADABLE $NAME: both legs claim slot ${SB_SLOT[0]}"
+  fi
+  if left 0 1 && left 1 0; then bad=1; fi
+  if left 0 1 && ((${SB_EV[1]} > ${SB_EV[0]})); then bad=1; fi
+  if left 1 0 && ((${SB_EV[0]} > ${SB_EV[1]})); then bad=1; fi
+  if ((bad == 1)); then
+    printf 'DIVERGED %s legA events=%s time=%s legB events=%s time=%s\n' \
+      "$NAME" "${SB_EV[0]}" "${SB_UT[0]}" "${SB_EV[1]}" "${SB_UT[1]}"
+    log "legA=$1 legB=$2: both advanced while apart; nothing was changed. A human decides (phase 4 adds the snapshot rollback path)"
+    exit 3
+  fi
+}
+
+# other_leg: from the sidecar, the spec and device of the leg that is not RETURNING.
+load_sidecar() {
+  local side i
+  side=$(sidecar_path)
+  if [[ ! -r "$side" ]]; then
+    refuse "mirror $NAME has no sidecar $side; assemble it with mirror-assemble first"
+  fi
+  RET_IDX=""
+  for i in 0 1; do
+    LEGS[i]=$(jq -r ".legs[$i].spec" "$side")
+    DEVS[i]=$(jq -r ".legs[$i].dev" "$side")
+    if [[ "${LEGS[$i]}" == "$RETURNING" ]]; then RET_IDX=$i; fi
+  done
+  if [[ -z "$RET_IDX" ]]; then
+    refuse "$RETURNING is not a leg of $NAME (${LEGS[0]} / ${LEGS[1]})"
+  fi
+  OTHER_IDX=$((1 - RET_IDX))
+  if [[ -z "${DEVS[$OTHER_IDX]}" ]]; then
+    refuse "the other leg ${LEGS[$OTHER_IDX]} has no device recorded"
+  fi
+}
+
+already_member() {
+  local detail real
+  detail=$(mdadm --detail "/dev/md/$NAME" 2> /dev/null)
+  real=$(readlink -f -- "$1")
+  grep -qF -e "$1" -e "$real" <<< "$detail"
+}
+
+main() {
+  local dev
+  parse_args "$@"
+  if ! array_present; then
+    refuse "/dev/md/$NAME is not assembled"
+  fi
+  load_sidecar
+  dev=$(resolve_leg "$RETURNING")
+  if already_member "$dev"; then
+    log "$RETURNING is already a member of $NAME; nothing to do"
+    return 0
+  fi
+  read_sb "$RET_IDX" "$dev" "$RETURNING"
+  read_sb "$OTHER_IDX" "${DEVS[$OTHER_IDX]}" "${LEGS[$OTHER_IDX]}"
+  check_consistent "${LEGS[0]}" "${LEGS[1]}"
+  if ! run mdadm "/dev/md/$NAME" --re-add "$dev"; then
+    log "re-add of $RETURNING failed (no usable bitmap?); a full --add is a human decision"
+    exit 1
+  fi
+  DEVS[RET_IDX]=$dev
+  jq -c --arg d "$dev" --argjson i "$RET_IDX" '.legs[$i].dev = $d' "$(sidecar_path)" > "$(sidecar_path).new"
+  mv -- "$(sidecar_path).new" "$(sidecar_path)"
+  run mdadm --detail "/dev/md/$NAME"
+  log "resync of $RETURNING from the bitmap started; follow it with mirror-status $NAME"
+}
+
+main "$@"
