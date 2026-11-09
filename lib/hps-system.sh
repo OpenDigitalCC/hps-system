@@ -24,6 +24,10 @@
 # Disable patsub_replacement for consistent string substitution
 shopt -u patsub_replacement 2>/dev/null || true
 
+# State ownership helpers (umask, group-owned directories)
+# shellcheck source=hps-state.sh
+source "$(dirname "${BASH_SOURCE[0]}")/hps-state.sh"
+
 #===============================================================================
 # Temporary bootstrap logger (replaced when functions-core-lib.sh loads)
 #===============================================================================
@@ -269,7 +273,7 @@ hps_ensure_directories() {
   for dir in "${dirs[@]}"; do
     if [[ -d "$dir" ]]; then
       hps_log info "  ✓ Exists: ${dir}"
-    elif mkdir -p "$dir" 2>/dev/null; then
+    elif hps_state_mkdir "$dir" 2>/dev/null; then
       hps_log info "  ✓ Created: ${dir}"
     else
       hps_log error "  ✗ Failed to create: ${dir}"
@@ -320,7 +324,7 @@ hps_ensure_system_registry() {
   hps_log info "Initializing system registry: ${registry_path}"
   
   # Create registry directory and lock directory
-  if mkdir -p "${registry_path}/.lock" 2>/dev/null; then
+  if hps_state_mkdir "${registry_path}/.lock" 2>/dev/null; then
     hps_log info "  ✓ System registry initialized"
     return 0
   else
@@ -352,6 +356,8 @@ hps_ensure_system_registry() {
 #
 #===============================================================================
 hps_system_initialize() {
+  # Everything HPS creates from here on is group-writable (group hps owns state).
+  hps_state_umask
   hps_log info "Starting HPS system initialization"
   
   # Step 1: Verify dependencies

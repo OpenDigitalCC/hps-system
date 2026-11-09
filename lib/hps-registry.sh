@@ -1,6 +1,12 @@
 # Disable patsub_replacement to ensure consistent string substitution
 shopt -u patsub_replacement 2>/dev/null || true
 
+# State ownership helpers (group-owned directories); see hps-state.sh
+if ! declare -F hps_state_mkdir >/dev/null 2>&1; then
+  # shellcheck source=hps-state.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/hps-state.sh"
+fi
+
 #===============================================================================
 # HPS Registry Functions - JSON-based Configuration Storage
 #===============================================================================
@@ -67,7 +73,7 @@ json_registry() {
   # Create the db directory only for writes; a read of an unknown key must
   # not create a phantom host/cluster directory (it would show in list_all).
   case "$cmd" in
-    set|delete|unset) mkdir -p "$db_path/.lock" ;;
+    set|delete|unset) hps_state_mkdir "$db_path/.lock" ;;
   esac
   
   local file="$db_path/${key}.json"
@@ -183,7 +189,7 @@ json_registry() {
       
       # Acquire lock for destroy operation
       local destroy_lock="$db_path/.lock/.destroy.lock"
-      mkdir -p "$db_path/.lock"
+      hps_state_mkdir "$db_path/.lock"
       
       if ! acquire_lock "$destroy_lock" "destroy"; then
         echo "ERROR: Cannot acquire lock for destroy operation" >&2
@@ -689,7 +695,7 @@ os_registry() {
       # Store the OS ID for reliable listing
       local id_file="$db_path/.os_id"
       if [[ ! -f "$id_file" ]]; then
-        mkdir -p "$db_path"
+        hps_state_mkdir "$db_path"
         echo "$os_id" > "$id_file"
       fi
       

@@ -64,7 +64,7 @@ initialise_cluster() {
   # Create cluster directory structure
   local cluster_dir="${config_base}/clusters/${cluster_name}"
   
-  if ! mkdir -p "${cluster_dir}/hosts" "${cluster_dir}/services"; then
+  if ! hps_state_mkdir "${cluster_dir}/hosts" "${cluster_dir}/services"; then
     hps_log error "Failed to create cluster directory structure: $cluster_dir"
     return 1
   fi

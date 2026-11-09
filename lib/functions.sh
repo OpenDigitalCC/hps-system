@@ -132,6 +132,10 @@ else
   return 1
 fi
 
+# State is group-writable (group hps). The CGI loads the libraries through
+# here, not through hps_system_initialize.
+source "${LIB_DIR}/hps-state.sh" && hps_state_umask
+
 #===============================================================================
 # Source Registry Functions
 #===============================================================================

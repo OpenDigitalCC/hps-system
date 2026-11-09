@@ -105,6 +105,18 @@ executor is deferred — `docs/adr/0003`); the `hps-node` allowlist is the
 containment boundary there. See *Node scripts under the executor* for NixOS. The `osvc_cmd`
 eval-style CGI path has been removed.
 
+## State ownership
+
+One system group, `hps`, owns the IPS state. The web user (`www-data`, to
+which lighttpd drops for the CGI) is a member. Every writer runs with `umask 002`, and every
+directory under the config base and the log base is setgid with group `hps`,
+so the CGI can write the registry that root created and the reverse.
+`supervisor_fix_state_permissions` re-asserts this at each start. The group is
+a convention of the image, not of the host: HPS never relies on a host group
+id. keysafe (`clusters/<cluster>/keysafe/`) is the exception: root-only
+(0700), the CGI never reads keys, and the permission pass skips any path named
+`keysafe`.
+
 ## Node scripts under the executor
 
 Node scripts run as root with capabilities through the ctrl-exec executor;

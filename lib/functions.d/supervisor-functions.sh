@@ -5,7 +5,29 @@ _supervisor_pre_start () {
   supervisor_configure_core_config
   supervisor_configure_core_services
   supervisor_prepare_services
+  supervisor_fix_state_permissions
   supervisor_reload_core_config
+}
+
+# Hand IPS state to group hps before services start (the CGI runs as www-data,
+# a member of hps; root writers are covered by umask 002 and setgid dirs).
+# Covers HPS_CONFIG_BASE and HPS_LOG; never touches a path named keysafe
+# (root-only); resources are served read-only and are left alone.
+# Idempotent; logs a count; refuses an empty variable or /.
+supervisor_fix_state_permissions () {
+  local target total=0
+  for target in "${HPS_CONFIG_BASE:-}" "${HPS_LOG:-}"; do
+    if [[ -z "$target" || "$target" == "/" ]]; then
+      hps_log error "supervisor_fix_state_permissions: refusing to run against '${target}'"
+      return 1
+    fi
+  done
+  for target in "$HPS_CONFIG_BASE" "$HPS_LOG"; do
+    hps_state_fix_tree "$target" || return 1
+    total=$((total + HPS_STATE_FIX_COUNT))
+  done
+  hps_log info "supervisor_fix_state_permissions: ${total} path(s) checked under ${HPS_CONFIG_BASE} and ${HPS_LOG}"
+  return 0
 }
 
 # Get all services ready to start

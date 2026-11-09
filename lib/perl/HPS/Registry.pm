@@ -27,6 +27,8 @@ sub new ($class, %opt) {
                            // '/srv/hps-config/system.db',
         lock_timeout    => $opt{lock_timeout} // 5,
     };
+    # One group (hps) owns IPS state: files group-writable, see lib/hps-state.sh.
+    umask 002;
     return bless $self, $class;
 }
 
@@ -184,9 +186,17 @@ sub _subdirs ($dir, $suffix) {
     return @names;
 }
 
+# Every directory created gets g+s, and group hps when running as root and the
+# group exists (best effort, never fatal). keysafe/ is not created here: it is
+# root-only and outside the shared group.
 sub mkdir_p ($dir) {
     require File::Path;
-    File::Path::make_path($dir);
+    my @made = File::Path::make_path($dir);
+    my $gid = ($> == 0) ? getgrnam('hps') : undef;
+    for my $d (@made) {
+        chmod((stat $d)[2] & 07777 | 02000, $d);
+        chown(-1, $gid, $d) if defined $gid;
+    }
     return 1;
 }
 
