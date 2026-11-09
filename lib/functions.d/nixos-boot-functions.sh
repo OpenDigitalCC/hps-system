@@ -154,7 +154,10 @@ nixos_emit_boot() {
 ipxe_boot_audit() {
   local mac="${1:-${mac:-}}"
   hps_log info "[$mac] held: booting audit image"
-  nixos_emit_boot "$mac" audit
+  nixos_emit_boot "$mac" audit || return 1
+  # The audit image runs the ctrl-exec agent and pairs (CS-1.10), so a held
+  # node needs the pairing window like an assigned one.
+  nixos_open_pairing_window "$mac"
 }
 
 # nixos_image_profile <host profile>

@@ -16,10 +16,13 @@
 #
 # Without --already-imported a pool that is already imported is refused.
 # Otherwise: list importable pools, import the pool read-only without mounting
-# (zpool import -o readonly=on -N), print status, selected pool properties,
+# (zpool import -f -o readonly=on -N; -f is needed for a pool last used by
+# another host and writes nothing when the import is read-only), print status,
+# selected pool properties,
 # datasets, the last 50 snapshots with the total count and the locally set
 # properties, then ALWAYS export the pool again (EXIT trap, so an error part-way
-# still exports). Nothing here writes to a disk: no -f, no mount, no zfs set.
+# still exports). Nothing here writes to a disk: -f only with readonly=on,
+# no mount, no zfs set.
 #
 # Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
 
@@ -101,7 +104,10 @@ export_pool() {
 }
 
 import_readonly() {
-  local args=(import -o readonly=on -N)
+  # -f: a pool last used by another host (the normal case for a disk that
+  # arrives from elsewhere) refuses to import without it; with readonly=on the
+  # import writes nothing, so the force is safe here and only here.
+  local args=(import -f -o readonly=on -N)
   if [[ $MISSING_LOG -eq 1 ]]; then
     args+=(-m)
   fi

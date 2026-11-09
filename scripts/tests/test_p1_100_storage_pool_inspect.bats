@@ -3,7 +3,7 @@
 # CS-1.10: node-manager/nixos-26/scripts/storage-pool-inspect with zpool and zfs
 # shims. Proves: argument and pool-name refusals, the already-imported refusal
 # (and --already-imported inspecting in place without exporting), the read-only
-# import flags (readonly=on, -N, never -f), -m only with --import-missing-log,
+# import flags (-f readonly=on -N; -f never without readonly=on), -m only with --import-missing-log,
 # the export on every exit (including a failing zfs command), no write verbs,
 # and every command logged.
 
@@ -122,7 +122,7 @@ teardown() {
   run bash "$SCRIPT" tank
   [ "$status" -eq 0 ]
   grep -qx 'zpool import' "$SHIM_LOG"
-  grep -qx 'zpool import -o readonly=on -N tank' "$SHIM_LOG"
+  grep -qx 'zpool import -f -o readonly=on -N tank' "$SHIM_LOG"
   grep -qx 'zpool status tank' "$SHIM_LOG"
   grep -qx 'zpool get -H all tank' "$SHIM_LOG"
   grep -qx 'zfs list -o name,used,refer,avail,mountpoint,encryption,compression -r tank' "$SHIM_LOG"
@@ -130,14 +130,15 @@ teardown() {
   [ "$(tail -n 1 "$SHIM_LOG")" = "zpool export tank" ]
 }
 
-@test "never forces, mounts or writes: no -f, no mount, no zfs set, no other write verb" {
+@test "never mounts or writes: -f only beside readonly=on, no mount, no zfs set, no other write verb" {
   run bash "$SCRIPT" tank --import-missing-log
   [ "$status" -eq 0 ]
-  ! grep -qE ' -f( |$)' "$SHIM_LOG"
+  ! grep -E ' -f( |$)' "$SHIM_LOG" | grep -qv 'readonly=on'
   ! grep -qE '^zfs (set|mount|create|destroy|rollback|snapshot|send|receive)' "$SHIM_LOG"
   ! grep -qE '^zpool (create|destroy|add|remove|attach|detach|scrub|clear|set|labelclear|upgrade)' "$SHIM_LOG"
   ! grep -qE 'mount|wipefs|dd |mkfs' "$SHIM_LOG"
-  run bash -c "grep -v '^ *#' '$SCRIPT' | grep -nE '(^| )-[A-Za-z]*f[A-Za-z]*( |\$)'"
+  # the only -f in the source is the read-only import line
+  run bash -c "grep -v '^ *#' '$SCRIPT' | grep -v 'readonly=on' | grep -nE '(^| )-[A-Za-z]*f[A-Za-z]*( |\$)'"
   [ "$status" -eq 1 ]
 }
 
@@ -148,7 +149,7 @@ teardown() {
   : > "$SHIM_LOG"
   run bash "$SCRIPT" tank --import-missing-log
   [ "$status" -eq 0 ]
-  grep -qx 'zpool import -o readonly=on -N -m tank' "$SHIM_LOG"
+  grep -qx 'zpool import -f -o readonly=on -N -m tank' "$SHIM_LOG"
 }
 
 @test "exports even when a zfs command fails part-way (datasets, then snapshots)" {
@@ -196,7 +197,7 @@ teardown() {
 @test "logs every command as it runs" {
   run bash "$SCRIPT" tank
   [ "$status" -eq 0 ]
-  [[ "$output" == *"+ zpool import -o readonly=on -N tank"* ]]
+  [[ "$output" == *"+ zpool import -f -o readonly=on -N tank"* ]]
   [[ "$output" == *"+ zpool status tank"* ]]
   [[ "$output" == *"+ zpool export tank"* ]]
 }
