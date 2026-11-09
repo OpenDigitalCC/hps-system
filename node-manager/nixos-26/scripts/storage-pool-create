@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+#
+# storage-pool-create - create a mirrored, encrypted-parent ZFS pool. HUMAN-
+# APPROVED ONLY: refuses without a valid signed approval.
+#
+# ctrl-exec allowlisted node script, declared input=raw (nix/modules/
+# hps-ctrl-exec.nix): the whole request input arrives on stdin as ONE JSON
+# document, never in an argument and never in a file on the node:
+#
+#   {"approval": {"action":"pool-create","disks":["<by-id>","<by-id>"],
+#                 "expires":<epoch>,"hmac":"<64 hex>","issued_by":"<who>",
+#                 "mac":"<12 hex>","pool":"<pool>","wipe":0|1},
+#    "secret":   "<64 hex: the 32-byte approval key>",
+#    "key_hex":  "<64 hex: the 32-byte raw key for <pool>/enc>"}
+#
+# Canonical approval = JSON with sorted keys and no whitespace (what `jq -S -c`
+# prints); the hmac member is stripped (sed) and HMAC-SHA256 is taken over the
+# remaining seven-member bytes, computed here without the key reaching a
+# command line.
+#
+# Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id>
+#            --approval-file <path|-> [--secret-from-stdin]
+#
+#   --approval-file -   the JSON document above is on stdin (the ctrl-exec use)
+#   --approval-file P   the same document read from file P (manual console use)
+#   --secret-from-stdin accepted; the key material is always in the document
+#
+# Checks, in order, all before any disk is touched: approval HMAC, expiry,
+# action == pool-create, mac == this node's hps.mac (kernel command line), pool
+# and sorted disk list equal the arguments; then per disk: exists under
+# /dev/disk/by-id, whole disk, unmounted with no holders, not a member of an
+# imported pool, and no pool label or filesystem/partition signature unless the
+# approval says wipe=1 - in which case "WILL WIPE: <by-id>" is printed and
+# exactly those devices get zpool labelclear -f and wipefs -a.
+# Then zpool create, and zfs create of <pool>/enc (aes-256-gcm raw key) with the
+# key piped to stdin; the key stays loaded for this session. Idempotent: the
+# same pool on the same disks with <pool>/enc present exits 0 after status.
+#
+# Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+
+POOL=""
+DISKS=()
+APPROVAL_FILE=""
+PAYLOAD=""
+HMAC_KEY=""
+ENC_KEY=""
+WIPE=0
+POOL_EXISTS=0
+DISK_DIRTY=0
+IMPORT_LISTING=""
+
+log() {
+  printf '[storage-pool-create] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> --approval-file <path|-> [--secret-from-stdin]
+Input (stdin for "-"): {"approval":{...,"hmac":"<hex>"},"secret":"<64 hex>","key_hex":"<64 hex>"}
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+byid_name() {
+  local d=$1
+  d=${d#/dev/disk/by-id/}
+  printf '%s\n' "$d"
+}
+
+parse_args() {
+  local arg d
+  while [[ $# -gt 0 ]]; do
+    arg=$1
+    case "$arg" in
+      --disk)
+        [[ $# -ge 2 ]] || { log "--disk needs a value"; usage; exit 2; }
+        d=$(byid_name "$2")
+        if [[ ! "$d" =~ ^[A-Za-z0-9._:+@-]+$ ]]; then
+          refuse "disk '$2' is not a /dev/disk/by-id name"
+        fi
+        DISKS+=("$d")
+        shift 2
+        ;;
+      --approval-file)
+        [[ $# -ge 2 ]] || { log "--approval-file needs a value"; usage; exit 2; }
+        APPROVAL_FILE=$2
+        shift 2
+        ;;
+      --secret-from-stdin) shift ;;
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$POOL" ]]; then
+          log "only one pool name is accepted"
+          usage
+          exit 2
+        fi
+        POOL=$arg
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$POOL" && -n "$APPROVAL_FILE" ]] || { usage; exit 2; }
+  [[ ${#DISKS[@]} -eq 2 ]] || { log "exactly two --disk arguments are required"; usage; exit 2; }
+  if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
+    refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
+  fi
+  if [[ "${DISKS[0]}" == "${DISKS[1]}" ]]; then
+    refuse "the two disks are the same device"
+  fi
+}
+
+sorted_disks() {
+  printf '%s\n' "${DISKS[@]}" | LC_ALL=C sort | paste -sd, -
+}
+
+read_payload() {
+  log "reading the approval document from ${APPROVAL_FILE/#-/stdin}"
+  if [[ "$APPROVAL_FILE" == "-" ]]; then
+    PAYLOAD=$(cat)
+  else
+    PAYLOAD=$(cat -- "$APPROVAL_FILE")
+  fi
+  if ! printf '%s' "$PAYLOAD" | jq -e 'type == "object"' > /dev/null 2>&1; then
+    refuse "the approval input is not a JSON object"
+  fi
+}
+
+payload_field() {
+  printf '%s' "$PAYLOAD" | jq -r "$1"
+}
+
+# hmac_sha256_hex <key-hex>: HMAC-SHA256 of stdin, as hex. Computed from the
+# definition (H((K^opad)||H((K^ipad)||m))) so the key never appears on a
+# command line; K is 32 bytes, zero-padded to the 64-byte block.
+hmac_sha256_hex() {
+  local key=$1 i b ipad="" opad="" inner msg
+  msg=$(cat)
+  for ((i = 0; i < 64; i++)); do
+    if ((i < 32)); then
+      b=$((16#${key:$((i * 2)):2}))
+    else
+      b=0
+    fi
+    ipad+=$(printf '%02x' $((b ^ 0x36)))
+    opad+=$(printf '%02x' $((b ^ 0x5c)))
+  done
+  inner=$({ printf '%s' "$ipad" | xxd -r -p; printf '%s' "$msg"; } | openssl dgst -sha256 -r | awk '{print $1}')
+  { printf '%s' "$opad" | xxd -r -p; printf '%s' "$inner" | xxd -r -p; } | openssl dgst -sha256 -r | awk '{print $1}'
+}
+
+this_mac() {
+  local word
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == hps.mac=* ]]; then
+      printf '%s\n' "${word#hps.mac=}" | tr -d ':' | tr 'A-F' 'a-f'
+      return 0
+    fi
+  done
+  return 1
+}
+
+verify_approval() {
+  local full canon want got now exp mac thismac
+  log "+ verifying the approval (HMAC-SHA256 over the canonical JSON; key not logged)"
+  if ! printf '%s' "$PAYLOAD" | jq -e '.approval | type == "object" and (keys == ["action","disks","expires","hmac","issued_by","mac","pool","wipe"])' > /dev/null 2>&1; then
+    refuse "approval must carry exactly: action, disks, expires, issued_by, mac, pool, wipe"
+  fi
+  HMAC_KEY=$(payload_field '.secret // ""')
+  if [[ ! "$HMAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    refuse "approval key must be 64 hex characters"
+  fi
+  full=$(printf '%s' "$PAYLOAD" | jq -S -c '.approval')
+  want=$(printf '%s' "$full" | grep -oE '"hmac":"[0-9a-f]{64}",' | sed -e 's/^"hmac":"//' -e 's/",$//') || want=""
+  canon=$(printf '%s' "$full" | sed -E 's/"hmac":"[0-9a-f]{64}",//')
+  got=$(printf '%s' "$canon" | hmac_sha256_hex "$HMAC_KEY")
+  # cmp over both strings: no short-circuit on the first differing character.
+  if [[ -z "$want" ]] || ! cmp -s <(printf '%s' "$want") <(printf '%s' "$got"); then
+    refuse "approval HMAC does not match"
+  fi
+  now=$(date +%s)
+  exp=$(payload_field '.approval.expires')
+  if [[ ! "$exp" =~ ^[0-9]+$ ]] || ((exp <= now)); then
+    refuse "approval has expired"
+  fi
+  if [[ "$(payload_field '.approval.action')" != "pool-create" ]]; then
+    refuse "approval action is not pool-create"
+  fi
+  mac=$(payload_field '.approval.mac' | tr -d ':' | tr 'A-F' 'a-f')
+  thismac=$(this_mac) || refuse "hps.mac is not on the kernel command line"
+  if [[ "$mac" != "$thismac" ]]; then
+    refuse "approval is for a different node"
+  fi
+  if [[ "$(payload_field '.approval.pool')" != "$POOL" ]]; then
+    refuse "approval is for a different pool"
+  fi
+  if [[ "$(payload_field '.approval.disks | sort | join(",")')" != "$(sorted_disks)" ]]; then
+    refuse "approval names different disks"
+  fi
+  WIPE=$(payload_field '.approval.wipe')
+  if [[ "$WIPE" != "0" && "$WIPE" != "1" ]]; then
+    refuse "approval wipe must be 0 or 1"
+  fi
+  ENC_KEY=$(payload_field '.key_hex // ""')
+  if [[ ! "$ENC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    refuse "key_hex must be 64 hex characters"
+  fi
+  log "approval verified: issued_by $(payload_field '.approval.issued_by'), wipe=$WIPE"
+}
+
+pool_is_imported() {
+  zpool list -H -o name "$POOL" > /dev/null 2>&1
+}
+
+# The by-id names (partition suffix removed) the existing pool uses, sorted.
+existing_pool_disks() {
+  zpool status -P "$POOL" | grep -o '/dev/disk/by-id/[^ 	]*' | sed -e 's|^/dev/disk/by-id/||' -e 's/-part[0-9]*$//' | LC_ALL=C sort -u | paste -sd, -
+}
+
+# Decides idempotency: the pool already there on the same disks is not an error.
+check_existing_pool() {
+  local have
+  if ! pool_is_imported; then
+    return 0
+  fi
+  have=$(existing_pool_disks)
+  if [[ "$have" != "$(sorted_disks)" ]]; then
+    refuse "pool '$POOL' already exists on different disks ($have)"
+  fi
+  POOL_EXISTS=1
+  log "pool '$POOL' already exists on the approved disks"
+}
+
+in_active_pool() {
+  local d=$1
+  if zpool status -P 2> /dev/null | grep -qF "/dev/disk/by-id/$d"; then
+    refuse "$d is a member of an imported pool"
+  fi
+}
+
+# check_disk <by-id>: sets DISK_DIRTY=1 when a label or signature is present.
+check_disk() {
+  local d=$1 dev tree
+  dev=$(run readlink -e -- "/dev/disk/by-id/$d") || refuse "/dev/disk/by-id/$d does not exist"
+  tree=$(run lsblk -nr -o TYPE,MOUNTPOINTS "$dev") || refuse "lsblk cannot read $dev"
+  if [[ "$(printf '%s\n' "$tree" | awk 'NR==1{print $1}')" != "disk" ]]; then
+    refuse "$d is not a whole disk"
+  fi
+  if printf '%s\n' "$tree" | awk 'NR>1 && $2!=""{f=1} END{exit !f}'; then
+    refuse "$d (or a partition on it) is mounted"
+  fi
+  if printf '%s\n' "$tree" | awk 'NR>1 && $1!="part"{f=1} END{exit !f}'; then
+    refuse "$d has a holder (lvm/crypt/md) on it"
+  fi
+  in_active_pool "$d"
+  if run blkid -p -o export "$dev" > /dev/null 2>&1; then
+    log "$d carries a filesystem or partition signature"
+    DISK_DIRTY=1
+  fi
+  if run zdb -l "$dev" > /dev/null 2>&1; then
+    log "$d carries a ZFS label"
+    DISK_DIRTY=1
+  fi
+  if printf '%s\n' "$IMPORT_LISTING" | grep -qF "$d"; then
+    log "$d appears in the zpool import listing"
+    DISK_DIRTY=1
+  fi
+}
+
+check_disks() {
+  local d
+  DISK_DIRTY=0
+  printf '+ zpool import -d /dev/disk/by-id\n' >&2
+  IMPORT_LISTING=$(zpool import -d /dev/disk/by-id 2>&1) || true
+  for d in "${DISKS[@]}"; do
+    check_disk "$d"
+  done
+  if [[ $DISK_DIRTY -eq 1 && "$WIPE" != "1" ]]; then
+    refuse "a disk carries a pool label or signature and the approval does not allow wipe"
+  fi
+}
+
+wipe_disks() {
+  local d
+  if [[ "$WIPE" != "1" ]]; then
+    return 0
+  fi
+  for d in "${DISKS[@]}"; do
+    log "WILL WIPE: /dev/disk/by-id/$d"
+  done
+  for d in "${DISKS[@]}"; do
+    run zpool labelclear -f "/dev/disk/by-id/$d" || log "no ZFS label to clear on $d"
+    run wipefs -a "/dev/disk/by-id/$d"
+  done
+}
+
+create_pool() {
+  local d
+  for d in "${DISKS[@]}"; do
+    log "using /dev/disk/by-id/$d"
+  done
+  run zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none "$POOL" mirror "/dev/disk/by-id/${DISKS[0]}" "/dev/disk/by-id/${DISKS[1]}"
+}
+
+enc_exists() {
+  zfs list -H -o name "$POOL/enc" > /dev/null 2>&1
+}
+
+# The 32-byte raw key goes to zfs on stdin only (keylocation=prompt).
+create_enc() {
+  printf '+ zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt %s/enc  (raw key on stdin)\n' "$POOL" >&2
+  printf '%s' "$ENC_KEY" | xxd -r -p | zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt "$POOL/enc"
+}
+
+main() {
+  parse_args "$@"
+  read_payload
+  verify_approval
+  check_existing_pool
+  if [[ $POOL_EXISTS -eq 0 ]]; then
+    check_disks
+    wipe_disks
+    create_pool
+  fi
+  if enc_exists; then
+    log "$POOL/enc already exists"
+  else
+    create_enc
+  fi
+  run zpool status "$POOL"
+}
+
+main "$@"

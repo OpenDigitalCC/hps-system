@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# iscsi-status - READ-ONLY view of the LIO iSCSI configuration.
+#
+# ctrl-exec allowlisted node script. Usage: iscsi-status
+# Prints the block backstores, the iSCSI targets (LUNs, ACLs, portals) and
+# whether anything listens on the iSCSI port 3260. Changes nothing.
+#
+# Exit: 0 shown, 2 usage, 1 a command failed.
+
+set -euo pipefail
+
+log() {
+  printf '[iscsi-status] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+main() {
+  if [[ $# -ne 0 ]]; then
+    log "takes no arguments"
+    exit 2
+  fi
+  printf '\n=== backstores ===\n'
+  run targetcli ls /backstores/block
+  printf '\n=== iscsi targets ===\n'
+  run targetcli ls /iscsi
+  printf '\n=== listening on 3260 ===\n'
+  run ss -ltn sport = :3260
+}
+
+main "$@"

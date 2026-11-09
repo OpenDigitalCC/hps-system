@@ -53,6 +53,25 @@ in
       node-dmesg.options.profile = "node";
       node-facts.source = mkScript "node-facts" (scriptsDir + "/node-facts");
       node-facts.options.profile = "node";
+      storage-pool-import.source = mkScript "storage-pool-import" (scriptsDir + "/storage-pool-import");
+      storage-pool-import.options.profile = "node";
+      storage-pool-create.source = mkScript "storage-pool-create" (scriptsDir + "/storage-pool-create");
+      storage-pool-create.options.profile = "node";
+      storage-pool-create.options.input = "raw";
+      storage-pool-destroy.source = mkScript "storage-pool-destroy" (scriptsDir + "/storage-pool-destroy");
+      storage-pool-destroy.options.profile = "node";
+      storage-pool-destroy.options.input = "raw";
+      dataset-unlock.source = mkScript "dataset-unlock" (scriptsDir + "/dataset-unlock");
+      dataset-unlock.options.profile = "node";
+      dataset-unlock.options.input = "raw";
+      storage-trim-check.source = mkScript "storage-trim-check" (scriptsDir + "/storage-trim-check");
+      storage-trim-check.options.profile = "node";
+      iscsi-export.source = mkScript "iscsi-export" (scriptsDir + "/iscsi-export");
+      iscsi-export.options.profile = "node";
+      iscsi-unexport.source = mkScript "iscsi-unexport" (scriptsDir + "/iscsi-unexport");
+      iscsi-unexport.options.profile = "node";
+      iscsi-status.source = mkScript "iscsi-status" (scriptsDir + "/iscsi-status");
+      iscsi-status.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

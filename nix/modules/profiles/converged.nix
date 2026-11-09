@@ -1,12 +1,12 @@
 # profiles/converged.nix - storage (SCH) and compute (TCH) roles on one node.
 #
-# Phase 1 records the roles only (/etc/hps/roles via hps.roles). The storage
-# services (ZFS pool import, LIO) arrive in phase 2 and the compute services
-# (libvirt/QEMU/KVM, OVMF) in phase 3; each lands here as its own module.
+# The roles are recorded in /etc/hps/roles via hps.roles. The storage services
+# (LIO, the storage script tools) come from storage.nix (phase 2); the compute
+# services (libvirt/QEMU/KVM, OVMF) arrive in phase 3 as their own module.
 { ... }:
 
 {
-  imports = [ ../hps-node.nix ];
+  imports = [ ../hps-node.nix ./storage.nix ];
 
   hps.roles = "SCH,TCH";
 }

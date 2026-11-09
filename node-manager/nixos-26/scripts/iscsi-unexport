@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#
+# iscsi-unexport - remove an iSCSI target and the backstores only it used.
+#
+# ctrl-exec allowlisted node script. Usage: iscsi-unexport <target-iqn>
+#
+# Reads the target's LUNs, deletes the target, deletes each backstore it used
+# that no other target still uses, then targetcli saveconfig. The zvols
+# themselves are never touched. A target that is not there is not an error.
+#
+# Exit: 0 done (or nothing to do), 2 usage, 3 refused (bad iqn), 1 failed.
+
+set -euo pipefail
+
+IQN=""
+
+log() {
+  printf '[iscsi-unexport] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: iscsi-unexport <target-iqn>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$IQN" ]]; then
+          log "only one target is accepted"
+          usage
+          exit 2
+        fi
+        IQN="$arg"
+        ;;
+    esac
+  done
+  if [[ -z "$IQN" ]]; then
+    usage
+    exit 2
+  fi
+  if [[ ! "$IQN" =~ ^iqn\.[0-9]{4}-[0-9]{2}\.[a-z0-9.-]+(:[A-Za-z0-9._:-]+)?$ ]]; then
+    log "refused: target '$IQN' is not an iqn name"
+    exit 3
+  fi
+}
+
+listing() {
+  printf '+ targetcli ls %s\n' "$1" >&2
+  targetcli ls "$1" 2> /dev/null || true
+}
+
+# Backstore names the target's LUNs point at ("block/<name>").
+target_backstores() {
+  listing "/iscsi/$IQN/tpg1/luns" | grep -o 'block/[^ ]*' | sed 's|^block/||' || true
+}
+
+main() {
+  local names name
+  parse_args "$@"
+  if ! listing /iscsi | grep -qF "o- ${IQN} "; then
+    log "target $IQN is not present; nothing to do"
+    exit 0
+  fi
+  names=$(target_backstores)
+  run targetcli /iscsi delete "$IQN"
+  for name in $names; do
+    if listing /iscsi | grep -qF "block/${name} "; then
+      log "backstore $name is still used by another target; kept"
+    else
+      run targetcli /backstores/block delete "$name"
+    fi
+  done
+  run targetcli saveconfig
+}
+
+main "$@"

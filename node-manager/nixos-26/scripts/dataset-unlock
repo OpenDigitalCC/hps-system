@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+#
+# dataset-unlock - load the key of an encrypted ZFS dataset and mount below it.
+#
+# ctrl-exec allowlisted node script, declared input=raw: one JSON document on
+# stdin, never an argument, never a file on the node:
+#
+#   {"key_hex": "<64 hex: the 32-byte raw key>"}
+#
+# Usage: dataset-unlock <pool>/enc
+#
+# If the key is not loaded: zfs load-key -L prompt with the raw key on stdin,
+# then zfs mount -a. If a key is already loaded: zfs load-key -n (dry run, the
+# key is only checked) decides - the same key exits 0 (mounts again, nothing
+# else), a different key is refused. The key goes from stdin to zfs through a
+# pipe and is never written anywhere or put on a command line.
+#
+# Exit: 0 unlocked, 2 usage, 3 refused (no such dataset, not encrypted, a
+# different key is loaded, bad input), 1 a command failed.
+
+set -euo pipefail
+
+DATASET=""
+KEY_HEX=""
+
+log() {
+  printf '[dataset-unlock] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: dataset-unlock <pool>/enc      (stdin: {"key_hex":"<64 hex>"})
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$DATASET" ]]; then
+          log "only one dataset is accepted"
+          usage
+          exit 2
+        fi
+        DATASET="$arg"
+        ;;
+    esac
+  done
+  if [[ -z "$DATASET" ]]; then
+    usage
+    exit 2
+  fi
+  if [[ ! "$DATASET" =~ ^[a-z][a-z0-9_.-]*(/[A-Za-z0-9_.:-]+)+$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/<name>"
+  fi
+}
+
+read_key() {
+  local payload
+  payload=$(cat)
+  KEY_HEX=$(printf '%s' "$payload" | jq -r 'if type == "object" then .key_hex // "" else "" end' 2> /dev/null) || KEY_HEX=""
+  if [[ ! "$KEY_HEX" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    refuse "stdin must be a JSON object with key_hex of 64 hex characters"
+  fi
+}
+
+# pipe_key <command...>: log the command, feed it the raw key on stdin.
+pipe_key() {
+  printf '+ %s  (raw key on stdin)\n' "$*" >&2
+  printf '%s' "$KEY_HEX" | xxd -r -p | "$@"
+}
+
+key_status() {
+  zfs get -H -o value keystatus "$DATASET"
+}
+
+main() {
+  local status
+  parse_args "$@"
+  read_key
+  if ! zfs list -H -o name "$DATASET" > /dev/null 2>&1; then
+    refuse "dataset '$DATASET' does not exist"
+  fi
+  printf '+ zfs get -H -o value keystatus %s\n' "$DATASET" >&2
+  status=$(key_status)
+  case "$status" in
+    available)
+      if ! pipe_key zfs load-key -n -L prompt "$DATASET"; then
+        refuse "a different key is already loaded for $DATASET"
+      fi
+      log "$DATASET is already unlocked with this key"
+      ;;
+    unavailable)
+      pipe_key zfs load-key -L prompt "$DATASET"
+      ;;
+    *)
+      refuse "$DATASET has keystatus '$status' (not an encrypted dataset)"
+      ;;
+  esac
+  run zfs mount -a
+}
+
+main "$@"
