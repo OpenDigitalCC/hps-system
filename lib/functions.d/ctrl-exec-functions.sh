@@ -288,8 +288,11 @@ _ce_close_window_after_approval() {
 #   2  usage / internal error
 #===============================================================================
 ce_approve_pair_request() {
-  local mac="${1:?Usage: ce_approve_pair_request <mac> <reqid>}"
-  local reqid="${2:?Usage: ce_approve_pair_request <mac> <reqid>}"
+  local mac="${1:?Usage: ce_approve_pair_request <mac> <reqid> [caller-ip]}"
+  local reqid="${2:?Usage: ce_approve_pair_request <mac> <reqid> [caller-ip]}"
+  # caller_ip: the API connection's peer address (api.sh resolved it to this
+  # MAC by ARP). Used only to bind a HELD node, which has no allocation yet.
+  local caller_ip="${3:-}"
 
   # reqid is agent-derived; constrain to the dispatcher's charset before it
   # reaches a file path or the CLI.
@@ -345,8 +348,16 @@ ce_approve_pair_request() {
   reg_ip=$(host_registry "$mac" get IP 2>/dev/null) || reg_ip=""
 
   if [[ -z "$reg_ip" ]]; then
-    hps_log error "ce_approve: ${mac} has no allocated IP; cannot bind request"
-    return 1
+    # A HELD node has no allocation yet (assign allocates it). Bind to the API
+    # caller's peer address instead: the API resolved that address to this MAC
+    # by ARP, so a pairing request from the same address is the same machine.
+    if [[ "$state" == "HELD" && -n "$caller_ip" ]]; then
+      reg_ip="$caller_ip"
+      hps_log info "ce_approve: ${mac} is HELD with no allocation; binding to API caller ${caller_ip}"
+    else
+      hps_log error "ce_approve: ${mac} has no allocated IP; cannot bind request"
+      return 1
+    fi
   fi
   if [[ "$req_ip" != "$reg_ip" ]]; then
     hps_log error "ce_approve: ${mac} request IP '${req_ip}' != allocated '${reg_ip}'"

@@ -104,3 +104,26 @@ held() {
 @test "ADR 0002 names HELD among the enrolment-eligible states" {
   grep -q 'HELD' "${BATS_TEST_DIRNAME}/../../docs/adr/0002-ctrl-exec-enrolment-trust.md"
 }
+
+@test "a HELD node with no allocated IP binds to the API caller address" {
+  sed -i "/^${MAC}|IP=/d" "$REG_FILE"
+  held
+  run ce_approve_pair_request "$MAC" abc123 10.0.0.50
+  [ "$status" -eq 0 ]
+  grep -q 'approve abc123' "$CE_LOG"
+}
+
+@test "a HELD node with no allocated IP and a caller address that differs from the request is refused" {
+  sed -i "/^${MAC}|IP=/d" "$REG_FILE"
+  held
+  run ce_approve_pair_request "$MAC" abc123 10.0.0.99
+  [ "$status" -ne 0 ]
+  ! grep -q 'approve abc123' "$CE_LOG"
+}
+
+@test "a HELD node with no allocated IP and no caller address is refused" {
+  sed -i "/^${MAC}|IP=/d" "$REG_FILE"
+  held
+  run ce_approve_pair_request "$MAC" abc123
+  [ "$status" -ne 0 ]
+}

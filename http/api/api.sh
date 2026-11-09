@@ -542,7 +542,7 @@ handle_system_action() {
         api_error 400 "Missing reqid parameter"
         return
       fi
-      if ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID"; then
+      if ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID" "$CLIENT_IP"; then
         api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
       else
         api_error 403 "Pairing request denied" "$REQUEST_MAC"
