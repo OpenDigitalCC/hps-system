@@ -8,6 +8,10 @@
 # pairing directory all mocked, so they need no ctrl-exec and no network.
 
 setup() {
+  # CS-2.4: these tests drive the root path (dispatcher called directly); as a
+  # non-root user the library goes through the job queue, tested in test_p2_61.
+  id() { if [[ "${1:-}" == -u ]]; then echo 0; else command id "$@"; fi; }
+  export -f id
   TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/ce-approve.XXXXXX")"
   export CTRL_EXEC_PAIRING_DIR="$TEST_DIR/pairing"
   mkdir -p "$CTRL_EXEC_PAIRING_DIR"

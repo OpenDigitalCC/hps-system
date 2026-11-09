@@ -225,13 +225,13 @@ parse_request() {
 # CS-2.3 hook: bring a paired storage node's pool up
 #===============================================================================
 # After a node has paired, a host whose TYPE contains SCH and whose registry has
-# storage_state (HPS created its pool before) gets `hps-storage <mac> up`:
-# import, unlock with the keysafe key, export. The job is detached (own session,
-# no inherited stdin/stdout/stderr, so the CGI response ends at once) and
-# logs through hps-storage itself. Anything else is a no-op with a log line.
-# HPS_STORAGE_CMD overrides the command (tests).
+# storage_state (HPS created its pool before) gets a `storage-up <mac>` job:
+# import, unlock with the keysafe key, export. hps-storage needs the keysafe, so
+# it runs in the root job runner (bin/hps-jobs, ADR 0006), not here as the web
+# user; the hook submits and returns at once (no wait). Anything else is a no-op
+# with a log line.
 api_storage_after_pair() {
-  local mac="$1" type state cmd
+  local mac="$1" type state id
   type=$(host_registry "$mac" get TYPE 2>/dev/null) || type=""
   if [[ "$type" != *SCH* ]]; then
     hps_log info "$API_LOG_PREFIX storage hook: $mac is not an SCH host; nothing to do"
@@ -242,9 +242,13 @@ api_storage_after_pair() {
     hps_log info "$API_LOG_PREFIX storage hook: $mac has no storage_state; nothing to do"
     return 0
   fi
-  cmd="${HPS_STORAGE_CMD:-${SCRIPT_DIR}/../../bin/hps-storage}"
-  hps_log info "$API_LOG_PREFIX storage hook: starting 'hps-storage $mac up --wait 120' detached"
-  setsid "$cmd" "$mac" up --wait 120 < /dev/null > /dev/null 2>&1 &
+  mac="${mac//[:.-]/}"
+  mac="${mac,,}"
+  if id=$(hps_job_submit storage-up "$mac"); then
+    hps_log info "$API_LOG_PREFIX storage hook: queued storage-up for $mac as job $id"
+  else
+    hps_log error "$API_LOG_PREFIX storage hook: could not queue storage-up for $mac"
+  fi
   return 0
 }
 

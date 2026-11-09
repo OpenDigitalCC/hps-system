@@ -5,6 +5,7 @@ _supervisor_pre_start () {
   supervisor_configure_core_config
   supervisor_configure_core_services
   supervisor_prepare_services
+  supervisor_prepare_jobs
   supervisor_fix_state_permissions
   supervisor_reload_core_config
 }
@@ -27,6 +28,19 @@ supervisor_fix_state_permissions () {
     total=$((total + HPS_STATE_FIX_COUNT))
   done
   hps_log info "supervisor_fix_state_permissions: ${total} path(s) checked under ${HPS_CONFIG_BASE} and ${HPS_LOG}"
+  return 0
+}
+
+# The privileged-action queue (jobs/{new,run,done,failed} of the active
+# cluster), created group hps / setgid / group-writable so the CGI can write
+# new/. hps-jobs creates the same on start; this makes them exist before the
+# first CGI request. No active cluster yet: logged, not an error.
+supervisor_prepare_jobs () {
+  if ! hps_jobs_ensure_dirs 2>/dev/null; then
+    hps_log warn "supervisor_prepare_jobs: no job queue yet (no active cluster?); hps-jobs creates it on start"
+    return 0
+  fi
+  hps_log info "supervisor_prepare_jobs: job queue ready at $(hps_jobs_dir)"
   return 0
 }
 

@@ -15,6 +15,12 @@
 #
 # The dispatcher CLI is ctrl-exec-dispatcher (aliased 'ced' upstream). We call
 # the binary by its full name so no shell alias is required.
+#
+# The dispatcher config and key are ctrl-exec-only (0600), so the CGI (www-data)
+# cannot run the dispatcher. When `id -u` is not 0 the pairing window, the
+# pending-request listing and the approval go through the root job runner
+# (jobs-functions.sh, bin/hps-jobs, ADR 0006); as root (CLI, tests) they call
+# the dispatcher directly.
 
 # Full path to the dispatcher CLI; overridable for tests.
 : "${CTRL_EXEC_DISPATCHER:=ctrl-exec-dispatcher}"
@@ -36,6 +42,18 @@
 # Floating dispatcher tarball served from the IPS package repo (see the
 # node-side CTRL_EXEC_TARBALL note; the same latest-symlink convention).
 : "${CTRL_EXEC_DISPATCHER_TARBALL:=/srv/hps-resources/packages/ctrl-exec/ctrl-exec-latest.tar.gz}"
+# The API client plugins (.deb, same convention: the lab resources hold the
+# release file and a ctrl-exec-api-plugins-latest.deb symlink to it).
+: "${CTRL_EXEC_API_PLUGINS_DEB:=/srv/hps-resources/packages/ctrl-exec/ctrl-exec-api-plugins-latest.deb}"
+# Where that deb installs the client, and where bring-up links it onto PATH.
+: "${CTRL_EXEC_CLI_INSTALLED:=/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli}"
+: "${CTRL_EXEC_CLI_LINK:=/usr/local/bin/ctrl-exec-cli}"
+# The API unix socket (ctrl-exec.conf api_socket) and its group. Group hps lets
+# root and the state group call it; the API runs as ctrl-exec, which bring-up
+# adds to hps so it may own a socket of that group.
+: "${CTRL_EXEC_API_SOCKET:=/run/ctrl-exec-api/api.sock}"
+: "${CTRL_EXEC_API_SOCKET_GROUP:=hps}"
+: "${CTRL_EXEC_DISPATCHER_CONF:=${CTRL_EXEC_DISPATCHER_CONF_DIR}/ctrl-exec.conf}"
 
 #===============================================================================
 # _ce_persist_dir
@@ -123,8 +141,79 @@ ce_dispatcher_bring_up() {
     }
   fi
 
+  ce_api_bring_up || return 1
+
   hps_log info "ce_dispatcher_bring_up: dispatcher ready"
   return 0
+}
+
+#===============================================================================
+# ce_api_bring_up
+# ---------------
+# The ctrl-exec-api side of the IPS (idempotent, root):
+#   1. api_socket and api_socket_group in ctrl-exec.conf, appended once (an
+#      existing api_socket line is left alone).
+#   2. The service user ctrl-exec joins the socket's group (hps).
+#   3. The API client (ctrl-exec-cli) from the plugins .deb, only when absent,
+#      linked onto PATH.
+# program:ctrl-exec-api then serves the socket (supervisor-functions.sh).
+# A missing plugins .deb is a warning: hps-run.sh --input needs it, nothing
+# else does.
+#===============================================================================
+ce_api_bring_up() {
+  local conf="$CTRL_EXEC_DISPATCHER_CONF"
+  if [[ -f "$conf" ]]; then
+    if ! grep -qE '^[[:space:]]*api_socket[[:space:]]*=' "$conf"; then
+      printf '\n# HPS: API unix socket for the IPS job runner and hps-run.sh --input\napi_socket = %s\napi_socket_group = %s\n' \
+        "$CTRL_EXEC_API_SOCKET" "$CTRL_EXEC_API_SOCKET_GROUP" >> "$conf" || {
+        hps_log error "ce_api_bring_up: cannot write api_socket to $conf"
+        return 1
+      }
+      hps_log info "ce_api_bring_up: api_socket set in $conf"
+    fi
+  else
+    hps_log warn "ce_api_bring_up: $conf not found; api_socket not set"
+  fi
+
+  if getent passwd ctrl-exec > /dev/null 2>&1 && getent group "$CTRL_EXEC_API_SOCKET_GROUP" > /dev/null 2>&1; then
+    if ! id -nG ctrl-exec 2> /dev/null | tr ' ' '\n' | grep -qx "$CTRL_EXEC_API_SOCKET_GROUP"; then
+      usermod -aG "$CTRL_EXEC_API_SOCKET_GROUP" ctrl-exec \
+        || hps_log warn "ce_api_bring_up: cannot add ctrl-exec to group $CTRL_EXEC_API_SOCKET_GROUP"
+    fi
+  fi
+
+  if ! command -v ctrl-exec-cli > /dev/null 2>&1 && [[ ! -x "$CTRL_EXEC_CLI_INSTALLED" ]]; then
+    if [[ -f "$CTRL_EXEC_API_PLUGINS_DEB" ]]; then
+      hps_log info "ce_api_bring_up: installing the API client from $CTRL_EXEC_API_PLUGINS_DEB"
+      dpkg -i "$CTRL_EXEC_API_PLUGINS_DEB" > /dev/null || {
+        hps_log warn "ce_api_bring_up: dpkg -i of the API plugins failed"
+        return 0
+      }
+    else
+      hps_log warn "ce_api_bring_up: ctrl-exec-cli absent and $CTRL_EXEC_API_PLUGINS_DEB missing; hps-run.sh --input unavailable"
+      return 0
+    fi
+  fi
+  if [[ -x "$CTRL_EXEC_CLI_INSTALLED" && ! -e "$CTRL_EXEC_CLI_LINK" ]]; then
+    ln -s "$CTRL_EXEC_CLI_INSTALLED" "$CTRL_EXEC_CLI_LINK" \
+      || hps_log warn "ce_api_bring_up: cannot link $CTRL_EXEC_CLI_LINK"
+  fi
+  return 0
+}
+
+# _ce_is_root: true when running as uid 0 (CLI, tests); the CGI is not.
+_ce_is_root() {
+  [[ "$(id -u)" -eq 0 ]]
+}
+
+# _ce_job <wait seconds> <kind> [args...]
+# Run one privileged action through the root job runner: submit, wait, relay the
+# job's stdout/stderr, return its exit.
+_ce_job() {
+  local wait="$1" id
+  shift
+  id=$(hps_job_submit "$@") || return 1
+  hps_job_wait "$id" "$wait"
 }
 
 #===============================================================================
@@ -148,10 +237,17 @@ ce_pairing_window_open() {
   fi
 
   hps_log info "Opening ctrl-exec pairing window for ${timeout}s"
-  "$CTRL_EXEC_DISPATCHER" pairing-mode start --timeout "$timeout" || {
-    hps_log error "Failed to start ctrl-exec pairing mode"
-    return 1
-  }
+  if _ce_is_root; then
+    "$CTRL_EXEC_DISPATCHER" pairing-mode start --timeout "$timeout" || {
+      hps_log error "Failed to start ctrl-exec pairing mode"
+      return 1
+    }
+  else
+    _ce_job 5 pairing-window-open "$timeout" || {
+      hps_log error "Failed to start ctrl-exec pairing mode (job runner)"
+      return 1
+    }
+  fi
   return 0
 }
 
@@ -165,10 +261,17 @@ ce_pairing_window_open() {
 #===============================================================================
 ce_pairing_window_close() {
   hps_log info "Closing ctrl-exec pairing window"
-  "$CTRL_EXEC_DISPATCHER" pairing-mode stop || {
-    hps_log error "Failed to stop ctrl-exec pairing mode"
-    return 1
-  }
+  if _ce_is_root; then
+    "$CTRL_EXEC_DISPATCHER" pairing-mode stop || {
+      hps_log error "Failed to stop ctrl-exec pairing mode"
+      return 1
+    }
+  else
+    _ce_job 5 pairing-window-close || {
+      hps_log error "Failed to stop ctrl-exec pairing mode (job runner)"
+      return 1
+    }
+  fi
   return 0
 }
 
@@ -191,9 +294,14 @@ ce_pairing_window_close() {
 #===============================================================================
 _ce_read_pair_request() {
   local reqid="$1"
-  local row host ip
-  row=$("$CTRL_EXEC_DISPATCHER" list-requests 2>/dev/null \
-    | awk -v id="$reqid" '$1 == id { print $2 " " $3; exit }') || row=""
+  local row host ip listing
+  # The listing needs the dispatcher config, so the CGI asks the job runner.
+  if _ce_is_root; then
+    listing=$("$CTRL_EXEC_DISPATCHER" list-requests 2>/dev/null) || listing=""
+  else
+    listing=$(_ce_job 15 pairing-list 2>/dev/null) || listing=""
+  fi
+  row=$(printf '%s\n' "$listing" | awk -v id="$reqid" '$1 == id { print $2 " " $3; exit }') || row=""
   if [[ -n "$row" ]]; then
     read -r host ip <<< "$row"
     jq -n --arg id "$reqid" --arg h "$host" --arg ip "$ip" \
@@ -394,16 +502,25 @@ ce_approve_pair_request() {
   # ctrl-exec 0.14.3+ takes --replace: a node that re-pairs (new boot, same
   # source address) unregisters its previous registration, so one node is one
   # registration. An older dispatcher gets the plain approve.
+  # As the CGI user the approval goes to the job runner, which probes for
+  # --replace itself; it returns the dispatcher's exit and output as here.
   local approve_out
   local -a approve_args=(approve "$reqid")
-  if _ce_dispatcher_supports_replace; then
-    approve_args+=(--replace)
+  if _ce_is_root; then
+    if _ce_dispatcher_supports_replace; then
+      approve_args+=(--replace)
+    else
+      hps_log info "ce_approve: dispatcher has no approve --replace; approving without it"
+    fi
+    approve_out=$("$CTRL_EXEC_DISPATCHER" "${approve_args[@]}" 2>&1) || {
+      hps_log error "ce_approve: dispatcher approve failed for ${reqid}: ${approve_out}"
+      return 1
+    }
   else
-    hps_log info "ce_approve: dispatcher has no approve --replace; approving without it"
-  fi
-  if ! approve_out=$("$CTRL_EXEC_DISPATCHER" "${approve_args[@]}" 2>&1); then
-    hps_log error "ce_approve: dispatcher approve failed for ${reqid}: ${approve_out}"
-    return 1
+    approve_out=$(_ce_job 15 pairing-approve "$reqid" --replace 2>&1) || {
+      hps_log error "ce_approve: dispatcher approve failed for ${reqid}: ${approve_out}"
+      return 1
+    }
   fi
   hps_log info "ce_approve: dispatcher: $(printf '%s' "$approve_out" | tr '\n' ' ' | cut -c1-300)"
   local replaced_line

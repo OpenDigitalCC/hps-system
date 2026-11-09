@@ -1,0 +1,176 @@
+#!/usr/bin/env perl
+# hps-jobs: the IPS root job runner (ADR 0006). Takes job files that the web
+# user wrote into <cluster>/jobs/new/, runs each from a fixed command table
+# (an argument list, never a shell) and writes the result into done/ or failed/.
+# One job at a time. Runs under supervisor as root (program:hps-jobs).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use POSIX qw(WNOHANG);
+use Time::HiRes qw(sleep time);
+use HPS::Jobs;
+
+$| = 1;
+umask 002;
+
+sub log_line {
+    my ($level, $msg) = @_;
+    print "hps-jobs: $level: $msg\n";
+    return;
+}
+
+sub usage {
+    print STDERR <<'USAGE';
+Usage: hps-jobs [--once] [--interval SECONDS] [--dir JOBS_DIR]
+Runs queued privileged jobs. Without --once it polls new/ until stopped.
+Kinds: pairing-window-open [seconds], pairing-window-close, pairing-list,
+pairing-approve <reqid> [--replace], storage-up|down|trim-check|status <mac>.
+Environment: HPS_JOBS_DIR, CTRL_EXEC_DISPATCHER, HPS_STORAGE_CMD.
+USAGE
+    return 2;
+}
+
+sub read_capped {
+    my ($file, $cap) = @_;
+    open(my $fh, '<:raw', $file) or return '';
+    my $text = '';
+    read($fh, $text, $cap + 1);
+    close $fh;
+    return $text;
+}
+
+# run_argv(\@argv, $timeout, $workdir, $id): fork/exec with stdout and stderr in
+# files (a daemonising child cannot hold the runner on a pipe). Returns
+# ($exit, $stdout, $stderr).
+sub run_argv {
+    my ($argv, $timeout, $dir, $id) = @_;
+    my ($outf, $errf) = ("$dir/.$id.out", "$dir/.$id.err");
+    my $pid = fork();
+    return (127, '', "fork failed: $!\n") unless defined $pid;
+    if (!$pid) {
+        open(STDIN,  '<', '/dev/null') or exit 126;
+        open(STDOUT, '>', $outf)       or exit 126;
+        open(STDERR, '>', $errf)       or exit 126;
+        { exec { $argv->[0] } @$argv; }
+        print STDERR "cannot run $argv->[0]: $!\n";
+        exit 127;
+    }
+    my $end = time + $timeout;
+    my ($status, $timed_out) = (undef, 0);
+    while (1) {
+        my $w = waitpid($pid, WNOHANG);
+        if ($w == $pid) { $status = $?; last }
+        if ($w < 0)     { $status = 255 << 8; last }
+        if (time >= $end) {
+            $timed_out = 1;
+            kill 'TERM', $pid;
+            sleep 2;
+            kill 'KILL', $pid if waitpid($pid, WNOHANG) == 0;
+            waitpid($pid, 0);
+            last;
+        }
+        sleep 0.1;
+    }
+    my $exit = $timed_out ? 124 : ($status & 127) ? 128 + ($status & 127) : $status >> 8;
+    my $out  = read_capped($outf, $HPS::Jobs::OUTPUT_CAP);
+    my $err  = read_capped($errf, $HPS::Jobs::OUTPUT_CAP);
+    $err .= "timed out after ${timeout}s\n" if $timed_out;
+    unlink $outf, $errf;
+    return ($exit, $out, $err);
+}
+
+# dispatcher_supports_replace: the usage text lists approve --replace (0.14.3+).
+sub dispatcher_supports_replace {
+    my ($ced, $dir) = @_;
+    my (undef, $out, $err) = run_argv([ $ced, '--help' ], 20, $dir, 'probe');
+    return ("$out$err" =~ /--replace/) ? 1 : 0;
+}
+
+sub execute_job {
+    my ($jobs, $job, $env) = @_;
+    my @args = @{ $job->{args} };
+    if ($job->{kind} eq 'pairing-approve' && @args == 2 && !dispatcher_supports_replace($env->{dispatcher}, $jobs->sub_dir('run'))) {
+        log_line(info => "job $job->{id}: dispatcher has no approve --replace; approving without it");
+        pop @args;
+    }
+    my @argv = HPS::Jobs::command($job->{kind}, \@args, %$env);
+    return run_argv(\@argv, HPS::Jobs::timeout_for($job->{kind}), $jobs->sub_dir('run'), $job->{id});
+}
+
+sub process_one {
+    my ($jobs, $name, $env) = @_;
+    my ($job, $problem) = $jobs->claim($name);
+    unless ($job) {
+        log_line(error => "cannot take $name: $problem");
+        return;
+    }
+    if (defined $problem) {
+        log_line(error => "job $job->{id}: refused: $problem");
+        $jobs->finish($job, exit => 2, stdout => '', stderr => "refused: $problem\n");
+        return;
+    }
+    log_line(info => "job $job->{id}: start kind=$job->{kind} args=[" . join(' ', @{ $job->{args} }) . "] requested_by=" . ($job->{requested_by} // '?'));
+    my $t0 = time;
+    my ($exit, $out, $err) = eval { execute_job($jobs, $job, $env) };
+    ($exit, $out, $err) = (127, '', "runner error: $@") unless defined $exit;
+    my $dur = sprintf('%.1f', time - $t0);
+    my $dest = $jobs->finish($job, exit => $exit, stdout => $out, stderr => $err, duration => $dur);
+    log_line(info => "job $job->{id}: end kind=$job->{kind} exit=$exit duration=${dur}s result=$dest");
+    return;
+}
+
+# recover_stale: a job left in run/ by a dead runner is failed, never re-run.
+sub recover_stale {
+    my ($jobs) = @_;
+    for my $name ($jobs->stale_run) {
+        my ($fid) = $name =~ /-([0-9a-f]{8})\.json$/;
+        my $job = { id => $fid, kind => undef, file => $name };
+        my $text = read_capped($jobs->sub_dir('run') . "/$name", 4096);
+        $job->{kind} = $1 if defined $text && $text =~ /"kind"\s*:\s*"([a-z-]+)"/;
+        $jobs->finish($job, exit => 125, stdout => '', stderr => "stale: found in run/ at runner start; the runner stopped while this job was running, it was not re-run\n");
+        log_line(warn => "job $fid: stale run/ entry at startup moved to failed/");
+    }
+    return;
+}
+
+sub main {
+    my @argv = @_;
+    my ($once, $interval, $dir) = (0, 0.5);
+    GetOptionsFromArray(\@argv, 'once' => \$once, 'interval=f' => \$interval, 'dir=s' => \$dir) or return usage();
+    return usage() if @argv;
+    my %opt = defined $dir ? (dir => $dir) : ();
+    my $jobs = eval { HPS::Jobs->new(%opt) };
+    unless ($jobs) {
+        log_line(error => "cannot locate the job queue: $@");
+        return 1;
+    }
+    eval { $jobs->ensure_dirs; 1 } or do { log_line(error => $@); return 1 };
+    my $env = {
+        dispatcher => $ENV{CTRL_EXEC_DISPATCHER} // 'ctrl-exec-dispatcher',
+        storage    => $ENV{HPS_STORAGE_CMD} // "$RealBin/hps-storage",
+    };
+    log_line(info => 'started; queue ' . $jobs->dir);
+    recover_stale($jobs);
+    my $stop = 0;
+    $SIG{TERM} = $SIG{INT} = sub { $stop = 1 };
+    my $last_prune = 0;
+    while (!$stop) {
+        for my $name ($jobs->pending) {
+            last if $stop;
+            process_one($jobs, $name, $env);
+        }
+        last if $once;
+        if (time - $last_prune > 3600) {
+            my $n = $jobs->prune(7);
+            log_line(info => "pruned $n old result file(s)") if $n;
+            $last_prune = time;
+        }
+        sleep $interval;
+    }
+    log_line(info => 'stopped');
+    return 0;
+}
+
+exit main(@ARGV);

@@ -117,6 +117,16 @@ id. keysafe (`clusters/<cluster>/keysafe/`) is the exception: root-only
 (0700), the CGI never reads keys, and the permission pass skips any path named
 `keysafe`.
 
+## Privileged actions on the IPS
+
+The web user holds no dispatcher and no keysafe access. The CGI asks for a
+privileged action by writing a job file into `clusters/<cluster>/jobs/new/`;
+`bin/hps-jobs`, a root process under supervisor, runs it from a fixed table of
+eight kinds (pairing window, pending-request listing, pairing approval, storage
+up/down/trim-check/status), validating the arguments again. Anything that can
+write that queue (group `hps`) can request those actions, so group membership is
+trusted as the web user is. See `docs/adr/0006-ips-privilege-split.md`.
+
 ## Node scripts under the executor
 
 Node scripts run as root with capabilities through the ctrl-exec executor;

@@ -40,7 +40,10 @@
 #
 # Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
 # $HPS_BASE/hps-system; CTRL_EXEC_DISPATCHER names the dispatcher CLI;
-# CTRL_EXEC_CLI the API client used by --input (default ctrl-exec-cli).
+# CTRL_EXEC_CLI the API client used by --input (default: ctrl-exec-cli on PATH,
+# else where the ctrl-exec-api-plugins .deb installs it); CTRL_EXEC_API_SOCKET
+# the API's unix socket (default /run/ctrl-exec-api/api.sock, the IPS value;
+# not set when CTRL_EXEC_API_URL is).
 #
 # Exit: dispatcher's status; 2 usage; 3 MAC or hostname not in the registry;
 # 4 no registered agent under any candidate name; 1 function library missing or
@@ -189,7 +192,18 @@ echo "hps-run: ${TARGET} -> agent ${AGENT}, script ${SCRIPT}" >&2
 ce_run_input() {
   local agent="$1" script="$2"
   shift 2
-  local cmd=("${CTRL_EXEC_CLI:-ctrl-exec-cli}" run "$agent" --script "$script" --input -)
+  local cli="${CTRL_EXEC_CLI:-}"
+  if [[ -z "$cli" ]]; then
+    if command -v ctrl-exec-cli > /dev/null 2>&1; then
+      cli=ctrl-exec-cli
+    else
+      cli=/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli
+    fi
+  fi
+  if [[ -z "${CTRL_EXEC_API_URL:-}" ]]; then
+    export CTRL_EXEC_API_SOCKET="${CTRL_EXEC_API_SOCKET:-/run/ctrl-exec-api/api.sock}"
+  fi
+  local cmd=("$cli" run "$agent" --script "$script" --input -)
   if [[ $JSON -eq 1 ]]; then
     cmd+=(--json)
   fi

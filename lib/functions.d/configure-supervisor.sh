@@ -151,7 +151,8 @@ EOF
 #===============================================================================
 # supervisor_configure_core_services
 # ----------------------------------
-# Generate supervisord.conf with dnsmasq, lighttpd, rsyslog, chronyd and OpenSVC.
+# Generate supervisord.conf with dnsmasq, lighttpd, rsyslog, chronyd, hps-jobs,
+# ctrl-exec-api and OpenSVC.
 #
 # Usage:
 #   supervisor_configure_core_services
@@ -294,6 +295,40 @@ autostart=true
 autorestart=true
 stderr_logfile=syslog
 stdout_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- hps-jobs (root runner of the privileged-action queue, ADR 0006) ---
+  _supervisor_append_once "program:hps-jobs" "$(cat <<EOF
+[program:hps-jobs]
+command=${HPS_SYSTEM_BASE}/bin/hps-jobs
+autostart=true
+autorestart=true
+startsecs=2
+stopsignal=TERM
+user=root
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- ctrl-exec-api (unix socket for ctrl-exec-cli: hps-run.sh --input) ---
+  # Starts as root only to create /run/ctrl-exec-api, then drops to the
+  # ctrl-exec service user with its groups (hps, so the socket can be group
+  # hps; see ce_api_bring_up). The socket path and group are in ctrl-exec.conf.
+  _supervisor_append_once "program:ctrl-exec-api" "$(cat <<EOF
+[program:ctrl-exec-api]
+command=/bin/bash -c 'install -d -o ctrl-exec -g ctrl-exec -m 0755 /run/ctrl-exec-api && exec setpriv --reuid=ctrl-exec --regid=ctrl-exec --init-groups ctrl-exec-api'
+autostart=true
+autorestart=true
+startsecs=2
+startretries=10
+stopsignal=TERM
+user=root
+stdout_logfile=syslog
+stderr_logfile=syslog
 environment=$(_get_hps_environment)
 EOF
 )" || return 3
