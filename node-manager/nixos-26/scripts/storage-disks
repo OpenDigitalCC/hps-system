@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# storage-disks - read-only picture of the disks and controllers a node sees.
+#
+# ctrl-exec allowlisted node script. Plain-text sections, every command logged
+# to stderr as "+ <command>" before it runs; a failing command is noted in its
+# section and the sequence carries on. Nothing is written anywhere.
+#
+# Usage: storage-disks          (no arguments)
+# Overrides for tests: HPS_SYS (default /sys), HPS_PROC (default /proc),
+# HPS_DEV (default /dev).
+# Exit: 0 done, 2 usage.
+
+set -euo pipefail
+
+: "${HPS_SYS:=/sys}"
+: "${HPS_PROC:=/proc}"
+: "${HPS_DEV:=/dev}"
+
+if [[ $# -ne 0 ]]; then
+  echo "Usage: storage-disks (takes no arguments)" >&2
+  exit 2
+fi
+
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# try <command...>: run, and note a non-zero exit in the output.
+try() {
+  local rc=0
+  run "$@" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    printf '(exit %s)\n' "$rc"
+  fi
+}
+
+section() {
+  printf '\n=== %s ===\n' "$*"
+}
+
+# attrs <glob...>: grep -H . over the files that exist.
+attrs() {
+  local files=()
+  local f
+  shopt -s nullglob
+  for f in "$@"; do
+    files+=("$f")
+  done
+  shopt -u nullglob
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "(none)"
+    return 0
+  fi
+  try grep -H . "${files[@]}"
+}
+
+section "lsblk"
+try lsblk -O -J
+section "/dev/disk/by-id"
+try ls -l "$HPS_DEV/disk/by-id"
+section "blkid"
+try blkid
+section "/proc/scsi/scsi"
+try cat "$HPS_PROC/scsi/scsi"
+section "scsi_host"
+attrs "$HPS_SYS"/class/scsi_host/host*/proc_name "$HPS_SYS"/class/scsi_host/host*/state
+section "scsi_device"
+attrs "$HPS_SYS"/class/scsi_device/*/device/vendor "$HPS_SYS"/class/scsi_device/*/device/model \
+  "$HPS_SYS"/class/scsi_device/*/device/state
+
+section "smartctl -i"
+if command -v smartctl > /dev/null 2>&1; then
+  shopt -s nullglob
+  for d in "$HPS_DEV"/sd?; do
+    try smartctl -i "$d"
+  done
+  shopt -u nullglob
+else
+  echo "(smartctl not installed)"
+fi

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# storage-pool-inspect - READ-ONLY inspection of an importable ZFS pool.
+#
+# ctrl-exec allowlisted node script (nix/modules/hps-ctrl-exec.nix). One action,
+# a straight sequence of standard commands, every command logged to stderr as
+# "+ <command>" before it runs, no library sourcing.
+#
+# Usage: storage-pool-inspect <pool> [--import-missing-log] [--already-imported]
+#
+#   <pool>                ^[a-z][a-z0-9_.-]*$
+#   --import-missing-log  add -m to the import: discard a missing log device
+#                         for this read-only import (nothing is written)
+#   --already-imported    the pool is imported already (by something else):
+#                         inspect it where it is and do NOT export it afterwards
+#
+# Without --already-imported a pool that is already imported is refused.
+# Otherwise: list importable pools, import the pool read-only without mounting
+# (zpool import -o readonly=on -N), print status, selected pool properties,
+# datasets, the last 50 snapshots with the total count and the locally set
+# properties, then ALWAYS export the pool again (EXIT trap, so an error part-way
+# still exports). Nothing here writes to a disk: no -f, no mount, no zfs set.
+#
+# Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+set -E
+
+POOL=""
+MISSING_LOG=0
+ALREADY=0
+IMPORTED_BY_US=0
+
+log() {
+  printf '[storage-pool-inspect] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-pool-inspect <pool> [--import-missing-log] [--already-imported]
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --import-missing-log) MISSING_LOG=1 ;;
+      --already-imported) ALREADY=1 ;;
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$POOL" ]]; then
+          log "only one pool name is accepted"
+          usage
+          exit 2
+        fi
+        POOL="$arg"
+        ;;
+    esac
+  done
+  if [[ -z "$POOL" ]]; then
+    usage
+    exit 2
+  fi
+  if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
+    log "refused: pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
+    exit 3
+  fi
+}
+
+pool_is_imported() {
+  zpool list -H "$POOL" > /dev/null 2>&1
+}
+
+check_import_state() {
+  if pool_is_imported; then
+    if [[ $ALREADY -eq 0 ]]; then
+      log "refused: pool '$POOL' is already imported (use --already-imported to inspect it in place)"
+      exit 3
+    fi
+  elif [[ $ALREADY -eq 1 ]]; then
+    log "refused: --already-imported given but pool '$POOL' is not imported"
+    exit 3
+  fi
+}
+
+# Runs on every exit once the pool is imported by this script.
+export_pool() {
+  if [[ $IMPORTED_BY_US -eq 1 ]]; then
+    IMPORTED_BY_US=0
+    log "exporting $POOL"
+    run zpool export "$POOL" || log "zpool export failed: $POOL may still be imported"
+  fi
+}
+
+import_readonly() {
+  local args=(import -o readonly=on -N)
+  if [[ $MISSING_LOG -eq 1 ]]; then
+    args+=(-m)
+  fi
+  args+=("$POOL")
+  # Set before the import: if it half-succeeds, the trap still tries the export.
+  IMPORTED_BY_US=1
+  if ! run zpool "${args[@]}"; then
+    IMPORTED_BY_US=0
+    log "read-only import of $POOL failed"
+    exit 1
+  fi
+}
+
+section() {
+  printf '\n=== %s ===\n' "$*"
+}
+
+show_properties() {
+  local props
+  props=$(run zpool get -H all "$POOL")
+  printf '%s\n' "$props" | awk -F'\t' '$2 ~ /^(size|allocated|free|ashift|autotrim|health|feature@encryption)$/'
+}
+
+show_snapshots() {
+  local snaps count
+  snaps=$(run zfs list -H -t snapshot -o name,used,creation -r "$POOL")
+  count=$(printf '%s' "$snaps" | grep -c . || true)
+  printf 'snapshots total: %s (showing the last 50)\n' "$count"
+  if [[ "$count" -gt 0 ]]; then
+    printf '%s\n' "$snaps" | tail -n 50
+  fi
+}
+
+main() {
+  parse_args "$@"
+  check_import_state
+  trap export_pool EXIT
+  trap 'exit 1' ERR
+
+  section "importable pools"
+  if [[ $ALREADY -eq 0 ]]; then
+    run zpool import || log "zpool import (listing) returned non-zero"
+    import_readonly
+  fi
+
+  section "zpool status"
+  run zpool status "$POOL"
+  section "pool properties (selected)"
+  show_properties
+  section "datasets"
+  run zfs list -o name,used,refer,avail,mountpoint,encryption,compression -r "$POOL"
+  section "snapshots"
+  show_snapshots
+  section "locally set properties"
+  run zfs get -H -o name,property,value -r -s local all "$POOL"
+}
+
+main "$@"

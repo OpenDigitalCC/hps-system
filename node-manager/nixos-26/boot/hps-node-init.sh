@@ -12,20 +12,17 @@
 #   3. fetch the node function bundle (cmd=get_remote_functions) to
 #      /run/hps/functions.sh and run n_init_run from it (compat path; the
 #      NixOS shims are CS-1.6 - a failure here is logged, not fatal)
-#   4. ctrl-exec-agent request-pairing --background, report the reqid to the
-#      IPS API (action ctrl_exec_pair_request, same shape as n_api_call), wait
-#      for the certificate, then start the agent.
+#   4. pairing: run hps-pair (boot/hps-pair.sh; installed as /etc/hps/hps-pair,
+#      shared with the audit image) with --no-hostname - step 2 has set it.
 #
-# Overrides for tests: HPS_CMDLINE (file), HPS_RUN_DIR, HPS_AGENT_ETC,
-# HPS_PAIR_TIMEOUT (seconds), HPS_PAIR_POLL (seconds).
+# Overrides for tests: HPS_CMDLINE (file), HPS_RUN_DIR, HPS_PAIR (the pairing
+# script); HPS_AGENT_ETC, HPS_PAIR_TIMEOUT and HPS_PAIR_POLL pass through to it.
 
 set -euo pipefail
 
 : "${HPS_CMDLINE:=/proc/cmdline}"
 : "${HPS_RUN_DIR:=/run/hps}"
-: "${HPS_AGENT_ETC:=/etc/ctrl-exec-agent}"
-: "${HPS_PAIR_TIMEOUT:=300}"
-: "${HPS_PAIR_POLL:=2}"
+: "${HPS_PAIR:=/etc/hps/hps-pair}"
 
 log() {
   printf '[hps-node-init] %s\n' "$*" >&2
@@ -119,62 +116,8 @@ run_bundle_init() {
   fi
 }
 
-# Same request shape as node-manager/base/n_api_client.sh n_api_call.
-report_pair_request() {
-  local ips="$1"
-  local mac="$2"
-  local reqid="$3"
-  local body
-  body=$(jq -n -c --arg mac "$mac" --arg reqid "$reqid" \
-    '{action: "ctrl_exec_pair_request", mac: $mac, reqid: $reqid}')
-  run curl -fsS -X POST -H 'Content-Type: application/json' -H "X-HPS-MAC: ${mac}" \
-    -d "$body" "http://${ips}/api/api.sh"
-}
-
-wait_for_cert() {
-  local waited=0
-  while [[ $waited -lt $HPS_PAIR_TIMEOUT ]]; do
-    if [[ -s "$HPS_AGENT_ETC/agent.crt" ]]; then
-      return 0
-    fi
-    sleep "$HPS_PAIR_POLL"
-    waited=$((waited + HPS_PAIR_POLL))
-  done
-  return 1
-}
-
 pair() {
-  local ips="$1"
-  local mac="$2"
-  local reqid
-  if [[ -s "$HPS_AGENT_ETC/agent.crt" ]]; then
-    log "certificate already present; skipping pairing"
-    return 0
-  fi
-  reqid=$(run ctrl-exec-agent request-pairing --background \
-    --timeout "$HPS_PAIR_TIMEOUT" --dispatcher "$ips") || {
-    log "request-pairing failed"
-    return 1
-  }
-  # The reqid is the first output line; keep its hex only.
-  reqid="${reqid%%$'\n'*}"
-  reqid=$(printf '%s' "$reqid" | tr -dc 'a-f0-9')
-  if [[ -z "$reqid" ]]; then
-    log "no reqid returned from request-pairing"
-    return 1
-  fi
-  log "pairing reqid $reqid"
-  if ! report_pair_request "$ips" "$mac" "$reqid" > /dev/null; then
-    log "the IPS declined the pairing request"
-    return 1
-  fi
-  if ! wait_for_cert; then
-    log "pairing timed out after ${HPS_PAIR_TIMEOUT}s"
-    return 1
-  fi
-  log "paired (certificate received)"
-  run systemctl restart ctrl-exec-agent.service || log "agent restart failed (continuing)"
-  return 0
+  run bash "$HPS_PAIR" --no-hostname
 }
 
 main() {
@@ -203,7 +146,7 @@ main() {
     log "bundle fetch failed (continuing to pairing)"
   fi
 
-  pair "$ips" "$mac"
+  pair
 }
 
 main "$@"

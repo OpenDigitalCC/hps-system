@@ -4,9 +4,15 @@
 # Broadcom/Intel NICs, firmware), then one oneshot that runs the read-only
 # audit script and POSTs its JSON to the IPS (cmd=node_audit). The system then
 # idles at a console banner. Nothing here writes to a disk.
+#
+# The image also runs the ctrl-exec agent (hps-ctrl-exec.nix) and, once the
+# audit report is posted, pairs it (hps-audit-pair -> hps-pair), so a HELD node
+# can be inspected with `ced run` (the IPS approver accepts STATE=HELD).
 { config, pkgs, ... }:
 
 {
+  imports = [ ./hps-ctrl-exec.nix ];
+
   hardware.enableAllHardware = true;
   hardware.enableRedistributableFirmware = true;
 
@@ -43,6 +49,27 @@
       StandardOutput = "journal+console";
       StandardError = "journal+console";
       ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-audit";
+    };
+  };
+
+  # After the audit POST: request ctrl-exec pairing. hps-pair exits 0 at once if
+  # the agent already has its certificate. Its failure (no pairing window open,
+  # IPS declined) leaves the audit and the banner untouched.
+  systemd.services.hps-audit-pair = {
+    description = "HPS audit image: ctrl-exec pairing, so a held node can be inspected";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "hps-audit.service" "network-online.target" "ctrl-exec-agent.service" ];
+    wants = [ "network-online.target" ];
+    path = with pkgs; [
+      bash coreutils curl jq iproute2 gawk gnugrep gnused hostname
+      config.systemd.package config.services.ctrl-exec-agent.package
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
+      ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-pair";
     };
   };
 }

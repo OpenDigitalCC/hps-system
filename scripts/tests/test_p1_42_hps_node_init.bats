@@ -3,7 +3,9 @@
 # node-manager/nixos-26/boot/hps-node-init.sh with shims for curl, ip,
 # hostnamectl, hostname, systemctl and ctrl-exec-agent. Proves: hostname from
 # the registry (fallback hps-<mac>), the bundle fetch + n_init_run compat
-# call, and the pairing request + report in the n_api_call shape.
+# call, and the pairing request + report in the n_api_call shape. Pairing
+# itself lives in boot/hps-pair.sh (shared with the audit image); hps-node-init
+# runs it with --no-hostname, so these tests drive both scripts together.
 
 setup() {
   TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p1-42.XXXXXX")"
@@ -17,6 +19,7 @@ setup() {
   export FAKE_BUNDLE="$TEST_DIR/bundle.sh"
   export BUNDLE_LOG="$TEST_DIR/bundle.log"
   INIT="${BATS_TEST_DIRNAME}/../../node-manager/nixos-26/boot/hps-node-init.sh"
+  export HPS_PAIR="${BATS_TEST_DIRNAME}/../../node-manager/nixos-26/boot/hps-pair.sh"
   export PATH="$TEST_DIR/bin:$PATH"
   mkdir -p "$TEST_DIR/bin" "$HPS_AGENT_ETC"
 
@@ -186,4 +189,11 @@ teardown() {
   [[ "$output" == *"+ hostnamectl set-hostname --transient node01"* ]]
   [[ "$output" == *"+ ctrl-exec-agent request-pairing"* ]]
   [[ "$output" == *"+ systemctl restart ctrl-exec-agent.service"* ]]
+}
+
+@test "hps-node-init hands pairing to hps-pair --no-hostname and does not repeat the hostname step" {
+  run bash "$INIT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"+ bash $HPS_PAIR --no-hostname"* ]]
+  [ "$(grep -c '^hostnamectl' "$SHIM_LOG")" -eq 1 ]
 }

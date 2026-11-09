@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# node-facts - the figures a node reports about itself: identity, time and its
+# synchronisation, kernel and command line, memory, store usage, addresses.
+#
+# ctrl-exec allowlisted node script. Every command is logged to stderr as
+# "+ <command>" before it runs; a failing command is noted and the sequence
+# carries on. Nothing is written anywhere.
+#
+# Usage: node-facts          (no arguments)
+# Exit: 0 done, 2 usage.
+
+set -euo pipefail
+
+if [[ $# -ne 0 ]]; then
+  echo "Usage: node-facts (takes no arguments)" >&2
+  exit 2
+fi
+
+: "${HPS_PROC:=/proc}"
+
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+try() {
+  local rc=0
+  run "$@" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    printf '(exit %s)\n' "$rc"
+  fi
+}
+
+section() {
+  printf '\n=== %s ===\n' "$*"
+}
+
+section "hostname"
+try hostname
+section "uptime"
+try uptime
+section "date -u"
+try date -u
+section "kernel"
+try uname -a
+section "kernel command line"
+try cat "$HPS_PROC/cmdline"
+section "time synchronisation"
+try timedatectl show
+section "memory (MiB)"
+try free -m
+section "store usage"
+try df -h /nix/store /nix/.ro-store
+section "addresses"
+try ip -br addr

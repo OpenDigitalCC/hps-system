@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# node-dmesg - the kernel log, optionally filtered, capped at 500 lines.
+#
+# ctrl-exec allowlisted node script. Every command is logged to stderr as
+# "+ <command>" before it runs.
+#
+# Usage: node-dmesg [pattern]
+#   pattern  extended regular expression handed to grep -E --; limited to
+#            letters, digits, space and  _ . : | ( ) [ ] * + ? ^ { } / , = @ % -
+#            (no shell metacharacters), at most 200 characters.
+#
+# Exit: 0 done (a pattern that matches nothing is still 0), 2 usage or a bad
+# pattern, 3 refused (pattern with a forbidden character), 1 dmesg failed.
+
+set -euo pipefail
+
+PATTERN=""
+CAP=500
+
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: node-dmesg [pattern]" >&2
+}
+
+parse_args() {
+  if [[ $# -gt 1 ]]; then
+    usage
+    exit 2
+  fi
+  PATTERN="${1:-}"
+  if [[ -z "$PATTERN" ]]; then
+    return 0
+  fi
+  if [[ ${#PATTERN} -gt 200 ]]; then
+    echo "refused: pattern longer than 200 characters" >&2
+    exit 3
+  fi
+  # "]" first and "-" last make both literal inside the bracket expression.
+  local allowed='^[]A-Za-z0-9 _.:|()[*+?^{}/,=@%-]+$'
+  if [[ ! "$PATTERN" =~ $allowed ]]; then
+    echo "refused: pattern contains a character outside the allowed set" >&2
+    exit 3
+  fi
+}
+
+main() {
+  local log out rc=0
+  parse_args "$@"
+  log=$(run dmesg -T) || exit 1
+  out="$log"
+  if [[ -n "$PATTERN" ]]; then
+    out=$(run grep -E -- "$PATTERN" <<< "$log") || rc=$?
+    if [[ $rc -ge 2 ]]; then
+      echo "invalid pattern for grep -E" >&2
+      exit 2
+    fi
+  fi
+  run tail -n "$CAP" <<< "$out"
+}
+
+main "$@"

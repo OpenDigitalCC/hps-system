@@ -271,7 +271,8 @@ _ce_close_window_after_approval() {
 #
 # Checks (all must pass):
 #   1. Host registry entry exists for MAC and STATE is enrolment-eligible
-#      (INSTALLING, CONFIGURING, or NETWORK_BOOT for a RAM-booted node).
+#      (INSTALLING, CONFIGURING, NETWORK_BOOT for a RAM-booted node, or HELD:
+#      a held node in the audit image pairs so it can be inspected).
 #   2. Pairing request exists and its hostname + IP match the registry
 #      allocation.
 #   3. The request arrives within CTRL_EXEC_PAIR_WINDOW seconds of the host's
@@ -304,7 +305,7 @@ ce_approve_pair_request() {
     return 1
   }
   case "$state" in
-    INSTALLING|CONFIGURING|NETWORK_BOOT) ;;
+    INSTALLING|CONFIGURING|NETWORK_BOOT|HELD) ;;
     *)
       hps_log error "ce_approve: ${mac} STATE '${state}' not enrolment-eligible"
       return 1

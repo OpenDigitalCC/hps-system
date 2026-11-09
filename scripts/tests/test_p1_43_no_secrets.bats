@@ -54,7 +54,11 @@ setup() {
   [ -f "$ROOT/node-manager/nixos-26/boot/hps-node-init.sh" ]
   grep -q 'node-manager/nixos-26/boot/hps-node-init.sh' "$ROOT/nix/modules/hps-node.nix"
   [ -f "$ROOT/node-manager/plugins/hps-node/hps-node.sh" ]
-  grep -q 'node-manager/plugins/hps-node/hps-node.sh' "$ROOT/nix/modules/hps-node.nix"
+  grep -q 'node-manager/plugins/hps-node/hps-node.sh' "$ROOT/nix/modules/hps-ctrl-exec.nix"
+  grep -q './hps-ctrl-exec.nix' "$ROOT/nix/modules/hps-node.nix"
+  grep -q './hps-ctrl-exec.nix' "$ROOT/nix/modules/hps-audit.nix"
+  [ -f "$ROOT/node-manager/nixos-26/boot/hps-pair.sh" ]
+  grep -q 'node-manager/nixos-26/boot/hps-pair.sh' "$ROOT/nix/modules/hps-ctrl-exec.nix"
   grep -q 'installer/netboot/netboot.nix' "$ROOT/nix/modules/hps-common.nix"
 }
 
@@ -68,4 +72,12 @@ setup() {
   grep -q 'hps.roles = "SCH,TCH"' "$ROOT/nix/modules/profiles/converged.nix"
   grep -q '"hps/roles"' "$ROOT/nix/modules/hps-common.nix"
   ! grep -q 'hps.roles =' "$ROOT/nix/modules/hps-node.nix"
+}
+
+@test "the node scripts directory is in the no-secrets scope and carries no credential" {
+  local d="$ROOT/node-manager/nixos-26/scripts"
+  [ -d "$d" ]
+  [ "$(find "$d" -type f | wc -l)" -ge 4 ]
+  run grep -rniE 'password|PRIVATE KEY|secret=|token=|BEGIN CERTIFICATE' "$d"
+  [ -z "$output" ]
 }

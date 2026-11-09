@@ -28,7 +28,8 @@ the following bind the request to a node HPS is actively provisioning:
 
 1. The reporting caller's MAC exists in the host registry and its STATE
    is enrolment-eligible (INSTALLING, CONFIGURING, or NETWORK_BOOT for a
-   RAM-booted NixOS node).
+   RAM-booted NixOS node, or HELD for a held node running the audit image,
+   which pairs so it can be inspected over ctrl-exec).
 2. The pairing request visible in `ced list-requests --json` matches the
    registry allocation: hostname equals the allocated hostname, source IP
    equals the node's DHCP lease address.
