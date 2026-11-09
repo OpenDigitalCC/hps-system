@@ -1,0 +1,8 @@
+#@METADATA os=nixos-26
+#===============================================================================
+# nixos.init
+# Base initialization sequence for NixOS nodes. Intentionally empty in CS-1.4:
+# CS-1.6 adds the NixOS compat shims and the init lines. An init file with no
+# action lines contributes nothing to HPS_INIT_SEQUENCE (node-libraries-init.sh
+# _build_init_sequence) and does not break n_init_run.
+#===============================================================================
