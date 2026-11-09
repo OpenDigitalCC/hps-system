@@ -25,10 +25,14 @@
 # request-pairing --background --timeout in ctrl-exec.init.
 : "${CTRL_EXEC_PAIR_WINDOW:=300}"
 # Persistent bases on the /srv bind-mount so the CA and pairing/agent state
-# survive container image rebuilds. The upstream defaults (/etc/ctrl-exec,
+# survive container image rebuilds. The upstream defaults (/etc/ctrl-exec-dispatcher,
 # /var/lib/ctrl-exec) are symlinked here at bring-up.
 : "${CTRL_EXEC_PERSIST_CONF:=/srv/ctrl-exec/conf}"
 : "${CTRL_EXEC_PERSIST_STATE:=/srv/ctrl-exec/state}"
+# Dispatcher paths since ctrl-exec 0.14: config and CA in /etc/ctrl-exec-dispatcher,
+# state in /var/lib/ctrl-exec. Overridable for tests.
+: "${CTRL_EXEC_DISPATCHER_CONF_DIR:=/etc/ctrl-exec-dispatcher}"
+: "${CTRL_EXEC_DISPATCHER_STATE_DIR:=/var/lib/ctrl-exec}"
 # Floating dispatcher tarball served from the IPS package repo (see the
 # node-side CTRL_EXEC_TARBALL note; the same latest-symlink convention).
 : "${CTRL_EXEC_DISPATCHER_TARBALL:=/srv/hps-resources/packages/ctrl-exec/ctrl-exec-latest.tar.gz}"
@@ -62,19 +66,19 @@ _ce_persist_dir() {
 # ce_dispatcher_bring_up
 # ----------------------
 # Idempotent IPS-side dispatcher bring-up, safe to call on every start:
-#   1. Back /etc/ctrl-exec and /var/lib/ctrl-exec with persistent /srv storage.
+#   1. Back /etc/ctrl-exec-dispatcher and /var/lib/ctrl-exec with persistent /srv storage.
 #   2. Install the dispatcher from the HPS-served tarball if absent.
 #   3. Initialise the CA and the dispatcher cert once.
 #
 # Returns: 0 on success (or already up), non-zero on failure.
 #===============================================================================
 ce_dispatcher_bring_up() {
-  _ce_persist_dir "$CTRL_EXEC_PERSIST_CONF" /etc/ctrl-exec || {
-    hps_log error "ce_dispatcher_bring_up: cannot persist /etc/ctrl-exec"
+  _ce_persist_dir "$CTRL_EXEC_PERSIST_CONF" "$CTRL_EXEC_DISPATCHER_CONF_DIR" || {
+    hps_log error "ce_dispatcher_bring_up: cannot persist $CTRL_EXEC_DISPATCHER_CONF_DIR"
     return 1
   }
-  _ce_persist_dir "$CTRL_EXEC_PERSIST_STATE" /var/lib/ctrl-exec || {
-    hps_log error "ce_dispatcher_bring_up: cannot persist /var/lib/ctrl-exec"
+  _ce_persist_dir "$CTRL_EXEC_PERSIST_STATE" "$CTRL_EXEC_DISPATCHER_STATE_DIR" || {
+    hps_log error "ce_dispatcher_bring_up: cannot persist $CTRL_EXEC_DISPATCHER_STATE_DIR"
     return 1
   }
 
@@ -107,7 +111,7 @@ ce_dispatcher_bring_up() {
   fi
 
   # Initialise the CA and dispatcher cert once (persisted under /srv).
-  if [[ ! -f /etc/ctrl-exec/ca.crt ]]; then
+  if [[ ! -f "$CTRL_EXEC_DISPATCHER_CONF_DIR/ca.crt" ]]; then
     hps_log info "ce_dispatcher_bring_up: initialising ctrl-exec CA"
     "$CTRL_EXEC_DISPATCHER" setup-ca || {
       hps_log error "ce_dispatcher_bring_up: setup-ca failed"

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 #===============================================================================
 # create_config_dnsmasq
 # ---------------------
@@ -37,13 +38,12 @@ create_config_dnsmasq() {
   local dns_hosts="${services_dir}/dns_hosts"
   local dhcp_addresses="${services_dir}/dhcp_addresses"
   
-  # Get TFTP directory
+  # Get TFTP directory (populated at pre-start from the system tftp/ tree)
   local tftp_dir
-  tftp_dir=$(hps_get_config system_base) || {
-    hps_log error "Cannot determine system base directory"
+  tftp_dir=$(hps_get_config tftp) || {
+    hps_log error "Cannot determine TFTP directory"
     return 1
   }
-  tftp_dir="${tftp_dir}/../hps-config/tftp"
   
   # Get cluster network configuration from registry
   local dhcp_ip
@@ -55,7 +55,10 @@ create_config_dnsmasq() {
   
   local dhcp_iface
   dhcp_iface=$(cluster_registry "$cluster" get network_dhcp_iface 2>/dev/null)
-  dhcp_iface=${dhcp_iface:-eth0}
+  if [[ -z "$dhcp_iface" ]]; then
+    hps_log error "No DHCP interface configured in cluster registry (network_dhcp_iface)"
+    return 1
+  fi
   
   local network_cidr
   network_cidr=$(cluster_registry "$cluster" get network_cidr 2>/dev/null)
@@ -82,8 +85,9 @@ create_config_dnsmasq() {
 # ---------------------------
 # Bind only to this IP (set dynamically from cluster config)
 listen-address=${dhcp_ip}
-# Interface to bind to within the container
+# Answer on this interface only (the IPS is host-networked)
 interface=${dhcp_iface}
+bind-interfaces
 
 # ---------------------------
 # DHCP configuration
@@ -124,10 +128,15 @@ tftp-root=${tftp_dir}
 # ---------------------------
 # PXE config
 # ---------------------------
-# PXE boot filename (BIOS)
-dhcp-boot=undionly.kpxe
 # Match iPXE clients by option 175
 dhcp-match=set:ipxe,175
+# Match UEFI x86-64 clients by architecture (7 = EFI BC, 9 = EFI x86-64)
+dhcp-match=set:efi64,option:client-arch,7
+dhcp-match=set:efi64,option:client-arch,9
+# UEFI clients not yet running iPXE: SNP-only iPXE
+dhcp-boot=tag:efi64,tag:!ipxe,snponly.efi
+# BIOS clients not yet running iPXE
+dhcp-boot=tag:!efi64,tag:!ipxe,undionly.kpxe
 # For iPXE clients
 dhcp-boot=tag:ipxe,http://${dhcp_ip}/cgi-bin/boot_manager.sh?cmd=init
 EOF

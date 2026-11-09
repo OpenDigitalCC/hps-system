@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 #===============================================================================
 # create_config_nginx
 # -------------------
@@ -41,6 +42,8 @@ create_config_nginx() {
   local http_static_dir="${system_base}/http"
   local distros_dir="${resources}/distros"
   local packages_dir="${resources}/packages"
+  local nixos_dir="${resources}/nixos"
+  local nix_cache_dir="${resources}/nix-cache"
   
   local nginx_conf="${cluster_services}/nginx.conf"
   
@@ -103,6 +106,25 @@ http {
     location /packages/ {
       autoindex on;
       alias ${packages_dir}/;
+    }
+
+    # NixOS netboot artefacts: <pin>/<profile>/{bzImage,initrd,boot.json}
+    location /nixos/ {
+      autoindex on;
+      alias ${nixos_dir}/;
+    }
+
+    # Nix binary cache (file:// layout). nix-cache-info must be text/plain.
+    location /nix-cache/ {
+      autoindex off;
+      alias ${nix_cache_dir}/;
+      client_max_body_size 0;
+      sendfile_max_chunk 1m;
+    }
+
+    location = /nix-cache/nix-cache-info {
+      alias ${nix_cache_dir}/nix-cache-info;
+      default_type text/plain;
     }
 
     location = /favicon.ico {

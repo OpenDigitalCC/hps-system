@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 
 # at initial containwer start, subsequent supervisor starts or restarts, prepare the services
 _supervisor_pre_start () {
@@ -10,6 +11,7 @@ _supervisor_pre_start () {
 # Get all services ready to start
 supervisor_prepare_services () {
 #  _set_ips_hostname
+  supervisor_populate_tftp
   create_config_nginx
   create_config_dnsmasq
   update_dns_dhcp_files
@@ -18,6 +20,40 @@ supervisor_prepare_services () {
 }
 
 
+# Copy the boot loaders shipped in ${HPS_SYSTEM_BASE}/tftp into the TFTP root
+# (hps_get_config tftp). Copies only files that are missing or differ.
+supervisor_populate_tftp () {
+  local src dest f name copied=0
+  src="$(hps_get_config system_base)/tftp"
+  dest="$(hps_get_config tftp)" || {
+    hps_log error "supervisor_populate_tftp: cannot determine TFTP root"
+    return 1
+  }
+  if [[ ! -d "$src" ]]; then
+    hps_log error "supervisor_populate_tftp: source directory missing: $src"
+    return 1
+  fi
+  mkdir -p "$dest" || {
+    hps_log error "supervisor_populate_tftp: cannot create $dest"
+    return 1
+  }
+  for f in "$src"/*; do
+    [[ -f "$f" ]] || continue
+    name="$(basename "$f")"
+    if [[ -f "$dest/$name" ]] && cmp -s "$f" "$dest/$name"; then
+      continue
+    fi
+    cp -f -- "$f" "$dest/$name" || {
+      hps_log error "supervisor_populate_tftp: copy failed: $name"
+      return 1
+    }
+    hps_log info "supervisor_populate_tftp: installed $name into $dest"
+    copied=$((copied + 1))
+  done
+  hps_log info "supervisor_populate_tftp: $copied file(s) copied to $dest"
+  return 0
+}
+
 # Functions to run straight after supervisor has started
 _supervisor_post_start () {
   osvc_configure_cluster
@@ -25,7 +61,8 @@ _supervisor_post_start () {
 
 
 supervisor_reload_core_config () {
-  local SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
+  local SUPERVISORD_CONF
+  SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
   hps_log info "Reread: $(supervisorctl -c "$SUPERVISORD_CONF" reread) $?"
   hps_log info "Update: $(supervisorctl -c "$SUPERVISORD_CONF" update) $?"
 }
@@ -47,7 +84,8 @@ supervisor_reload_core_config () {
 #  1 if SUPERVISORD_CONF is not set or file doesn't exist
 #  2 if supervisorctl command fails
 supervisor_reload_services() {
-  local SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
+  local SUPERVISORD_CONF
+  SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
   local service_name="${1:-}"
   
   # Validate SUPERVISORD_CONF is set
