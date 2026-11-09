@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+#
+# storage-zvol-create - create a sparse zvol under a pool's encrypted parent.
+#
+# ctrl-exec allowlisted node script. Usage: storage-zvol-create <dataset> <size>
+#
+#   <dataset>  <pool>/enc/<name>   (only directly below the encrypted parent)
+#   <size>     ^[0-9]+[KMGT]$      binary multiples, a multiple of 16K, > 0
+#
+# The parent <pool>/enc must have keystatus "available" (a locked parent is
+# never written to). Then:
+#   zfs create -V <size> -s -o volblocksize=16k -o compression=lz4 <dataset>
+# Idempotent: the dataset already there as a zvol of exactly that size exits 0
+# without a change; a different size, or a dataset that is not a zvol, is
+# refused. Nothing is ever resized or replaced.
+#
+# Exit: 0 created or already identical, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+DATASET=""
+SIZE=""
+POOL=""
+BYTES=0
+
+log() {
+  printf '[storage-zvol-create] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-zvol-create <pool>/enc/<name> <size>   (size like 1G, 512M, 2T)
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+    esac
+  done
+  if [[ $# -ne 2 ]]; then
+    usage
+    exit 2
+  fi
+  DATASET=$1
+  SIZE=$2
+  if [[ ! "$DATASET" =~ ^([a-z][a-z0-9_.-]*)/enc/[A-Za-z0-9_-]+$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/enc/<name>"
+  fi
+  POOL=${BASH_REMATCH[1]}
+  if [[ ! "$SIZE" =~ ^[0-9]+[KMGT]$ ]]; then
+    refuse "size '$SIZE' does not match ^[0-9]+[KMGT]\$"
+  fi
+}
+
+# size_bytes: BYTES from SIZE; refuses zero, overflow and a size that is not a
+# multiple of the 16K volblocksize.
+size_bytes() {
+  local num=${SIZE%?} unit=${SIZE: -1} sh
+  case "$unit" in
+    K) sh=10 ;;
+    M) sh=20 ;;
+    G) sh=30 ;;
+    T) sh=40 ;;
+  esac
+  num=$((10#$num))
+  if ((${#SIZE} > 12 || num == 0)); then
+    refuse "size '$SIZE' is zero or out of range"
+  fi
+  BYTES=$((num << sh))
+  if ((BYTES % 16384 != 0)); then
+    refuse "size '$SIZE' is not a multiple of the 16K volblocksize"
+  fi
+}
+
+require_unlocked_parent() {
+  local ks
+  ks=$(run zfs get -H -o value keystatus "$POOL/enc") || refuse "cannot read keystatus of $POOL/enc"
+  if [[ "$ks" != "available" ]]; then
+    refuse "$POOL/enc is not unlocked (keystatus: $ks)"
+  fi
+}
+
+# Exits 0 when the dataset is already a zvol of the requested size.
+check_existing() {
+  local type have
+  printf '+ zfs list -H -o type %s\n' "$DATASET" >&2
+  if ! type=$(zfs list -H -o type "$DATASET" 2> /dev/null); then
+    return 0
+  fi
+  if [[ "$type" != "volume" ]]; then
+    refuse "'$DATASET' exists and is a $type, not a zvol"
+  fi
+  have=$(run zfs get -H -p -o value volsize "$DATASET")
+  if [[ "$have" == "$BYTES" ]]; then
+    log "$DATASET already exists with size $SIZE; nothing to do"
+    exit 0
+  fi
+  refuse "'$DATASET' exists with a different size ($have bytes, wanted $BYTES)"
+}
+
+main() {
+  parse_args "$@"
+  size_bytes
+  require_unlocked_parent
+  check_existing
+  run zfs create -V "$SIZE" -s -o volblocksize=16k -o compression=lz4 "$DATASET"
+  log "created $DATASET ($SIZE, sparse)"
+}
+
+main "$@"

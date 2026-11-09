@@ -28,10 +28,12 @@ Usage:
       [--wipe] [--expires SECONDS] [--allow-any-pool-name] [--json]
   hps-approve pool-destroy <mac> --pool NAME [--expires SECONDS]
       [--allow-any-pool-name] [--json]
+  hps-approve zvol-destroy <mac> --dataset POOL/enc/NAME [--expires SECONDS]
+      [--allow-any-pool-name] [--json]
   hps-approve list <mac> [--json]
   hps-approve revoke <mac> <action> <pool> [--json]
-The pool is named after the active cluster; any other name needs
---allow-any-pool-name. Default expiry 3600 s.
+The pool (for zvol-destroy the pool part of the dataset) is named after the
+active cluster; any other name needs --allow-any-pool-name. Default expiry 3600 s.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
     return 2;
@@ -67,8 +69,9 @@ sub check_policy {
     die HPS::Keysafe::Error->new('usage', "Invalid MAC address: $mac") unless defined $m;
     die HPS::Keysafe::Error->new('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my $cluster = $reg->active_cluster;
-    refuse("pool '$pool' is not the active cluster name '$cluster' (use --allow-any-pool-name to override)")
-        unless $any || $pool eq $cluster;
+    (my $pool_part = $pool) =~ s{/.*}{};
+    refuse("pool '$pool_part' is not the active cluster name '$cluster' (use --allow-any-pool-name to override)")
+        unless $any || $pool_part eq $cluster;
     if ($cmd eq 'pool-create') {
         my $state = $reg->host_get($m, 'STATE');
         refuse("host $m is not assigned (STATE is '" . ($state // '') . "'); run hps-onboard assign first")
@@ -79,17 +82,18 @@ sub check_policy {
 
 sub main {
     my @argv = @_;
-    my ($json, $pool, @disks, $wipe, $expires, $any);
+    my ($json, $pool, $dataset, @disks, $wipe, $expires, $any);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
-        \@argv, 'json' => \$json, 'pool=s' => \$pool, 'disk=s' => \@disks, 'wipe' => \$wipe,
+        \@argv, 'json' => \$json, 'pool=s' => \$pool, 'dataset=s' => \$dataset, 'disk=s' => \@disks, 'wipe' => \$wipe,
         'expires=s' => \$expires, 'allow-any-pool-name' => \$any,
     ) or return usage();
-    return usage("unknown command '$cmd'") unless $cmd =~ /^(?:pool-create|pool-destroy|list|revoke)$/;
+    return usage("unknown command '$cmd'") unless $cmd =~ /^(?:pool-create|pool-destroy|zvol-destroy|list|revoke)$/;
     my $js  = JSON::PP->new->canonical->pretty->allow_nonref;
     my $reg = HPS::Registry->new;
     my $rc = eval {
         my $ap = HPS::Approval->new(registry => $reg);
+        return usage('--dataset is only for zvol-destroy') if defined $dataset && $cmd ne 'zvol-destroy';
         if ($cmd eq 'pool-create' || $cmd eq 'pool-destroy') {
             return usage("$cmd needs one MAC") unless @argv == 1;
             return usage('--pool is required') unless defined $pool && length $pool;
@@ -103,6 +107,18 @@ sub main {
             $f{expires} = $ap->now + $expires if defined $expires;
             my $doc = $ap->issue(\%f);
             my $a = decode_json($doc);
+            print $json ? $js->encode($a) : render_approval($a, 'Approved');
+        }
+        elsif ($cmd eq 'zvol-destroy') {
+            return usage('zvol-destroy needs one MAC') unless @argv == 1;
+            return usage('--dataset is required') unless defined $dataset && length $dataset;
+            return usage('zvol-destroy takes --dataset, not --pool, --disk or --wipe') if defined $pool || @disks || $wipe;
+            return usage('--expires must be a positive number of seconds')
+                if defined $expires && $expires !~ /^[1-9][0-9]{0,8}$/;
+            my $mac = check_policy($reg, $cmd, $argv[0], $dataset, $any);
+            my %f = (action => $cmd, mac => $mac, pool => $dataset, disks => [], wipe => 0);
+            $f{expires} = $ap->now + $expires if defined $expires;
+            my $a = decode_json($ap->issue(\%f));
             print $json ? $js->encode($a) : render_approval($a, 'Approved');
         }
         elsif ($cmd eq 'list') {

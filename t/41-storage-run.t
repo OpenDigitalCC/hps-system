@@ -181,7 +181,7 @@ sub registry_text {
     is($f->{reg}->host_get($mac, 'storage_trim_verdict'), 'out of storage-trim-check', 'verdict (last stdout line) recorded');
     $f->{ce}{calls} = [];
     $f->{st}->run('status');
-    is_deeply([ $f->{ce}->scripts ], [ 'storage-pool-import', 'iscsi-status' ], 'status calls');
+    is_deeply([ $f->{ce}->scripts ], [ 'storage-status' ], 'status calls');
     ok(!$f->{reg}->host_exists($mac, 'storage_state'), 'status changes no state');
 }
 

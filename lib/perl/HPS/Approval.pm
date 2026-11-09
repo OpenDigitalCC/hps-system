@@ -11,8 +11,11 @@ use JSON::PP;
 use HPS::Registry;
 use HPS::Keysafe;
 
-my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe);
+my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe zvol-destroy);
 my $POOL_RE = qr/^[A-Za-z][A-Za-z0-9_-]*$/;
+# zvol-destroy carries the dataset <pool>/enc/<name> in the 'pool' member; no '__'
+# so the registry key (which maps '/' to '__') stays unambiguous.
+my $DATASET_RE = qr{^(?!.*__)[A-Za-z][A-Za-z0-9_-]*/enc/[A-Za-z0-9_-]+$};
 my $DISK_RE = qr{^(?:/dev/disk/by-id/)?[A-Za-z0-9][A-Za-z0-9_.:+-]*$};
 my $USER_RE = qr/^[A-Za-z0-9_][A-Za-z0-9_.@-]*$/;
 
@@ -29,7 +32,12 @@ sub new ($class, %opt) {
 
 sub now ($self) { return $self->{now}->() }
 
-sub registry_key ($action, $pool) { return "approval_${action}_$pool" }
+sub _pool_ok ($action, $pool) {
+    return 0 unless defined $pool && !ref $pool;
+    return $pool =~ ($action eq 'zvol-destroy' ? $DATASET_RE : $POOL_RE) ? 1 : 0;
+}
+
+sub registry_key ($action, $pool) { (my $p = $pool) =~ s{/}{__}g; return "approval_${action}_$p" }
 
 #--- canonical form --------------------------------------------------------------
 
@@ -43,7 +51,8 @@ sub _normalise ($f) {
     my $mac = eval { HPS::Registry::normalise_mac($f->{mac}) };
     _fail('usage', 'mac is not a valid MAC address') unless defined $mac;
     my $pool = $f->{pool};
-    _fail('usage', "pool must match $POOL_RE") unless defined $pool && !ref $pool && $pool =~ $POOL_RE;
+    _fail('usage', $action eq 'zvol-destroy' ? "pool must be a dataset <pool>/enc/<name> (matching $DATASET_RE)" : "pool must match $POOL_RE")
+        unless _pool_ok($action, $pool);
     my $disks = $f->{disks} // [];
     _fail('usage', 'disks must be a list') unless ref $disks eq 'ARRAY';
     my %seen;
@@ -52,8 +61,10 @@ sub _normalise ($f) {
         _fail('usage', "disk listed twice: $d") if $seen{$d}++;
     }
     _fail('usage', "$action needs at least one disk") if $action eq 'pool-create' && !@$disks;
+    _fail('usage', 'zvol-destroy takes no disks') if $action eq 'zvol-destroy' && @$disks;
     my $wipe = $f->{wipe} // 0;
     _fail('usage', 'wipe must be 0 or 1') unless !ref $wipe && $wipe =~ /^[01]$/;
+    _fail('usage', 'zvol-destroy takes wipe 0') if $action eq 'zvol-destroy' && $wipe != 0;
     my $exp = $f->{expires};
     _fail('usage', 'expires must be an epoch') unless defined $exp && !ref $exp && $exp =~ /^[0-9]{1,12}$/;
     my $by = $f->{issued_by};
@@ -170,7 +181,7 @@ sub list ($self, $mac) {
 # Returns 1 if an approval was removed, 0 if there was none.
 sub revoke ($self, $mac, $action, $pool) {
     _fail('usage', 'unknown action') unless defined $action && $ACTIONS{$action};
-    _fail('usage', 'invalid pool') unless defined $pool && $pool =~ $POOL_RE;
+    _fail('usage', 'invalid pool') unless _pool_ok($action, $pool);
     my $reg = $self->{registry};
     my $key = registry_key($action, $pool);
     return 0 unless $reg->host_exists($mac) && $reg->host_exists($mac, $key);
@@ -189,11 +200,15 @@ HPS::Approval - HMAC-signed human approvals for storage actions
 =head1 CANONICAL FORM
 
 An approval is a JSON object with exactly these members: C<action>
-(C<pool-create>, C<pool-destroy> or C<dataset-wipe>), C<disks> (array of
+(C<pool-create>, C<pool-destroy>, C<dataset-wipe> or C<zvol-destroy>), C<disks> (array of
 by-id names or C</dev/disk/by-id/...> paths, sorted bytewise, unique),
 C<expires> (epoch seconds, JSON integer), C<issued_by> (string), C<mac> (12
 lower-case hex digits, no separators), C<pool> (string), C<wipe> (JSON
 integer 0 or 1).
+For C<zvol-destroy> the C<pool> member carries the dataset name
+C<E<lt>poolE<gt>/enc/E<lt>nameE<gt>> (no C<__>), C<disks> is empty and C<wipe> is 0; the form and
+the HMAC are otherwise identical. The registry key maps C</> to C<__>
+(C<approval_zvol-destroy_lab__enc__t0>).
 
 The signed bytes are that object encoded as UTF-8 JSON with the members
 sorted bytewise by name, no whitespace anywhere, strings escaped as

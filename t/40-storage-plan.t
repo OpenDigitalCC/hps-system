@@ -43,7 +43,7 @@ is_deeply([ map { $_->{n} } @$plan ], [ 1, 2, 3 ], 'steps are numbered');
 is_deeply([ scripts($st->plan('down')) ], ['iscsi-unexport'], 'down unexports each target only');
 is_deeply($st->plan('down')->[0]{args}, ['iqn.2026-11.example:t0'], 'unexport takes the target iqn');
 is_deeply([ scripts($st->plan('trim-check')) ], ['storage-trim-check'], 'trim-check');
-is_deeply([ scripts($st->plan('status')) ], [ 'storage-pool-import', 'iscsi-status' ], 'status = import (idempotent) + iscsi-status');
+is_deeply([ scripts($st->plan('status')) ], [ 'storage-status' ], 'status = the read-only storage-status (imports nothing)');
 like(err_of(sub { $st->plan('explode') })->message, qr/unknown operation/, 'unknown op');
 
 # --- bad exports are malformed, not passed to the node

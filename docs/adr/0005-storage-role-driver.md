@@ -33,8 +33,7 @@ input documents and changes nothing; all are idempotent):
   `up`.
 - `destroy <pool>`: needs a `pool-destroy` approval. One `storage-pool-destroy`
   call; the `storage_*` registry keys are cleared. The key is not deleted.
-- `trim-check`, `status` (`storage-pool-import` is idempotent and prints the
-  pool status, plus `iscsi-status`).
+- `trim-check`, `status` (read-only `storage-status`; see the amendment below).
 - `forget-key`: the only way a key leaves the keysafe. Refused while the
   registry still records a pool unless `--yes`.
 
@@ -122,3 +121,42 @@ scripts/hps-run.sh --input $NODE dataset-unlock $POOL/enc < $KEYDOCFILE
 scripts/hps-run.sh $NODE iscsi-export $POOL/enc/$ZVOL --iqn $TARGET_IQN --initiator $INITIATOR_IQN --portal $PORTAL
 scripts/hps-run.sh --input $NODE storage-pool-create $POOL --disk $BYID1 --disk $BYID2 --approval-file - < $DOCFILE
 ```
+
+## Amendment 2026-11-09 (CS-2.5): zvols and exports belong to the storage role
+
+A zvol is created, listed, exported, unexported and destroyed through the same
+driver; none of it is a separate role. A zvol is `<pool>/enc/<name>`, one level
+below the encrypted parent, so it is only ever created on an unlocked parent.
+
+- `zvol-create <dataset> <size>` (`storage-zvol-create`): sparse, `volblocksize=16k`,
+  `compression=lz4`; `keystatus` of `<pool>/enc` must be `available`. A zvol of the
+  same size already there is a no-op; anything else is refused.
+- `zvol-list` (`storage-zvol-list`) and `status` (`storage-status`: pool status,
+  keystatus, zvols, exports) are read-only. `status` no longer imports the pool.
+- `export <dataset> --iqn --initiator [--portal]` runs `iscsi-export` and records
+  `{zvol, iqn, initiator, portal}` in `storage_exports` once the node succeeded
+  (the portal defaults to the host's registry `IP`); `unexport <iqn>` runs
+  `iscsi-unexport` and removes the entry. One zvol is exported under one iqn.
+  `up` exports every recorded entry again after unlocking, which is how an
+  export survives a node reboot.
+- `zvol-destroy <dataset>` (`storage-zvol-destroy`, `input = raw`) is destructive
+  and follows the pool-destroy path: a human runs `hps-approve zvol-destroy <mac>
+  --dataset <dataset>`. The approval keeps the eight-member canonical form and the
+  same HMAC; action is `zvol-destroy`, `pool` carries the dataset name, `disks`
+  is empty and `wipe` is 0. The registry key maps `/` to `__`
+  (`approval_zvol-destroy_lab__enc__t0`). An approval for the pool never approves
+  a zvol and the other way round (the action and the `pool` member are both
+  checked, on the IPS and again on the node). The IPS refuses a zvol still in
+  `storage_exports`; the node refuses one a LIO backstore names or that is
+  mounted or has holders; it fails closed if LIO cannot be listed.
+
+`trim-check` records `storage_trim_verdict` from the script's stdout (the last
+line starting `TRIM `, else the last non-empty stdout line), never a `+ cmd`
+trace from stderr, and `storage_trim_ok` (0|1). A failing verdict (exit 3) is
+recorded too.
+
+The export is proved from the IPS with `scripts/hps-iscsi-test.sh <ip> <iqn>
+[--initiator-name <iqn>]` (open-iscsi is in the IPS image for this): discover,
+login, write and read back 4 MiB at 1 GiB - 8 MiB, logout. It is the only place
+HPS writes to a LUN, and the LUN is a test zvol. The host kernel must have
+`iscsi_tcp` loaded; a container cannot load it, and the script says so.

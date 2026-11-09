@@ -72,6 +72,15 @@ in
       iscsi-unexport.options.profile = "node";
       iscsi-status.source = mkScript "iscsi-status" (scriptsDir + "/iscsi-status");
       iscsi-status.options.profile = "node";
+      storage-zvol-create.source = mkScript "storage-zvol-create" (scriptsDir + "/storage-zvol-create");
+      storage-zvol-create.options.profile = "node";
+      storage-zvol-destroy.source = mkScript "storage-zvol-destroy" (scriptsDir + "/storage-zvol-destroy");
+      storage-zvol-destroy.options.profile = "node";
+      storage-zvol-destroy.options.input = "raw";
+      storage-zvol-list.source = mkScript "storage-zvol-list" (scriptsDir + "/storage-zvol-list");
+      storage-zvol-list.options.profile = "node";
+      storage-status.source = mkScript "storage-status" (scriptsDir + "/storage-status");
+      storage-status.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

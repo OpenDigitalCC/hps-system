@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+#
+# storage-zvol-destroy - destroy a zvol. HUMAN-APPROVED ONLY.
+#
+# ctrl-exec allowlisted node script, declared input=raw: one JSON document on
+# stdin (never an argument, never a file on the node):
+#
+#   {"approval": {"action":"zvol-destroy","disks":[],
+#                 "expires":<epoch>,"hmac":"<64 hex>","issued_by":"<who>",
+#                 "mac":"<12 hex>","pool":"<the dataset name>","wipe":0},
+#    "secret":   "<64 hex: the 32-byte approval key>"}
+#
+# The approval is the same eight-member document as for pool-destroy (same
+# canonical form, same HMAC); "pool" carries the dataset name
+# <pool>/enc/<name> and action is zvol-destroy.
+#
+# Usage: storage-zvol-destroy <pool>/enc/<name> --approval-file <path|-> [--secret-from-stdin]
+#
+# Checks the approval (HMAC, expiry, action == zvol-destroy, mac == this node's
+# hps.mac, pool == the dataset argument), then refuses when the dataset is not
+# a zvol, when it is exported (a LIO block backstore names it) or in use
+# (mounted, or holders/partitions on the device), prints "WILL DESTROY: ..."
+# and runs zfs destroy. A dataset that is not there exits 0 (nothing to do).
+# Snapshots or clones make zfs destroy fail; they are never destroyed here.
+#
+# Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+
+DATASET=""
+APPROVAL_FILE=""
+PAYLOAD=""
+HMAC_KEY=""
+
+log() {
+  printf '[storage-zvol-destroy] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-zvol-destroy <pool>/enc/<name> --approval-file <path|-> [--secret-from-stdin]
+Input (stdin for "-"): {"approval":{...,"hmac":"<hex>"},"secret":"<64 hex>"}
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  local arg
+  while [[ $# -gt 0 ]]; do
+    arg=$1
+    case "$arg" in
+      --approval-file)
+        [[ $# -ge 2 ]] || { log "--approval-file needs a value"; usage; exit 2; }
+        APPROVAL_FILE=$2
+        shift 2
+        ;;
+      --secret-from-stdin) shift ;;
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+      *)
+        if [[ -n "$DATASET" ]]; then
+          log "only one dataset is accepted"
+          usage
+          exit 2
+        fi
+        DATASET=$arg
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$DATASET" && -n "$APPROVAL_FILE" ]] || { usage; exit 2; }
+  if [[ ! "$DATASET" =~ ^[a-z][a-z0-9_.-]*/enc/[A-Za-z0-9_-]+$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/enc/<name>"
+  fi
+}
+
+read_payload() {
+  log "reading the approval document from ${APPROVAL_FILE/#-/stdin}"
+  if [[ "$APPROVAL_FILE" == "-" ]]; then
+    PAYLOAD=$(cat)
+  else
+    PAYLOAD=$(cat -- "$APPROVAL_FILE")
+  fi
+  if ! printf '%s' "$PAYLOAD" | jq -e 'type == "object"' > /dev/null 2>&1; then
+    refuse "the approval input is not a JSON object"
+  fi
+}
+
+payload_field() {
+  printf '%s' "$PAYLOAD" | jq -r "$1"
+}
+
+# hmac_sha256_hex <key-hex>: HMAC-SHA256 of stdin, as hex, computed from the
+# definition so the key never appears on a command line.
+hmac_sha256_hex() {
+  local key=$1 i b ipad="" opad="" inner msg
+  msg=$(cat)
+  for ((i = 0; i < 64; i++)); do
+    if ((i < 32)); then
+      b=$((16#${key:$((i * 2)):2}))
+    else
+      b=0
+    fi
+    ipad+=$(printf '%02x' $((b ^ 0x36)))
+    opad+=$(printf '%02x' $((b ^ 0x5c)))
+  done
+  inner=$({ printf '%s' "$ipad" | xxd -r -p; printf '%s' "$msg"; } | openssl dgst -sha256 -r | awk '{print $1}')
+  { printf '%s' "$opad" | xxd -r -p; printf '%s' "$inner" | xxd -r -p; } | openssl dgst -sha256 -r | awk '{print $1}'
+}
+
+this_mac() {
+  local word
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == hps.mac=* ]]; then
+      printf '%s\n' "${word#hps.mac=}" | tr -d ':' | tr 'A-F' 'a-f'
+      return 0
+    fi
+  done
+  return 1
+}
+
+verify_approval() {
+  local full canon want got now exp mac thismac
+  log "+ verifying the approval (HMAC-SHA256 over the canonical JSON; key not logged)"
+  if ! printf '%s' "$PAYLOAD" | jq -e '.approval | type == "object" and (keys == ["action","disks","expires","hmac","issued_by","mac","pool","wipe"])' > /dev/null 2>&1; then
+    refuse "approval must carry exactly: action, disks, expires, issued_by, mac, pool, wipe"
+  fi
+  HMAC_KEY=$(payload_field '.secret // ""')
+  if [[ ! "$HMAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    refuse "approval key must be 64 hex characters"
+  fi
+  full=$(printf '%s' "$PAYLOAD" | jq -S -c '.approval')
+  want=$(printf '%s' "$full" | grep -oE '"hmac":"[0-9a-f]{64}",' | sed -e 's/^"hmac":"//' -e 's/",$//') || want=""
+  canon=$(printf '%s' "$full" | sed -E 's/"hmac":"[0-9a-f]{64}",//')
+  got=$(printf '%s' "$canon" | hmac_sha256_hex "$HMAC_KEY")
+  # cmp over both strings: no short-circuit on the first differing character.
+  if [[ -z "$want" ]] || ! cmp -s <(printf '%s' "$want") <(printf '%s' "$got"); then
+    refuse "approval HMAC does not match"
+  fi
+  now=$(date +%s)
+  exp=$(payload_field '.approval.expires')
+  if [[ ! "$exp" =~ ^[0-9]+$ ]] || ((exp <= now)); then
+    refuse "approval has expired"
+  fi
+  if [[ "$(payload_field '.approval.action')" != "zvol-destroy" ]]; then
+    refuse "approval action is not zvol-destroy"
+  fi
+  mac=$(payload_field '.approval.mac' | tr -d ':' | tr 'A-F' 'a-f')
+  thismac=$(this_mac) || refuse "hps.mac is not on the kernel command line"
+  if [[ "$mac" != "$thismac" ]]; then
+    refuse "approval is for a different node"
+  fi
+  if [[ "$(payload_field '.approval.pool')" != "$DATASET" ]]; then
+    refuse "approval is for a different dataset"
+  fi
+  log "approval verified: issued_by $(payload_field '.approval.issued_by')"
+}
+
+# Exits 0 when there is nothing to destroy; refuses a dataset that is not a zvol.
+require_zvol() {
+  local type
+  printf '+ zfs list -H -o type %s\n' "$DATASET" >&2
+  if ! type=$(zfs list -H -o type "$DATASET" 2> /dev/null); then
+    log "$DATASET does not exist; nothing to do"
+    exit 0
+  fi
+  if [[ "$type" != "volume" ]]; then
+    refuse "'$DATASET' is a $type, not a zvol"
+  fi
+}
+
+# Refuses while a LIO block backstore points at the zvol (by device or by the
+# backstore name iscsi-export gives it). Fails closed if targetcli cannot say.
+refuse_if_exported() {
+  local ls name=${DATASET//\//_}
+  printf '+ targetcli ls /backstores/block\n' >&2
+  ls=$(targetcli ls /backstores/block 2> /dev/null) || {
+    log "cannot list the LIO backstores; not destroying what may be exported"
+    exit 1
+  }
+  if printf '%s\n' "$ls" | grep -qF "/dev/zvol/${DATASET} " || printf '%s\n' "$ls" | grep -qF "o- ${name} "; then
+    refuse "'$DATASET' is exported (a block backstore uses it); run iscsi-unexport first"
+  fi
+}
+
+# Refuses while the device is mounted or has holders/partitions.
+refuse_if_in_use() {
+  local rows first rest
+  printf '+ lsblk -n -r -o TYPE,MOUNTPOINTS /dev/zvol/%s\n' "$DATASET" >&2
+  rows=$(lsblk -n -r -o TYPE,MOUNTPOINTS "/dev/zvol/$DATASET" 2> /dev/null) || rows=""
+  first=${rows%%$'\n'*}
+  rest=""
+  if [[ "$rows" == *$'\n'* ]]; then
+    rest=${rows#*$'\n'}
+  fi
+  if [[ -n "$rest" ]]; then
+    refuse "'$DATASET' is in use (holders or partitions on the device)"
+  fi
+  if [[ "$first" == *" "* && -n "${first#* }" ]]; then
+    refuse "'$DATASET' is in use (mounted at ${first#* })"
+  fi
+}
+
+main() {
+  parse_args "$@"
+  read_payload
+  verify_approval
+  require_zvol
+  refuse_if_exported
+  refuse_if_in_use
+  log "WILL DESTROY: zvol $DATASET"
+  run zfs destroy "$DATASET"
+  log "zvol $DATASET destroyed"
+}
+
+main "$@"

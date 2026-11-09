@@ -12,6 +12,8 @@ use HPS::Keysafe;
 use HPS::Storage;
 
 # 0 ok, 1 failed, 2 usage, 3 refused (policy, approval, node refusal), 4 not found
+# operations that take arguments, and how many
+my %ZVOL_OPS = ('zvol-create' => 2, 'zvol-destroy' => 1, 'zvol-list' => 0, 'export' => 1, 'unexport' => 1);
 my %EXIT = (
     usage => 2, refused => 3, perms => 3, tampered => 3, expired => 3,
     malformed => 3, notfound => 4, failed => 1,
@@ -25,10 +27,18 @@ Usage:
   hps-storage <host> up|down|trim-check|status [--dry-run] [--json] [--wait SECONDS]
   hps-storage <host> create <pool> [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> destroy <pool> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-storage <host> zvol-create <pool>/enc/<name> <size> [--dry-run] [--json]
+  hps-storage <host> zvol-destroy <pool>/enc/<name> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-storage <host> zvol-list [--json]
+  hps-storage <host> export <pool>/enc/<name> --iqn <iqn> --initiator <iqn> [--portal <ip>] [--dry-run] [--json]
+  hps-storage <host> unexport <iqn> [--dry-run] [--json]
   hps-storage <host> forget-key [--yes] [--dry-run] [--json]
 <host> is a MAC (any format) or a registry HOSTNAME. The pool is named after
 the active cluster; any other name needs --allow-any-pool-name.
-create and destroy need an unexpired approval (hps-approve pool-create|pool-destroy).
+create and destroy need an unexpired approval (hps-approve pool-create|pool-destroy);
+zvol-destroy needs hps-approve zvol-destroy <mac> --dataset <dataset>. A size is
+like 1G (K, M, G, T). export records the target in the host's storage_exports
+(portal defaults to the host's registry IP); up exports every recorded target again.
 --dry-run prints the node calls and redacted inputs and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
@@ -69,23 +79,36 @@ sub render_run {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $any, $yes, $wait);
+    my ($json, $dry, $any, $yes, $wait, $iqn, $initiator, $portal);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'allow-any-pool-name' => \$any,
-        'yes' => \$yes, 'wait=i' => \$wait,
+        'yes' => \$yes, 'wait=i' => \$wait, 'iqn=s' => \$iqn, 'initiator=s' => \$initiator, 'portal=s' => \$portal,
     ) or return usage();
     my $host = shift @argv // return usage('host required');
     my $op   = shift @argv // return usage('operation required');
     my $js   = JSON::PP->new->canonical->pretty->allow_nonref;
     my $needs_pool = $op =~ /^(?:create|destroy)$/;
-    return usage("unknown operation '$op'") unless $needs_pool || $op eq 'forget-key' || grep { $_ eq $op } HPS::Storage::ops();
-    my $pool;
+    return usage("unknown operation '$op'") unless $needs_pool || $ZVOL_OPS{$op} || $op eq 'forget-key' || grep { $_ eq $op } HPS::Storage::ops();
+    my ($pool, %opt);
     if ($needs_pool) {
         return usage("$op needs a pool name") unless @argv == 1;
         $pool = shift @argv;
     }
+    elsif ($ZVOL_OPS{$op}) {
+        my $n = $ZVOL_OPS{$op};
+        return usage("$op needs $n argument" . ($n == 1 ? '' : 's')) unless @argv == $n;
+        if ($op eq 'unexport') { $opt{iqn} = shift @argv }
+        elsif ($n) { $opt{dataset} = shift @argv }
+        $opt{size} = shift @argv if $op eq 'zvol-create';
+    }
+    return usage('--iqn, --initiator and --portal are only for export') if $op ne 'export' && (defined $iqn || defined $initiator || defined $portal);
+    if ($op eq 'export') {
+        return usage('export needs --iqn and --initiator') unless defined $iqn && defined $initiator;
+        @opt{qw(iqn initiator)} = ($iqn, $initiator);
+        $opt{portal} = $portal if defined $portal;
+    }
     return usage("$op takes no further arguments") if @argv;
-    return usage('--allow-any-pool-name is only for create and destroy') if $any && !$needs_pool;
+    return usage('--allow-any-pool-name is only for create, destroy and zvol-destroy') if $any && !$needs_pool && $op ne 'zvol-destroy';
     return usage('--yes is only for forget-key') if $yes && $op ne 'forget-key';
     return usage('--wait must be 0 or more seconds') if defined $wait && $wait < 0;
 
@@ -98,7 +121,7 @@ sub main {
                 : ($r->{forgot} ? "Deleted the 'enc' key of host " . $st->mac . "\n" : "No key held for host " . $st->mac . "\n");
             return 0;
         }
-        my $plan = $st->plan($op);
+        my $plan = $st->plan($op, %opt);
         my $appr = $st->approval_info;
         if ($dry) {
             if ($json) {
@@ -112,7 +135,7 @@ sub main {
             return 0;
         }
         print render_approval($appr) if $appr && !$json;
-        my $r = $st->run($op);
+        my $r = $st->run($op, %opt);
         $r->{approval} = $appr if $appr;
         print $json ? $js->encode($r) : render_run($r);
         return 0;

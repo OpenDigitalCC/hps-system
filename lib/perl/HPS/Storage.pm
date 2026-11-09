@@ -26,11 +26,15 @@ my $POOL_RE = qr/^[a-z][a-z0-9_.-]*$/;
 my $ZVOL_RE = qr{^[A-Za-z0-9][A-Za-z0-9_.:/-]*$};
 my $IQN_RE  = qr/^iqn\.[A-Za-z0-9._:-]+$/;
 my $ADDR_RE = qr/^[0-9A-Fa-f:.]+$/;
+my $DS_RE   = qr{^([a-z][a-z0-9_.-]*)/enc/([A-Za-z0-9_-]+)$};    # <pool>/enc/<name>
+my $SIZE_RE = qr/^[1-9][0-9]*[KMGT]$/;
 my $KEY     = 'enc';    # the keysafe name of <pool>/enc's key
 
 my %OPS = (
     'up' => '_steps_up', 'down' => '_steps_down', 'create' => '_steps_create',
     'destroy' => '_steps_destroy', 'trim-check' => '_steps_trim', 'status' => '_steps_status',
+    'zvol-create' => '_steps_zvol_create', 'zvol-destroy' => '_steps_zvol_destroy',
+    'zvol-list' => '_steps_zvol_list', 'export' => '_steps_export', 'unexport' => '_steps_unexport',
 );
 
 sub _fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
@@ -121,11 +125,25 @@ sub _record ($self, $op, $ok, $script, $rc) {
 # The pool a host's storage role uses: --pool, else the pool HPS created there,
 # else the active cluster (the pool is named after the cluster).
 sub pool ($self, %a) {
-    my $pool = $a{pool} // $self->{pool_arg} // $self->_get('storage_pool')
+    my $pool = $a{pool} // $self->{pool_arg} // $self->_dataset_pool($a{dataset}) // $self->_get('storage_pool')
         // eval { $self->{registry}->active_cluster };
     _fail('failed', 'No pool name and no active cluster') unless defined $pool;
     _fail('usage', "pool name '$pool' must match $POOL_RE") unless $pool =~ $POOL_RE;
     return $pool;
+}
+
+# The pool part of a <pool>/enc/<name> dataset, else undef.
+sub _dataset_pool ($self, $dataset) {
+    return undef unless defined $dataset && $dataset =~ $DS_RE;
+    return $1;
+}
+
+# The dataset argument of the zvol ops: <pool>/enc/<name>.
+sub _dataset ($self, %a) {
+    my $ds = $a{dataset};
+    _fail('usage', 'a dataset <pool>/enc/<name> is required') unless defined $ds && length $ds;
+    _fail('usage', "dataset '$ds' must be <pool>/enc/<name>") unless $ds =~ $DS_RE;
+    return $ds;
 }
 
 # The ruling: a pool is named after the active cluster.
@@ -164,7 +182,9 @@ sub exports ($self) {
 sub _approval ($self, $action, $pool) {
     my $mac = $self->{mac};
     my $json = $self->{approval}->get($mac, $action, $pool)
-        // _fail('refused', "no $action approval for pool '$pool' on host $mac (a human runs: hps-approve $action $mac --pool $pool ...)");
+        // _fail('refused', $action eq 'zvol-destroy'
+            ? "no $action approval for dataset '$pool' on host $mac (a human runs: hps-approve $action $mac --dataset $pool)"
+            : "no $action approval for pool '$pool' on host $mac (a human runs: hps-approve $action $mac --pool $pool ...)");
     my $secret = $self->{keysafe}->cluster_secret('approval');
     my $f = $self->{approval}->verify($json, $secret);   # dies: expired, tampered, malformed
     _fail('refused', "the approval is for another host") unless $f->{mac} eq $mac;
@@ -242,8 +262,62 @@ sub _steps_destroy ($self, %a) {
 
 sub _steps_trim ($self, %a) { return _step('storage-trim-check', [ $self->pool(%a) ]) }
 
-sub _steps_status ($self, %a) {
-    return ( _step('storage-pool-import', [ $self->pool(%a) ]), _step('iscsi-status', []) );
+# Read-only: pool status, keystatus, zvols, exports. Imports nothing.
+sub _steps_status ($self, %a) { return _step('storage-status', [ $self->pool(%a) ]) }
+
+#--- zvols and exports
+
+sub _steps_zvol_create ($self, %a) {
+    my $ds = $self->_dataset(%a);
+    my $size = $a{size};
+    _fail('usage', 'a size like 1G is required (K, M, G or T)') unless defined $size && $size =~ $SIZE_RE;
+    my $pool = $self->pool(%a, dataset => undef);    # the host's pool, not the dataset's
+    _fail('refused', "dataset '$ds' is not in pool '$pool'") unless $self->_dataset_pool($ds) eq $pool;
+    return _step('storage-zvol-create', [ $ds, $size ]);
+}
+
+sub _steps_zvol_destroy ($self, %a) {
+    my $ds = $self->_dataset(%a);
+    $self->_check_cluster_name($self->_dataset_pool($ds));
+    for my $e (grep { $_->{zvol} eq $ds } $self->exports) {
+        _fail('refused', "zvol '$ds' is exported (iqn $e->{iqn}); run unexport first");
+    }
+    my ($f, $secret_hex) = $self->_approval('zvol-destroy', $ds);
+    my %desc_approval = (%$f, hmac => '<redacted>');
+    return _step('storage-zvol-destroy', [ $ds, '--approval-file', '-' ],
+        input_desc => { approval => \%desc_approval, secret => '<redacted: 64 hex, cluster approval secret>' },
+        input => sub { _json({ approval => $f, secret => $secret_hex }) });
+}
+
+sub _steps_zvol_list ($self, %a) { return _step('storage-zvol-list', [ $self->pool(%a) ]) }
+
+# The export is recorded (an entry of the same iqn replaced) once the node did it.
+sub _steps_export ($self, %a) {
+    my $ds = $self->_dataset(%a);
+    my ($iqn, $init) = ($a{iqn}, $a{initiator});
+    _fail('usage', '--iqn must be an iqn name') unless defined $iqn && $iqn =~ $IQN_RE;
+    _fail('usage', '--initiator must be an iqn name') unless defined $init && $init =~ $IQN_RE;
+    my $portal = $a{portal} // $self->_get('IP');
+    _fail('usage', 'no --portal given and the host has no IP in the registry') unless defined $portal;
+    _fail('usage', '--portal must be a specific address') unless $portal =~ $ADDR_RE && $portal ne '0.0.0.0';
+    for my $e ($self->exports) {
+        _fail('refused', "iqn $iqn already exports $e->{zvol}") if $e->{iqn} eq $iqn && $e->{zvol} ne $ds;
+        _fail('refused', "zvol $ds is already exported as $e->{iqn}") if $e->{zvol} eq $ds && $e->{iqn} ne $iqn;
+    }
+    return _step('iscsi-export', [ $ds, '--iqn', $iqn, '--initiator', $init, '--portal', $portal ],
+        after => sub {
+            my @keep = grep { $_->{iqn} ne $iqn } $self->exports;
+            $self->_set('storage_exports', [ @keep, { zvol => $ds, iqn => $iqn, initiator => $init, portal => $portal } ]);
+        });
+}
+
+sub _steps_unexport ($self, %a) {
+    my $iqn = $a{iqn};
+    _fail('usage', 'an iqn is required') unless defined $iqn && $iqn =~ $IQN_RE;
+    return _step('iscsi-unexport', [$iqn], after => sub {
+        my @keep = grep { $_->{iqn} ne $iqn } $self->exports;
+        if (@keep) { $self->_set('storage_exports', \@keep) } else { $self->_unset('storage_exports') }
+    });
 }
 
 # What the registry says after a successful op.
@@ -264,10 +338,22 @@ sub _post ($self, $op, $pool, $results) {
         }
     }
     elsif ($op eq 'trim-check') {
-        my @lines = grep { length } split /\n/, ($results->[-1]{stdout} // '');
-        $self->_set('storage_trim_at', $self->_stamp);
-        $self->_set('storage_trim_verdict', @lines ? $lines[-1] : '');
+        $self->_record_trim($results);
     }
+    return;
+}
+
+# The verdict is a STDOUT line of storage-trim-check ("TRIM OK" or "TRIM NOT
+# REACHING <disk>"), never a stderr trace line. A runner that hands back stdout
+# with stderr appended (ced run text mode) would put "+ cmd" lines last, so the
+# last line starting with "TRIM " wins; failing that, the last non-empty line.
+sub _record_trim ($self, $results) {
+    my @lines = grep { length } map { s/\s+\z//r } split /\n/, ($results->[-1]{stdout} // '');
+    my ($verdict) = reverse grep { /^TRIM / } @lines;
+    $verdict //= @lines ? $lines[-1] : '';
+    $self->_set('storage_trim_at', $self->_stamp);
+    $self->_set('storage_trim_verdict', $verdict);
+    $self->_set('storage_trim_ok', $verdict eq 'TRIM OK' ? 1 : 0);
     return;
 }
 
@@ -329,6 +415,7 @@ sub run ($self, $op, %a) {
             stdout => $r->{stdout} // '', stderr => $r->{stderr} // '' };
         if ($r->{rc} != 0) {
             $self->_record($op, 0, $st->{script}, $r->{rc});
+            $self->_record_trim(\@results) if $op eq 'trim-check';
             my $last = (grep { length } split /\n/, ($r->{stderr} // ''))[-1] // '';
             my $kind = $r->{rc} == 3 ? 'refused' : 'failed';
             _fail($kind, "$op: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
@@ -442,13 +529,19 @@ never exported. C<create>: needs an unexpired, valid C<pool-create> approval;
 one C<storage-pool-create> call carrying approval, secret and key, then C<up>.
 C<destroy>: needs a C<pool-destroy> approval; one C<storage-pool-destroy>
 call; clears the storage_* registry keys; the key stays in the keysafe.
-C<trim-check>, C<status> as named.
+C<trim-check>, C<status> as named (C<status> is the read-only
+C<storage-status>; it imports nothing). C<zvol-create DATASET SIZE>,
+C<zvol-destroy DATASET> (needs a C<zvol-destroy> approval whose C<pool> is the
+dataset; refused while the zvol is in C<storage_exports>), C<zvol-list>,
+C<export DATASET --iqn --initiator [--portal]> (portal defaults to the host's
+registry C<IP>; recorded in C<storage_exports> after the node did it) and
+C<unexport IQN> (removes the entry). A zvol is C<POOL/enc/NAME>.
 
 =head1 REGISTRY KEYS (per host)
 
 C<storage_state> (up|down), C<storage_up_at>, C<storage_down_at>,
 C<storage_pool>, C<storage_created_at>, C<storage_exports> (list of
-C<{zvol,iqn,initiator,portal}>), C<storage_trim_at>, C<storage_trim_verdict>,
+C<{zvol,iqn,initiator,portal}>), C<storage_trim_at>, C<storage_trim_verdict>, C<storage_trim_ok> (0|1),
 C<storage_last> (C<{op,ok,at,script,rc}>).
 
 =cut

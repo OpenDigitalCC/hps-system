@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# storage-status - READ-ONLY view of a node's storage role.
+#
+# ctrl-exec allowlisted node script. Usage: storage-status <pool>
+# Prints the pool status, the keystatus of <pool>/enc, the zvols of the pool
+# and the iSCSI exports (block backstores and targets). Changes nothing; in
+# particular it never imports a pool.
+#
+# Exit: 0 shown, 2 usage, 3 refused (bad name, pool not imported), 1 failed.
+
+set -euo pipefail
+
+POOL=""
+
+log() {
+  printf '[storage-status] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-status <pool>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+main() {
+  if [[ $# -ne 1 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  POOL=$1
+  if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
+    log "refused: pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
+    exit 3
+  fi
+  if ! zpool list -H -o name "$POOL" > /dev/null 2>&1; then
+    log "refused: pool '$POOL' is not imported"
+    exit 3
+  fi
+  printf '\n=== pool ===\n'
+  run zpool status "$POOL"
+  printf '\n=== keystatus ===\n'
+  run zfs get -H keystatus "$POOL/enc" || log "no $POOL/enc dataset"
+  printf '\n=== zvols ===\n'
+  run zfs list -t volume -r -o name,volsize,used,referenced "$POOL"
+  printf '\n=== exports ===\n'
+  run targetcli ls /backstores/block || log "targetcli could not list the backstores"
+  run targetcli ls /iscsi || log "targetcli could not list the targets"
+}
+
+main "$@"
