@@ -95,8 +95,8 @@ teardown() {
   run create_config_nginx
   [ "$status" -eq 0 ]
   conf="$TEST_DIR/services/nginx.conf"
-  grep -qF 'error_log syslog:server=unix:/dev/log,tag=nginx warn;' "$conf"
-  grep -qF 'access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx,severity=info combined;' "$conf"
+  grep -qF 'error_log syslog:server=unix:/dev/log,nohostname,tag=nginx warn;' "$conf"
+  grep -qF 'access_log syslog:server=unix:/dev/log,nohostname,facility=local7,tag=nginx,severity=info combined;' "$conf"
   run grep -E '^\s*(access|error)_log / ' "$conf"
   [ "$status" -eq 1 ]
   run grep -E '\.log' "$conf"

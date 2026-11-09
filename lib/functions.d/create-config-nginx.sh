@@ -75,8 +75,8 @@ http {
   sendfile      on;
   keepalive_timeout  65;
   # All logging through syslog (rsyslog files it under the IPS log tree)
-  access_log syslog:server=unix:/dev/log,facility=local7,tag=nginx,severity=info combined;
-  error_log syslog:server=unix:/dev/log,tag=nginx warn;
+  access_log syslog:server=unix:/dev/log,nohostname,facility=local7,tag=nginx,severity=info combined;
+  error_log syslog:server=unix:/dev/log,nohostname,tag=nginx warn;
 
   server {
     listen ${listen_ip}:80 default_server;
