@@ -5,7 +5,7 @@
 # The builder (nix/build.sh) writes, under ${resources}/nixos:
 #   <pin>/<profile>/{bzImage,initrd,boot.json}      and   latest  (the pin)
 # boot.json carries the kernel command line and init path; nothing about a
-# NixOS boot is hard-coded here. nginx serves the tree at /nixos/.
+# NixOS boot is hard-coded here. lighttpd serves the tree at /nixos/.
 #===============================================================================
 
 # nixos_resolve_pin [mac]

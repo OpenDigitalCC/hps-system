@@ -13,7 +13,7 @@ setup() {
   hps_log() { echo "$*" >> "$TEST_DIR/hps.log"; }
   supervisor_populate_tftp() { echo populate_tftp >> "$CALLS"; }
   os_seed_nixos() { echo os_seed >> "$CALLS"; }
-  create_config_nginx() { echo nginx >> "$CALLS"; }
+  create_config_lighttpd() { echo lighttpd >> "$CALLS"; }
   create_config_dnsmasq() { echo dnsmasq >> "$CALLS"; }
   update_dns_dhcp_files() { echo dns_dhcp >> "$CALLS"; }
   create_config_rsyslog() { echo rsyslog >> "$CALLS"; }
@@ -33,7 +33,7 @@ teardown() {
   [ "$status" -eq 0 ]
   grep -q 'warn.*OpenSVC not prepared' "$TEST_DIR/hps.log"
   [ "$(tail -1 "$CALLS")" = "osvc_prepare" ]
-  grep -qx nginx "$CALLS"
+  grep -qx lighttpd "$CALLS"
   grep -qx dnsmasq "$CALLS"
 }
 

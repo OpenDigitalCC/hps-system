@@ -102,7 +102,7 @@ teardown() {
   : > "$CALLS"
   supervisor_populate_tftp() { :; }
   os_seed_nixos() { :; }
-  create_config_nginx() { :; }
+  create_config_lighttpd() { :; }
   create_config_dnsmasq() { :; }
   update_dns_dhcp_files() { :; }
   create_config_rsyslog() { :; }

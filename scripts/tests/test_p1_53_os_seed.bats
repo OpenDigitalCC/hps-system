@@ -42,7 +42,7 @@ teardown() {
 
 @test "supervisor_prepare_services seeds nixos" {
   supervisor_populate_tftp() { :; }
-  create_config_nginx() { :; }
+  create_config_lighttpd() { :; }
   create_config_dnsmasq() { :; }
   update_dns_dhcp_files() { :; }
   create_config_rsyslog() { :; }

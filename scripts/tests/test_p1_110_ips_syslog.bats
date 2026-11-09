@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # CS-1.11: all IPS service logging through syslog. Generated rsyslog, dnsmasq,
-# nginx and supervisord configs are inspected; nothing is started.
+# lighttpd and supervisord configs are inspected; nothing is started.
 
 setup() {
   TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p1-110.XXXXXX")"
@@ -40,7 +40,7 @@ setup() {
 
   source "$ROOT/lib/functions.d/create-config-rsyslog.sh"
   source "$ROOT/lib/functions.d/create-config-dnsmasq.sh"
-  source "$ROOT/lib/functions.d/create-config-nginx.sh"
+  source "$ROOT/lib/functions.d/create-config-lighttpd.sh"
   source "$ROOT/lib/functions.d/configure-supervisor.sh"
 }
 
@@ -63,9 +63,11 @@ teardown() {
   conf="$TEST_DIR/services/rsyslog.conf"
   grep -qF "string=\"$TEST_DIR/log/ips/%programname%/%\$YEAR%-%\$MONTH%-%\$DAY%.log\"" "$conf"
   rule="$(grep -E 'programname == \[' "$conf")"
-  for p in dnsmasq dnsmasq-dhcp dnsmasq-tftp nginx fcgiwrap chronyd supervisord hps; do
+  for p in dnsmasq dnsmasq-dhcp dnsmasq-tftp lighttpd chronyd supervisord hps; do
     [[ "$rule" == *"\"$p\""* ]]
   done
+  [[ "$rule" != *ngin[x]* ]]
+  [[ "$rule" != *fcgiwra[p]* ]]
   [[ "$rule" == *'$fromhost-ip == "127.0.0.1"'* ]]
 }
 
@@ -91,14 +93,12 @@ teardown() {
   [ "$status" -eq 1 ]
 }
 
-@test "nginx logs to syslog only: access and error, no file or stdio paths" {
-  run create_config_nginx
+@test "lighttpd logs to syslog only: access and error, no file paths" {
+  run create_config_lighttpd
   [ "$status" -eq 0 ]
-  conf="$TEST_DIR/services/nginx.conf"
-  grep -qF 'error_log syslog:server=unix:/dev/log,nohostname,tag=nginx warn;' "$conf"
-  grep -qF 'access_log syslog:server=unix:/dev/log,nohostname,facility=local7,tag=nginx,severity=info combined;' "$conf"
-  run grep -E '^\s*(access|error)_log / ' "$conf"
-  [ "$status" -eq 1 ]
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qE '^server.errorlog-use-syslog += "enable"$' "$conf"
+  grep -qE '^accesslog.use-syslog +=+ "enable"$' "$conf"
   run grep -E '\.log' "$conf"
   [ "$status" -eq 1 ]
 }
@@ -108,14 +108,20 @@ teardown() {
   run supervisor_configure_core_services
   [ "$status" -eq 0 ]
   conf="$TEST_DIR/supervisord.conf"
-  for p in dnsmasq nginx fcgiwrap rsyslogd chronyd opensvc; do
+  for p in dnsmasq lighttpd rsyslogd chronyd opensvc; do
     grep -q "^\[program:$p\]" "$conf"
   done
   run grep -cE '^std(out|err)_logfile=' "$conf"
   total="$output"
   run grep -cE '^std(out|err)_logfile=syslog$' "$conf"
   [ "$output" -eq "$total" ]
-  [ "$total" -ge 14 ]
+  [ "$total" -ge 12 ]
+  grep -qx "command=/usr/sbin/lighttpd -D -f $TEST_DIR/services/lighttpd.conf" "$conf"
+  run grep -E '^\[program:(ngin[x]|fcgiwra[p])\]' "$conf"
+  [ "$status" -eq 1 ]
+  awk '/^\[program:lighttpd\]/{f=1;next} /^\[/{f=0} f' "$conf" > "$TEST_DIR/lighttpd.block"
+  grep -qx 'stdout_logfile=syslog' "$TEST_DIR/lighttpd.block"
+  grep -qx 'stderr_logfile=syslog' "$TEST_DIR/lighttpd.block"
   grep -qx "command=/usr/sbin/dnsmasq -k --conf-file=$TEST_DIR/services/dnsmasq.conf" "$conf"
   run grep -F -e '--log-facility' "$conf"
   [ "$status" -eq 1 ]

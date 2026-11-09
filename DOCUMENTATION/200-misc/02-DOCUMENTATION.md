@@ -20,7 +20,7 @@
 - **Cluster management** – Creating, switching, and editing clusters.
 - **Host management** – Adding, removing, and updating host configurations.
 - **Distribution and repository management** – Managing ISOs, PXE trees, and package repositories.
-- **Service management** – Starting, stopping, and reloading dnsmasq, nginx, and supervisord.
+- **Service management** – Starting, stopping, and reloading dnsmasq, lighttpd, and supervisord.
 - **Backup and restore** – Protecting and recovering configuration and repository data.
 
 ## Functions reference

@@ -1,3 +1,3 @@
 ## Service management
 
-*Stub:* Controlling dnsmasq, nginx, supervisord, and other HPS services.
+*Stub:* Controlling dnsmasq, lighttpd, supervisord, and other HPS services.

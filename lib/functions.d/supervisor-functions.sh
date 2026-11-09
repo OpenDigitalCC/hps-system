@@ -13,7 +13,7 @@ supervisor_prepare_services () {
 #  _set_ips_hostname
   supervisor_populate_tftp
   os_seed_nixos || hps_log warn "supervisor_prepare_services: os_seed_nixos failed (continuing)"
-  create_config_nginx
+  create_config_lighttpd
   create_config_dnsmasq
   update_dns_dhcp_files
   create_config_rsyslog
@@ -85,7 +85,7 @@ supervisor_reload_core_config () {
 #  If service_name provided, signals only that specific service.
 #  Validates that supervisorctl command succeeds and logs results.
 #:parameters:
-#  service_name - (optional) Name of specific service to reload (e.g., nginx, dnsmasq)
+#  service_name - (optional) Name of specific service to reload (e.g., lighttpd, dnsmasq)
 #:returns:
 #  0 on success
 #  1 if SUPERVISORD_CONF is not set or file doesn't exist

@@ -22,7 +22,7 @@ get_active_cluster_filename
 # generate_ks 52540061c8c9 SCH
 
 
-#  create_config_nginx
+#  create_config_lighttpd
 #  create_config_dnsmasq
   create_config_opensvc
 

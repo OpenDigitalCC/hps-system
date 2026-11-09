@@ -151,7 +151,7 @@ EOF
 #===============================================================================
 # supervisor_configure_core_services
 # ----------------------------------
-# Generate supervisord.conf with dnsmasq, nginx, fcgiwrap, rsyslog, chronyd and OpenSVC.
+# Generate supervisord.conf with dnsmasq, lighttpd, rsyslog, chronyd and OpenSVC.
 #
 # Usage:
 #   supervisor_configure_core_services
@@ -162,7 +162,7 @@ EOF
 #   with the program name); rsyslog files it under ${HPS_LOG}/ips/<program>/.
 #   supervisord's own log stays a file: ${HPS_LOG}/supervisord.log.
 #   The function is idempotent: each program block is only added once.
-#   Service configs use cluster-specific paths for dnsmasq, nginx, rsyslog.
+#   Service configs use cluster-specific paths for dnsmasq, lighttpd, rsyslog.
 #
 # Returns:
 #   0 on success
@@ -250,26 +250,12 @@ environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
-  # --- nginx ---
-  local nginx_conf="${cluster_services_dir}/nginx.conf"
-  
-  _supervisor_append_once "program:nginx" "$(cat <<EOF
-[program:nginx]
-command=/usr/sbin/nginx -g 'daemon off;' -c ${nginx_conf}
-autostart=true
-autorestart=true
-stdout_logfile=syslog
-stderr_logfile=syslog
-environment=$(_get_hps_environment)
-EOF
-)" || return 3
+  # --- lighttpd (static files, ranges and CGI in one process) ---
+  local lighttpd_conf="${cluster_services_dir}/lighttpd.conf"
 
-  # --- fcgiwrap ---
-  
-  _supervisor_append_once "program:fcgiwrap" "$(cat <<EOF
-[program:fcgiwrap]
-command=bash -c 'rm -f /var/run/fcgiwrap.socket && exec /usr/bin/spawn-fcgi -n -s /var/run/fcgiwrap.socket -U www-data -G www-data -- /usr/sbin/fcgiwrap -c 4'
-umask=002
+  _supervisor_append_once "program:lighttpd" "$(cat <<EOF
+[program:lighttpd]
+command=/usr/sbin/lighttpd -D -f ${lighttpd_conf}
 autostart=true
 autorestart=true
 stdout_logfile=syslog

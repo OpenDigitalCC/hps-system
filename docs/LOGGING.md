@@ -11,8 +11,7 @@ receives local messages on `/dev/log` and node messages on port 514
 | dnsmasq (DNS) | `$HPS_LOG/ips/dnsmasq/<date>.log` |
 | dnsmasq DHCP | `$HPS_LOG/ips/dnsmasq-dhcp/<date>.log` |
 | dnsmasq TFTP | `$HPS_LOG/ips/dnsmasq-tftp/<date>.log` |
-| nginx (access and error) | `$HPS_LOG/ips/nginx/<date>.log` |
-| fcgiwrap | `$HPS_LOG/ips/fcgiwrap/<date>.log` |
+| lighttpd (access, error and CGI stderr) | `$HPS_LOG/ips/lighttpd/<date>.log` |
 | chronyd | `$HPS_LOG/ips/chronyd/<date>.log` |
 | supervisord program output | `$HPS_LOG/ips/supervisord/<date>.log` |
 | `hps_log` (CGI and API scripts) | `$HPS_LOG/ips/hps/<date>.log` |

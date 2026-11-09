@@ -127,7 +127,7 @@ self-tests
 - Make-docs 
   - skip functions that no longer exist
   - create section docs as compiled sections, sp only merge existing in to sectiondoc, plus header
-- Replace nginx with sozu
+- Replace lighttpd with sozu
 - create hps_config get/set/unset function
   - replace all HPS_variables with this
 - Set resources with hps_config vars

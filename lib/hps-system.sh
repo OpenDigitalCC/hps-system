@@ -99,7 +99,7 @@ hps_verify_dependencies() {
   check_binary "supervisorctl"
   
   # Additional binaries to be added during refactoring:
-  # - nginx, dnsmasq, rsyslogd, logger
+  # - lighttpd, dnsmasq, rsyslogd, logger
   # - ipxe (network boot)
   # - zfs, targetcli (storage)
   # - osvc, sozu (optional)

@@ -1,3 +1,3 @@
 ## Service verification
 
-*Stub:* Checking that dnsmasq, nginx, supervisord, and other components are running.
+*Stub:* Checking that dnsmasq, lighttpd, supervisord, and other components are running.

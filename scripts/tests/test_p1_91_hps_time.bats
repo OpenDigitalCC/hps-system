@@ -29,10 +29,10 @@ SH
 #!/bin/bash
 echo "curl $*" >> "$SHIM_LOG"
 if [[ "${FAKE_NO_DATE:-}" == 1 ]]; then
-  printf 'HTTP/1.1 404 Not Found\r\nServer: nginx\r\n\r\n'
+  printf 'HTTP/1.1 404 Not Found\r\nServer: httpd\r\n\r\n'
   exit 0
 fi
-printf 'HTTP/1.1 404 Not Found\r\nServer: nginx\r\nDate: Mon, 09 Nov 2026 12:19:00 GMT\r\nContent-Type: text/html\r\n\r\n'
+printf 'HTTP/1.1 404 Not Found\r\nServer: httpd\r\nDate: Mon, 09 Nov 2026 12:19:00 GMT\r\nContent-Type: text/html\r\n\r\n'
 exit "${FAKE_CURL_RC:-0}"
 SH
   cat > "$TEST_DIR/bin/ip" <<'SH'

@@ -141,7 +141,7 @@ create_new_cluster() {
 # Behaviour:
 #   - Verifies cluster is active
 #   - Generates supervisord.conf (core + services)
-#   - Prepares service configs (nginx, dnsmasq, rsyslog, opensvc)
+#   - Prepares service configs (lighttpd, dnsmasq, rsyslog, opensvc)
 #   - Regenerates DNS/DHCP files with service reload
 #   - Reloads supervisor configuration
 #
@@ -171,7 +171,7 @@ start_cluster_services() {
     return 1
   fi
   
-  # Prepare service configs (nginx, dnsmasq, rsyslog, opensvc)
+  # Prepare service configs (lighttpd, dnsmasq, rsyslog, opensvc)
   cli_info "Preparing cluster services..."
   if ! supervisor_prepare_services; then
     hps_log error "Failed to prepare services"

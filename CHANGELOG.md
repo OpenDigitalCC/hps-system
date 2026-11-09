@@ -82,6 +82,9 @@ Work committed on `claude/*` branches, not yet on `main`:
   `osvc_cmd` CGI join path and the OpenSVC task exec bus; changed: VM creation
   now runs over ctrl-exec with OpenSVC kept only as the health/placement gate.
   See `docs/adr/0001..0003`.
+- CS-2.0a — changed: lighttpd (mod_cgi) replaces nginx + spawn-fcgi +
+  fcgiwrap on the IPS; removed: the nginx config generator and the nginx and
+  fcgiwrap supervisor programs. See `docs/adr/0004-lighttpd.md`.
 - `claude/dedup-functions` — changed: consolidated the duplicated
   `host_config` / `cluster_config` compatibility aliases to a single
   definition.

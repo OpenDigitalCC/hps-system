@@ -60,7 +60,7 @@ teardown() {
 }
 
 @test "prepare_services runs the populate step" {
-  create_config_nginx() { :; }
+  create_config_lighttpd() { :; }
   create_config_dnsmasq() { :; }
   update_dns_dhcp_files() { :; }
   create_config_rsyslog() { :; }

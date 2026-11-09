@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# CS-1.2: dnsmasq and nginx config generators (lib/functions.d/create-config-*.sh).
+# CS-1.2: dnsmasq and lighttpd config generators (lib/functions.d/create-config-*.sh).
 # Registry, path lookup and range maths are stubbed; the generated files are
 # inspected.
 
@@ -34,7 +34,7 @@ setup() {
   export -f hps_log hps_get_config cluster_registry generate_dhcp_range_simple
 
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/create-config-dnsmasq.sh"
-  source "${BATS_TEST_DIRNAME}/../../lib/functions.d/create-config-nginx.sh"
+  source "${BATS_TEST_DIRNAME}/../../lib/functions.d/create-config-lighttpd.sh"
 }
 
 teardown() {
@@ -82,39 +82,79 @@ teardown() {
   grep -qx "tftp-root=$TEST_DIR/config/tftp" "$TEST_DIR/services/dnsmasq.conf"
 }
 
-@test "nginx serves /nixos/ and /nix-cache/ from the resources tree" {
-  run create_config_nginx
+@test "lighttpd binds to the IPS address only, never 0.0.0.0 (shared host)" {
+  run create_config_lighttpd
   [ "$status" -eq 0 ]
-  conf="$TEST_DIR/services/nginx.conf"
-  grep -q 'location /nixos/ {' "$conf"
-  grep -q "alias $TEST_DIR/res/nixos/;" "$conf"
-  grep -q 'location /nix-cache/ {' "$conf"
-  grep -q "alias $TEST_DIR/res/nix-cache/;" "$conf"
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qE '^server.bind +=+ "192.0.2.1"$' "$conf"
+  grep -qE '^server.port +=+ 80$' "$conf"
+  ! grep -q '0\.0\.0\.0' "$conf"
 }
 
-@test "nginx serves nix-cache-info as text/plain with no cache listing" {
-  run create_config_nginx
+@test "lighttpd serves the http tree as document root with the CGI modules" {
+  run create_config_lighttpd
   [ "$status" -eq 0 ]
-  conf="$TEST_DIR/services/nginx.conf"
-  grep -q 'location = /nix-cache/nix-cache-info {' "$conf"
-  grep -q 'default_type text/plain;' "$conf"
-  # autoindex off sits inside the /nix-cache/ block
-  run awk '/location \/nix-cache\/ \{/{f=1} f&&/autoindex off;/{print "ok"; exit}' "$conf"
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qF "server.document-root = \"$TEST_DIR/sys/http\"" "$conf"
+  for m in mod_alias mod_cgi mod_accesslog; do
+    grep -q "\"$m\"" "$conf"
+  done
+}
+
+@test "lighttpd aliases every resource tree to the resources dir" {
+  run create_config_lighttpd
+  [ "$status" -eq 0 ]
+  conf="$TEST_DIR/services/lighttpd.conf"
+  for t in distros packages nixos nix-cache; do
+    grep -qF "\"/$t/\"" "$conf"
+    grep -qF "\"$TEST_DIR/res/$t/\"" "$conf"
+  done
+}
+
+@test "lighttpd serves nix-cache-info as text/plain, lists nix-cache never" {
+  run create_config_lighttpd
+  [ "$status" -eq 0 ]
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qF '$HTTP["url"] =~ "^/nix-cache/nix-cache-info$" {' "$conf"
+  grep -qF 'mimetype.assign = ( "" => "text/plain" )' "$conf"
+  run awk '/=~ "\^\/nix-cache\/" \{/{f=1;next} f&&/dir-listing.activate = "disable"/{print "ok";exit} /^\}/{f=0}' "$conf"
   [ "$output" = "ok" ]
 }
 
-@test "nginx listens on the IPS address only, never 0.0.0.0:80 (shared host)" {
-  run create_config_nginx
+@test "lighttpd assigns .sh under /cgi-bin/ and /api/ to bash" {
+  run create_config_lighttpd
   [ "$status" -eq 0 ]
-  conf="$TEST_DIR/services/nginx.conf"
-  grep -q 'listen 192.0.2.1:80 default_server;' "$conf"
-  ! grep -qE 'listen (80|0\.0\.0\.0:80)' "$conf"
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qF '$HTTP["url"] =~ "^/(cgi-bin|api)/" {' "$conf"
+  grep -qF 'cgi.assign = ( ".sh" => "/bin/bash" )' "$conf"
 }
 
-@test "nginx generation fails clearly without network_dhcp_ip" {
+@test "lighttpd enables ranges, a 256 KiB-capable request size and an upload dir" {
+  run create_config_lighttpd
+  [ "$status" -eq 0 ]
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qE '^server.range-requests += "enable"$' "$conf"
+  size="$(sed -n 's/^server.max-request-size *= *\([0-9]*\)$/\1/p' "$conf")"
+  [ "$size" -ge 256 ]
+  grep -qF "server.upload-dirs   = ( \"$TEST_DIR/services/lighttpd-upload\" )" "$conf"
+  [ -d "$TEST_DIR/services/lighttpd-upload" ]
+  ! grep -q 'pid-file' "$conf"
+}
+
+@test "lighttpd sends access and error log to syslog only" {
+  run create_config_lighttpd
+  [ "$status" -eq 0 ]
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qE '^server.errorlog-use-syslog += "enable"$' "$conf"
+  grep -qE '^accesslog.use-syslog +=+ "enable"$' "$conf"
+  grep -qE '^accesslog.syslog-level +=+ [0-9]+$' "$conf"
+  ! grep -qE '(accesslog.filename|server.errorlog) *=' "$conf"
+}
+
+@test "lighttpd generation fails clearly without network_dhcp_ip" {
   cluster_registry() { return 1; }
   export -f cluster_registry
-  run create_config_nginx
+  run create_config_lighttpd
   [ "$status" -ne 0 ]
-  [ ! -e "$TEST_DIR/services/nginx.conf" ]
+  [ ! -e "$TEST_DIR/services/lighttpd.conf" ]
 }
