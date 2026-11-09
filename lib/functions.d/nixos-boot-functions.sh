@@ -115,6 +115,17 @@ nixos_boot_lines() {
   if [[ "$hostname" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$ ]]; then
     args="${args} hps.hostname=${hostname}"
   fi
+  # Cluster DNS domain: the node makes its hostname <name>.<domain> so that
+  # the ctrl-exec agent registers under a well-formed FQDN (hps-pair).
+  local domain cluster
+  cluster="$(hps_get_config active_cluster 2>/dev/null)" || cluster=""
+  domain=""
+  if [[ -n "$cluster" ]]; then
+    domain="$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null)" || domain=""
+  fi
+  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    args="${args} hps.domain=${domain}"
+  fi
   printf 'kernel %s/bzImage %s\n' "$base" "$args"
   printf 'initrd %s/initrd\n' "$base"
   printf 'boot\n'

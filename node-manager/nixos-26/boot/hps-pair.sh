@@ -10,8 +10,17 @@
 #      gateway; MAC of the default-route interface)
 #   3. unless --no-hostname: make the transient hostname the registry HOSTNAME
 #      (first label only, validated as an RFC 1123 label; fallback
-#      hps-<mac without colons>). The agent registers under it and the IPS
-#      approver binds the request to the registry hostname (first label).
+#      hps-<mac without colons>), followed by ".<hps.domain>" when the kernel
+#      command line carries hps.domain. The agent registers under it and the
+#      IPS approver binds the request to the registry hostname (first label).
+#      Why a dotted hostname: the agent registers as Net::Domain::hostfqdn().
+#      With a bare host and no domain that is "host.." (trailing dots). With
+#      a dotted hostname Net::Domain does not append a domain; it searches
+#      for a name that gethostbyname() resolves, trying the dotted name
+#      itself. nss-myhostname (in NixOS's default hosts: line) resolves the
+#      machine's own hostname, so the result is exactly <name>.<domain>.
+#      /etc/hosts is store-managed on NixOS and is left alone; a check after
+#      setting the name logs a warning if getent cannot resolve it.
 #   4. start ctrl-exec-agent request-pairing --background in the background
 #      with its stdout in a temp file (a pipe would stay open until approval:
 #      the agent forks and the child keeps stdout), poll the file for the
@@ -98,6 +107,30 @@ valid_hostname() {
   return 1
 }
 
+# fqdn_of <label>: <label>.<hps.domain> when the command line has a valid
+# domain, else the label alone.
+fqdn_of() {
+  local label="$1"
+  local domain
+  domain=$(cmdline_value hps.domain || true)
+  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    printf '%s.%s\n' "$label" "$domain"
+    return 0
+  fi
+  [[ -n "$domain" ]] && log "ignoring invalid hps.domain on the command line"
+  printf '%s\n' "$label"
+}
+
+# check_self_resolves <name>: the agent's hostfqdn() needs gethostbyname() to
+# resolve the node's own name; warn (never fail) when it does not.
+check_self_resolves() {
+  local name="$1"
+  [[ "$name" == *.* ]] || return 0
+  if ! getent hosts "$name" > /dev/null 2>&1; then
+    log "warning: $name does not resolve locally; the agent may register under another name"
+  fi
+}
+
 set_hostname() {
   local name="$1"
   if command -v hostnamectl > /dev/null 2>&1; then
@@ -117,7 +150,9 @@ ensure_hostname() {
     name="hps-${mac//:/}"
     log "registry returned no usable HOSTNAME; using $name"
   fi
+  name=$(fqdn_of "$name")
   set_hostname "$name"
+  check_self_resolves "$name"
 }
 
 # Same request shape as node-manager/base/n_api_client.sh n_api_call.

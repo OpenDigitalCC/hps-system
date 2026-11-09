@@ -8,7 +8,8 @@
 #   1. read hps.ips, hps.mac, hps.profile from the kernel command line
 #      (fallbacks: default gateway; MAC of the default-route interface)
 #   2. transient hostname from the registry (cmd=host_variable&name=HOSTNAME;
-#      fallback hps-<mac without colons>)
+#      fallback hps-<mac without colons>), as <name>.<hps.domain> when the
+#      command line carries hps.domain (see hps-pair for why)
 #   3. fetch the node function bundle (cmd=get_remote_functions) to
 #      /run/hps/functions.sh and run n_init_run from it (compat path; the
 #      NixOS shims are CS-1.6 - a failure here is logged, not fatal)
@@ -76,6 +77,19 @@ fetch_hostname() {
   run curl -fsS "http://${ips}/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"
 }
 
+# fqdn_of <name>: <first label>.<hps.domain> when the command line has a valid
+# domain, else the name unchanged.
+fqdn_of() {
+  local label="${1%%.*}"
+  local domain
+  domain=$(cmdline_value hps.domain || true)
+  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ && -n "$label" ]]; then
+    printf '%s.%s\n' "$label" "$domain"
+    return 0
+  fi
+  printf '%s\n' "$1"
+}
+
 set_hostname() {
   local name="$1"
   if command -v hostnamectl > /dev/null 2>&1; then
@@ -136,6 +150,7 @@ main() {
     name="hps-${mac//:/}"
     log "registry returned no HOSTNAME; using $name"
   fi
+  name=$(fqdn_of "$name")
   set_hostname "$name"
   mkdir -p "$HPS_RUN_DIR"
   printf '%s\n' "${profile}" > "$HPS_RUN_DIR/profile"

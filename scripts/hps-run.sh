@@ -9,11 +9,14 @@
 #     ced run <agent> <script> -- args...
 #
 # The agent name is what the node's ctrl-exec agent registered under at pairing:
-# its hostname. hps-pair (node-manager/nixos-26/boot) makes that the registry
-# HOSTNAME (fallback hps-<mac without delimiters>) before it requests pairing,
-# and ce_approve_pair_request refuses a request whose hostname differs from the
-# registry. So the name is the registry HOSTNAME, or the same fallback when the
-# registry has none.
+# its FQDN (Net::Domain::hostfqdn). hps-pair (node-manager/nixos-26/boot) makes
+# the node's hostname <registry HOSTNAME, fallback hps-<mac without delimiters>>
+# followed by .<network_dns_domain>, and ce_approve_pair_request compares first
+# labels with the registry. The registered names are read from the dispatcher
+# (list-agents) and the first of these that exists is used:
+#     <name>.<network_dns_domain>   (only when the cluster has a domain)
+#     <name>
+#     <name>..                      (ctrl-exec 0.14.x, node without a domain)
 #
 # Output and exit status are the dispatcher's, passed through unchanged (see
 # ce_run in lib/functions.d/ctrl-exec-functions.sh). The resolution line goes to
@@ -23,7 +26,8 @@
 # $HPS_BASE/hps-system; CTRL_EXEC_DISPATCHER names the dispatcher CLI.
 #
 # Exit: dispatcher's status; 2 usage; 3 MAC or hostname not in the registry;
-# 1 function library missing.
+# 4 no registered agent under any candidate name; 1 function library missing or
+# list-agents failed.
 #===============================================================================
 set -euo pipefail
 
@@ -79,22 +83,74 @@ resolve_mac() {
   printf '%s\n' "$mac"
 }
 
-# agent_name <mac>: the registry HOSTNAME, else hps-<mac>.
-agent_name() {
+# base_name <mac>: the registry HOSTNAME (first label), else hps-<mac>.
+base_name() {
   local mac="$1"
   local name
   name=$(host_registry "$mac" get HOSTNAME 2> /dev/null) || name=""
+  name="${name%%.*}"
   if [[ -z "$name" ]]; then
     name="hps-${mac//:/}"
   fi
   printf '%s\n' "$name"
 }
 
+# cluster_domain: the cluster's network_dns_domain, empty when unset.
+cluster_domain() {
+  local cluster domain
+  cluster=$(hps_get_config active_cluster 2> /dev/null) || cluster=""
+  [[ -n "$cluster" ]] || return 0
+  domain=$(cluster_registry "$cluster" get network_dns_domain 2> /dev/null) || domain=""
+  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    printf '%s\n' "$domain"
+  fi
+}
+
+# registered_agents: first column of `list-agents` (the HOSTNAME column).
+registered_agents() {
+  "$CTRL_EXEC_DISPATCHER" list-agents | awk 'NR > 2 && $1 != "" { print $1 }'
+}
+
+# candidates <base> <domain>: names to try, in order: <base>.<domain> (when the
+# cluster has a domain; what a node with a DNS domain registers as), <base>,
+# <base>.. (ctrl-exec 0.14.x registers a node without a domain that way).
+candidates() {
+  local base="$1"
+  local domain="$2"
+  if [[ -n "$domain" ]]; then
+    printf '%s\n' "${base}.${domain}"
+  fi
+  printf '%s\n' "$base" "${base}.."
+}
+
+# pick_agent <candidates, one per line> <registered, one per line>: the first
+# candidate that is registered.
+pick_agent() {
+  local cand
+  while IFS= read -r cand; do
+    if grep -qxF -- "$cand" <<< "$2"; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done <<< "$1"
+  return 1
+}
+
 MAC=$(resolve_mac "$TARGET") || {
   echo "hps-run: no host in the registry matches: $TARGET" >&2
   exit 3
 }
-AGENT=$(agent_name "$MAC")
+BASE=$(base_name "$MAC")
+DOMAIN=$(cluster_domain)
+CANDS=$(candidates "$BASE" "$DOMAIN")
+REGISTERED=$(registered_agents) || {
+  echo "hps-run: cannot list the dispatcher's agents ($CTRL_EXEC_DISPATCHER list-agents failed)" >&2
+  exit 1
+}
+AGENT=$(pick_agent "$CANDS" "$REGISTERED") || {
+  echo "hps-run: no registered agent for ${TARGET}; tried: $(tr '\n' ' ' <<< "$CANDS")" >&2
+  exit 4
+}
 echo "hps-run: ${TARGET} -> agent ${AGENT}, script ${SCRIPT}" >&2
 
 rc=0

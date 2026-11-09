@@ -40,11 +40,17 @@ EOF
   cat > "$CTRL_EXEC_DISPATCHER" <<'EOT'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CE_LOG"
+if [[ "$1" == list-agents ]]; then
+  printf 'HOSTNAME  IP  PORT\n----\n'
+  cat "$TEST_DIR/agents"
+  exit 0
+fi
 echo "ced-stdout"
 echo "ced-stderr" >&2
 exit "${FAKE_CED_RC:-0}"
 EOT
   chmod +x "$CTRL_EXEC_DISPATCHER"
+  printf 'held01  10.0.0.5  7443\nhps-112233445566  10.0.0.6  7443\n' > "$TEST_DIR/agents"
   mkdir -p "$TEST_DIR/hosts/aabbccddeeff" "$TEST_DIR/hosts/112233445566"
   echo -n held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
 }
@@ -71,26 +77,26 @@ teardown() {
     : > "$CE_LOG"
     run bash "$RUN" "$m" node-facts
     [ "$status" -eq 0 ]
-    [ "$(cat "$CE_LOG")" = "run held01 node-facts" ]
+    [ "$(tail -n 1 "$CE_LOG")" = "run held01 node-facts" ]
   done
 }
 
 @test "a hostname resolves through the registry to the same agent" {
   run bash "$RUN" held01 node-facts
   [ "$status" -eq 0 ]
-  [ "$(cat "$CE_LOG")" = "run held01 node-facts" ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run held01 node-facts" ]
 }
 
 @test "arguments follow -- exactly as given" {
   run bash "$RUN" held01 storage-pool-inspect tank --import-missing-log
   [ "$status" -eq 0 ]
-  [ "$(cat "$CE_LOG")" = "run held01 storage-pool-inspect -- tank --import-missing-log" ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run held01 storage-pool-inspect -- tank --import-missing-log" ]
 }
 
 @test "a MAC whose host has no HOSTNAME uses the hps-<mac> fallback agent name" {
   run bash "$RUN" 11:22:33:44:55:66 node-dmesg hpsa
   [ "$status" -eq 0 ]
-  [ "$(cat "$CE_LOG")" = "run hps-112233445566 node-dmesg -- hpsa" ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run hps-112233445566 node-dmesg -- hpsa" ]
 }
 
 @test "an unknown MAC or hostname is refused (3) and ced is not called" {
