@@ -5,7 +5,7 @@
 # Runs INSIDE the builder container (lab/builder/compose.yml). For each profile
 # (audit, node-base, node-converged by default):
 #   nix build <src>#<profile>          -> bzImage, initrd, boot.json (store)
-# then computes the pin  nixos-<ver>-<yyyymmdd>-<nixpkgs short rev>  and writes
+# then computes the pin  nixos-<ver>-<yyyymmdd>-<nixpkgs short rev>-<content7>  and writes
 #   <out>/<pin>/<profile>/{bzImage,initrd,boot.json}
 #   <out>/latest                       (the pin)
 #   nix copy --to file://<cache>       (each profile's system closure)
@@ -149,6 +149,17 @@ cleanup() {
   fi
 }
 
+# content_suffix: 7 hex chars of sha256 over the built systems' store paths, in
+# profile order. The date and the nixpkgs rev alone do not change when the HPS
+# modules do; two builds of different images on one day must not share a pin.
+content_suffix() {
+  local profile init
+  for profile in $PROFILES; do
+    init=$(jq -r '.init' "$WORK/result-$profile/boot.json")
+    printf '%s %s\n' "$profile" "$init"
+  done | sha256sum | cut -c1-7
+}
+
 main() {
   local rev version pin profile link
   parse_args "$@"
@@ -163,7 +174,7 @@ main() {
   done
 
   version=$(jq -r '.nixos_version' "$WORK/result-${PROFILES%% *}/boot.json")
-  pin="nixos-${version}-${BUILD_DATE}-${rev}"
+  pin="nixos-${version}-${BUILD_DATE}-${rev}-$(content_suffix)"
   log "pin: $pin"
 
   for profile in $PROFILES; do

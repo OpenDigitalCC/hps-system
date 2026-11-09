@@ -57,10 +57,21 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
+# The pin's content suffix, computed as build.sh does: sha256 over
+# "<profile> <init store path>" lines in profile order, first 7 hex chars.
+pin_for() {
+  local profiles="$1" p suffix
+  suffix=$(for p in $profiles; do
+    printf '%s /nix/store/aaaa-nixos-system-%s/init\n' "$p" "$p"
+  done | sha256sum | cut -c1-7)
+  printf 'nixos-26.05-%s-0123456-%s\n' "${2:-20261109}" "$suffix"
+}
+ALL_PROFILES="audit node-base node-converged"
+
 @test "publishes <pin>/<profile>/{bzImage,initrd,boot.json} for every profile and writes latest" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
-  pin="nixos-26.05-20261109-0123456"
+  pin="$(pin_for "$ALL_PROFILES")"
   [ "$(cat "$OUT/latest")" = "$pin" ]
   for p in audit node-base node-converged; do
     [ -f "$OUT/$pin/$p/bzImage" ]
@@ -74,29 +85,29 @@ teardown() {
 @test "boot.json is valid and carries every required key" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
-  f="$OUT/nixos-26.05-20261109-0123456/node-base/boot.json"
+  f="$OUT/$(pin_for "$ALL_PROFILES")/node-base/boot.json"
   jq -e '.kernel == "bzImage" and .initrd == "initrd"' "$f"
   jq -e '.init | test("^/nix/store/.*/init$")' "$f"
   jq -e '.cmdline | test("console=ttyS0")' "$f"
   jq -e '.nixpkgs_rev | length == 40' "$f"
   jq -e '.nixos_version == "26.05"' "$f"
   jq -e '.profile == "node-base"' "$f"
-  jq -e '.pin == "nixos-26.05-20261109-0123456"' "$f"
+  jq -e --arg pin "$(pin_for "$ALL_PROFILES")" '.pin == $pin' "$f"
   jq -e '.built_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")' "$f"
 }
 
-@test "pin is nixos-<version>-<yyyymmdd>-<7-char nixpkgs rev>" {
+@test "pin is nixos-<version>-<yyyymmdd>-<7-char nixpkgs rev>-<7-char content hash>" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   run cat "$OUT/latest"
-  [[ "$output" =~ ^nixos-26\.05-[0-9]{8}-[0-9a-f]{7}$ ]]
+  [[ "$output" =~ ^nixos-26\.05-[0-9]{8}-[0-9a-f]{7}-[0-9a-f]{7}$ ]]
 }
 
 @test "the pin date defaults to today (UTC) when --date is absent" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE"
   [ "$status" -eq 0 ]
   today="$(date -u +%Y%m%d)"
-  [ "$(cat "$OUT/latest")" = "nixos-26.05-${today}-0123456" ]
+  [ "$(cat "$OUT/latest")" = "$(pin_for "$ALL_PROFILES" "$today")" ]
 }
 
 @test "--no-cache builds with no substituters and --rebuild" {
@@ -150,13 +161,13 @@ teardown() {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   first="$(cd "$OUT" && find . -type f | sort)"
-  jq 'del(.built_at)' "$OUT/nixos-26.05-20261109-0123456/audit/boot.json" > "$TEST_DIR/first.json"
+  jq 'del(.built_at)' "$OUT/$(pin_for "$ALL_PROFILES")/audit/boot.json" > "$TEST_DIR/first.json"
 
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   second="$(cd "$OUT" && find . -type f | sort)"
   [ "$first" = "$second" ]
-  jq 'del(.built_at)' "$OUT/nixos-26.05-20261109-0123456/audit/boot.json" > "$TEST_DIR/second.json"
+  jq 'del(.built_at)' "$OUT/$(pin_for "$ALL_PROFILES")/audit/boot.json" > "$TEST_DIR/second.json"
   cmp "$TEST_DIR/first.json" "$TEST_DIR/second.json"
   # No scratch directory left behind.
   [ -z "$(find "$OUT" -maxdepth 1 -name '.build-*')" ]
@@ -165,8 +176,8 @@ teardown() {
 @test "--profiles restricts the build" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109 --profiles audit
   [ "$status" -eq 0 ]
-  [ -f "$OUT/nixos-26.05-20261109-0123456/audit/boot.json" ]
-  [ ! -e "$OUT/nixos-26.05-20261109-0123456/node-base" ]
+  [ -f "$OUT/$(pin_for audit)/audit/boot.json" ]
+  [ ! -e "$OUT/$(pin_for audit)/node-base" ]
 }
 
 @test "refuses to run without --out and --cache, with a bad date, or with a failing nix" {
