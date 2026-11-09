@@ -50,11 +50,22 @@
     # Empty: the kernel/DHCP name applies until hps-node-init sets the
     # transient hostname from the registry.
     networking.hostName = "";
-    networking.useDHCP = lib.mkDefault true;
-    # Only HPS names the node (hps-node-init, from the registry). Without this
-    # dhcpcd sets the hostname from the DHCP reply and logs "Could not set
-    # transient hostname: Access denied".
-    networking.dhcpcd.extraConfig = "nohook hostname";
+    # ---- networking: systemd-networkd, the boot NIC only ----------------------
+    # No dhcpcd. hps-net (below) writes the .network files at boot from hps.mac=
+    # on the kernel command line: DHCP on the NIC the node booted from, every
+    # other interface unmanaged (a second NIC on a switch that carries another
+    # LAN once took a lease and a foreign domain there). The lease gives no
+    # hostname and no search domain (UseHostname/UseDomains=false): only HPS
+    # names the node (hps-node-init / hps-pair, from the registry) and the
+    # agent therefore registers under the short name. DNS servers still come
+    # from the lease, written by systemd-resolved.
+    networking.useDHCP = false;
+    networking.useNetworkd = true;
+    systemd.network.enable = true;
+    networking.dhcpcd.enable = false;
+    services.resolved.enable = true;
+    # One configured NIC is enough for network-online.target.
+    systemd.network.wait-online.anyInterface = true;
 
     environment.systemPackages = with pkgs; [
       bash curl jq iproute2 gawk gnutar findutils util-linux
@@ -65,6 +76,28 @@
     environment.etc."hps/profile".text = hpsProfile + "\n";
     environment.etc."hps/roles" = lib.mkIf (config.hps.roles != "") {
       text = config.hps.roles + "\n";
+    };
+
+    environment.etc."hps/hps-net" = {
+      source = ../../node-manager/nixos-26/boot/hps-net.sh;
+      mode = "0755";
+    };
+
+    # Before systemd-networkd starts, so the runtime .network files exist when
+    # it reads them. MAC match: no interface name (and no udev settle) needed.
+    systemd.services.hps-net = {
+      description = "HPS: DHCP on the boot NIC only";
+      wantedBy = [ "systemd-networkd.service" ];
+      before = [ "systemd-networkd.service" ];
+      unitConfig.DefaultDependencies = false;
+      path = with pkgs; [ bash coreutils ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        StandardOutput = "journal+console";
+        StandardError = "journal+console";
+        ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-net";
+      };
     };
 
     # ---- logs leave the node from early boot ---------------------------------

@@ -31,8 +31,9 @@ the following bind the request to a node HPS is actively provisioning:
    RAM-booted NixOS node, or HELD for a held node running the audit image,
    which pairs so it can be inspected over ctrl-exec).
 2. The pairing request visible in `ced list-requests --json` matches the
-   registry allocation: hostname equals the allocated hostname, source IP
-   equals the node's DHCP lease address.
+   registry allocation: the hostname's first label equals the allocated
+   hostname (the agent registers under an FQDN whose domain is not
+   HPS's to decide), source IP equals the node's DHCP lease address.
 3. The request arrives within a short window of the node's last
    boot-script issue (default 300 seconds, `CTRL_EXEC_PAIR_WINDOW`,
    matching the agent's `request-pairing --background --timeout`). The

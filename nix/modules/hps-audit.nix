@@ -70,6 +70,9 @@
       StandardOutput = "journal+console";
       StandardError = "journal+console";
       ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-pair";
+      # hps-pair is idempotent: a transient failure retries.
+      Restart = "on-failure";
+      RestartSec = 30;
     };
   };
 }

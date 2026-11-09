@@ -59,6 +59,14 @@ long-term answer and belong upstream, not in HPS.
   namespace/capability sandbox; the per-node `scripts.conf` allowlist and
   the single `hps-node` entry point are the containment boundary until
   the executor phase.
+
+## Amendment 2026-11-09 (NixOS nodes)
+
+The NixOS node and audit images (`nix/modules/hps-ctrl-exec.nix`) enable the
+executor (`services.ctrl-exec-agent.executor.enable = true`): node operations
+need root and device access (`/dev/zfs`, `/proc/self/mounts`), which the
+unprivileged agent user under `PrivateDevices` cannot have. The statements
+above about running without the executor describe the Alpine/OpenRC nodes only.
 - Diskless TCH nodes rebuild their root on every boot, so agent install
   and pairing state must live in the apkovol/overlay or be re-established
   each boot — the enrolment flow (ADR 0002) must therefore be idempotent

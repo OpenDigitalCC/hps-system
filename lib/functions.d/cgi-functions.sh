@@ -9,10 +9,16 @@
 #   - ipxe_cgi_fail <msg>   if client is ipxe
 #   - cgi_fail <msg>        otherwise (cli, browser, unknown)
 #
+# Non-iPXE callers get an HTTP error status (default 500; pass a code and text
+# as $2 $3 for another, e.g. 404 "Not Found") so `curl -f` fails. iPXE callers
+# keep the iPXE-script failure body.
+#
 # Usage:
 #   cgi_auto_fail "Missing required parameter"
+#   cgi_auto_fail "Key not found" 404 "Not Found"
 cgi_auto_fail() {
-  local msg="${1:?Usage: cgi_auto_fail <message>}"
+  local msg="${1:?Usage: cgi_auto_fail <message> [code text]}"
+  local code="${2:-}" text="${3:-}"
   local client_type
   client_type="$(detect_client_type)"
 
@@ -21,7 +27,7 @@ cgi_auto_fail() {
       ipxe_cgi_fail "$msg"
       ;;
     cli|browser|script|unknown)
-      cgi_fail "$msg"
+      cgi_fail "$msg" "$code" "$text"
       ;;
     *)
       hps_log error "$msg"
@@ -52,8 +58,27 @@ cgi_success () {
 }
 
 
+# cgi_status <code> <text>
+# ------------------------
+# The one helper that prints a CGI "Status:" header line. Call it before the
+# Content-Type header (cgi_header_plain); cgi_fail does so itself.
+cgi_status() {
+  echo "Status: ${1:?Usage: cgi_status <code> <text>} ${2:?Usage: cgi_status <code> <text>}"
+}
+
+# cgi_fail <message> [code text]
+# ------------------------------
+# Plain-text failure with a non-2xx HTTP status (default 500 Internal Server
+# Error) so `curl -f` fails on the node side. host_audit_refuse prints its own
+# Status line before calling this, so no second line is added for that caller.
 cgi_fail () {
   local cfmsg="$1"
+  local code="${2:-500}" text="${3:-Internal Server Error}"
+  [[ -n "$code" ]] || code=500
+  [[ -n "$text" ]] || text="Internal Server Error"
+  if [[ "${FUNCNAME[1]:-}" != "host_audit_refuse" ]]; then
+    cgi_status "$code" "$text"
+  fi
   cgi_header_plain
   hps_log error "$cfmsg"
   echo -n "$cfmsg"

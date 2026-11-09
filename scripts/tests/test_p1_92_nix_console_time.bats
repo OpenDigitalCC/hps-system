@@ -28,6 +28,7 @@ setup() {
   grep -q 'node-manager/nixos-26/boot/hps-time.sh' "$COMMON"
 }
 
-@test "dhcpcd does not set the hostname" {
-  grep -q 'networking.dhcpcd.extraConfig = "nohook hostname"' "$COMMON"
+@test "the lease does not set the hostname (networkd, CS-1.12; dhcpcd is gone)" {
+  grep -q 'UseHostname=false' "$ROOT/node-manager/nixos-26/boot/hps-net.sh"
+  ! grep -q 'dhcpcd.extraConfig' "$COMMON"
 }

@@ -6,7 +6,8 @@
 # node-manager/nixos-26/scripts/ - one script per action, a straight sequence of
 # standard commands with argument checks, every command logged as it runs, no
 # runtime library sourcing - and is used through `ced run` from then on. Add a
-# script by adding its file there and one `scripts.<name>.source` line below.
+# script by adding its file there and one `scripts.<name>.source = mkScript ...`
+# line below (every source must be a derivation output, never a bare path).
 #
 # The agent module copies each source out of the store to
 # /opt/ctrl-exec-scripts/<name> (root-owned real file, as the agent's trust walk
@@ -18,6 +19,17 @@
 
 let
   scriptsDir = ../../node-manager/nixos-26/scripts;
+  # The agent module does `escapeShellArg (toString source)`, and toString drops
+  # the store-path context: a bare path would leave the flake source tree out of
+  # the system closure (and the netboot squashfs), so the install in the
+  # activation script fails ("cannot stat .../hps-node.sh") and
+  # /opt/ctrl-exec-scripts stays empty. writeTextFile makes each script its own
+  # derivation output; the source tree is read at evaluation time.
+  mkScript = name: file: pkgs.writeTextFile {
+    inherit name;
+    executable = true;
+    text = builtins.readFile file;
+  };
 in
 {
   imports = [ ctrl-exec.nixosModules.ctrl-exec-agent ];
@@ -28,14 +40,20 @@ in
     scriptPath = "/run/wrappers/bin:/run/current-system/sw/bin";
     # The plugin's shebang is #!/usr/bin/env bash (CS-1.6); NixOS has no /bin/bash.
     scripts = {
-      hps-node.source = ../../node-manager/plugins/hps-node/hps-node.sh;
-      storage-pool-inspect.source = scriptsDir + "/storage-pool-inspect";
-      storage-disks.source = scriptsDir + "/storage-disks";
-      node-dmesg.source = scriptsDir + "/node-dmesg";
-      node-facts.source = scriptsDir + "/node-facts";
+      hps-node.source = mkScript "hps-node" ../../node-manager/plugins/hps-node/hps-node.sh;
+      storage-pool-inspect.source = mkScript "storage-pool-inspect" (scriptsDir + "/storage-pool-inspect");
+      storage-disks.source = mkScript "storage-disks" (scriptsDir + "/storage-disks");
+      node-dmesg.source = mkScript "node-dmesg" (scriptsDir + "/node-dmesg");
+      node-facts.source = mkScript "node-facts" (scriptsDir + "/node-facts");
     };
-    # Mirrors node-manager/base/n_ctrl-exec.sh: executor off, so run_as is
-    # recorded, not enforced (ADR 0003).
+    # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
+    # executor_socket in agent.conf). Without it the agent runs scripts itself
+    # as User=ctrl-exec-agent under PrivateDevices with no capabilities, and
+    # node operations (zpool, mdadm, virsh, targetcli) fail for want of
+    # /dev/zfs and /proc/self/mounts. With it the profile below is enforced:
+    # run_as root. (ADR 0003 left the executor off for Alpine nodes; --async
+    # runs are refused while it is on.)
+    executor.enable = true;
     profiles.default = {
       run_as = "root";
       no_new_privileges = "yes";

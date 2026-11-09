@@ -121,7 +121,7 @@ if [[ "$cmd" == "host_variable" ]]; then
       cgi_success "$current_value"
       exit 0
     else
-      cgi_auto_fail "Key '$var_name' not found"
+      cgi_auto_fail "Key '$var_name' not found" 404 "Not Found"
       exit 1
     fi
   fi
@@ -174,7 +174,7 @@ if [[ "$cmd" == "cluster_variable" ]]; then
       cgi_success "$val"
       exit 0
     else
-      cgi_auto_fail "Cluster key '$name' not found"
+      cgi_auto_fail "Cluster key '$name' not found" 404 "Not Found"
       exit 1
     fi
   fi

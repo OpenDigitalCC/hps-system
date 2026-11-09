@@ -89,7 +89,7 @@ seed_request() {
 
   run ce_approve_pair_request "52:54:00:11:22:33" "abc123"
   [ "$status" -eq 0 ]
-  grep -q "approve abc123 --ip 10.99.1.50" "$CE_APPROVE_LOG"
+  grep -q "approve abc123$" "$CE_APPROVE_LOG"
   # Records the pairing timestamp.
   run host_registry "52:54:00:11:22:33" get ctrl_exec_paired
   [ "$status" -eq 0 ]

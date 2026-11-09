@@ -71,7 +71,7 @@ seed_request() {
   seed_request
   run ce_approve_pair_request "$MAC" abc123
   [ "$status" -eq 0 ]
-  grep -q "^approve abc123 --ip 10.0.0.50" "$CE_LOG"
+  grep -q "^approve abc123$" "$CE_LOG"
   grep -q "^pairing-mode stop" "$CE_LOG"
 }
 

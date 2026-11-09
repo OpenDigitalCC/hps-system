@@ -353,14 +353,19 @@ ce_approve_pair_request() {
     return 1
   fi
   # Hostname is advisory: only enforce when the registry has one recorded.
-  if [[ -n "$reg_hostname" && "$req_hostname" != "$reg_hostname" ]]; then
+  # Compare first labels: the agent registers under its FQDN, and a node with
+  # a second NIC on a foreign LAN can pick up a foreign domain (or .lab.hps),
+  # which must not decide the binding; the peer IP above is the strong check.
+  if [[ -n "$reg_hostname" && "${req_hostname%%.*}" != "${reg_hostname%%.*}" ]]; then
     hps_log error "ce_approve: ${mac} request hostname '${req_hostname}' != '${reg_hostname}'"
     return 1
   fi
 
-  # All bindings satisfied - approve, keyed to the request's own IP.
+  # All bindings satisfied - approve. The binding to the allocated IP was
+  # checked above; ctrl-exec-dispatcher 0.14.x approve takes only <reqid>
+  # (no --ip: it fails with "Too many arguments").
   hps_log info "ce_approve: approving ${reqid} for ${mac} (${reg_hostname:-$req_hostname} @ ${reg_ip})"
-  if ! "$CTRL_EXEC_DISPATCHER" approve "$reqid" --ip "$reg_ip"; then
+  if ! "$CTRL_EXEC_DISPATCHER" approve "$reqid"; then
     hps_log error "ce_approve: dispatcher approve failed for ${reqid}"
     return 1
   fi

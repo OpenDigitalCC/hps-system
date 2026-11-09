@@ -23,6 +23,10 @@
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      # hps-pair is idempotent: a transient failure (window not open yet, IPS
+      # busy) retries.
+      Restart = "on-failure";
+      RestartSec = 30;
       StandardOutput = "journal+console";
       StandardError = "journal+console";
       ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-node-init";

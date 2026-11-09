@@ -34,6 +34,7 @@ case "$*" in
     printf 'held01' ;;
   */api/api.sh*)
     [[ "${FAKE_API_RC:-0}" -ne 0 ]] && exit "$FAKE_API_RC"
+    : > "$TEST_DIR/approved"   # the IPS approves once it has the reqid
     echo '{"success":true}' ;;
 esac
 exit 0
@@ -45,9 +46,13 @@ case "$1" in
   request-pairing)
     [[ "${FAKE_PAIRING_RC:-0}" -ne 0 ]] && exit "$FAKE_PAIRING_RC"
     echo "${FAKE_REQID:-deadbeef}"
-    if [[ -z "${FAKE_NO_CERT:-}" ]]; then
-      ( sleep 1; echo cert > "$HPS_AGENT_ETC/agent.crt" ) &
-    fi ;;
+    # like the real agent: stay running until the IPS approves (CS-1.12)
+    n=0
+    while [[ ! -e "$TEST_DIR/approved" && $n -lt 80 ]]; do sleep 0.1; n=$((n+1)); done
+    [[ -e "$TEST_DIR/approved" ]] || exit 2
+    echo "agent approved" >> "$SHIM_LOG"
+    [[ -z "${FAKE_NO_CERT:-}" ]] && echo cert > "$HPS_AGENT_ETC/agent.crt"
+    exit 0 ;;
 esac
 SHIM
   for s in hostnamectl hostname systemctl; do
@@ -178,10 +183,10 @@ teardown() {
 
 @test "the shared module allowlists hps-node and the four node scripts, each file present" {
   for s in storage-pool-inspect storage-disks node-dmesg node-facts; do
-    grep -q "$s.source = scriptsDir + \"/$s\"" "$ROOT/nix/modules/hps-ctrl-exec.nix"
+    grep -q "$s.source = mkScript \"$s\" (scriptsDir + \"/$s\")" "$ROOT/nix/modules/hps-ctrl-exec.nix"
     [ -x "$ROOT/node-manager/nixos-26/scripts/$s" ]
   done
-  grep -q 'hps-node.source = ../../node-manager/plugins/hps-node/hps-node.sh' "$ROOT/nix/modules/hps-ctrl-exec.nix"
+  grep -q 'hps-node.source = mkScript "hps-node" ../../node-manager/plugins/hps-node/hps-node.sh' "$ROOT/nix/modules/hps-ctrl-exec.nix"
   grep -q 'scriptPath' "$ROOT/nix/modules/hps-ctrl-exec.nix"
   grep -q 'openFirewall = true' "$ROOT/nix/modules/hps-ctrl-exec.nix"
 }
