@@ -50,7 +50,7 @@ rm -f "$WORK/called"; run run-init >/dev/null
 ok "run-init dispatches n_init_run" "n_init_run" "$(cat "$WORK/called" 2>/dev/null)"
 
 rm -f "$WORK/called"; run set-status INSTALLED >/dev/null
-ok "set-status dispatches n_remote_host_variable" "n_remote_host_variable set STATE INSTALLED" "$(cat "$WORK/called" 2>/dev/null)"
+ok "set-status passes <name> <value> (STATE INSTALLED), not a leading verb" "n_remote_host_variable STATE INSTALLED" "$(cat "$WORK/called" 2>/dev/null)"
 
 rm -f "$WORK/called"; run opensvc-join tok123 >/dev/null
 ok "opensvc-join dispatches n_opensvc_join" "n_opensvc_join tok123" "$(cat "$WORK/called" 2>/dev/null)"

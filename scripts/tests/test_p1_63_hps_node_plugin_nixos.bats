@@ -44,7 +44,7 @@ teardown() {
 @test "set-status dispatches into the fallback bundle" {
   run "$PLUGIN" set-status RUNNING < /dev/null
   [ "$status" -eq 0 ]
-  [ "$(cat "$TEST_DIR/called")" = "n_remote_host_variable set STATE RUNNING" ]
+  [ "$(cat "$TEST_DIR/called")" = "n_remote_host_variable STATE RUNNING" ]
 }
 
 @test "neither bundle present fails with a message naming both paths" {

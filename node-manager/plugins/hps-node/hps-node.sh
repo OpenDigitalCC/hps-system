@@ -112,7 +112,7 @@ main() {
             [[ -n "$state" ]] || { echo "hps-node: set-status needs <state>" >&2; exit 2; }
             load_bundle || exit $?
             require_fn n_remote_host_variable || exit 1
-            n_remote_host_variable set STATE "$state"
+            n_remote_host_variable STATE "$state"
             ;;
         opensvc-join)
             local token="${1:-}"

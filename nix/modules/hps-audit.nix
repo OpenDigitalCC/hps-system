@@ -18,6 +18,11 @@
     "tg3" "bnx2" "bnx2x" "igb" "ixgbe" "i40e" "e1000e"
   ];
 
+  # Lab debugging aid: a root console on a held node. The audit image holds no
+  # secrets and has no role, so the console exposes nothing; node images never
+  # get this (no autologin anywhere outside this file).
+  services.getty.autologinUser = "root";
+
   environment.etc."hps/hps-audit" = {
     source = ../../node-manager/nixos-26/audit/hps-audit.sh;
     mode = "0755";

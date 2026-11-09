@@ -57,6 +57,43 @@
       text = config.hps.roles + "\n";
     };
 
+    # ---- logs leave the node from early boot ---------------------------------
+    # Crash evidence must survive a RAM-only node: journald hands every message
+    # to a local rsyslog, which forwards to the IPS (TCP 514; the IPS files it
+    # under <log dir>/<node ip>/YYYY-MM-DD.log). The forward target is not in
+    # the image: hps-log-target writes it at boot from hps.ips= on the kernel
+    # command line. Every image carries this, the audit image included.
+    services.journald.extraConfig = "ForwardToSyslog=yes";
+    services.rsyslogd = {
+      enable = true;
+      # no local file sink: the root is tmpfs and the journal already holds it
+      defaultConfig = "";
+      extraConfig = ''
+        include(file="/run/hps/rsyslog-target.conf" mode="optional")
+      '';
+    };
+
+    environment.etc."hps/hps-log-target" = {
+      source = ../../node-manager/nixos-26/boot/hps-log-target.sh;
+      mode = "0755";
+    };
+
+    # Not ordered after network-online: with hps.ips= on the command line no
+    # network is needed, and rsyslog (and the journal socket queue behind it)
+    # must not wait for DHCP. Without hps.ips the script retries the default
+    # gateway for up to 30 s itself.
+    systemd.services.hps-log-target = {
+      description = "HPS: point syslog forwarding at the IPS";
+      wantedBy = [ "multi-user.target" ];
+      before = [ "syslog.service" "rsyslog.service" ];
+      path = with pkgs; [ bash coreutils gawk iproute2 ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-log-target";
+      };
+    };
+
     services.openssh.enable = false;
     users.mutableUsers = false;
     users.allowNoPasswordLogin = true;

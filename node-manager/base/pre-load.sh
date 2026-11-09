@@ -297,8 +297,8 @@ n_ips_command() {
 #
 # Usage:
 #   n_remote_log "message text" [method]
-#   echo "message" | n_remote_log [method]
-#   command 2>&1 | n_remote_log [method]
+#   echo "message" | n_remote_log "" [method]
+#   command 2>&1 | n_remote_log          (no arguments: method auto)
 #
 # Parameters:
 #   $1 - Log message to send (optional if piped)
@@ -325,19 +325,16 @@ n_ips_command() {
 #===============================================================================
 n_remote_log() {
   local message=""
-  local function="${FUNCNAME[1]}"
+  local function="${FUNCNAME[1]:-unknown}"
   local method="${2:-auto}"
-  
-  # If we have arguments, use them
-  if [[ $# -gt 0 ]] && [[ ! -t 0 ]]; then
-    # Piped input with method argument
-    method="${1:-auto}"
-  elif [[ $# -gt 0 ]]; then
-    # Direct message
+
+  # An explicit message argument is always the message. Stdin is read only
+  # when no message argument is given (or it is empty) and stdin is not a tty.
+  # "cmd | n_remote_log '' syslog" selects the method for piped input.
+  if [[ $# -gt 0 && -n "$1" ]]; then
     message="$1"
-    method="${2:-auto}"
   fi
-  
+
   # Determine logging method
   local use_method=""
   case "$method" in
@@ -371,8 +368,10 @@ n_remote_log() {
       fi
     done <<< "$message"
   else
-    # Piped input - process line by line without buffering
-    while IFS= read -r line; do
+    # Piped input - process line by line without buffering. Nothing to read
+    # from a tty; a read timeout keeps an idle open pipe from hanging callers.
+    [[ -t 0 ]] && return 0
+    while IFS= read -r -t "${HPS_LOG_STDIN_TIMEOUT:-30}" line; do
       if [[ -n "$line" ]]; then
         if [[ "$use_method" == "syslog" ]]; then
           logger -t "hps[${function}]" "$line"
