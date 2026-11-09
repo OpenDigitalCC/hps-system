@@ -70,10 +70,9 @@ the exposure is confined to the pairing window.
   provisioning window with a spoofed IP and hostname. Accepted for the
   isolated provisioning segment; documented in docs/SECURITY.md when the
   threat model is written.
-- A keysafe single-use token (purpose `ctrl-exec-pair`) can be layered as
-  a second factor later without redesign — the reporting call gains a
-  token parameter and the approver gains a validation step. Deferred
-  until keysafe secure mode is implemented.
+- An HMAC single-use pairing ticket from `HPS::Keysafe`, if ever needed, can
+  be layered as a second factor later without redesign — the reporting call
+  gains a ticket parameter and the approver gains a validation step.
 - The approver must run on the IPS (where `ced` and the CA live);
   approval never crosses the network.
 - Re-provisioning a node requires clearing `ctrl_exec_paired` (and

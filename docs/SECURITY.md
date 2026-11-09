@@ -38,10 +38,17 @@ inherent to the problem rather than defects:
    per-node script allowlist (the single `hps-node` entry point). This is the
    authenticated channel; it replaces the former MAC-trust `osvc_cmd` join
    path. Enrolment is bound to provisioning state (`docs/adr/0002`).
-4. **keysafe.** Single-use, time-limited tokens for privileged node operations
-   (e.g. backup). The "secure" (cryptographic) mode is not yet implemented;
-   "open" mode issues UUID tokens and is explicitly marked insecure in the
-   code — a hardening item, not a shipped guarantee.
+4. **Keysafe secret store and approvals (`HPS::Keysafe`, `HPS::Approval`).**
+   Keys are 32 random bytes from `/dev/urandom`, one file per host and name
+   under `clusters/<cluster>/keysafe/` (directory 0700, files 0600, root only),
+   never in the registry JSON, an image or a log. A directory or file that is
+   group/world accessible, a symlink or owned by another uid is refused, never
+   repaired silently. Destructive storage actions need a human approval
+   (`hps-approve`): HMAC-SHA256 over host, pool, disks, wipe flag and expiry
+   (default one hour) with a per-cluster secret, compared in constant time,
+   stored in the registry. Keys and the secret reach a node only over ctrl-exec
+   mTLS `input=fields`. The former Bash keysafe and its unauthenticated
+   `keysafe_request_token` route are retired.
 
 ## Node identity at boot
 
@@ -68,8 +75,8 @@ mitigated, accepted-with-isolation, or an open hardening item.
 **Spoofing.** MAC-based identity on the CGI/API surface is spoofable
 (accepted; mitigated by segment isolation). ctrl-exec mTLS provides strong
 identity post-enrolment (mitigated). The enrolment window is the exposure —
-the registry-bound approver limits it (`docs/adr/0002`); a keysafe second
-factor is the planned hardening.
+the registry-bound approver limits it (`docs/adr/0002`); an HMAC single-use pairing
+ticket from `HPS::Keysafe` is the planned hardening if ever needed.
 
 **Tampering.** Config lives in a file-per-key JSON registry with locking; the
 integrity of downloaded distro/package artefacts is checked with gpg where
@@ -81,7 +88,7 @@ tampering of node operations.
 logs each run with a request id. Audit completeness is an open item.
 
 **Information disclosure.** Cluster secrets (OpenSVC agent key, cluster
-secret) and keysafe tokens live under the config tree; the SBOM and any
+secret) and keysafe keys (`clusters/<cluster>/keysafe/`, 0700 root) live under the config tree; the SBOM and any
 security artefacts are handled per the open-source-steward distribution
 posture. No customer data is processed. Secrets in the tree should be reviewed
 against least-exposure at each close-out.
@@ -120,8 +127,7 @@ the intended verification companion once the platform runs end to end.
 
 ## Open hardening items (tracked)
 
-- keysafe secure (cryptographic) mode — currently a stub.
 - ctrl-exec privileged executor adoption for per-script sandboxing.
 - gpg signature coverage for all downloaded artefacts.
-- a second enrolment factor (keysafe token) on ctrl-exec pairing.
+- a second enrolment factor (an HMAC pairing ticket from `HPS::Keysafe`) on ctrl-exec pairing.
 - audit-log completeness review.

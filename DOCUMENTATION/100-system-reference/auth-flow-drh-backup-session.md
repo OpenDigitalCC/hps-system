@@ -1,3 +1,7 @@
+> **Historical — never implemented; superseded by HPS::Keysafe (2026-11-09).**
+> The design below was not built. The secret store is `lib/perl/HPS/Keysafe.pm`
+> and approvals are HMAC-signed by `HPS::Approval` (see `docs/SECURITY.md`).
+
 ## Keysafe Token Authentication Flow
 
 ### Overview

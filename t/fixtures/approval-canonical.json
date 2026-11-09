@@ -1,0 +1,1 @@
+{"action":"pool-create","disks":["ata-FAKE_1","ata-FAKE_2"],"expires":1800003600,"issued_by":"operator","mac":"525400000001","pool":"lab","wipe":1}

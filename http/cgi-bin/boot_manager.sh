@@ -44,12 +44,11 @@ if [[ "$cmd" == "host_allocate_networks" ]]; then
 fi
 
 
-# Command: Handle a keysafe token request
+# Command: keysafe_request_token - retired (CS-2.2); the Bash keysafe issued
+# unsigned tokens that nothing checked. Answer 410 Gone for one release.
 if [[ "$cmd" == "keysafe_request_token" ]]; then
-  purpose=$(cgi_require_param purpose)
-  token=$(keysafe_handle_token_request "$mac" "$purpose")
-  cgi_header_plain
-  echo "$token"
+  hps_log warn "[$mac] retired command keysafe_request_token refused (410 Gone)"
+  cgi_fail "keysafe_request_token is retired; secrets are issued by the IPS over ctrl-exec" 410 "Gone"
   exit 0
 fi
 
