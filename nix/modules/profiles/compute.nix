@@ -61,11 +61,15 @@
   # file system") and libvirtd.service fails on the dependency (sch-001,
   # 2026-11-09). HPS does not use libvirt secrets (guest disks are plain
   # block devices; keys live in the IPS keysafe), so the unit is a no-op.
+  # The unit comes from the libvirt package (systemd.packages), so this is a
+  # drop-in: the empty ExecStart= resets the package's command (a plain
+  # mkForce string only appended a second ExecStart and the first still ran
+  # and failed, pin 43e235c).
   systemd.services.virt-secret-init-encryption = {
+    overrideStrategy = "asDropin";
     serviceConfig = {
-      Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = lib.mkForce "${pkgs.coreutils}/bin/true";
+      ExecStart = [ "" "${pkgs.coreutils}/bin/true" ];
     };
   };
 
