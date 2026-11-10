@@ -397,3 +397,32 @@ PDU_TEMPLATE='pdu-ctl --host {addr} --outlet {outlet} {action}'
   done
   shellcheck -S warning -x "$ROOT/lib/bmc/redfish-common.sh"
 }
+
+@test "hpe-ilo pxe-once with pxe_uefi_target overrides to that UEFI boot device" {
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"Off","Model":"ProLiant DL360 Gen9","SerialNumber":"S","Boot":{"BootSourceOverrideSupported":["None","Pxe","UefiTarget"],"UefiTargetBootSourceOverrideSupported":["NIC.LOM.1.1.IPv4","NIC.FlexLOM.1.1.IPv4"]},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","ForceRestart"]}}}'
+  p97_fix GET /redfish/v1/Managers/1/ '{"FirmwareVersion":"iLO 4 v2.76"}'
+  p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{}'
+  p97_fix PATCH /redfish/v1/Systems/1/ '{}'
+  BMC_OPT_pxe_uefi_target=NIC.FlexLOM.1.1.IPv4 p97_run_driver hpe-ilo pxe-once
+  [ "$status" -eq 0 ]
+  grep -qF '{"Boot":{"BootSourceOverrideTarget":"UefiTarget","UefiTargetBootSourceOverride":"NIC.FlexLOM.1.1.IPv4","BootSourceOverrideEnabled":"Once"}}' "$CALLS_LOG"
+  grep -qF '{"ResetType":"On"}' "$CALLS_LOG"
+}
+
+@test "hpe-ilo pxe-once refuses a pxe_uefi_target the system does not list (exit 3, nothing sent)" {
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"Off","Model":"ProLiant DL360 Gen9","SerialNumber":"S","Boot":{"UefiTargetBootSourceOverrideSupported":["NIC.LOM.1.1.IPv4"]},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/"}}}'
+  p97_fix GET /redfish/v1/Managers/1/ '{"FirmwareVersion":"iLO 4 v2.76"}'
+  BMC_OPT_pxe_uefi_target=NIC.FlexLOM.1.1.IPv4 p97_run_driver hpe-ilo pxe-once
+  [ "$status" -eq 3 ]
+  run grep -E '^(PATCH|POST) ' "$CALLS_LOG"
+  [ "$status" -eq 1 ]
+}
+
+@test "pxe_override=boot-order: no PATCH, only power on" {
+  ilo_system Off
+  BMC_OPT_pxe_override=boot-order p97_run_driver hpe-ilo pxe-once
+  [ "$status" -eq 0 ]
+  run grep -E '^PATCH ' "$CALLS_LOG"
+  [ "$status" -eq 1 ]
+  grep -qF '{"ResetType":"On"}' "$CALLS_LOG"
+}

@@ -207,6 +207,38 @@ act_power() {
 act_pxe_once() {
   local allowed mode_json target_json
   load_system
+  # Host options (hps-bmc set <host> --option k=v):
+  #   pxe_override=boot-order  no override: power on or restart and let the boot
+  #                            order (network first) decide
+  #   pxe_uefi_target=<id>     override to that UEFI boot device (an entry of
+  #                            UefiTargetBootSourceOverrideSupported), so the
+  #                            firmware cannot pick an uncabled PXE port. Lab
+  #                            2026-11-10: a plain Pxe override on the DL360
+  #                            gave no DHCP at all on the cabled FlexLOM port.
+  if [[ "${BMC_OPT_pxe_override:-}" == boot-order ]]; then
+    printf '%s: pxe-once by boot order (no override)\n' "${RF_NAME:-redfish}" >&2
+    if [[ "$(current_power)" == on ]]; then
+      do_reset ForceRestart PowerCycle GracefulRestart
+    else
+      do_reset On ForceOn
+    fi
+    return 0
+  fi
+  if [[ -n "${BMC_OPT_pxe_uefi_target:-}" ]]; then
+    if ! jq -e --arg t "$BMC_OPT_pxe_uefi_target" '(.Boot.UefiTargetBootSourceOverrideSupported // []) | index($t)' <<< "$RF_SYSJSON" > /dev/null; then
+      die 3 "pxe_uefi_target '$BMC_OPT_pxe_uefi_target' is not a UEFI boot target of this system"
+    fi
+    target_json="$(jq -cn --arg t "$BMC_OPT_pxe_uefi_target" '{Boot: {BootSourceOverrideTarget: "UefiTarget", UefiTargetBootSourceOverride: $t, BootSourceOverrideEnabled: "Once"}}')"
+    printf '%s: one-time boot override -> UEFI target %s\n' "${RF_NAME:-redfish}" "$BMC_OPT_pxe_uefi_target" >&2
+    rf_req PATCH "$RF_SYSTEM" "$target_json"
+    rf_check "boot override"
+    if [[ "$(current_power)" == on ]]; then
+      do_reset ForceRestart PowerCycle GracefulRestart
+    else
+      do_reset On ForceOn
+    fi
+    return 0
+  fi
   # Standard annotation, else iLO 4's BootSourceOverrideSupported list.
   allowed="$(jq -r '(.Boot["BootSourceOverrideTarget@Redfish.AllowableValues"] // .Boot.BootSourceOverrideSupported // [])[]' <<< "$RF_SYSJSON")"
   if [[ -n "$allowed" ]] && ! grep -qx Pxe <<< "$allowed"; then
