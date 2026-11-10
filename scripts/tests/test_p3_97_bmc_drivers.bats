@@ -405,7 +405,10 @@ PDU_TEMPLATE='pdu-ctl --host {addr} --outlet {outlet} {action}'
   p97_fix PATCH /redfish/v1/Systems/1/ '{}'
   BMC_OPT_pxe_uefi_target=NIC.FlexLOM.1.1.IPv4 p97_run_driver hpe-ilo pxe-once
   [ "$status" -eq 0 ]
-  grep -qF '{"Boot":{"BootSourceOverrideTarget":"UefiTarget","UefiTargetBootSourceOverride":"NIC.FlexLOM.1.1.IPv4","BootSourceOverrideEnabled":"Once"}}' "$CALLS_LOG"
+  # device first, then the override (iLO 4 refuses both in one request)
+  first=$(grep -n -F '{"Boot":{"UefiTargetBootSourceOverride":"NIC.FlexLOM.1.1.IPv4"}}' "$CALLS_LOG" | head -1 | cut -d: -f1)
+  second=$(grep -n -F '{"Boot":{"BootSourceOverrideTarget":"UefiTarget","BootSourceOverrideEnabled":"Once"}}' "$CALLS_LOG" | head -1 | cut -d: -f1)
+  [ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ]
   grep -qF '{"ResetType":"On"}' "$CALLS_LOG"
 }
 

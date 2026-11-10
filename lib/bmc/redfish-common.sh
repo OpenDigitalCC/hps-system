@@ -228,9 +228,15 @@ act_pxe_once() {
     if ! jq -e --arg t "$BMC_OPT_pxe_uefi_target" '(.Boot.UefiTargetBootSourceOverrideSupported // []) | index($t)' <<< "$RF_SYSJSON" > /dev/null; then
       die 3 "pxe_uefi_target '$BMC_OPT_pxe_uefi_target' is not a UEFI boot target of this system"
     fi
-    target_json="$(jq -cn --arg t "$BMC_OPT_pxe_uefi_target" '{Boot: {BootSourceOverrideTarget: "UefiTarget", UefiTargetBootSourceOverride: $t, BootSourceOverrideEnabled: "Once"}}')"
+    # Two PATCHes, device first: iLO 4 refuses BootSourceOverrideTarget
+    # UefiTarget in the same request ("BootSourceOverrideTarget cannot be set
+    # before UefiTargetBootSourceOverride is set", HTTP 400, lab 2026-11-10);
+    # the order is also valid on any Redfish system.
     printf '%s: one-time boot override -> UEFI target %s\n' "${RF_NAME:-redfish}" "$BMC_OPT_pxe_uefi_target" >&2
+    target_json="$(jq -cn --arg t "$BMC_OPT_pxe_uefi_target" '{Boot: {UefiTargetBootSourceOverride: $t}}')"
     rf_req PATCH "$RF_SYSTEM" "$target_json"
+    rf_check "UEFI boot target"
+    rf_req PATCH "$RF_SYSTEM" '{"Boot":{"BootSourceOverrideTarget":"UefiTarget","BootSourceOverrideEnabled":"Once"}}'
     rf_check "boot override"
     if [[ "$(current_power)" == on ]]; then
       do_reset ForceRestart PowerCycle GracefulRestart
