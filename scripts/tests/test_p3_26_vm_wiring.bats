@@ -83,7 +83,7 @@ code() {
   for s in $SCRIPTS; do
     run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])(zpool|mdadm|wipefs|dd|mkfs[.a-z0-9]*)[ ]'"
     case "$s" in
-      image-fetch) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs ' | grep -vE 'zfs (list|create) |command -v zfs '" ;;
+      image-fetch) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs ' | grep -vE 'zfs (list|create|get|set|mount) |command -v zfs '" ;;
       *) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs '" ;;
     esac
     case "$s" in

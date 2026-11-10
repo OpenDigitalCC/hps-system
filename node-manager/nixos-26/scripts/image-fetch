@@ -100,10 +100,16 @@ ensure_images_dataset() {
   pool=${BASH_REMATCH[1]}
   command -v zfs > /dev/null 2>&1 || return 0
   if zfs list -H -o type "$pool/enc/images" > /dev/null 2>&1; then
+    # Exists but is not mounted (the pool is created with mountpoint=none, so
+    # a dataset made without one is never mounted).
+    if [[ "$(zfs get -H -o value mounted "$pool/enc/images")" != "yes" ]]; then
+      run zfs set mountpoint="$DEST" "$pool/enc/images"
+      run zfs mount "$pool/enc/images"
+    fi
     return 0
   fi
-  log "creating $pool/enc/images (inherits the encryption of $pool/enc)"
-  run zfs create "$pool/enc/images"
+  log "creating $pool/enc/images (inherits the encryption of $pool/enc; the pool has mountpoint=none, so the mountpoint is set here)"
+  run zfs create -o mountpoint="$DEST" "$pool/enc/images"
 }
 
 file_sum() {
