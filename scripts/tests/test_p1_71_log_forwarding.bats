@@ -25,6 +25,8 @@ teardown() {
   grep -q 'services.rsyslogd = {' "$f"
   grep -q 'enable = true;' "$f"
   grep -q 'include(file="/run/hps/rsyslog-target.conf" mode="optional")' "$f"
+  # kernel lines (oops, AppArmor denials) only leave the node through imklog
+  grep -q 'module(load="imklog")' "$f"
   grep -q 'node-manager/nixos-26/boot/hps-log-target.sh' "$f"
   grep -q 'systemd.services.hps-log-target' "$f"
   grep -q 'before = \[ "syslog.service" "rsyslog.service" \];' "$f"

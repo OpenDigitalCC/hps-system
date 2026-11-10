@@ -108,6 +108,19 @@ teardown() {
   [ "$(wc -l < "$HPS_LIBVIRT_LOGDIR/vm1-serial.log")" -eq 500 ]
 }
 
+@test "vm-console-log --qemu: tails the QEMU process log, not the serial log" {
+  seq 1 10 > "$HPS_LIBVIRT_LOGDIR/vm1-serial.log"
+  printf 'qemu-system-x86_64: -blockdev x: Permission denied\n' > "$HPS_LIBVIRT_LOGDIR/vm1.log"
+  run bash "$S/vm-console-log" vm1 --qemu
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Permission denied"* ]]
+  [[ "$output" != *"10"* ]]
+  rm "$HPS_LIBVIRT_LOGDIR/vm1.log"
+  run bash "$S/vm-console-log" vm1 --qemu
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"no qemu log"* ]]
+}
+
 @test "vm-console-log: no log exits 4; usage exits 2" {
   run bash "$S/vm-console-log" vm1
   [ "$status" -eq 4 ]

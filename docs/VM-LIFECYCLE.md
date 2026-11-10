@@ -36,7 +36,7 @@ and can run at any time.
 | `vm-stop <vm> [--timeout 60] [--force]` | `virsh shutdown`, waits. `virsh destroy` only with `--force` after the timeout. Last line `VM <vm> shut off` | 0, 2, 4 not defined, 1 still running |
 | `vm-status [<vm>]` | Read-only: `virsh list --all`, `dominfo`, `domblklist`. Last line per guest `VM <vm> <state>`, or `no VMs` | 0, 2, 4 |
 | `vm-undefine <vm>` | `virsh undefine --nvram` of a shut-off guest. Not defined: no-op. Does not touch disks, mirrors or images. Last line `VM <vm> undefined` | 0, 2, 3 (not shut off), 1 |
-| `vm-console-log <vm> [--lines 200]` | Read-only tail of `/var/log/libvirt/qemu/<vm>-serial.log` | 0, 2, 4 no log |
+| `vm-console-log <vm> [--lines 200] [--qemu]` | Read-only tail of `/var/log/libvirt/qemu/<vm>-serial.log`; `--qemu` tails `<vm>.log`, the QEMU process log (where "process exited while connecting to monitor" explains itself) | 0, 2, 4 no log |
 | `vm-confinement-report [<vm>]` | Read-only confinement checks; see `CONFINEMENT.md`. Last line `CONFINEMENT model=... qemu_user=... seccomp=... apparmor_kernel=... label=...` | 0, 2 |
 
 ## Repeating a call

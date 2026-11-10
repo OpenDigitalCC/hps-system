@@ -111,7 +111,12 @@
       enable = true;
       # no local file sink: the root is tmpfs and the journal already holds it
       defaultConfig = "";
+      # journald forwards what it receives on its sockets, never what it reads
+      # from /dev/kmsg: without imklog no kernel line (oops, AppArmor denial,
+      # link state) ever leaves the node. Lab 2026-11-10: zero kernel lines in
+      # a day of forwarded logs while a guest start was being refused.
       extraConfig = ''
+        module(load="imklog")
         include(file="/run/hps/rsyslog-target.conf" mode="optional")
       '';
     };

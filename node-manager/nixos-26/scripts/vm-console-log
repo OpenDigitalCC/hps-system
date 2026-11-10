@@ -2,10 +2,14 @@
 #
 # vm-console-log - the tail of a guest's serial console log. Read-only.
 #
-# Usage: vm-console-log <vm> [--lines <n, default 200>]
+# Usage: vm-console-log <vm> [--lines <n, default 200>] [--qemu]
 # Reads /var/log/libvirt/qemu/<vm>-serial.log (the vm-define default;
 # HPS_LIBVIRT_LOGDIR overrides the directory). A guest defined with another
 # --serial-log is not found here.
+# --qemu reads /var/log/libvirt/qemu/<vm>.log instead: the QEMU process log
+# that libvirt keeps (command line, QEMU's own stderr). When a start fails
+# with "process exited while connecting to monitor", the reason is there, not
+# on the serial console.
 # Exit: 0 ok, 2 usage, 4 no such log.
 
 set -euo pipefail
@@ -14,6 +18,7 @@ set -euo pipefail
 
 VM=""
 LINES_N=200
+WHICH=serial
 
 log() {
   printf '[vm-console-log] %s\n' "$*" >&2
@@ -21,7 +26,7 @@ log() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: vm-console-log <vm> [--lines <n>]
+Usage: vm-console-log <vm> [--lines <n>] [--qemu]
 Exit: 0 ok, 2 usage, 4 no log.
 USAGE
 }
@@ -41,14 +46,22 @@ main() {
         LINES_N=$2
         shift 2
         ;;
+      --qemu)
+        WHICH=qemu
+        shift
+        ;;
       *) log "unknown argument: $1"; usage; exit 2 ;;
     esac
   done
   [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
   [[ "$LINES_N" =~ ^[0-9]{1,5}$ ]] || { usage; exit 2; }
-  file="$HPS_LIBVIRT_LOGDIR/$VM-serial.log"
+  if [[ "$WHICH" == qemu ]]; then
+    file="$HPS_LIBVIRT_LOGDIR/$VM.log"
+  else
+    file="$HPS_LIBVIRT_LOGDIR/$VM-serial.log"
+  fi
   if [[ ! -r "$file" ]]; then
-    log "no serial log at $file"
+    log "no $WHICH log at $file"
     exit 4
   fi
   printf '+ tail -n %s %s\n' "$LINES_N" "$file" >&2
