@@ -177,14 +177,24 @@ load_nodes() {
   [[ ${#NODES[@]} -gt 0 ]] || refuse "the IPS lists no paired nodes"
 }
 
+# check_self: this node is in the IPS list, matched on the first label (the IPS
+# lists FQDNs; the kernel hostname, which om3 takes as its node name, may be the
+# short name: lab 2026-11-10, sch-001 against sch-001.lab.hps). The names
+# written to cluster.conf and node.conf then take this node's form: short names
+# when its hostname is short, so om3 finds itself and its peers.
 check_self() {
-  local n
+  local n i found=0
   for n in "${NODES[@]}"; do
-    if [[ "$n" == "$SELF" ]]; then
-      return 0
+    if [[ "${n%%.*}" == "${SELF%%.*}" ]]; then
+      found=1
     fi
   done
-  refuse "this node ('$SELF') is not in the IPS node list (${NODES[*]})"
+  [[ "$found" == 1 ]] || refuse "this node ('$SELF') is not in the IPS node list (${NODES[*]})"
+  if [[ "$SELF" != *.* ]]; then
+    for i in "${!NODES[@]}"; do
+      NODES[$i]="${NODES[$i]%%.*}"
+    done
+  fi
 }
 
 # write_file <path> <mode> <content>: atomically, logged.

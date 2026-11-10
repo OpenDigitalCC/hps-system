@@ -85,6 +85,12 @@ setup() {
   run ! grep -E 'enableAutoLoginOut *= *true|discoverPortal *= *"' "$COMPUTE"
 }
 
+@test "iscsi-init is ordered after the initiator name, never masked (iscsid's socket requires it)" {
+  run ! grep -E '^[^#]*iscsi-init\.enable *= *false' "$COMPUTE"
+  grep -A3 'systemd.services.iscsi-init = {' "$COMPUTE" | grep -q 'requires = \[ "hps-iscsi-initiator.service" \];'
+  grep -A3 'systemd.services.iscsi-init = {' "$COMPUTE" | grep -q 'after = \[ "hps-iscsi-initiator.service" \];'
+}
+
 @test "mdadm: swraid on, no monitor mail, no udev auto-assembly, no degraded last-resort timer" {
   grep -q 'boot.swraid = {' "$COMPUTE"
   grep -q 'PROGRAM ${pkgs.coreutils}/bin/true' "$COMPUTE"
