@@ -22,6 +22,11 @@ sub make_pin {
         open my $fh, '>', "$res/nixos/$pin/$p/boot.json" or die $!;
         print {$fh} '{"init":"/x"}';
         close $fh;
+        for my $f (qw(bzImage initrd)) {   # present, no hashes recorded: unverified, not failed
+            open my $af, '>', "$res/nixos/$pin/$p/$f" or die $!;
+            print {$af} "x\n";
+            close $af;
+        }
     }
 }
 make_pin('pin-a', qw(audit node-base));

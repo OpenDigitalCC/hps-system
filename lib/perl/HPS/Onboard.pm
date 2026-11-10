@@ -7,6 +7,7 @@ no warnings 'experimental::signatures';
 
 use JSON::PP ();
 use HPS::Registry;
+use HPS::Pins;
 
 package HPS::Onboard::Error {
     # kind: usage (2), refused (3), notfound (4), failed (1)
@@ -180,6 +181,8 @@ sub assign ($self, $mac, $a) {
     _fail('refused', "Host $m is in state $state; only HELD hosts can be assigned")
         unless $state eq 'HELD';
     _fail('notfound', "OS $a->{os} is not in the OS registry") unless $reg->os_exists($a->{os});
+    # assign has never required the pin directory to exist; one that does is verified.
+    $self->_verify_pin($a->{pin}) if -d $self->nixos_dir . "/$a->{pin}";
 
     $reg->host_set($m, 'TYPE',         $a->{type});
     $reg->host_set($m, 'HOST_PROFILE', $a->{profile});
@@ -234,6 +237,18 @@ sub _check_pin_artefacts ($self, $pin) {
     return 1;
 }
 
+# A pin whose served files differ from boot.json or SHA256SUMS is refused, naming
+# the file (IPS-05). A pin with no recorded hashes (built before IPS-05) passes.
+sub _verify_pin ($self, $pin) {
+    my $r = eval { HPS::Pins->new(registry => $self->{registry}, resources => $self->{resources})->verify_pin($pin) };
+    unless ($r) {
+        my $err = $@;
+        _fail('notfound', "Pin $pin cannot be verified: " . (ref $err ? $err->message : $err));
+    }
+    return 1 if $r->{ok};
+    _fail('refused', "Pin $pin failed verification: " . join('; ', map { "$_->{file}: $_->{reason}" } @{ $r->{failures} }));
+}
+
 # repin($mac, {pin => P} | {to_latest => 1}): change an assigned host's
 # system_pin. Rollout and rollback are this registry change. The previous pin
 # is kept as system_pin_previous. Returns {mac, from, to}.
@@ -253,6 +268,7 @@ sub repin ($self, $mac, $a) {
     my $old = $reg->host_get($m, 'system_pin');
     _fail('refused', "Host $m is already pinned to $pin") if defined $old && $old eq $pin;
     $self->_check_pin_artefacts($pin);
+    $self->_verify_pin($pin);
 
     if (defined $old && length $old) { $reg->host_set($m, 'system_pin_previous', $old) }
     else                             { $reg->host_unset($m, 'system_pin_previous') if $reg->host_exists($m, 'system_pin_previous') }

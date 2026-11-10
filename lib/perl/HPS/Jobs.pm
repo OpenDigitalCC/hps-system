@@ -44,6 +44,7 @@ my %KINDS = (
     'workload-stop'        => [ \&_args_wl_vm,      1800 ],
     'workload-destroy'     => [ \&_args_wl_destroy, 3600 ],
     'workload-status'      => [ \&_args_wl_vm,      600 ],
+    'pins-prune'           => [ \&_args_pins_prune, 600 ],
 );
 
 sub kinds { return sort keys %KINDS }
@@ -66,6 +67,21 @@ sub _args_approve (@args) {
 
 sub _args_mac (@args) {
     return 'needs exactly <mac> (12 lowercase hex digits)' unless @args == 1 && $args[0] =~ $MAC_RE;
+    return undef;
+}
+
+# [--keep-previous N] [--dry-run]
+sub _args_pins_prune (@args) {
+    my @a = @args;
+    my %seen;
+    while (@a) {
+        my $o = shift @a;
+        return 'only --keep-previous N and --dry-run are allowed' unless $o eq '--keep-previous' || $o eq '--dry-run';
+        return "$o given twice" if $seen{$o}++;
+        next if $o eq '--dry-run';
+        return '--keep-previous needs a number 0-99' unless @a && $a[0] =~ /^[0-9]{1,2}\z/;
+        shift @a;
+    }
     return undef;
 }
 
@@ -109,7 +125,8 @@ sub validate ($kind, @args) {
 sub timeout_for ($kind) { return $KINDS{$kind} ? $KINDS{$kind}[1] : 60 }
 
 # command($kind, \@args, %env): the argv for the kind (never a shell string).
-# env: dispatcher (CLI name/path), storage (hps-storage path), workload (hps-workload path).
+# env: dispatcher (CLI name/path), storage (hps-storage path), workload (hps-workload path),
+# pins (hps-pins path).
 sub command ($kind, $args, %env) {
     my $ced = $env{dispatcher} // 'ctrl-exec-dispatcher';
     my @a   = @$args;
@@ -117,6 +134,7 @@ sub command ($kind, $args, %env) {
     return ($ced, 'pairing-mode', 'stop')                              if $kind eq 'pairing-window-close';
     return ($ced, 'list-requests')                                     if $kind eq 'pairing-list';
     return ($ced, 'approve', @a)                                       if $kind eq 'pairing-approve';
+    return ($env{pins} // 'hps-pins', 'prune', @a) if $kind eq 'pins-prune';
     my $st = $env{storage} // 'hps-storage';
     return ($st, $a[0], 'up', '--wait', 120)                           if $kind eq 'storage-up';
     return ($st, $a[0], 'down')                                        if $kind eq 'storage-down';

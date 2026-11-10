@@ -1,0 +1,120 @@
+#!/usr/bin/env perl
+# hps-pins: retention and integrity of the published NixOS pins (IPS-05).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::Pins;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-pins: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-pins list [--json]
+  hps-pins verify (<pin> | --all) [--json]
+  hps-pins prune [--keep-previous N] [--dry-run]
+  hps-pins delete <pin>
+list: pin, date, size, profiles, hosts pinned to it, latest marker.
+verify: sha256 and size of every bzImage and initrd against boot.json and
+  SHA256SUMS; FAIL lines name the file. A file with no recorded hash (a pin
+  built before IPS-05) is reported UNVERIFIED and does not fail.
+prune: removes pins nothing references (not the latest, not a host's
+  system_pin or system_pin_previous, not the cluster nixos_default_pin, not a
+  pin a host booted from in the last 15 minutes), keeping the newest N
+  (default 1) of those. delete: the same protection, one named pin.
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (verify: a FAIL; delete or prune: a
+protected pin or no latest), 4 not found.
+USAGE
+    return 2;
+}
+
+sub human_size {
+    my ($b) = @_;
+    return sprintf('%.1f GB', $b / 1e9) if $b >= 1e9;
+    return sprintf('%.1f MB', $b / 1e6) if $b >= 1e6;
+    return "$b B";
+}
+
+sub render_list {
+    my (@rows) = @_;
+    return "No pins.\n" unless @rows;
+    my $out = sprintf("%-44s %-20s %9s  %-30s %s\n", 'PIN', 'DATE', 'SIZE', 'PROFILES', 'HOSTS');
+    for my $r (@rows) {
+        my $hosts = join(',', @{ $r->{hosts} });
+        $hosts = $hosts ne '' ? $hosts : '-';
+        $out .= sprintf("%-44s %-20s %9s  %-30s %s%s\n", $r->{pin}, $r->{date}, human_size($r->{size}),
+            join(',', @{ $r->{profiles} }), $hosts, $r->{latest} ? '  [latest]' : '');
+    }
+    return $out;
+}
+
+sub render_verify {
+    my (@results) = @_;
+    my $out = '';
+    for my $r (@results) {
+        $out .= "FAIL $r->{pin}: $_->{file}: $_->{reason}\n" for @{ $r->{failures} };
+        $out .= "UNVERIFIED $r->{pin}: $_: no sha256 recorded\n" for @{ $r->{unverified} };
+        $out .= "OK $r->{pin}\n" if $r->{ok};
+    }
+    return $out;
+}
+
+sub cmd_verify {
+    my ($p, $argv, $opt) = @_;
+    return usage('verify needs one pin or --all') unless $opt->{all} ? !@$argv : @$argv == 1;
+    my @results = $opt->{all} ? $p->verify_all : ($p->verify_pin($argv->[0]));
+    print $opt->{json} ? JSON::PP->new->canonical->pretty->encode(\@results) : render_verify(@results);
+    return (grep { !$_->{ok} } @results) ? $EXIT{refused} : 0;
+}
+
+sub cmd_prune {
+    my ($p, $argv, $opt) = @_;
+    return usage('prune takes no arguments') if @$argv;
+    my $r = $p->prune(keep_previous => $opt->{keep}, dry_run => $opt->{dry});
+    print "keep   $_->{pin} ($_->{why})\n" for @{ $r->{kept} };
+    print(($r->{dry_run} ? 'would delete' : 'deleted     ') . " $_->{pin} ($_->{why})\n") for @{ $r->{removed} };
+    return 0;
+}
+
+sub dispatch {
+    my ($p, $cmd, $argv, $opt) = @_;
+    if ($cmd eq 'list') {
+        return usage('list takes no arguments') if @$argv;
+        my @rows = $p->list;
+        print $opt->{json} ? JSON::PP->new->canonical->pretty->encode(\@rows) : render_list(@rows);
+        return 0;
+    }
+    return cmd_verify($p, $argv, $opt) if $cmd eq 'verify';
+    return cmd_prune($p, $argv, $opt)  if $cmd eq 'prune';
+    if ($cmd eq 'delete') {
+        return usage('delete needs one pin') unless @$argv == 1;
+        $p->delete($argv->[0]);
+        print "deleted $argv->[0]\n";
+        return 0;
+    }
+    return usage("unknown command '$cmd'");
+}
+
+sub main {
+    my @argv = @_;
+    my %opt;
+    my $cmd = shift @argv // return usage('command required');
+    GetOptionsFromArray(\@argv, 'json' => \$opt{json}, 'all' => \$opt{all},
+        'dry-run' => \$opt{dry}, 'keep-previous=s' => \$opt{keep}) or return usage();
+    my $rc = eval { dispatch(HPS::Pins->new, $cmd, \@argv, \%opt) };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::Pins::Error')) {
+        print STDERR 'hps-pins: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-pins: $err";
+    return 1;
+}
+
+exit main(@ARGV);

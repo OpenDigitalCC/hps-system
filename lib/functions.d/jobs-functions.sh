@@ -91,6 +91,22 @@ hps_job_validate() {
         return 1
       fi
       ;;
+    pins-prune)
+      local seen_keep=0 seen_dry=0
+      while (( $# > 0 )); do
+        case "$1" in
+          --dry-run)
+            (( seen_dry == 0 )) || { echo "$kind: --dry-run given twice" >&2; return 1; }
+            seen_dry=1; shift ;;
+          --keep-previous)
+            (( seen_keep == 0 )) || { echo "$kind: --keep-previous given twice" >&2; return 1; }
+            [[ "${2:-}" =~ ^[0-9]{1,2}$ ]] || { echo "$kind: --keep-previous needs a number 0-99" >&2; return 1; }
+            seen_keep=1; shift 2 ;;
+          *)
+            echo "$kind: only --keep-previous N and --dry-run are allowed" >&2; return 1 ;;
+        esac
+      done
+      ;;
     workload-destroy)
       { [[ $# -eq 1 ]] || { [[ $# -eq 2 ]] && [[ "$2" == "--forget" ]]; }; } && [[ "$1" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
         || { echo "$kind: needs <workload> [--forget]" >&2; return 1; }

@@ -9,7 +9,8 @@
 #   <out>/<pin>/<profile>/{bzImage,initrd,boot.json}
 #   <out>/latest                       (the pin)
 #   nix copy --to file://<cache>       (each profile's system closure)
-# boot.json gains built_at and pin on the way out of the store.
+# boot.json gains built_at, pin, sha256 and size (bzImage, initrd) on the way
+# out of the store; <pin>/SHA256SUMS lists every profile's two files.
 #
 # Usage:
 #   build.sh --out DIR --cache DIR [--src DIR] [--profiles "a b"] [--no-cache]
@@ -140,13 +141,49 @@ publish_profile() {
   run mkdir -p "$dest"
   run install -m 0644 "$link/bzImage" "$dest/bzImage.tmp"
   run install -m 0644 "$link/initrd" "$dest/initrd.tmp"
-  log "+ jq add built_at/pin -> $dest/boot.json"
-  jq --arg built_at "$built_at" --arg pin "$pin" --arg profile "$profile" \
-    '.built_at = $built_at | .pin = $pin | .profile = $profile' \
-    "$link/boot.json" > "$dest/boot.json.tmp"
   run mv -f "$dest/bzImage.tmp" "$dest/bzImage"
   run mv -f "$dest/initrd.tmp" "$dest/initrd"
+  # Hash and size come from the published files, after the move (IPS-05): what
+  # the IPS serves is checked against what was written here. boot.json goes
+  # last, so a pin without one is visibly incomplete.
+  local bz_sha bz_size rd_sha rd_size
+  bz_sha=$(file_sha256 "$dest/bzImage")
+  bz_size=$(file_size "$dest/bzImage")
+  rd_sha=$(file_sha256 "$dest/initrd")
+  rd_size=$(file_size "$dest/initrd")
+  log "+ jq add built_at/pin/sha256/size -> $dest/boot.json"
+  jq --arg built_at "$built_at" --arg pin "$pin" --arg profile "$profile" \
+    --arg bz_sha "$bz_sha" --arg rd_sha "$rd_sha" \
+    --argjson bz_size "$bz_size" --argjson rd_size "$rd_size" \
+    '.built_at = $built_at | .pin = $pin | .profile = $profile
+     | .sha256 = {bzImage: $bz_sha, initrd: $rd_sha}
+     | .size = {bzImage: $bz_size, initrd: $rd_size}' \
+    "$link/boot.json" > "$dest/boot.json.tmp"
   run mv -f "$dest/boot.json.tmp" "$dest/boot.json"
+}
+
+file_sha256() {
+  sha256sum "$1" | cut -d' ' -f1
+}
+
+file_size() {
+  stat -c %s "$1"
+}
+
+# write_sums <pin>: <pin>/SHA256SUMS over every profile's bzImage and initrd,
+# in the sha256sum -c format with paths relative to the pin directory.
+write_sums() {
+  local pin="$1"
+  local dir="$OUT/$pin"
+  local profile
+  log "+ write $dir/SHA256SUMS"
+  : > "$dir/SHA256SUMS.tmp"
+  for profile in $(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
+    [[ -f "$dir/$profile/bzImage" && -f "$dir/$profile/initrd" ]] || continue
+    printf '%s  %s/bzImage\n' "$(file_sha256 "$dir/$profile/bzImage")" "$profile" >> "$dir/SHA256SUMS.tmp"
+    printf '%s  %s/initrd\n' "$(file_sha256 "$dir/$profile/initrd")" "$profile" >> "$dir/SHA256SUMS.tmp"
+  done
+  run mv -f "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS"
 }
 
 cache_profile() {
@@ -198,6 +235,7 @@ main() {
     publish_profile "$profile" "$link" "$pin"
     cache_profile "$link"
   done
+  write_sums "$pin"
 
   printf '%s\n' "$pin" > "$OUT/latest.tmp"
   run mv -f "$OUT/latest.tmp" "$OUT/latest"
