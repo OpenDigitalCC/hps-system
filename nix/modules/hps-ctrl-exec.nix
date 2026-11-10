@@ -145,6 +145,9 @@ in
       # Lab test only (rig test 2); remove with the script once the rig results are recorded.
       osvc-rig-probe.source = mkScript "osvc-rig-probe" (scriptsDir + "/osvc-rig-probe");
       osvc-rig-probe.options.profile = "node";
+      # CS-3.12a: node-to-node iSCSI proof (open-iscsi comes with the compute profile).
+      iscsi-login-test.source = mkScript "iscsi-login-test" (scriptsDir + "/iscsi-login-test");
+      iscsi-login-test.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

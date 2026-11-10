@@ -37,7 +37,7 @@ my $MAX_DISKS = 1;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status);
 my %TOP = map { $_ => 1 } qw(name project access vms);
-my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host);
+my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot);
 my %DSK = map { $_ => 1 } qw(name size legs);
 my %LEG = map { $_ => 1 } qw(host pool iqn portal);
 
@@ -98,11 +98,20 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     $where = "vm '$vm->{name}'";
     _bad($where, 'memory_mib must be 256-262144') unless _int_in($vm->{memory_mib}, 256, 262144);
     _bad($where, 'vcpus must be 1-64') unless _int_in($vm->{vcpus}, 1, 64);
-    _bad($where, "image must match $IMAGE_RE") unless _plain($vm->{image}) && $vm->{image} =~ $IMAGE_RE;
+    my $boot = exists $vm->{boot} ? $vm->{boot} : 'disk';
+    _bad($where, 'boot must be "disk" or "network"') unless _plain($boot) && ($boot eq 'disk' || $boot eq 'network');
+    my $net_boot = $boot eq 'network';
+    if ($net_boot) {
+        _bad($where, 'a network-boot VM has no image (it boots from the network)') if exists $vm->{image};
+    }
+    else {
+        _bad($where, "image must match $IMAGE_RE") unless _plain($vm->{image}) && $vm->{image} =~ $IMAGE_RE;
+    }
     my $prio = exists $vm->{priority} ? $vm->{priority} : 3;
     _bad($where, 'priority must be 1-5') unless _int_in($prio, 1, 5);
-    my $disks = $vm->{disks};
-    _bad($where, 'disks must be a non-empty list') unless ref $disks eq 'ARRAY' && @$disks;
+    my $disks = $net_boot ? ($vm->{disks} // []) : $vm->{disks};
+    _bad($where, $net_boot ? 'disks must be a list' : 'disks must be a non-empty list')
+        unless ref $disks eq 'ARRAY' && ($net_boot || @$disks);
     _bad($where, "at most $MAX_DISKS disk per VM (vm-define takes one --disk)") if @$disks > $MAX_DISKS;
     my (%seen, @d);
     for my $d (@$disks) {
@@ -135,7 +144,7 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     elsif (@lh) { $compute = $lh[0] }
     else { _bad($where, 'no local {host,pool} leg and no compute_host: the compute host is unknown') }
     return { name => "$vm->{name}", memory_mib => $vm->{memory_mib} + 0, vcpus => $vm->{vcpus} + 0,
-        image => "$vm->{image}", disks => \@d, nets => [ map {"$_"} @$nets ],
+        boot => $boot, (defined $vm->{image} ? (image => "$vm->{image}") : ()), disks => \@d, nets => [ map {"$_"} @$nets ],
         priority => $prio + 0, compute => $compute };
 }
 
@@ -379,9 +388,10 @@ sub _steps_create ($self, $def, %a) {
             push @s, _step($mac, $shown->{script}, $shown->{args}, key => "zvol:$d->{dataset}",
                 storage => [ 'zvol-create', dataset => $d->{dataset}, size => $d->{size} ]);
         }
+        my $net_boot = $vm->{boot} eq 'network';
         my $image = $vm->{image};
-        my $path = "$in->{image_dir}/$image.qcow2";
-        unless ($fetched{"$mac $image"}++) {
+        my $path = $net_boot ? undef : "$in->{image_dir}/$image.qcow2";
+        unless ($net_boot || $fetched{"$mac $image"}++) {
             my $sum = $self->_image_files($image);
             push @s, _step($mac, 'image-fetch', [ $image, '--from', $self->_ips_url . "/images/$image.qcow2",
                 '--sha256', $sum, '--dest', $in->{image_dir} ], key => "image:$mac:$image");
@@ -391,7 +401,7 @@ sub _steps_create ($self, $def, %a) {
                 key => "mirror:$d->{mirror}");
         }
         push @s, _step($mac, 'vm-image-write', [ $vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path ],
-            key => "write:$vm->{name}");
+            key => "write:$vm->{name}") unless $net_boot;
         my $have = $attached{$mac} //= $self->_attached($mac);
         my @missing = grep { my $n = $_; !grep { $_ eq $n } @$have } @{ $vm->{nets} };
         if (@missing) {
@@ -406,9 +416,13 @@ sub _steps_create ($self, $def, %a) {
                 },
                 undo => sub { defined $prev ? $reg->host_set($mac, 'nets', $prev) : $reg->host_unset($mac, 'nets') });
         }
+        my ($wl, $vmname) = ($name, $vm->{name});
         push @s, _step($mac, 'vm-define', [ $vm->{name}, '--memory', $vm->{memory_mib}, '--vcpus', $vm->{vcpus},
+            ($net_boot ? ('--boot', 'network') : ()),
             (map { ('--disk', $_->{device}) } @{ $in->{disks} }),
-            (map { ('--net', $layout->{$_}{bridge}) } @{ $vm->{nets} }), '--image', $path ], key => "define:$vm->{name}");
+            (map { ('--net', $layout->{$_}{bridge}) } @{ $vm->{nets} }), ($net_boot ? () : ('--image', $path)) ],
+            key => "define:$vm->{name}",
+            ($net_boot ? (after => sub ($r) { $self->_record_macs($wl, $vmname, $r) }) : ()));
     }
     return @s;
 }
@@ -461,6 +475,14 @@ sub _steps_status ($self, $def, %a) {
             grep { $_->{mirrored} } @{ $in->{disks} };
     }
     return @s;
+}
+
+# The MACs vm-define reports ("VM <vm> defined mac=<mac>", one line per NIC),
+# kept in the workload record so the operator can find the node.
+sub _record_macs ($self, $name, $vm, $r) {
+    my @macs = ($r->{stdout} // '') =~ /^VM \S+ defined mac=([0-9a-f]{2}(?::[0-9a-f]{2}){5})\s*$/mg;
+    $self->_rec_update($name, sub ($rec) { $rec->{vms}{$vm}{macs} = [@macs] });
+    return;
 }
 
 sub _need_record ($self, $name, $op) {
@@ -609,7 +631,7 @@ sub run ($self, $op, $name, %a) {
             $self->_log('err', "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}");
             _fail($kind, "$op: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
         }
-        $st->{after}->() if $st->{after} && $r->{rc} == 0;
+        $st->{after}->($r) if $st->{after} && $r->{rc} == 0;
         if ($op eq 'create' && $st->{key}) {
             $done{ $st->{key} } = 1;
             $self->_rec_update($name, sub ($rec) { push @{ $rec->{done} }, $st->{key} });

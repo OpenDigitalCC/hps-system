@@ -16,6 +16,11 @@
 #   untagged network  the bridge alone; a physical NIC joins it only when the
 #                     layout names one (nic=<mac>), never the boot NIC
 #
+#   uplink "boot"    (purpose provisioning) the bridge hps-net builds on the boot
+#                     NIC itself (host key boot_bridge). Only checked: it must
+#                     exist and be a bridge; its members, address and the
+#                     networkd files stay hps-net's and networkd's.
+#
 # No address is ever configured on a workload bridge or its members (guests get
 # addresses from their own networks), and IPv6 link-local generation is turned
 # off on them (addrgenmode none). The boot NIC's own addressing is untouched:
@@ -174,13 +179,14 @@ net_field() {
 
 # check_net <name>: refuse a network the layout does not define or cannot be built.
 check_net() {
-  local name="$1" bridge vlan nic purpose
+  local name="$1" bridge vlan nic purpose uplink
   printf '%s' "$LAYOUT" | jq -e --arg n "$name" 'has($n) and (.[$n] | type == "object")' > /dev/null 2>&1 \
     || refuse "network '$name' is not in the network layout"
   bridge=$(net_field "$name" bridge)
   vlan=$(net_field "$name" vlan)
   nic=$(net_field "$name" nic)
   purpose=$(net_field "$name" purpose)
+  uplink=$(net_field "$name" uplink)
   [[ "$bridge" =~ ^[a-z][a-z0-9-]{0,14}$ ]] || refuse "network '$name': bridge '$bridge' is not a valid interface name"
   if [[ -n "$vlan" ]]; then
     [[ "$vlan" =~ ^[0-9]+$ ]] || refuse "network '$name': vlan '$vlan' is not 1-4094"
@@ -195,6 +201,12 @@ check_net() {
     nic=$(normalise_mac "$nic" || true)
     [[ -n "$nic" ]] || refuse "network '$name': nic is not a MAC address"
     [[ "$nic" != "$BOOT_MAC" ]] || refuse "network '$name': nic is the boot NIC; it is never put in a bridge"
+  fi
+  if [[ -n "$uplink" ]]; then
+    [[ "$uplink" == "boot" ]] || refuse "network '$name': uplink '$uplink' is not boot"
+    [[ "$purpose" == "provisioning" ]] || refuse "network '$name': uplink boot is only for purpose provisioning"
+    [[ -z "$vlan" && -z "$nic" ]] || refuse "network '$name': uplink boot takes no vlan and no nic"
+    return 0
   fi
   [[ "$purpose" == "workload" || "$purpose" == "storage" ]] \
     || refuse "network '$name': purpose '$purpose' is not workload or storage"
@@ -236,6 +248,9 @@ Unmanaged=yes
 
 write_unmanaged_for() {
   local name="$1" bridge vlan nic names
+  if [[ -n "$(net_field "$name" uplink)" ]]; then
+    return 0
+  fi
   bridge=$(net_field "$name" bridge)
   vlan=$(net_field "$name" vlan)
   nic=$(net_field "$name" nic)
@@ -302,9 +317,24 @@ ensure_nic() {
   enslave "$dev" "$bridge"
 }
 
+# check_boot_bridge <bridge>: the bridge hps-net built on the boot NIC exists.
+# Read only; its members and address are not ours.
+check_boot_bridge() {
+  local bridge="$1" kind
+  link_json "$bridge" > /dev/null \
+    || refuse "boot bridge $bridge does not exist (hps-net builds it when the host key boot_bridge is set; reboot the node)"
+  kind=$(link_field "$bridge" '.[0].linkinfo.info_kind // ""')
+  [[ "$kind" == "bridge" ]] || refuse "interface $bridge exists and is a '${kind:-plain}' link, not a bridge"
+}
+
 ensure_net() {
   local name="$1" bridge vlan nic
   bridge=$(net_field "$name" bridge)
+  if [[ -n "$(net_field "$name" uplink)" ]]; then
+    check_boot_bridge "$bridge"
+    printf 'network %s: bridge %s ready (boot NIC bridge, made by hps-net)\n' "$name" "$bridge"
+    return 0
+  fi
   vlan=$(net_field "$name" vlan)
   nic=$(net_field "$name" nic)
   ensure_bridge "$bridge"

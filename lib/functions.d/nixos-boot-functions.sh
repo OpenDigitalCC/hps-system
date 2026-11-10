@@ -126,6 +126,13 @@ nixos_boot_lines() {
   if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
     args="${args} hps.domain=${domain}"
   fi
+  # Boot-NIC bridge (host key boot_bridge): hps-net makes the boot NIC a
+  # member of it so guests can attach to the provisioning segment itself.
+  local bridge
+  bridge="$(host_registry "$mac" get boot_bridge 2>/dev/null)" || bridge=""
+  if [[ "$bridge" =~ ^br-[a-z0-9-]{1,12}$ ]]; then
+    args="${args} hps.bridge=${bridge}"
+  fi
   printf 'kernel %s/bzImage %s\n' "$base" "$args"
   printf 'initrd %s/initrd\n' "$base"
   printf 'boot\n'

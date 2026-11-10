@@ -5,7 +5,10 @@
 # ctrl-exec allowlisted node script.
 #
 # Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
-#          --net <bridge> [--net <bridge>...] --image <base qcow2>
+#          --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
+#          --image <base qcow2> [--serial-log <path>] [--replace]
+#        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
+#          --net <bridge> [--mac <mac>] [--net ...] [--disk <dev>]
 #          [--serial-log <path>] [--replace]
 #
 #   <vm>      ^[a-z0-9][a-z0-9-]{0,31}$
@@ -15,6 +18,12 @@
 #   --image   the base qcow2 the disk was filled from (vm-image-write). It is
 #             only RECORDED in the domain metadata; vm-define neither reads
 #             nor copies it, and never touches the disk.
+#   --boot    disk (default) | network. network: OVMF netboots from the first
+#             NIC (<boot dev='network'/>, then the disk if there is one); the
+#             guest may have NO disk and no --image (a node that is deployed
+#             over the network, like metal).
+#   --mac     the MAC of the NIC given by the --net just before it (lower-case
+#             unicast aa:bb:cc:dd:ee:ff); without it libvirt generates one.
 #   --serial-log  default /var/log/libvirt/qemu/<vm>-serial.log
 #
 # The domain: q35, OVMF UEFI, host-passthrough CPU, virtio disk (raw, cache
@@ -35,8 +44,10 @@
 # redefines it (keeping the uuid) only while the guest is not running.
 #
 # Calls, in order: virsh dominfo; (if defined) virsh dumpxml; (--replace)
-# virsh domuuid, virsh domstate; virsh define.
-# Last line on success: VM <vm> defined
+# virsh domuuid, virsh domstate; virsh define; (--boot network) virsh domiflist.
+# Last line on success: VM <vm> defined. With --boot network the last lines are
+# one "VM <vm> defined mac=<mac>" per NIC, in --net order (read back with
+# virsh domiflist, so libvirt-generated MACs are reported too).
 # Exit: 0 defined or already identical, 2 usage, 3 refused, 1 a command failed.
 
 set -euo pipefail
@@ -53,8 +64,10 @@ VCPUS=""
 DISK=""
 IMAGE=""
 SERIAL=""
+BOOT="disk"
 REPLACE=0
 NETS=()
+MACS=()
 TMP=""
 
 log() {
@@ -76,8 +89,10 @@ run_q() {
 usage() {
   cat >&2 <<'USAGE'
 Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
-         --net <bridge> [--net <bridge>...] --image <base qcow2>
-         [--serial-log <path>] [--replace]
+         --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
+         --image <base qcow2> [--serial-log <path>] [--replace]
+       vm-define <vm> --boot network --memory <MiB> --vcpus <n>
+         --net <bridge> [--mac <mac>] [...] [--disk <dev>] [--serial-log <path>]
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
 }
@@ -96,7 +111,7 @@ parse_args() {
   shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --memory | --vcpus | --disk | --net | --image | --serial-log)
+      --memory | --vcpus | --disk | --net | --image | --serial-log | --boot | --mac)
         [[ $# -ge 2 ]] || { usage; exit 2; }
         case "$1" in
           --memory) MEMORY=$2 ;;
@@ -109,7 +124,21 @@ parse_args() {
             fi
             DISK=$2
             ;;
-          --net) NETS+=("$2") ;;
+          --net) NETS+=("$2"); MACS+=("") ;;
+          --mac)
+            if [[ ${#NETS[@]} -eq 0 ]]; then
+              log "--mac must follow the --net it belongs to"
+              usage
+              exit 2
+            fi
+            if [[ -n "${MACS[-1]}" ]]; then
+              log "only one --mac per --net"
+              usage
+              exit 2
+            fi
+            MACS[-1]=$2
+            ;;
+          --boot) BOOT=$2 ;;
           --image) IMAGE=$2 ;;
           --serial-log) SERIAL=$2 ;;
         esac
@@ -119,10 +148,26 @@ parse_args() {
       *) log "unknown argument: $1"; usage; exit 2 ;;
     esac
   done
-  if [[ -z "$MEMORY" || -z "$VCPUS" || -z "$DISK" || -z "$IMAGE" || ${#NETS[@]} -eq 0 ]]; then
+  if [[ -z "$MEMORY" || -z "$VCPUS" || ${#NETS[@]} -eq 0 ]]; then
     usage
     exit 2
   fi
+  if [[ "$BOOT" != "network" && ( -z "$DISK" || -z "$IMAGE" ) ]]; then
+    usage
+    exit 2
+  fi
+}
+
+# check_macs: every --mac is a lower-case unicast MAC, none used twice.
+check_macs() {
+  local m seen=" "
+  for m in "${MACS[@]}"; do
+    [[ -n "$m" ]] || continue
+    [[ "$m" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || refuse "--mac '$m' is not a lower-case MAC aa:bb:cc:dd:ee:ff"
+    (( (16#${m:0:2} & 1) == 0 )) || refuse "--mac '$m' is a multicast address"
+    [[ "$seen" != *" $m "* ]] || refuse "--mac '$m' is given twice"
+    seen+="$m "
+  done
 }
 
 check_args() {
@@ -134,13 +179,19 @@ check_args() {
   VCPUS=$((10#$VCPUS))
   ((MEMORY >= 64)) || refuse "--memory $MEMORY is below 64 MiB"
   ((VCPUS >= 1)) || refuse "--vcpus must be at least 1"
-  [[ "$DISK" =~ ^[A-Za-z0-9/_.:-]+$ && "$DISK" != *..* ]] || refuse "--disk '$DISK' has characters outside [A-Za-z0-9/_.:-] or contains .."
-  [[ "$DISK" == "$HPS_DEV"/* ]] || refuse "--disk '$DISK' is not under $HPS_DEV"
-  [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
+  [[ "$BOOT" == "disk" || "$BOOT" == "network" ]] || refuse "--boot '$BOOT' is not disk or network"
+  if [[ -n "$DISK" ]]; then
+    [[ "$DISK" =~ ^[A-Za-z0-9/_.:-]+$ && "$DISK" != *..* ]] || refuse "--disk '$DISK' has characters outside [A-Za-z0-9/_.:-] or contains .."
+    [[ "$DISK" == "$HPS_DEV"/* ]] || refuse "--disk '$DISK' is not under $HPS_DEV"
+    [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
+  fi
   for n in "${NETS[@]}"; do
     [[ "$n" =~ ^[a-z][a-z0-9_.-]{0,14}$ ]] || refuse "--net '$n' is not a bridge name"
   done
-  [[ "$IMAGE" =~ ^/[A-Za-z0-9/_.-]+\.qcow2$ && "$IMAGE" != *..* ]] || refuse "--image '$IMAGE' is not an absolute path ending .qcow2"
+  check_macs
+  if [[ -n "$IMAGE" ]]; then
+    [[ "$IMAGE" =~ ^/[A-Za-z0-9/_.-]+\.qcow2$ && "$IMAGE" != *..* ]] || refuse "--image '$IMAGE' is not an absolute path ending .qcow2"
+  fi
   if [[ -z "$SERIAL" ]]; then
     SERIAL="$HPS_LIBVIRT_LOGDIR/$VM-serial.log"
   fi
@@ -149,7 +200,22 @@ check_args() {
 
 # render_xml <uuid-or-empty>: the domain XML on stdout, the spec hash inside.
 render_xml() {
-  local uuid=$1 n body hash
+  local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml
+  if [[ "$BOOT" == "network" ]]; then
+    boot_xml="    <boot dev='network'/>"
+    if [[ -n "$DISK" ]]; then
+      boot_xml+=$'\n'"    <boot dev='hd'/>"
+    fi
+  else
+    boot_xml="    <boot dev='hd'/>"
+  fi
+  if [[ -n "$DISK" ]]; then
+    disk_xml="    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native'/>
+      <source dev='$DISK'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>"
+  fi
   body=$(
     cat <<XML
   <name>$VM</name>
@@ -160,7 +226,7 @@ render_xml() {
     <type arch='x86_64' machine='q35'>hvm</type>
     <loader readonly='yes' type='pflash' format='raw'>$HPS_OVMF_CODE</loader>
     <nvram template='$HPS_OVMF_VARS' templateFormat='raw' format='raw'>$HPS_NVRAM_DIR/${VM}_VARS.fd</nvram>
-    <boot dev='hd'/>
+$boot_xml
   </os>
   <features><acpi/><apic/></features>
   <cpu mode='host-passthrough' check='none'/>
@@ -169,15 +235,17 @@ render_xml() {
   <on_reboot>restart</on_reboot>
   <on_crash>destroy</on_crash>
   <devices>
-    <disk type='block' device='disk'>
-      <driver name='qemu' type='raw' cache='none' io='native'/>
-      <source dev='$DISK'/>
-      <target dev='vda' bus='virtio'/>
-    </disk>
+$disk_xml
 XML
-    for n in "${NETS[@]}"; do
+    for i in "${!NETS[@]}"; do
+      n=${NETS[$i]}
+      mac_xml=""
+      if [[ -n "${MACS[$i]}" ]]; then
+        mac_xml="
+      <mac address='${MACS[$i]}'/>"
+      fi
       cat <<XML
-    <interface type='bridge'>
+    <interface type='bridge'>$mac_xml
       <source bridge='$n'/>
       <model type='virtio'/>
     </interface>
@@ -205,7 +273,11 @@ XML
     printf '  <uuid>%s</uuid>\n' "$uuid"
   fi
   printf '%s\n' "$body" | sed -n '1,/<\/os>/p'
-  printf "  <metadata>\n    <hps:vm xmlns:hps='urn:hps:vm'>\n      <hps:image>%s</hps:image>\n      <hps:spec>%s</hps:spec>\n    </hps:vm>\n  </metadata>\n" "$IMAGE" "$hash"
+  printf "  <metadata>\n    <hps:vm xmlns:hps='urn:hps:vm'>\n"
+  if [[ -n "$IMAGE" ]]; then
+    printf '      <hps:image>%s</hps:image>\n' "$IMAGE"
+  fi
+  printf "      <hps:spec>%s</hps:spec>\n    </hps:vm>\n  </metadata>\n" "$hash"
   printf '%s\n' "$body" | sed -n '/<\/os>/,$p' | sed '1d'
   printf '</domain>\n'
 }
@@ -214,6 +286,27 @@ defined_spec() {
   local xml
   xml=$(run virsh -c qemu:///system dumpxml "$VM")
   sed -n -E 's/.*<hps:spec>([0-9a-f]+)<\/hps:spec>.*/\1/p' <<< "$xml" | head -n 1
+}
+
+# report_macs: one "VM <vm> defined mac=<mac>" per NIC (--boot network only),
+# read back from the defined domain so generated MACs are included.
+report_macs() {
+  local list mac
+  list=$(run virsh -c qemu:///system domiflist "$VM")
+  while read -r _ type _ _ mac; do
+    if [[ "$type" == "bridge" && -n "$mac" ]]; then
+      printf 'VM %s defined mac=%s\n' "$VM" "$mac"
+    fi
+  done <<< "$list"
+}
+
+# finish: the success lines.
+finish() {
+  if [[ "$BOOT" == "network" ]]; then
+    report_macs
+  else
+    printf 'VM %s defined\n' "$VM"
+  fi
 }
 
 main() {
@@ -228,7 +321,7 @@ main() {
     have=$(defined_spec)
     if [[ "$have" == "$SPEC_HASH" ]]; then
       log "$VM is already defined with this definition; nothing to do"
-      printf 'VM %s defined\n' "$VM"
+      finish
       return 0
     fi
     if ((REPLACE == 0)); then
@@ -242,7 +335,7 @@ main() {
     render_xml "$uuid" > "$TMP/domain.xml"
   fi
   run virsh -c qemu:///system define "$TMP/domain.xml"
-  printf 'VM %s defined\n' "$VM"
+  finish
 }
 
 main "$@"

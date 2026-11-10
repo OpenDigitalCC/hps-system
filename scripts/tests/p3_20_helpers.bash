@@ -68,6 +68,14 @@ case "$cmd" in
     echo "Domain '$vm' is being shutdown" ;;
   destroy) rm -f "$STATE/pending.$vm"; echo "shut off" > "$STATE/dom.$vm"; echo "Domain '$vm' destroyed" ;;
   undefine) rm -f "$STATE/dom.$vm" "$STATE/xml.$vm"; echo "Domain '$vm' has been undefined" ;;
+  domiflist)
+    [[ -e "$STATE/xml.$vm" ]] || { echo "error: failed to get domain '$vm'" >&2; exit 1; }
+    printf ' Interface   Type     Source   Model    MAC\n-------------------------------------------\n'
+    awk -v q="'" 'BEGIN{n=0}
+      /<interface/ {inif=1; mac=""; src=""}
+      inif && /<mac address=/ {mac=$0; sub(".*<mac address=" q,"",mac); sub(q ".*","",mac)}
+      inif && /<source bridge=/ {src=$0; sub(".*<source bridge=" q,"",src); sub(q ".*","",src)}
+      /<\/interface>/ {n++; if (mac=="") mac=sprintf("52:54:00:00:00:%02x", n); printf " vnet%d   bridge   %s   virtio   %s\n", n, src, mac; inif=0}' "$STATE/xml.$vm" ;;
   domblklist) printf ' Target   Source\n------------------\n vda      /dev/md/%s-disk0\n' "$vm" ;;
   list)
     all=0; name=0

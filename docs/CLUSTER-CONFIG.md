@@ -101,10 +101,14 @@ interface, from bootstrap or from a file.
 ### Network layout
 
 `network_layout` is one JSON object, as `net-bridge-ensure` reads it:
-`{"<name>": {"cidr", "vlan", "bridge", "purpose", "nic"?}}`. Names match
+`{"<name>": {"cidr", "vlan", "bridge", "purpose", "nic"?, "uplink"?}}`. Names match
 `^[a-z][a-z0-9-]{0,15}$`; `cidr` is IPv4/prefix; `vlan` is 1 to 4094, or
 `null` or absent for untagged; `bridge` matches `^br-[a-z0-9-]{1,12}$`;
-`purpose` is a short word; `nic` is a MAC address when present. VLANs and
+`purpose` is a short word; `nic` is a MAC address when present. `uplink`
+is `boot` only, and only with `purpose` `provisioning`, with no `vlan` and no
+`nic`: the bridge is the one `hps-net` builds on the node's boot NIC (host key
+`boot_bridge`, see `docs/VM-LIFECYCLE.md`), so a VM can sit on the provisioning
+segment itself; `net-bridge-ensure` only checks that it exists. VLANs and
 bridges may not repeat. In the text file format the JSON goes on one line
 after `network_layout =`; in a JSON file it may be an object. It is stored,
 compared and exported as canonical one-line JSON.

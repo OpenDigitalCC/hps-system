@@ -172,6 +172,15 @@ my $L = '{"prod":{"cidr":"10.50.0.0/24","vlan":50,"bridge":"br-prod","purpose":"
       . '"flat":{"cidr":"10.60.0.0/24","vlan":null,"bridge":"br-flat","purpose":"storage","nic":"52:54:00:aa:bb:cc"}}';
 good('network_layout', $L, 'a layout (vlan, untagged, nic)');
 good('network_layout', '{}', 'an empty layout');
+# CS-3.12a: the boot-NIC bridge
+good('network_layout', '{"prov":{"cidr":"10.100.1.0/24","vlan":null,"bridge":"br-prov","purpose":"provisioning","uplink":"boot"}}', 'a provisioning network with uplink boot');
+good('network_layout', '{"prov":{"cidr":"10.100.1.0/24","bridge":"br-prov","purpose":"provisioning"}}', 'purpose provisioning without an uplink is a plain network');
+bad('network_layout', '{"prov":{"cidr":"10.100.1.0/24","bridge":"br-prov","purpose":"workload","uplink":"boot"}}', 'uplink boot on a workload network');
+bad('network_layout', '{"prov":{"cidr":"10.100.1.0/24","bridge":"br-prov","purpose":"storage","uplink":"boot"}}', 'uplink boot on a storage network');
+bad('network_layout', '{"prov":{"cidr":"10.100.1.0/24","bridge":"br-prov","purpose":"provisioning","uplink":"eth0"}}', 'an uplink that is not boot');
+bad('network_layout', '{"prov":{"cidr":"10.100.1.0/24","bridge":"br-prov","purpose":"provisioning","uplink":["boot"]}}', 'an uplink that is not a word');
+bad('network_layout', '{"prov":{"cidr":"10.100.1.0/24","vlan":7,"bridge":"br-prov","purpose":"provisioning","uplink":"boot"}}', 'uplink boot with a vlan');
+bad('network_layout', '{"prov":{"cidr":"10.100.1.0/24","bridge":"br-prov","purpose":"provisioning","uplink":"boot","nic":"52:54:00:aa:bb:cc"}}', 'uplink boot with a nic');
 bad('network_layout', 'not json', 'text');
 bad('network_layout', '[]', 'an array');
 bad('network_layout', '{"Prod":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload"}}', 'an upper-case name');

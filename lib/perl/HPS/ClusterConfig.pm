@@ -18,7 +18,8 @@ package HPS::ClusterConfig;
 #   subnet_base     X.Y, the first two octets of the storage subnets
 #   iplist          IPv4 addresses separated by commas and/or spaces
 #   hostlist        host names or IPv4 addresses separated by commas and/or spaces
-#   layout          JSON object {"<name>": {cidr, vlan, bridge, purpose, nic?}}
+#   layout          JSON object {"<name>": {cidr, vlan, bridge, purpose, nic?, uplink?}}
+#                   (uplink boot, only with purpose provisioning: the bridge hps-net builds on the boot NIC)
 # An optional (not required) key may be the empty string.
 use strict;
 use warnings;
@@ -241,7 +242,7 @@ sub validate_layout ($text) {
         my $n = $data->{$name};
         return "network name '$name' must match ^[a-z][a-z0-9-]{0,15}\$" unless $name =~ /^[a-z][a-z0-9-]{0,15}\z/;
         return "network '$name' must be an object" unless ref $n eq 'HASH';
-        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic);
+        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic uplink);
         my ($extra) = grep { !$ok{$_} } sort keys %$n;
         return "network '$name': unknown field '$extra'" if defined $extra;
         for my $req (qw(cidr bridge purpose)) {
@@ -250,6 +251,12 @@ sub validate_layout ($text) {
         return "network '$name': cidr must be IPv4/prefix" if defined validate_value({ rule => 'cidr', required => 1 }, $n->{cidr});
         return "network '$name': bridge must match ^br-[a-z0-9-]{1,12}\$" unless $n->{bridge} =~ /^br-[a-z0-9-]{1,12}\z/;
         return "network '$name': purpose must be a short word" unless $n->{purpose} =~ /^[a-z][a-z0-9-]{0,15}\z/;
+        if (defined $n->{uplink}) {
+            return "network '$name': uplink must be \"boot\"" unless !ref $n->{uplink} && $n->{uplink} eq 'boot';
+            return "network '$name': uplink boot is only for purpose provisioning" unless $n->{purpose} eq 'provisioning';
+            return "network '$name': uplink boot (a bridge hps-net builds on the boot NIC) takes no vlan and no nic"
+                if defined $n->{vlan} || defined $n->{nic};
+        }
         if (defined $n->{vlan}) {
             return "network '$name': vlan must be 1 to 4094"
                 unless !ref $n->{vlan} && $n->{vlan} =~ /^[1-9][0-9]{0,3}\z/ && $n->{vlan} <= 4094;

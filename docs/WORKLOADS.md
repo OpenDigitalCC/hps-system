@@ -34,9 +34,10 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `memory_mib` | 256-262144 |
 | `vcpus` | 1-64 |
 | `priority` | 1-5, default 3; 1 starts first and stops last |
-| `image` | `^[a-z0-9][a-z0-9._-]{0,63}$`; `hps-resources/images/<image>.qcow2` and `<image>.sha256` must exist on the IPS (checked by `create`; `image-fetch` on the node checks the sum) |
+| `image` | `^[a-z0-9][a-z0-9._-]{0,63}$`; `hps-resources/images/<image>.qcow2` and `<image>.sha256` must exist on the IPS (checked by `create`; `image-fetch` on the node checks the sum); absent when `boot` is `network` |
+| `boot` | optional, `disk` (default) or `network`. `network`: the VM netboots from the first NIC like a metal node (a nested HPS node, CS-3.12a); `image` is refused, `disks` may be empty or absent, so `compute_host` is required; `create` runs `net-bridge-ensure` and `vm-define --boot network` only (no zvol, image, mirror or image write) and `start`, `stop`, `status` and `destroy` are unchanged |
 | `disks[].size` | `^[1-9][0-9]*[MGT]$` |
-| `disks` | exactly one per VM (`vm-define` keeps one `--disk`) |
+| `disks` | exactly one per VM (`vm-define` keeps one `--disk`); none needed with `boot: network` |
 | `legs` | 1 or 2; `{host,pool}` is a local zvol, `{host,iqn[,portal]}` a remote LUN already exported by the storage side; at most one local leg per disk; one leg only if it is local (the disk is then the zvol itself, no mirror) |
 | `nets` | non-empty; every name must be in the cluster key `network_layout` |
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
@@ -101,6 +102,10 @@ Cluster key `workload_<name>`:
                  "disks": {"root": {"md": "/dev/md/$VM-root", "legs": ["local:...", "iscsi:..."]}},
                  "last_owner": "$NODE", "started_at": "..."}}}
 ```
+
+A `boot: network` VM has `"disks": {}` and `"macs": ["$MAC", ...]`, the MACs
+`vm-define` reported (`VM $VM defined mac=$MAC`, one per NIC), which are the
+identity the IPS sees when the VM netboots.
 
 States. VM: `creating`, `defined`, `running`, `stopped`. Workload: `creating`
 (an unfinished create; carries `done`, the finished step keys), `created`,
