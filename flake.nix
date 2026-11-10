@@ -76,5 +76,40 @@
       packages.${system} =
         lib.mapAttrs (name: _: netbootArtefacts name self.nixosConfigurations.${name}) profiles
         // { default = self.packages.${system}.node-base; };
+
+      # The AppArmor profiles of the compute role, parsed (no kernel load) from
+      # the evaluated node-converged configuration, so the check sees exactly
+      # the text the node ships. A sample generated per-guest profile exercises
+      # the `include if exists <libvirt/<uuid>.files>` route the parser takes
+      # when virt-aa-helper loads a guest's profile.
+      checks.${system}.apparmor-profiles =
+        let
+          aa = self.nixosConfigurations.node-converged.config.security.apparmor;
+          incDir = pkgs.linkFarm "hps-apparmor-includes"
+            (lib.mapAttrsToList (name: path: { inherit name path; }) aa.includes);
+          policyFiles = lib.mapAttrsToList (n: p: pkgs.writeText "${n}.profile" p.profile) aa.policies;
+        in
+        pkgs.runCommand "hps-apparmor-profiles" { nativeBuildInputs = [ pkgs.apparmor-parser ]; } ''
+          parse() { apparmor_parser -Q -K -I ${incDir} -I ${pkgs.apparmor-profiles}/etc/apparmor.d "$@"; }
+          mkdir -p gen/libvirt
+          cat > gen/libvirt/libvirt-00000000-0000-0000-0000-000000000000 <<'EOF'
+          #include <tunables/global>
+          profile libvirt-00000000-0000-0000-0000-000000000000 flags=(attach_disconnected) {
+            #include <abstractions/libvirt-qemu>
+            #include if exists <libvirt/libvirt-00000000-0000-0000-0000-000000000000.files>
+          }
+          EOF
+          cat > gen/libvirt/libvirt-00000000-0000-0000-0000-000000000000.files <<'EOF'
+            "/dev/md127" rwk,
+            "/var/log/libvirt/**/vm.log" w,
+          EOF
+          for f in ${lib.concatStringsSep " " policyFiles} ${incDir}/libvirt/TEMPLATE.qemu; do
+            echo "parsing $f"
+            parse "$f"
+          done
+          echo "parsing sample generated guest profile"
+          parse -I gen gen/libvirt/libvirt-00000000-0000-0000-0000-000000000000
+          touch $out
+        '';
     };
 }

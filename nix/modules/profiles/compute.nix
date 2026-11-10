@@ -12,6 +12,8 @@
 #    description shipped with QEMU is linked into /run/libvirt/nix-ovmf by
 #    libvirtd-config (an assertion fires if `qemu.ovmf.*` is set).
 #  - guest confinement: see docs/CONFINEMENT.md, which states exactly what is on.
+#    The AppArmor profiles (libvirtd, virt-aa-helper, the guest abstraction and
+#    template) are in compute-apparmor.nix.
 #  - open-iscsi as an INITIATOR only. The initiator name cannot be in the image:
 #    one image serves every node. hps-iscsi-initiator writes it at boot from the
 #    registry hostname (iqn.2026-11.hps:<hostname>) and /etc/iscsi/
@@ -28,6 +30,8 @@
 { config, lib, pkgs, ... }:
 
 {
+  imports = [ ./compute-apparmor.nix ];
+
   hps.roles = lib.mkDefault "TCH";
 
   # ---- libvirt / QEMU / KVM -------------------------------------------------
@@ -49,6 +53,7 @@
         security_default_confined = 1
         security_require_confined = 0
         set_process_name = 1
+        security_driver = "apparmor"
       '';
     };
     onBoot = "ignore";
@@ -96,10 +101,10 @@
 
   boot.kernelModules = [ "kvm-intel" "kvm-amd" "vhost_net" "8021q" "bridge" ];
 
-  # AppArmor in the kernel and the userspace parser. libvirt (built with the
-  # AppArmor security driver in nixpkgs) probes for it at start; whether it
-  # actually confines guests on this image is reported by docs/CONFINEMENT.md
-  # section "Verify on the node". mkDefault: one line turns it off.
+  # AppArmor in the kernel and the userspace parser. The libvirt profiles that
+  # make the per-guest layer work are in compute-apparmor.nix; qemu.conf above
+  # sets security_driver = "apparmor" so libvirtd fails to start rather than fall
+  # back to the DAC driver alone. mkDefault: one line turns the module off.
   security.apparmor.enable = lib.mkDefault true;
 
   # ---- open-iscsi initiator -------------------------------------------------
