@@ -51,6 +51,18 @@ esac
 exit "${FAKE_NIX_RC:-0}"
 EOF
   chmod +x "$TEST_DIR/bin/nix"
+  # Fake nix-store: records the call; --verify-path fails when FAKE_VERIFY_BAD
+  # names a substring of the path.
+  cat > "$TEST_DIR/bin/nix-store" <<'SHIM'
+#!/bin/bash
+echo "nix-store $*" >> "$NIX_LOG"
+if [[ "$1" == --verify-path && -n "${FAKE_VERIFY_BAD:-}" && "$2" == *"$FAKE_VERIFY_BAD"* ]]; then
+  echo "path '$2' was modified! expected hash 'sha256:x', got 'sha256:y'" >&2
+  exit 1
+fi
+exit 0
+SHIM
+  chmod +x "$TEST_DIR/bin/nix-store"
 }
 
 teardown() {
@@ -188,4 +200,22 @@ ALL_PROFILES="audit node-base node-converged"
   FAKE_NIX_RC=1 run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -ne 0 ]
   [ ! -e "$OUT/latest" ]
+}
+
+@test "every published kernel and initrd store path is verified first" {
+  run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
+  [ "$status" -eq 0 ]
+  for p in audit node-base node-converged; do
+    grep -q "nix-store --verify-path $FAKE_STORE/hps-netboot-$p" "$NIX_LOG"
+  done
+}
+
+@test "a damaged store path fails the build: no latest, nothing of that profile published" {
+  FAKE_VERIFY_BAD=hps-netboot-audit run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"failed verification"* ]]
+  [[ "$output" == *"--repair"* ]]
+  [ ! -e "$OUT/latest" ]
+  pin="$(pin_for "$ALL_PROFILES")"
+  [ ! -e "$OUT/$pin/audit/initrd" ]
 }

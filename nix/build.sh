@@ -114,6 +114,20 @@ build_profile() {
   fi
 }
 
+# verify_store_file <link>/<file>: the store path holding the file must still
+# match the hash nix recorded for it. A damaged path is not rebuilt by nix (it
+# counts as present), so without this check every later build would publish the
+# same damaged file. 2026-11-10: the audit initrd path had 24 MiB of zeros at its
+# start after a disk-full build; the image downloaded and the kernel panicked.
+verify_store_file() {
+  local f
+  f=$(readlink -f "$1")
+  if ! run nix-store --verify-path "$(dirname "$f")"; then
+    echo "build.sh: $1: store path $(dirname "$f") failed verification (its contents differ from the recorded hash); repair the store (nix-store --verify --check-contents --repair) and build again" >&2
+    return 1
+  fi
+}
+
 publish_profile() {
   local profile="$1"
   local link="$2"
@@ -121,6 +135,8 @@ publish_profile() {
   local dest="$OUT/$pin/$profile"
   local built_at
   built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  verify_store_file "$link/bzImage" || return 1
+  verify_store_file "$link/initrd" || return 1
   run mkdir -p "$dest"
   run install -m 0644 "$link/bzImage" "$dest/bzImage.tmp"
   run install -m 0644 "$link/initrd" "$dest/initrd.tmp"
