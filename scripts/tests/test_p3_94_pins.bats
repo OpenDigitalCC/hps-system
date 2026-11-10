@@ -323,7 +323,7 @@ build_pin() {
   [ "$status" -eq 3 ]
   [[ "$output" == *"node-converged/bzImage"* ]]
   run "$ONB" show 525400000001 --json
-  [[ "$output" == *"\"system_pin\": \"$p1\""* ]]
+  echo "$output" | jq -e --arg p "$p1" '.identity.system_pin == $p'
   run "$ONB" repin 525400000001 --to-latest
   [ "$status" -eq 3 ]
   run "$ONB" repin 525400000001 --pin "$p1"
