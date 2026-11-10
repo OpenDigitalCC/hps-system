@@ -39,6 +39,7 @@ hand.
 | `boot_manager cluster_variable` | `?cmd=cluster_variable&name=network_dns_domain` returns 200 and a non-empty value | |
 | `nixos boot.json` | `/nixos/<latest pin>/<profile>/boot.json` returns 200 and JSON with `pin` | No `nixos/latest` is a WARN (no image built or seeded). |
 | `tftp boot files` | `snponly.efi` and `undionly.kpxe` exist and are non-empty in the TFTP root | |
+| `ipxe` | the TFTP root's `snponly.efi` matches the latest pin's `ipxe/ipxe.json`; the line reads `ipxe: pin <pin> <version>` | Otherwise a WARN reading `ipxe: image <Debian package version> (...)`: the latest pin has no iPXE, or the root does not hold it (see `docs/IPXE.md`). Only reads. |
 | `dns ips`, `dns registry host` | dnsmasq answers for `ips.$DOMAIN` and for the first registry host with a `HOSTNAME` | No registry host is a WARN; no `dig` or `host` on the IPS is a WARN. |
 | `ctrl-exec dispatcher`, `api`, `cli` | each is installed; `ctrl-exec-dispatcher --version` and `ctrl-exec-cli --version` are printed | The API server has no `--version`; its version is in the `api health` line. |
 | `ctrl-exec api socket` | the `api_socket` of `ctrl-exec.conf` is a socket owned by the configured `api_socket_group` | |

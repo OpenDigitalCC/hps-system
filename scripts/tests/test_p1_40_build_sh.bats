@@ -38,6 +38,14 @@ case "$sub" in
       esac
     done
     profile="${inst##*#}"
+    if [[ "$profile" == ipxe ]]; then
+      store="$FAKE_STORE/hps-ipxe"
+      mkdir -p "$store"
+      for n in snponly.efi ipxe.efi undionly.kpxe; do echo "ipxe-$n" > "$store/$n"; done
+      echo '{"version":"2.0.0","files":["snponly.efi","ipxe.efi","undionly.kpxe"],"nixpkgs_rev":"0123456789abcdef0123456789abcdef01234567"}' > "$store/ipxe.json"
+      ln -sfn "$store" "$link"
+      exit 0
+    fi
     store="$FAKE_STORE/hps-netboot-$profile"
     mkdir -p "$store"
     echo "kernel-$profile" > "$store/bzImage"
@@ -126,7 +134,7 @@ ALL_PROFILES="audit node-base node-converged"
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109 --no-cache
   [ "$status" -eq 0 ]
   run grep -c -- '--option substituters .*--rebuild' "$NIX_LOG"
-  [ "$output" -eq 3 ]
+  [ "$output" -eq 4 ]
 }
 
 @test "without --no-cache the build uses the configured substituters" {
@@ -148,11 +156,11 @@ ALL_PROFILES="audit node-base node-converged"
   CTRL_EXEC_FLAKE="path:/ctrl-exec" run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   run grep -c -- '--override-input ctrl-exec path:/ctrl-exec' "$NIX_LOG"
-  # metadata + 3 builds; nix copy takes no flake flags
-  [ "$output" -eq 4 ]
+  # metadata + 3 profile builds + ipxe; nix copy takes no flake flags
+  [ "$output" -eq 5 ]
   # the flag sits after the subcommand, where nix accepts it
   run grep -c -E -- '(flake metadata|build) --no-write-lock-file --override-input' "$NIX_LOG"
-  [ "$output" -eq 4 ]
+  [ "$output" -eq 5 ]
 }
 
 @test "without a flake.lock the lock file is not written; with one it is left alone" {

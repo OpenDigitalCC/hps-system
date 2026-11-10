@@ -83,6 +83,43 @@
             ln -s ${cfg.system.build.netbootRamdisk}/${cfg.system.boot.loader.initrdFile} "$out/initrd"
             cp ${bootJson} "$out/boot.json"
           '';
+
+      # iPXE from the pinned nixpkgs, built with exactly the targets the IPS
+      # serves (IPS-09): snponly.efi (UEFI, dnsmasq's first chain step),
+      # ipxe.efi (UEFI NICs without SNP) and undionly.kpxe (BIOS). The default
+      # platform targets are switched off so nothing else is built; firmwareBinary
+      # names one of ours because the package asserts it is among the targets.
+      # No embedded script and no option beyond the package defaults: the DHCP
+      # options chain to boot_manager.sh?cmd=init, and no secret is built in.
+      # Secure Boot is out of scope: these binaries are unsigned (docs/IPXE.md).
+      ipxeBuilt = pkgs.ipxe.override {
+        enableDefaultPlatformTargets = false;
+        additionalTargets = {
+          "bin-x86_64-efi/snponly.efi" = null;
+          "bin-x86_64-efi/ipxe.efi" = null;
+          "bin/undionly.kpxe" = null;
+        };
+        firmwareBinary = "ipxe.efi";
+      };
+
+      # <out>/{snponly.efi,ipxe.efi,undionly.kpxe,ipxe.json}; ipxe.json carries
+      # the version and file names, build.sh adds the sha256 on publishing.
+      ipxeArtefacts =
+        let
+          ipxeJson = pkgs.writeText "hps-ipxe.json" (builtins.toJSON {
+            version = ipxeBuilt.version;
+            files = [ "snponly.efi" "ipxe.efi" "undionly.kpxe" ];
+            nixpkgs_rev = nixpkgs.rev or "dirty";
+          });
+        in
+        pkgs.runCommand "hps-ipxe-${ipxeBuilt.version}" { passthru = { inherit ipxeBuilt; }; } ''
+          mkdir -p "$out"
+          for f in snponly.efi ipxe.efi undionly.kpxe; do
+            test -s ${ipxeBuilt}/$f
+            cp ${ipxeBuilt}/$f "$out/$f"
+          done
+          cp ${ipxeJson} "$out/ipxe.json"
+        '';
     in
     {
       overlays.default = om3Overlay;
@@ -93,8 +130,12 @@
         lib.mapAttrs (name: _: netbootArtefacts name self.nixosConfigurations.${name}) profiles
         // {
           default = self.packages.${system}.node-base;
+          ipxe = ipxeArtefacts;
           om3 = (pkgs.extend om3Overlay).om3;
         };
+
+      # The iPXE outputs build (their derivation fails on a missing or empty target).
+      checks.${system}.ipxe = ipxeArtefacts;
 
       # The AppArmor profiles of the compute role, parsed (no kernel load) from
       # the evaluated node-converged configuration, so the check sees exactly

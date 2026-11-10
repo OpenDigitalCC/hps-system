@@ -7,10 +7,13 @@
 #   nix build <src>#<profile>          -> bzImage, initrd, boot.json (store)
 # then computes the pin  nixos-<ver>-<yyyymmdd>-<nixpkgs short rev>-<content7>  and writes
 #   <out>/<pin>/<profile>/{bzImage,initrd,boot.json}
+#   <out>/<pin>/ipxe/{snponly.efi,ipxe.efi,undionly.kpxe,ipxe.json}   (IPS-09)
 #   <out>/latest                       (the pin)
 #   nix copy --to file://<cache>       (each profile's system closure)
 # boot.json gains built_at, pin, sha256 and size (bzImage, initrd) on the way
-# out of the store; <pin>/SHA256SUMS lists every profile's two files.
+# out of the store, plus ipxe {version}; <pin>/SHA256SUMS lists every profile's
+# two files and the three iPXE binaries. ipxe.json carries version, files,
+# sha256 and size of the iPXE binaries (built by `nix build <src>#ipxe`).
 #
 # Usage:
 #   build.sh --out DIR --cache DIR [--src DIR] [--profiles "a b"] [--no-cache]
@@ -29,6 +32,8 @@ SRC=$(cd "$SELF_DIR/.." && pwd)
 OUT=""
 CACHE=""
 PROFILES="audit node-base node-converged"
+IPXE_FILES="snponly.efi ipxe.efi undionly.kpxe"
+IPXE_VERSION=""
 NO_CACHE=0
 BUILD_DATE="${BUILD_DATE:-}"
 mkdir -p "${TMPDIR:-/tmp}"
@@ -155,11 +160,61 @@ publish_profile() {
   jq --arg built_at "$built_at" --arg pin "$pin" --arg profile "$profile" \
     --arg bz_sha "$bz_sha" --arg rd_sha "$rd_sha" \
     --argjson bz_size "$bz_size" --argjson rd_size "$rd_size" \
+    --arg ipxe "$IPXE_VERSION" \
     '.built_at = $built_at | .pin = $pin | .profile = $profile
+     | (if $ipxe != "" then .ipxe = {version: $ipxe} else . end)
      | .sha256 = {bzImage: $bz_sha, initrd: $rd_sha}
      | .size = {bzImage: $bz_size, initrd: $rd_size}' \
     "$link/boot.json" > "$dest/boot.json.tmp"
   run mv -f "$dest/boot.json.tmp" "$dest/boot.json"
+}
+
+# publish_ipxe <link> <pin>: <pin>/ipxe/{snponly.efi,ipxe.efi,undionly.kpxe,
+# ipxe.json}. ipxe.json is the store's (version, files) plus built_at, pin and
+# the sha256 and size of each binary, taken from the published files.
+publish_ipxe() {
+  local link="$1"
+  local pin="$2"
+  local dest="$OUT/$pin/ipxe"
+  local f sha_json="{}" size_json="{}" sha size
+  for f in $IPXE_FILES; do
+    verify_store_file "$link/$f" || return 1
+    [[ -s "$link/$f" ]] || { echo "build.sh: ipxe output lacks $f" >&2; return 1; }
+  done
+  [[ -f "$link/ipxe.json" ]] || { echo "build.sh: ipxe output lacks ipxe.json" >&2; return 1; }
+  run mkdir -p "$dest"
+  for f in $IPXE_FILES; do
+    run install -m 0644 "$link/$f" "$dest/$f.tmp"
+    run mv -f "$dest/$f.tmp" "$dest/$f"
+    sha=$(file_sha256 "$dest/$f")
+    size=$(file_size "$dest/$f")
+    sha_json=$(jq -c --arg k "$f" --arg v "$sha" '.[$k] = $v' <<< "$sha_json")
+    size_json=$(jq -c --arg k "$f" --argjson v "$size" '.[$k] = $v' <<< "$size_json")
+  done
+  log "+ jq add built_at/pin/sha256/size -> $dest/ipxe.json"
+  jq --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pin "$pin" \
+    --argjson sha "$sha_json" --argjson size "$size_json" \
+    '.built_at = $built_at | .pin = $pin | .sha256 = $sha | .size = $size' \
+    "$link/ipxe.json" > "$dest/ipxe.json.tmp"
+  run mv -f "$dest/ipxe.json.tmp" "$dest/ipxe.json"
+}
+
+build_ipxe() {
+  local link="$1"
+  local -a extra=()
+  if [[ $NO_CACHE -eq 1 ]]; then
+    extra+=(--option substituters "" --rebuild)
+  fi
+  run nix "${NIX_FLAGS[@]}" build "${FLAKE_FLAGS[@]}" "path:$SRC#ipxe" --out-link "$link" "${extra[@]}"
+  if [[ ! -f "$link/ipxe.json" ]]; then
+    echo "build.sh: ipxe built without ipxe.json" >&2
+    return 1
+  fi
+  IPXE_VERSION=$(jq -r '.version // empty' "$link/ipxe.json")
+  if [[ -z "$IPXE_VERSION" ]]; then
+    echo "build.sh: ipxe.json carries no version" >&2
+    return 1
+  fi
 }
 
 file_sha256() {
@@ -175,13 +230,17 @@ file_size() {
 write_sums() {
   local pin="$1"
   local dir="$OUT/$pin"
-  local profile
+  local profile f
   log "+ write $dir/SHA256SUMS"
   : > "$dir/SHA256SUMS.tmp"
   for profile in $(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
     [[ -f "$dir/$profile/bzImage" && -f "$dir/$profile/initrd" ]] || continue
     printf '%s  %s/bzImage\n' "$(file_sha256 "$dir/$profile/bzImage")" "$profile" >> "$dir/SHA256SUMS.tmp"
     printf '%s  %s/initrd\n' "$(file_sha256 "$dir/$profile/initrd")" "$profile" >> "$dir/SHA256SUMS.tmp"
+  done
+  for f in $IPXE_FILES; do
+    [[ -f "$dir/ipxe/$f" ]] || continue
+    printf '%s  ipxe/%s\n' "$(file_sha256 "$dir/ipxe/$f")" "$f" >> "$dir/SHA256SUMS.tmp"
   done
   run mv -f "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS"
 }
@@ -225,16 +284,20 @@ main() {
   for profile in $PROFILES; do
     build_profile "$profile" "$WORK/result-$profile"
   done
+  build_ipxe "$WORK/result-ipxe"
 
   version=$(jq -r '.nixos_version' "$WORK/result-${PROFILES%% *}/boot.json")
   pin="nixos-${version}-${BUILD_DATE}-${rev}-$(content_suffix)"
   log "pin: $pin"
 
+  publish_ipxe "$WORK/result-ipxe" "$pin"
   for profile in $PROFILES; do
     link="$WORK/result-$profile"
     publish_profile "$profile" "$link" "$pin"
     cache_profile "$link"
   done
+  run mkdir -p "$CACHE"
+  run nix "${NIX_FLAGS[@]}" copy --to "file://$CACHE" "$(readlink -f "$WORK/result-ipxe")"
   write_sums "$pin"
 
   printf '%s\n' "$pin" > "$OUT/latest.tmp"

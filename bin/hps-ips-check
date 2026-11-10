@@ -10,7 +10,10 @@
 #       log_message (POST, empty body: not 411), cluster_variable, the latest
 #       pin's boot.json under /nixos/. cmd=init is NOT probed: from the IPS's
 #       own address it would register that address as a held host.
-#   2 TFTP boot files exist and are non-empty
+#   2 TFTP boot files exist and are non-empty; then one line "ipxe: <source>
+#       <version>": the TFTP root's snponly.efi matches the latest pin's
+#       ipxe/ipxe.json (source "pin <pin>", PASS) or does not (source "image",
+#       the Debian iPXE; WARN, with the reason)
 #   3 dnsmasq answers DNS for the IPS's own name and for one registry host
 #   4 ctrl-exec: dispatcher, API, CLI present with versions; API socket and
 #       group; ctrl-exec-cli health over the socket
@@ -273,7 +276,46 @@ check_tftp() {
     record FAIL "tftp boot files" "missing or empty in ${tftp}:${missing}"
   else
     record PASS "tftp boot files" "snponly.efi and undionly.kpxe present, non-empty"
+    check_ipxe "$tftp"
   fi
+}
+
+#-------------------------------------------------------------------------------
+# check_ipxe <tftp dir>: which iPXE the TFTP root serves and its version (IPS-09).
+# Read-only: compares the root's snponly.efi with the latest pin's ipxe.json.
+#-------------------------------------------------------------------------------
+check_ipxe() {
+  local tftp="$1" resources pin json want got version
+  resources="$(hps_get_config resources 2> /dev/null)" || resources=""
+  pin=""
+  if [[ -n "$resources" && -r "${resources}/nixos/latest" ]]; then
+    pin="$(tr -d '[:space:]' < "${resources}/nixos/latest")"
+  fi
+  json="${resources}/nixos/${pin}/ipxe/ipxe.json"
+  got=""
+  if [[ -s "${tftp}/snponly.efi" ]]; then
+    got="$(sha256sum "${tftp}/snponly.efi" | cut -d' ' -f1)"
+  fi
+  if [[ -n "$pin" && -f "$json" ]]; then
+    version="$(jq -r '.version // "unknown"' "$json" 2> /dev/null)" || version="unknown"
+    want="$(jq -r '.sha256["snponly.efi"] // empty' "$json" 2> /dev/null)" || want=""
+    if [[ -n "$want" && "$got" == "$want" ]]; then
+      record PASS "ipxe" "pin ${pin} ${version}"
+      return 0
+    fi
+    record WARN "ipxe" "image $(ipxe_image_version) (the TFTP root does not hold latest pin ${pin}'s iPXE ${version}; see the bring-up log)"
+    return 0
+  fi
+  record WARN "ipxe" "image $(ipxe_image_version) (latest pin ${pin:-none} has no iPXE; the Debian iPXE of the image is served)"
+}
+
+# The Debian ipxe package version of the image, or "unknown".
+ipxe_image_version() {
+  local v=""
+  if command -v dpkg-query > /dev/null 2>&1; then
+    v="$(dpkg-query -W -f='${Version}' ipxe 2> /dev/null)" || v=""
+  fi
+  printf '%s' "${v:-unknown}"
 }
 
 #===============================================================================

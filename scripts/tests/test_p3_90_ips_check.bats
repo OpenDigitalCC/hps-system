@@ -45,6 +45,9 @@ EOF
   echo loader > "$TEST_DIR/tftp/snponly.efi"
   echo loader > "$TEST_DIR/tftp/undionly.kpxe"
   echo pin1 > "$TEST_DIR/res/nixos/latest"
+  mkdir -p "$TEST_DIR/res/nixos/pin1/ipxe"
+  printf '{"version":"2.0.0","files":["snponly.efi"],"sha256":{"snponly.efi":"%s"}}\n' \
+    "$(sha256sum "$TEST_DIR/tftp/snponly.efi" | cut -d' ' -f1)" > "$TEST_DIR/res/nixos/pin1/ipxe/ipxe.json"
   echo '{"pin":"pin1"}' > "$TEST_DIR/res/nixos/pin1/audit/boot.json"
   perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 1) or die $!' "$TEST_DIR/api.sock"
   printf 'api_socket = %s\napi_socket_group = %s\n' "$TEST_DIR/api.sock" "$(id -gn)" > "$TEST_DIR/ctrl-exec.conf"

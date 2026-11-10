@@ -2,6 +2,8 @@ package HPS::Pins;
 # Retention and integrity of the published NixOS pins (IPS-05).
 #
 #   <resources>/nixos/<pin>/<profile>/{bzImage,initrd,boot.json}
+#   <resources>/nixos/<pin>/ipxe/{snponly.efi,ipxe.efi,undionly.kpxe,ipxe.json}
+#                                             (IPS-09; not a profile)
 #   <resources>/nixos/<pin>/SHA256SUMS        (written by nix/build.sh)
 #   <resources>/nixos/latest                  (the newest pin)
 #
@@ -30,6 +32,8 @@ package HPS::Pins::Error {
 
 my $PIN_RE = qr/^[a-z0-9][a-z0-9.-]+\z/;
 my @ARTEFACTS = qw(bzImage initrd);
+# The pin's iPXE directory sits beside the profile directories and is not one.
+my $IPXE_DIR = 'ipxe';
 
 sub new ($class, %opt) {
     my $self = {
@@ -81,7 +85,7 @@ sub _boot_json ($self, $pin, $profile) {
 sub profiles ($self, $pin) {
     my $dir = $self->nixos_dir . "/$pin";
     opendir(my $dh, $dir) or return ();
-    my @p = sort grep { !/^\./ && -d "$dir/$_" } readdir $dh;
+    my @p = sort grep { !/^\./ && $_ ne $IPXE_DIR && -d "$dir/$_" } readdir $dh;
     closedir $dh;
     return @p;
 }
@@ -109,7 +113,7 @@ sub pin_date ($self, $pin) {
 sub pin_size ($self, $pin) {
     my $dir = $self->nixos_dir . "/$pin";
     my $sum = 0;
-    for my $prof ($self->profiles($pin)) {
+    for my $prof ($self->profiles($pin), (-d "$dir/$IPXE_DIR" ? ($IPXE_DIR) : ())) {
         opendir(my $dh, "$dir/$prof") or next;
         for my $f (grep { !/^\./ } readdir $dh) {
             $sum += -s "$dir/$prof/$f" if -f "$dir/$prof/$f";
@@ -271,7 +275,47 @@ sub verify_pin ($self, $pin) {
             push @fail, @here;
         }
     }
+    $self->_verify_ipxe($pin, $sums, \@fail, \@unverified);
     return { pin => $pin, ok => (@fail ? 0 : 1), failures => \@fail, unverified => \@unverified };
+}
+
+# The pin's ipxe/ files, when the directory exists: each file named in
+# ipxe.json (sha256, size) and in SHA256SUMS is checked like an artefact. A
+# pin without ipxe/ has nothing to check. Appends to @$fail and @$unverified.
+sub _verify_ipxe ($self, $pin, $sums, $fail, $unverified) {
+    my $dir = $self->nixos_dir . "/$pin/$IPXE_DIR";
+    return unless -d $dir;
+    my $j = _slurp("$dir/ipxe.json");
+    my $meta = defined $j ? eval { JSON::PP::decode_json($j) } : undef;
+    unless (ref $meta eq 'HASH') {
+        push @$fail, { file => "$IPXE_DIR/ipxe.json", reason => (defined $j ? 'not valid JSON' : 'missing') };
+        return;
+    }
+    my @files = ref $meta->{files} eq 'ARRAY' ? @{ $meta->{files} } : ();
+    unless (@files) {
+        push @$fail, { file => "$IPXE_DIR/ipxe.json", reason => 'names no files' };
+        return;
+    }
+    for my $name (@files) {
+        my $rel = "$IPXE_DIR/$name";
+        if ($name !~ /\A[A-Za-z0-9][A-Za-z0-9._-]*\z/) {
+            push @$fail, { file => $rel, reason => 'not a plain file name' };
+            next;
+        }
+        my $sha  = ref $meta->{sha256} eq 'HASH' ? $meta->{sha256}{$name} : undef;
+        my $size = ref $meta->{size}   eq 'HASH' ? $meta->{size}{$name}   : undef;
+        my $sum  = $sums ? $sums->{$rel} : undef;
+        if (!defined $sha && !defined $sum) {
+            push @$unverified, $rel;
+            push @$fail, { file => $rel, reason => 'missing' } unless -f "$dir/$name";
+            next;
+        }
+        my @here;
+        $self->_check_file($pin, $rel, $sha, $size, \@here) if defined $sha;
+        $self->_check_file($pin, $rel, $sum, undef, \@here) if defined $sum && !@here;
+        push @$fail, @here;
+    }
+    return;
 }
 
 # One verify_pin result per pin, newest first.

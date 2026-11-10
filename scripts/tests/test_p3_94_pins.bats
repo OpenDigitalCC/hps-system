@@ -58,6 +58,14 @@ case "$sub" in
       esac
     done
     profile="${inst##*#}"
+    if [[ "$profile" == ipxe ]]; then
+      store="$FAKE_STORE/hps-ipxe"
+      mkdir -p "$store"
+      for n in snponly.efi ipxe.efi undionly.kpxe; do echo "ipxe-$n" > "$store/$n"; done
+      echo '{"version":"2.0.0","files":["snponly.efi","ipxe.efi","undionly.kpxe"],"nixpkgs_rev":"0123456789abcdef0123456789abcdef01234567"}' > "$store/ipxe.json"
+      ln -sfn "$store" "$link"
+      exit 0
+    fi
     store="$FAKE_STORE/hps-netboot-$profile"
     mkdir -p "$store"
     echo "kernel-$profile-${BUILD_TAG:-1}" > "$store/bzImage"
@@ -121,7 +129,7 @@ build_pin() {
   build_pin 20261109
   [ -f "$OUT/$PIN/SHA256SUMS" ]
   run grep -c . "$OUT/$PIN/SHA256SUMS"
-  [ "$output" = 6 ]
+  [ "$output" = 9 ]
   grep -q '  audit/initrd$' "$OUT/$PIN/SHA256SUMS"
   cd "$OUT/$PIN"
   run sha256sum --check --quiet SHA256SUMS

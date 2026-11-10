@@ -222,7 +222,7 @@ sub _check_pin_artefacts ($self, $pin) {
     my $dir = $self->nixos_dir . "/$pin";
     _fail('notfound', "Pin $pin does not exist under " . $self->nixos_dir) unless -d $dir;
     opendir my $dh, $dir or _fail('failed', "Cannot read $dir: $!");
-    my @profiles = sort grep { !/^\./ && -d "$dir/$_" } readdir $dh;
+    my @profiles = sort grep { !/^\./ && $_ ne 'ipxe' && -d "$dir/$_" } readdir $dh;
     closedir $dh;
     _fail('notfound', "Pin $pin has no profile directories") unless @profiles;
     for my $prof (@profiles) {

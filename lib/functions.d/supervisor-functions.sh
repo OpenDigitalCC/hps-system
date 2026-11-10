@@ -59,8 +59,51 @@ supervisor_prepare_services () {
 }
 
 
-# Copy the boot loaders shipped in ${HPS_SYSTEM_BASE}/tftp into the TFTP root
-# (hps_get_config tftp). Copies only files that are missing or differ.
+# Select the iPXE binaries of the latest pin (IPS-09): <resources>/nixos/latest
+# names the pin, <pin>/ipxe/ipxe.json lists the files with their sha256. Sets
+# SUPERVISOR_PIN_IPXE_DIR to the pin's ipxe directory when every listed file
+# is present and matches its recorded hash; otherwise leaves it empty and logs
+# why, so the caller falls back to the image's own (Debian) iPXE.
+SUPERVISOR_PIN_IPXE_DIR=""
+supervisor_select_pin_ipxe () {
+  local res pin dir name want got n=0
+  SUPERVISOR_PIN_IPXE_DIR=""
+  res="$(hps_get_config resources 2>/dev/null)" || res=""
+  if [[ -z "$res" || ! -r "$res/nixos/latest" ]]; then
+    hps_log warn "supervisor_select_pin_ipxe: no latest pin; using the image's iPXE (Debian)"
+    return 0
+  fi
+  pin="$(tr -d '[:space:]' < "$res/nixos/latest")"
+  dir="$res/nixos/$pin/ipxe"
+  if [[ ! "$pin" =~ ^[a-z0-9][a-z0-9.-]+$ || ! -f "$dir/ipxe.json" ]]; then
+    hps_log warn "supervisor_select_pin_ipxe: latest pin '$pin' has no ipxe/ipxe.json; using the image's iPXE (Debian)"
+    return 0
+  fi
+  while IFS= read -r name; do
+    n=$((n + 1))
+    want="$(jq -r --arg f "$name" '.sha256[$f] // empty' "$dir/ipxe.json")"
+    if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || ! -s "$dir/$name" || -z "$want" ]]; then
+      hps_log error "supervisor_select_pin_ipxe: pin $pin ipxe/$name missing, empty or without sha256; using the image's iPXE (Debian)"
+      return 0
+    fi
+    got="$(sha256sum "$dir/$name" | cut -d' ' -f1)"
+    if [[ "$got" != "$want" ]]; then
+      hps_log error "supervisor_select_pin_ipxe: pin $pin ipxe/$name sha256 $got, ipxe.json says $want; using the image's iPXE (Debian)"
+      return 0
+    fi
+  done < <(jq -r '.files[]? // empty' "$dir/ipxe.json")
+  if [[ $n -eq 0 ]]; then
+    hps_log error "supervisor_select_pin_ipxe: pin $pin ipxe.json lists no files; using the image's iPXE (Debian)"
+    return 0
+  fi
+  SUPERVISOR_PIN_IPXE_DIR="$dir"
+  hps_log info "supervisor_select_pin_ipxe: using iPXE $(jq -r '.version // "unknown"' "$dir/ipxe.json") from pin $pin"
+  return 0
+}
+
+# Copy the boot loaders into the TFTP root (hps_get_config tftp), only when
+# missing or different: the latest pin's iPXE where it has one (see
+# supervisor_select_pin_ipxe), the image's ${HPS_SYSTEM_BASE}/tftp otherwise.
 supervisor_populate_tftp () {
   local src dest f name copied=0
   src="$(hps_get_config system_base)/tftp"
@@ -76,9 +119,13 @@ supervisor_populate_tftp () {
     hps_log error "supervisor_populate_tftp: cannot create $dest"
     return 1
   }
+  supervisor_select_pin_ipxe
   for f in "$src"/*; do
     [[ -f "$f" ]] || continue
     name="$(basename "$f")"
+    if [[ -n "$SUPERVISOR_PIN_IPXE_DIR" && -f "$SUPERVISOR_PIN_IPXE_DIR/$name" ]]; then
+      f="$SUPERVISOR_PIN_IPXE_DIR/$name"
+    fi
     if [[ -f "$dest/$name" ]] && cmp -s "$f" "$dest/$name"; then
       continue
     fi
