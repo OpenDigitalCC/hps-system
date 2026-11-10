@@ -523,7 +523,8 @@ _find_available_hostname() {
 host_network_configure() {
   local macid="$1"
 
-  local hosttype=$(host_registry "$macid" get TYPE 2>/dev/null)
+  local hosttype
+  hosttype=$(host_registry "$macid" get TYPE 2>/dev/null)
 
   local cluster
   cluster=$(hps_get_config active_cluster) || {
