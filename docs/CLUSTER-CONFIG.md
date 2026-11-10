@@ -1,0 +1,143 @@
+# Cluster configuration
+
+A cluster is configured by a fixed list of questions (`hps-cluster-config
+questions`). Three entry points answer that same list.
+
+- The menu (`cli/cluster-configure.sh`, scripts in
+  `scripts/cluster-config.d/`) asks them interactively. It is the entry
+  point today.
+- A declarative file, applied with `hps-cluster-config apply`, is available
+  today.
+- A web form is planned for after the control API provides authentication; it
+  will read the same list from `hps-cluster-config questions --json`.
+
+The menu scripts still carry their own prompts and rules. `t/80` parses them
+and fails if a prompt or a stored key has no catalogue entry, so the two
+cannot drift apart unnoticed. The menu's commit step (`commit_changes` in
+`lib/functions.d/cluster-interactive-functions.sh`) does not yet call
+`apply`; see "Menu" below.
+
+## Commands
+
+```
+hps-cluster-config [--cluster NAME] questions [--json]
+hps-cluster-config [--cluster NAME] show [--json]
+hps-cluster-config [--cluster NAME] get KEY
+hps-cluster-config [--cluster NAME] set KEY VALUE [--dry-run] [--json]
+hps-cluster-config [--cluster NAME] apply FILE|- [--dry-run] [--json]
+hps-cluster-config [--cluster NAME] export [--json]
+```
+
+The cluster defaults to `ACTIVE_CLUSTER`.
+
+`show` lists every catalogued key (unset keys as unset), then derived keys,
+then registry keys that are not in the catalogue (listed, never dropped).
+`export` writes the current configuration in the `apply` format with the
+prompt as a comment above each key, so `export > f; edit f; apply f` is the
+round trip. Unset keys are exported commented out with their default; derived
+keys are left out because `apply` recomputes them.
+
+## File format
+
+`key = value` lines. `#` starts a comment line; blank lines are ignored. There
+is no quoting and no inline comment: the value is everything after the first
+`=`, trimmed. A file whose first character is `{` is read as one JSON object
+of string, number or boolean values instead. Each key may appear once.
+
+`apply` validates the whole file first. It reports every error with its line,
+and writes nothing if there is any error (exit 3). Otherwise it writes the
+keys, then the derived keys, one registry write per changed key, and prints
+what changed (old to new) and what is unchanged. Only keys named in the file
+are written; keys not mentioned keep their stored value. `--dry-run` prints
+the plan and writes nothing. Required keys that are still unset afterwards
+are listed, not treated as an error, so a file may update part of a
+configuration.
+
+No key in the catalogue is a secret, and a key whose name looks like one
+(secret, password, token, credential, psk, private, key) is refused.
+
+### Derived keys
+
+- `network_dhcp_ip` and `network_cidr` come from `network_dhcp_cidr`.
+- `network_storage_vlanN_subnet`, `_gateway`, `_netmask`, `_domain` and
+  `_allocated` come from the storage count, base VLAN, subnet base, subnet
+  prefix and DNS domain, with the arithmetic of
+  `050-set-storage-network.sh`. `_allocated` is runtime state: it starts as
+  `false` and is never reset by `apply`.
+
+A derived key may appear in a file only if it equals the computed value.
+
+### Example
+
+```
+# Cluster configuration
+DESCRIPTION = $CLUSTER description
+network_dns_domain = cluster.local
+network_dhcp_iface = $IFACE
+network_dhcp_cidr = $IPS_ADDRESS/24
+network_dhcp_rangesize = 100
+network_storage_count = 2
+network_storage_base_vlan = 31
+network_storage_subnet_cidr = 24
+network_syslog_server = $IPS_ADDRESS
+network_name_server = $IPS_ADDRESS
+network_time_server = $IPS_ADDRESS
+osvc_hb_type = unicast
+```
+
+## Menu
+
+`commit_changes` writes the menu's `CLUSTER_CONFIG_PENDING` pairs straight to
+the registry. It is shared with `scripts/cluster-bootstrap.sh`, which also
+stores `network_static_start`, `network_static_end`, `network_reserved` and
+`network_time_upstream` (not menu questions), so the menu has not been moved
+onto `hps-cluster-config apply -` yet.
+
+## Catalogue
+
+Produced by `hps-cluster-config questions --json` (rows in menu order). The
+rule is `text`, `regex:`, `enum:`, `int:MIN..MAX`, `bool`, `ip`, `cidr`,
+`host` (address or host name), `dnsdomain` or `subnet_base` (`X.Y`). Optional
+keys may be empty.
+
+| Key | Group | Prompt | Rule | Default | Required |
+|---|---|---|---|---|---|
+| `DESCRIPTION` | description | Enter descriptive name for this cluster | `regex:.+` | - | yes |
+| `network_dns_domain` | dns | Enter DNS domain name for this cluster | `dnsdomain` | `cluster.local` | yes |
+| `network_dhcp_enabled` | dhcp | DHCP enabled | `bool` | `true` | no |
+| `network_dhcp_iface` | dhcp | Select interface to listen on for boot requests | `regex:[A-Za-z0-9_.:@-]+` | - | yes |
+| `network_dhcp_cidr` | dhcp | Address of the DHCP interface (IP/prefix) | `cidr` | - | yes |
+| `network_dhcp_rangesize` | dhcp | DHCP range size (number of IPs) | `int:1..16777216` | `100` | no |
+| `network_dhcp_range_start` | dhcp | DHCP range start (blank: from the range size) | `ip` | (empty) | no |
+| `network_dhcp_range_end` | dhcp | DHCP range end (blank: from the range size) | `ip` | (empty) | no |
+| `network_storage_count` | storage-networks | Number of storage networks to configure (1-10) | `int:0..10` | `2` | no |
+| `network_storage_base_vlan` | storage-networks | Storage network base VLAN ID (31-99) | `int:31..99` | `31` | no |
+| `network_storage_subnet_base` | storage-networks | Storage subnet base | `subnet_base` | from `network_storage_base_vlan` | no |
+| `network_storage_subnet_cidr` | storage-networks | Storage subnet CIDR mask (16-28) | `int:16..28` | `24` | no |
+| `network_storage_mtu` | storage-networks | Enable jumbo frames (9000 MTU) on storage networks? | `enum:1500,9000` | `1500` | no |
+| `network_syslog_server` | services | Syslog server IP address | `ip` | from `network_dhcp_ip` | no |
+| `network_name_server` | services | DNS server IP address | `ip` | from `network_dhcp_ip` | no |
+| `network_time_server` | services | NTP server address | `host` | from `network_dhcp_ip` | no |
+| `osvc_log_level` | opensvc | Log level (debug/info/warn/error) | `enum:debug,info,warn,error` | `info` | no |
+| `osvc_listener_port` | opensvc | Listener port (1024-65535) | `int:1024..65535` | `1215` | no |
+| `osvc_web_ui` | opensvc | Enable Web UI? | `enum:yes,no` | `yes` | no |
+| `osvc_web_port` | opensvc | Web UI port (1024-65535) | `int:1024..65535` | `1214` | no |
+| `osvc_hb_interval` | opensvc | Heartbeat interval in seconds (1-60) | `int:1..60` | `5` | no |
+| `osvc_hb_timeout` | opensvc | Heartbeat timeout in seconds (5-300) | `int:5..300` | `15` | no |
+| `osvc_templates_url` | opensvc | Templates URL | `text` | (empty) | no |
+| `osvc_packages_url` | opensvc | Packages URL | `text` | (empty) | no |
+| `osvc_hb_type` | opensvc | Heartbeat type (multicast/unicast) | `enum:multicast,unicast` | `unicast` | no |
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | done |
+| 1 | failed (registry error) |
+| 2 | usage |
+| 3 | refused: validation errors, nothing written |
+| 4 | not found: cluster, input file, or an unset key for `get` |
+
+With `--json`, `apply` and `set` print one object (`ok`, `dry_run`,
+`cluster`, `errors`, `changes`, `unchanged`, `missing_required`) on stdout,
+also when they exit 3.

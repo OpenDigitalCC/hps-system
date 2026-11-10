@@ -1,0 +1,170 @@
+#!/usr/bin/env perl
+# hps-cluster-config: declarative cluster configuration (see docs/CLUSTER-CONFIG.md).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::ClusterConfig;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-cluster-config: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-cluster-config [--cluster NAME] questions [--json]
+  hps-cluster-config [--cluster NAME] show [--json]
+  hps-cluster-config [--cluster NAME] get KEY
+  hps-cluster-config [--cluster NAME] set KEY VALUE [--dry-run] [--json]
+  hps-cluster-config [--cluster NAME] apply FILE|- [--dry-run] [--json]
+  hps-cluster-config [--cluster NAME] export [--json]
+FILE holds "key = value" lines (# comments, blank lines) or a JSON object.
+The cluster defaults to ACTIVE_CLUSTER.
+Exit: 0 ok, 2 usage, 3 refused (validation errors; nothing written),
+4 not found (cluster, or an unset key for get), 1 failed.
+USAGE
+    return 2;
+}
+
+my $JS = JSON::PP->new->canonical->pretty->allow_nonref;
+
+sub render_questions {
+    my (@qs) = @_;
+    my $out = '';
+    my $group = '';
+    for my $q (@qs) {
+        if ($q->{group} ne $group) { $group = $q->{group}; $out .= "[$group]\n" }
+        my $def = defined $q->{default} ? "default '$q->{default}'"
+            : defined $q->{default_from} ? "default from $q->{default_from}" : 'no default';
+        $out .= "  $q->{key}" . ($q->{required} ? ' (required)' : '') . "\n"
+            . "      $q->{prompt}\n      rule $q->{rule}; $def\n";
+    }
+    return $out;
+}
+
+sub render_show {
+    my ($s) = @_;
+    my $out = "Cluster $s->{cluster}\n";
+    my $group = '';
+    for my $r (@{ $s->{keys} }) {
+        if ($r->{group} ne $group) { $group = $r->{group}; $out .= "\n[$group]\n" }
+        $out .= sprintf("  %-32s %s%s\n", $r->{key}, $r->{set} ? $r->{value} : '(unset)',
+            $r->{missing_required} ? '  REQUIRED' : '');
+    }
+    if (@{ $s->{derived} }) {
+        $out .= "\n[derived]\n";
+        $out .= sprintf("  %-32s %s\n", $_->{key}, $_->{value}) for @{ $s->{derived} };
+    }
+    if (@{ $s->{other} }) {
+        $out .= "\n[in the registry, not in the catalogue]\n";
+        $out .= sprintf("  %-32s %s\n", $_->{key}, $_->{value}) for @{ $s->{other} };
+    }
+    return $out;
+}
+
+sub render_plan {
+    my ($p) = @_;
+    my $out = "Cluster $p->{cluster}" . ($p->{dry_run} ? " (dry run, nothing written)\n" : "\n");
+    if (@{ $p->{changes} }) {
+        $out .= "Changed:\n";
+        for my $c (@{ $p->{changes} }) {
+            $out .= sprintf("  %s: %s -> %s%s\n", $c->{key}, defined $c->{old} ? "'$c->{old}'" : '(unset)',
+                "'$c->{new}'", $c->{derived} ? '  [derived]' : '');
+        }
+    }
+    else { $out .= "Changed: none\n" }
+    $out .= 'Unchanged: ' . (@{ $p->{unchanged} } ? join(', ', @{ $p->{unchanged} }) : 'none') . "\n";
+    $out .= 'Still unset and required: ' . join(', ', @{ $p->{missing_required} }) . "\n" if @{ $p->{missing_required} };
+    return $out;
+}
+
+sub render_errors {
+    my ($p) = @_;
+    my $out = '';
+    for my $e (@{ $p->{errors} }) {
+        my $where = $e->{line} ? "line $e->{line}: " : '';
+        $out .= "hps-cluster-config: $where" . (defined $e->{key} ? "$e->{key}: " : '') . "$e->{message}\n";
+    }
+    return $out . "hps-cluster-config: " . scalar(@{ $p->{errors} }) . " error(s); nothing written\n";
+}
+
+sub read_source {
+    my ($src) = @_;
+    my $fh;
+    if ($src eq '-') { $fh = \*STDIN }
+    else {
+        open($fh, '<', $src) or die HPS::ClusterConfig::Error->new('notfound', "Cannot read $src: $!");
+    }
+    local $/;
+    my $text = <$fh>;
+    return $text // '';
+}
+
+sub do_apply {
+    my ($cc, $entries, $parse_errors, $json, $dry) = @_;
+    # A syntax error anywhere means nothing is written, but the rest is still checked.
+    my $plan = $cc->apply($entries, dry_run => ($dry || @$parse_errors) ? 1 : 0);
+    $plan->{dry_run} = $dry ? JSON::PP::true : JSON::PP::false;
+    @{ $plan->{errors} } = sort { $a->{line} <=> $b->{line} } (@$parse_errors, @{ $plan->{errors} });
+    $plan->{ok} = JSON::PP::false if @$parse_errors;
+    my $bad = @{ $plan->{errors} } ? 1 : 0;
+    print $json ? $JS->encode($plan) : ($bad ? '' : render_plan($plan));
+    print STDERR render_errors($plan) if $bad && !$json;
+    return $bad ? $EXIT{refused} : 0;
+}
+
+sub main {
+    my @argv = @_;
+    my ($json, $dry, $cluster);
+    GetOptionsFromArray(\@argv, 'json' => \$json, 'dry-run' => \$dry, 'cluster=s' => \$cluster) or return usage();
+    my $cmd = shift @argv // return usage('command required');
+    my $cc = HPS::ClusterConfig->new(cluster => $cluster);
+    my $rc = eval {
+        if ($cmd eq 'questions') {
+            return usage('questions takes no arguments') if @argv;
+            my @qs = HPS::ClusterConfig::questions();
+            print $json ? $JS->encode(\@qs) : render_questions(@qs);
+        }
+        elsif ($cmd eq 'show') {
+            return usage('show takes no arguments') if @argv;
+            my $s = $cc->show;
+            print $json ? $JS->encode($s) : render_show($s);
+        }
+        elsif ($cmd eq 'get') {
+            return usage('get needs one KEY') unless @argv == 1;
+            my $v = $cc->get($argv[0]);
+            die HPS::ClusterConfig::Error->new('notfound', "$argv[0] is not set") unless defined $v;
+            print "$v\n";
+        }
+        elsif ($cmd eq 'set') {
+            return usage('set needs KEY VALUE') unless @argv == 2;
+            return do_apply($cc, [ { key => $argv[0], value => $argv[1], line => 0 } ], [], $json, $dry);
+        }
+        elsif ($cmd eq 'apply') {
+            return usage('apply needs FILE or -') unless @argv == 1;
+            my ($entries, $errors) = HPS::ClusterConfig::parse_file(read_source($argv[0]));
+            return do_apply($cc, $entries, $errors, $json, $dry);
+        }
+        elsif ($cmd eq 'export') {
+            return usage('export takes no arguments') if @argv;
+            print $json ? $JS->encode($cc->export_data) : $cc->export_text;
+        }
+        else {
+            return usage("unknown command '$cmd'");
+        }
+        0;
+    };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::ClusterConfig::Error')) {
+        print STDERR 'hps-cluster-config: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-cluster-config: $err";
+    return 1;
+}
+
+exit main(@ARGV);
