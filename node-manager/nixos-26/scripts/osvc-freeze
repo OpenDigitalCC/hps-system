@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# osvc-freeze - freeze this node's OpenSVC daemon (om node freeze).
+#
+# Usage: osvc-freeze          (no arguments)
+# A frozen node's daemon starts and stops nothing by itself; HPS may keep every
+# node frozen as a second guard (docs/OPENSVC.md). Explicit
+# om <obj> start|stop --local still work on a frozen node.
+# Exit: 0 done, 1 om failed, 2 usage.
+
+set -euo pipefail
+
+log() {
+  printf '[osvc-freeze] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+main() {
+  if [[ $# -ne 0 ]]; then
+    echo "Usage: osvc-freeze" >&2
+    exit 2
+  fi
+  run om node freeze
+  log "node frozen"
+}
+
+main "$@"

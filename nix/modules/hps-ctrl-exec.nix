@@ -124,6 +124,27 @@ in
       vm-console-log.options.profile = "node";
       vm-confinement-report.source = mkScript "vm-confinement-report" (scriptsDir + "/vm-confinement-report");
       vm-confinement-report.options.profile = "node";
+      # CS-3.5: OpenSVC (om comes with hps-opensvc.nix; the secret arrives on stdin).
+      osvc-status.source = mkScript "osvc-status" (scriptsDir + "/osvc-status");
+      osvc-status.options.profile = "node";
+      osvc-object-set.source = mkScript "osvc-object-set" (scriptsDir + "/osvc-object-set");
+      osvc-object-set.options.profile = "node";
+      osvc-object-start.source = mkScript "osvc-object-start" (scriptsDir + "/osvc-object-start");
+      osvc-object-start.options.profile = "node";
+      osvc-object-stop.source = mkScript "osvc-object-stop" (scriptsDir + "/osvc-object-stop");
+      osvc-object-stop.options.profile = "node";
+      osvc-object-delete.source = mkScript "osvc-object-delete" (scriptsDir + "/osvc-object-delete");
+      osvc-object-delete.options.profile = "node";
+      osvc-freeze.source = mkScript "osvc-freeze" (scriptsDir + "/osvc-freeze");
+      osvc-freeze.options.profile = "node";
+      osvc-thaw.source = mkScript "osvc-thaw" (scriptsDir + "/osvc-thaw");
+      osvc-thaw.options.profile = "node";
+      osvc-secret-set.source = mkScript "osvc-secret-set" (scriptsDir + "/osvc-secret-set");
+      osvc-secret-set.options.profile = "node";
+      osvc-secret-set.options.input = "raw";
+      # Lab test only (rig test 2); remove with the script once the rig results are recorded.
+      osvc-rig-probe.source = mkScript "osvc-rig-probe" (scriptsDir + "/osvc-rig-probe");
+      osvc-rig-probe.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

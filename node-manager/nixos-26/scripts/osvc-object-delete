@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# osvc-object-delete - delete an OpenSVC object's configuration on this node.
+#
+# Usage: osvc-object-delete <obj>
+#   <obj>   svc/<name> or <name> (^[a-z][a-z0-9-]{0,31}$)
+# Runs  om <obj> delete --local . It stops and unprovisions nothing: stop the
+# object first (osvc-object-stop) and remove its disks and guest with the
+# workload tools. Deleting an object that does not exist is not an error.
+# Exit: 0 done, 1 om failed, 2 usage.
+
+set -euo pipefail
+
+log() {
+  printf '[osvc-object-delete] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: osvc-object-delete <obj>" >&2
+  echo "Exit: 0 done, 1 om failed, 2 usage." >&2
+}
+
+main() {
+  local name obj
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 2
+  fi
+  name="${1#svc/}"
+  [[ "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+  obj="svc/$name"
+  run om "$obj" delete --local --ignore-not-found
+  printf 'object %s deleted\n' "$obj"
+}
+
+main "$@"

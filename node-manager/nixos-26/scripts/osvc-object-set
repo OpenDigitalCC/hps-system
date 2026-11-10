@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+#
+# osvc-object-set - create or change an OpenSVC object on this node, refusing
+# anything that would let the daemon place, move or restart it.
+#
+# Usage: osvc-object-set <obj> <keyword=value>...
+#   <obj>      svc/<name> or <name> (^[a-z][a-z0-9-]{0,31}$), always kind svc
+#
+# Allowed keywords (everything else is refused, exit 3):
+#   nodes           exactly one node name (^[a-z0-9][a-z0-9.-]*$): the owner
+#   topology        failover
+#   orchestrate     no
+#   monitor_action  none
+#   placement       none
+#   disk#<id>.<kw>       kw in type uuid devs name level chunk spares bitmap
+#                        (type must be md)
+#   container#<id>.<kw>  kw in type name vcpus memory disk bridge network
+#                        osinfo image cdrom (type must be kvm)
+#   fs#<id>.type         flag (the trivial resource of the lab rig tests)
+# A value is limited to [A-Za-z0-9_./:@,+-] (no spaces, quotes or newlines).
+#
+# A new object (no config file yet) must carry all five enforced keywords in
+# this one call: om <obj> create --kw ...  An existing object is changed with
+# om <obj> set --local --kw ... . Afterwards each enforced keyword of the object
+# is read back (om <obj> get --local --kw ...) and must hold its enforced value;
+# if not, exit 3 and the object is left for the operator (nothing is started).
+#
+# Overrides for tests: OSVC_ETC (default /etc/opensvc).
+# Exit: 0 done, 1 om failed, 2 usage, 3 refused.
+
+set -euo pipefail
+
+: "${OSVC_ETC:=/etc/opensvc}"
+
+OBJ=""
+KWS=()
+
+log() {
+  printf '[osvc-object-set] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: osvc-object-set <obj> <keyword=value>..." >&2
+  echo "Exit: 0 done, 1 om failed, 2 usage, 3 refused." >&2
+}
+
+parse_object() {
+  local name="${1#svc/}"
+  [[ "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+  OBJ="svc/$name"
+}
+
+# check_pair <keyword> <value>: refuse anything outside the allowed set.
+check_pair() {
+  local kw="$1" val="$2"
+  [[ "$val" =~ ^[A-Za-z0-9_./:@,+-]+$ ]] || refuse "value of $kw has characters outside [A-Za-z0-9_./:@,+-]"
+  case "$kw" in
+    nodes)
+      [[ "$val" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || refuse "nodes must name exactly one node, not '$val'"
+      ;;
+    topology)
+      [[ "$val" == failover ]] || refuse "topology must be failover, not '$val'"
+      ;;
+    orchestrate)
+      [[ "$val" == no ]] || refuse "orchestrate must be no, not '$val'"
+      ;;
+    monitor_action)
+      [[ "$val" == none ]] || refuse "monitor_action must be none, not '$val'"
+      ;;
+    placement)
+      [[ "$val" == none ]] || refuse "placement must be none, not '$val'"
+      ;;
+    disk#*.*)
+      [[ "$kw" =~ ^disk#[A-Za-z0-9_]+\.(type|uuid|devs|name|level|chunk|spares|bitmap)$ ]] || refuse "keyword $kw is not an md disk keyword HPS sets"
+      if [[ "$kw" == *.type ]]; then
+        [[ "$val" == md ]] || refuse "$kw must be md"
+      fi
+      ;;
+    container#*.*)
+      [[ "$kw" =~ ^container#[A-Za-z0-9_]+\.(type|name|vcpus|memory|disk|bridge|network|osinfo|image|cdrom)$ ]] || refuse "keyword $kw is not a kvm container keyword HPS sets"
+      if [[ "$kw" == *.type ]]; then
+        [[ "$val" == kvm ]] || refuse "$kw must be kvm"
+      fi
+      ;;
+    fs#*.*)
+      [[ "$kw" =~ ^fs#[A-Za-z0-9_]+\.type$ && "$val" == flag ]] || refuse "only fs#<id>.type=flag is allowed"
+      ;;
+    *)
+      refuse "keyword '$kw' is not one HPS sets on an object"
+      ;;
+  esac
+}
+
+parse_pairs() {
+  local pair kw val
+  for pair in "$@"; do
+    [[ "$pair" == *=* ]] || { usage; exit 2; }
+    kw="${pair%%=*}"
+    val="${pair#*=}"
+    [[ -n "$kw" ]] || { usage; exit 2; }
+    check_pair "$kw" "$val"
+    KWS+=("$pair")
+  done
+}
+
+# has_kw <keyword>: whether the pairs set it.
+has_kw() {
+  local pair
+  for pair in "${KWS[@]}"; do
+    [[ "${pair%%=*}" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+object_exists() {
+  [[ -f "$OSVC_ETC/${OBJ#svc/}.conf" ]]
+}
+
+# verify_enforced: read the five keywords back; each must hold.
+verify_enforced() {
+  local kw want got
+  for kw in topology orchestrate monitor_action placement; do
+    case "$kw" in
+      topology) want=failover ;;
+      orchestrate) want=no ;;
+      *) want=none ;;
+    esac
+    got=$(run om "$OBJ" get --local --kw "$kw")
+    [[ "$got" == "$want" ]] || refuse "$OBJ has $kw='$got', must be '$want'; nothing started, fix or delete the object"
+  done
+  got=$(run om "$OBJ" get --local --kw nodes)
+  [[ "$got" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || refuse "$OBJ has nodes='$got', must be exactly one node; nothing started, fix or delete the object"
+}
+
+main() {
+  local kw args=()
+  if [[ $# -lt 2 ]]; then
+    usage
+    exit 2
+  fi
+  parse_object "$1"
+  shift
+  parse_pairs "$@"
+  for kw in "${KWS[@]}"; do
+    args+=(--kw "$kw")
+  done
+  if object_exists; then
+    run om "$OBJ" set --local "${args[@]}"
+  else
+    for kw in nodes topology orchestrate monitor_action placement; do
+      has_kw "$kw" || refuse "a new object must set $kw in its first call"
+    done
+    run om "$OBJ" create "${args[@]}"
+  fi
+  verify_enforced
+  printf 'object %s configured\n' "$OBJ"
+}
+
+main "$@"

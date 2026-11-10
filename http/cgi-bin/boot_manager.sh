@@ -183,6 +183,26 @@ fi
 
 
 #===============================================================================
+# cluster_nodes command handler
+# -----------------------------
+# The OpenSVC membership of the active cluster, read-only: the cluster name and
+# every paired node's name and IP (osvc_cluster_node_list). Read by the node
+# generator hps-osvc-config. No secret is returned.
+#
+# Example usage:
+#   GET:  curl "http://ips/cgi-bin/boot_manager.sh?cmd=cluster_nodes"
+#===============================================================================
+if [[ "$cmd" == "cluster_nodes" ]]; then
+  if nodes_out="$(osvc_cluster_node_list)"; then
+    cgi_success "$nodes_out"$'\n'
+    exit 0
+  fi
+  cgi_auto_fail "no active cluster configured"
+  exit 1
+fi
+
+
+#===============================================================================
 # os_variable command handler
 # ---------------------------
 # Get OS configuration variables via CGI interface.

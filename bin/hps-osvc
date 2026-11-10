@@ -1,0 +1,67 @@
+#!/usr/bin/env perl
+# hps-osvc: deliver the OpenSVC cluster secret to a node over ctrl-exec.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use HPS::Keysafe;
+
+# 0 ok, 1 failed, 2 usage, 3 refused (keysafe permissions), 4 not found
+my %EXIT = (usage => 2, refused => 3, perms => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-osvc: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-osvc deliver <host> [--dry-run]
+<host> is a MAC (any format) or a registry HOSTNAME. deliver sends the cluster's
+OpenSVC secret (keysafe purpose 'opensvc', created on first use) as confidential
+input to the node script osvc-secret-set, through scripts/hps-run.sh --input.
+The node stores it in RAM and (re)starts opensvc-daemon, which rewrites its
+config, including the node list, from the IPS. Run it for every node, and again
+on every node after a node is paired. The secret appears in no argument, no
+output and no log. --dry-run prints the call and sends nothing.
+Exit: 0 ok, 1 failed, 2 usage, 3 refused, 4 not found.
+USAGE
+    return 2;
+}
+
+sub runner { return $ENV{HPS_OSVC_RUN} // "$RealBin/../scripts/hps-run.sh" }
+
+sub deliver {
+    my ($host, $dry) = @_;
+    my @cmd = (runner(), '--input', $host, 'osvc-secret-set');
+    if ($dry) {
+        print "Dry run: would send the cluster secret (redacted) to:\n  @cmd\n";
+        return 0;
+    }
+    my $hex = unpack('H*', HPS::Keysafe->new->cluster_secret('opensvc'));
+    open(my $fh, '|-', @cmd) or die "cannot run $cmd[0]: $!\n";
+    print {$fh} "$hex\n";
+    close $fh;    # sets $? to the runner's wait status
+    return $? == 0 ? 0 : ($? >> 8) || 1;
+}
+
+sub main {
+    my @argv = @_;
+    my $dry = 0;
+    @argv = grep { $_ eq '--dry-run' ? do { $dry = 1; 0 } : 1 } @argv;
+    my $op   = shift @argv // return usage('operation required');
+    my $host = shift @argv // return usage('host required');
+    return usage("unknown operation '$op'") unless $op eq 'deliver';
+    return usage('too many arguments') if @argv;
+    return usage('host must be a MAC or a hostname') unless $host =~ /^[A-Za-z0-9][A-Za-z0-9:.-]*$/;
+    my $rc = eval { deliver($host, $dry) };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::Keysafe::Error')) {
+        print STDERR 'hps-osvc: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    $err =~ s/\s+\z//;
+    print STDERR "hps-osvc: $err\n";
+    return 1;
+}
+
+exit main(@ARGV);

@@ -8,7 +8,7 @@
 { ... }:
 
 {
-  imports = [ ../hps-node.nix ./storage.nix ./compute.nix ];
+  imports = [ ../hps-node.nix ../hps-opensvc.nix ./storage.nix ./compute.nix ];
 
   hps.roles = "SCH,TCH";
 }

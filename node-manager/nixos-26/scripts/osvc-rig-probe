@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+#
+# osvc-rig-probe - LAB TEST ONLY: the three OpenSVC commands the finding's rig
+# test 2 must try, which HPS itself never runs (plans/opensvc-finding.md).
+#
+# Usage: osvc-rig-probe drain
+#        osvc-rig-probe thaw-cluster
+#        osvc-rig-probe plain-start <obj>
+#   drain         om node drain         (freezes this node, stops its instances)
+#   thaw-cluster  om cluster thaw
+#   plain-start   om <obj> start        (no --local: a global "started"
+#                                        expectation through the orchestrator)
+# Used by lab/osvc-rig-2.sh to prove none of them starts an instance on a peer
+# when the object has orchestrate = no and nodes = this node only.
+#
+# Safe by construction: <obj> must be rig<N> (^rig[0-9]{1,2}$), and the script
+# refuses (3) when any other object is configured on this node, because drain
+# stops every instance. Remove this script and its allowlist line once the
+# rig tests are recorded.
+#
+# Overrides for tests: OSVC_ETC (default /etc/opensvc).
+# Exit: 0 done, 1 om failed, 2 usage, 3 refused.
+
+set -euo pipefail
+
+: "${OSVC_ETC:=/etc/opensvc}"
+
+log() {
+  printf '[osvc-rig-probe] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: osvc-rig-probe drain | thaw-cluster | plain-start <rigN>" >&2
+  echo "Exit: 0 done, 1 om failed, 2 usage, 3 refused." >&2
+}
+
+# only_rig_objects: refuse when a non-rig object is configured here.
+only_rig_objects() {
+  local f base
+  for f in "$OSVC_ETC"/*.conf; do
+    [[ -e "$f" ]] || continue
+    base=$(basename "$f" .conf)
+    case "$base" in
+      cluster | node) ;;
+      rig[0-9] | rig[0-9][0-9]) ;;
+      *) refuse "object '$base' is configured on this node; the probe runs only where rig objects are the only ones" ;;
+    esac
+  done
+}
+
+main() {
+  case "${1:-}" in
+    drain | thaw-cluster)
+      [[ $# -eq 1 ]] || { usage; exit 2; }
+      only_rig_objects
+      if [[ "$1" == drain ]]; then
+        run om node drain
+      else
+        run om cluster thaw
+      fi
+      ;;
+    plain-start)
+      [[ $# -eq 2 ]] || { usage; exit 2; }
+      [[ "$2" =~ ^(svc/)?rig[0-9]{1,2}$ ]] || refuse "object '$2' is not rig<N>"
+      only_rig_objects
+      run om "svc/${2#svc/}" start
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

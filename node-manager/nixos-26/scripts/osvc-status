@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# osvc-status - OpenSVC membership and health of this node. Read-only.
+#
+# Usage: osvc-status          (no arguments)
+# Runs  om daemon status --format json  and  om mon --format json  (both printed
+# as they are, in that order, each under a marker line), then one summary line
+#
+#   OSVC <node> peers=<n> beating=<n> stale=<comma list or -> frozen=<yes|no>
+#
+# from .daemon.nodename, .daemon.heartbeat.streams[].peers.<peer>.is_beating and
+# .cluster.status.is_frozen of the daemon status. A peer is stale when no
+# heartbeat stream sees it beating; a node with no peers (a one-node cluster)
+# is healthy. HPS reads the summary line and the JSON; it never acts on the
+# daemon for them.
+# Exit: 0 healthy, 1 om failed (daemon not running or not answering),
+#       2 degraded (a peer is stale), 3 usage.
+
+set -euo pipefail
+
+log() {
+  printf '[osvc-status] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: osvc-status" >&2
+  echo "Exit: 0 healthy, 1 om failed, 2 degraded, 3 usage." >&2
+}
+
+main() {
+  local status mon summary stale
+  if [[ $# -ne 0 ]]; then
+    usage
+    exit 3
+  fi
+  if ! status=$(run om daemon status --format json); then
+    log "om daemon status failed: the daemon is not running or not answering"
+    exit 1
+  fi
+  if ! mon=$(run om mon --format json); then
+    log "om mon failed"
+    exit 1
+  fi
+  printf '== om daemon status --format json\n%s\n' "$status"
+  printf '== om mon --format json\n%s\n' "$mon"
+  summary=$(printf '%s' "$status" | jq -r '
+    [.daemon.heartbeat.streams[]? | (.peers // {}) | to_entries[]] as $p
+    | ($p | map(.key) | unique) as $peers
+    | [$peers[] as $n | select(([$p[] | select(.key == $n) | .value.is_beating] | any) | not) | $n] as $stale
+    | ["OSVC", (.daemon.nodename // "?"),
+       "peers=\($peers | length)",
+       "beating=\(($peers | length) - ($stale | length))",
+       "stale=\(if ($stale | length) == 0 then "-" else ($stale | join(",")) end)",
+       "frozen=\(if .cluster.status.is_frozen then "yes" else "no" end)"] | join(" ")')
+  printf '%s\n' "$summary"
+  stale=${summary#* stale=}
+  stale=${stale%% *}
+  if [[ "$stale" != "-" ]]; then
+    exit 2
+  fi
+}
+
+main "$@"

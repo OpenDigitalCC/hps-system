@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# osvc-object-stop - stop an OpenSVC object on THIS node only.
+#
+# Usage: osvc-object-stop <obj>
+#   <obj>   svc/<name> or <name> (^[a-z][a-z0-9-]{0,31}$)
+# Runs  om <obj> stop --local  (the instance on this node; a plain
+# om <obj> stop sends a global expectation to the orchestrator and is never used).
+# A stop is always safe and is not conditional on the object's settings.
+# Exit: 0 done, 1 om failed, 2 usage.
+
+set -euo pipefail
+
+OBJ=""
+
+log() {
+  printf '[osvc-object-stop] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: osvc-object-stop <obj>" >&2
+  echo "Exit: 0 done, 1 om failed, 2 usage." >&2
+}
+
+main() {
+  local name
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 2
+  fi
+  name="${1#svc/}"
+  [[ "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+  OBJ="svc/$name"
+  run om "$OBJ" stop --local
+  printf 'object %s stopped\n' "$OBJ"
+}
+
+main "$@"

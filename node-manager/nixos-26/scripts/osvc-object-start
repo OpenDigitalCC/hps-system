@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# osvc-object-start - start an OpenSVC object on THIS node only.
+#
+# Usage: osvc-object-start <obj>
+#   <obj>   svc/<name> or <name> (^[a-z][a-z0-9-]{0,31}$)
+# Runs  om <obj> start --local  (the instance on this node; a plain
+# om <obj> start sends a global expectation to the orchestrator and is never used).
+# Before it runs, the object's enforced keywords are read back
+# (om <obj> get --local --kw ...): nodes names one node, topology=failover,
+# orchestrate=no, monitor_action=none, placement=none. An object that does not
+# hold them is refused (exit 3) and nothing is done to it.
+# Exit: 0 done, 1 om failed, 2 usage, 3 refused.
+
+set -euo pipefail
+
+OBJ=""
+
+log() {
+  printf '[osvc-object-start] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  echo "Usage: osvc-object-start <obj>" >&2
+  echo "Exit: 0 done, 1 om failed, 2 usage, 3 refused." >&2
+}
+
+# verify_enforced: read the keywords back; each must hold.
+verify_enforced() {
+  local kw want got
+  for kw in topology orchestrate monitor_action placement; do
+    case "$kw" in
+      topology) want=failover ;;
+      orchestrate) want=no ;;
+      *) want=none ;;
+    esac
+    got=$(run om "$OBJ" get --local --kw "$kw")
+    [[ "$got" == "$want" ]] || refuse "$OBJ has $kw='$got', must be '$want'"
+  done
+  got=$(run om "$OBJ" get --local --kw nodes)
+  [[ "$got" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || refuse "$OBJ has nodes='$got', must be exactly one node"
+}
+
+main() {
+  local name
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 2
+  fi
+  name="${1#svc/}"
+  [[ "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { usage; exit 2; }
+  OBJ="svc/$name"
+  verify_enforced
+  run om "$OBJ" start --local
+  printf 'object %s started\n' "$OBJ"
+}
+
+main "$@"

@@ -22,13 +22,27 @@
       url = "github:OpenDigitalCC/ctrl-exec";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # OpenSVC v3 (om3), pinned to the newest release tag (owner ruling
+    # 2026-11-09: a current OpenSVC, bumped as releases land). Not in nixpkgs.
+    om3-src = {
+      url = "github:opensvc/om3/v3.0.0-rc60"; # 4ff6def4972f1975c8eff458765f9cb9b6049717
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, ctrl-exec }:
+  outputs = { self, nixpkgs, ctrl-exec, om3-src }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       lib = nixpkgs.lib;
+
+      # om3 from the pinned source; modules use pkgs.om3 through this overlay.
+      om3Overlay = final: _prev: {
+        om3 = final.callPackage ./nix/pkgs/om3.nix {
+          src = om3-src;
+          version = "3.0.0-rc60";
+        };
+      };
 
       # Profile name -> the modules that distinguish it from hps-common.
       profiles = {
@@ -40,7 +54,7 @@
       # The platform is set once, in hps-common.nix (nixpkgs.hostPlatform).
       mkSystem = name: extra: lib.nixosSystem {
         specialArgs = { inherit ctrl-exec; hpsProfile = name; };
-        modules = [ ./nix/modules/hps-common.nix ] ++ extra;
+        modules = [ ./nix/modules/hps-common.nix { nixpkgs.overlays = [ om3Overlay ]; } ] ++ extra;
       };
 
       # The netboot artefact set for one built system. boot.json carries only
@@ -71,11 +85,16 @@
           '';
     in
     {
+      overlays.default = om3Overlay;
+
       nixosConfigurations = lib.mapAttrs mkSystem profiles;
 
       packages.${system} =
         lib.mapAttrs (name: _: netbootArtefacts name self.nixosConfigurations.${name}) profiles
-        // { default = self.packages.${system}.node-base; };
+        // {
+          default = self.packages.${system}.node-base;
+          om3 = (pkgs.extend om3Overlay).om3;
+        };
 
       # The AppArmor profiles of the compute role, parsed (no kernel load) from
       # the evaluated node-converged configuration, so the check sees exactly
