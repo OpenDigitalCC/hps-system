@@ -114,3 +114,19 @@ EOS
   grep -q 'install.sh --api' "$BATS_TEST_DIRNAME/../../lib/functions.d/ctrl-exec-functions.sh"
   grep -q 'command -v ctrl-exec-api' "$BATS_TEST_DIRNAME/../../lib/functions.d/ctrl-exec-functions.sh"
 }
+
+@test "a failed install.sh fails bring-up even when it left the binary in place" {
+  rm -f "$CTRL_EXEC_DISPATCHER"
+  make_tarball
+  cat > "$TEST_DIR/pkg/ctrl-exec-9.9.9/install.sh" <<'EOS'
+#!/usr/bin/env bash
+echo "install.sh $*" >> "$CALLS"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$CTRL_EXEC_DISPATCHER"
+chmod +x "$CTRL_EXEC_DISPATCHER"
+exit 1
+EOS
+  tar -czf "$CTRL_EXEC_DISPATCHER_TARBALL" -C "$TEST_DIR/pkg" ctrl-exec-9.9.9
+  run ce_dispatcher_bring_up
+  [ "$status" -eq 1 ]
+  grep -q '^install.sh --dispatcher$' "$CALLS"
+}

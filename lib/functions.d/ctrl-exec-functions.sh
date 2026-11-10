@@ -107,24 +107,13 @@ _ce_tarball_install() {
     rm -rf "$work"
     return 1
   fi
-  local binary
-  case "$role" in
-    --dispatcher) binary="$CTRL_EXEC_DISPATCHER" ;;
-    --api) binary="ctrl-exec-api" ;;
-    *) binary="" ;;
-  esac
+  # install.sh's exit status decides (ctrl-exec 0.14.5: --api exits 0 in the
+  # IPS container, where systemd is not PID 1; HPS no longer second-guesses a
+  # failed install by looking for the binary).
   if ! ( cd "$srcdir" && ./install.sh "$role" ); then
-    # install.sh --api ends with "systemctl daemon-reload": in the IPS
-    # container systemctl exists but systemd is not PID 1, so the install
-    # reports failure after the binary and library are in place (supervisord
-    # runs the API here; the unit is not used). The binary decides.
-    if [[ -n "$binary" ]] && command -v "$binary" >/dev/null 2>&1; then
-      hps_log warn "ce_dispatcher_bring_up: install.sh $role reported failure after installing $binary (no init system in the container; its service unit is unused here)"
-    else
-      hps_log error "ce_dispatcher_bring_up: install.sh $role failed"
-      rm -rf "$work"
-      return 1
-    fi
+    hps_log error "ce_dispatcher_bring_up: install.sh $role failed"
+    rm -rf "$work"
+    return 1
   fi
   rm -rf "$work"
   return 0
