@@ -57,9 +57,11 @@ setup() {
   grep -q '^        namespaces = \[\]$' "$COMPUTE"
 }
 
-@test "confinement: AppArmor is enabled in the image and libvirt is left to probe it" {
+@test "confinement: AppArmor is enabled and libvirt is told to use it (CS-3.4a)" {
   grep -q 'security.apparmor.enable = lib.mkDefault true;' "$COMPUTE"
-  run ! grep -E '^[^#]*security_driver' "$COMPUTE"
+  grep -q 'security_driver = "apparmor"' "$COMPUTE"
+  grep -q 'imports = \[ ./compute-apparmor.nix \];' "$COMPUTE"
+  test -f "$(dirname "$COMPUTE")/compute-apparmor.nix"
   grep -q 'security_default_confined = 1' "$COMPUTE"
   grep -q 'security_require_confined = 0' "$COMPUTE"
 }
