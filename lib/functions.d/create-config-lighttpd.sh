@@ -45,6 +45,7 @@ create_config_lighttpd() {
   local packages_dir="${resources}/packages"
   local nixos_dir="${resources}/nixos"
   local nix_cache_dir="${resources}/nix-cache"
+  local images_dir="${resources}/images"
   local upload_dir="${cluster_services}/lighttpd-upload"
 
   local lighttpd_conf="${cluster_services}/lighttpd.conf"
@@ -113,8 +114,14 @@ alias.url = (
   "/distros/"   => "${distros_dir}/",
   "/packages/"  => "${packages_dir}/",
   "/nixos/"     => "${nixos_dir}/",
-  "/nix-cache/" => "${nix_cache_dir}/"
+  "/nix-cache/" => "${nix_cache_dir}/",
+  "/images/"    => "${images_dir}/"
 )
+
+# Base images for guests (image-fetch on the nodes): no listing
+\$HTTP["url"] =~ "^/images/" {
+  dir-listing.activate = "disable"
+}
 
 # Nix binary cache: no listing; nix-cache-info must be text/plain
 \$HTTP["url"] =~ "^/nix-cache/" {
