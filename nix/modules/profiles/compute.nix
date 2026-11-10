@@ -143,6 +143,17 @@
     after = [ "hps-iscsi-initiator.service" ];
   };
 
+  # open-iscsi ships iscsi-init.service ("One time configuration for
+  # iscsi.service"): a oneshot pulled in by systemd-remount-fs.service that
+  # runs iscsi-gen-initiatorname when /etc/iscsi/initiatorname.iscsi does
+  # not exist. Here that path is a symlink into /run/hps that hps-iscsi-
+  # initiator creates later in the boot, so the condition passes, the
+  # generator writes through a dangling link and fails ("Failed to start One
+  # time configuration for iscsi.service" at 12 s on every boot of sch-001,
+  # 2026-11-09). It is ordering, not a transient fault, it has no retry, and
+  # nothing needs it: the name comes from the registry. Masked.
+  systemd.services.iscsi-init.enable = false;
+
   # ---- mdadm ----------------------------------------------------------------
   boot.swraid = {
     enable = true;
