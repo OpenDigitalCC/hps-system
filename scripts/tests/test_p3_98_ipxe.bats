@@ -126,8 +126,8 @@ build_pin() {
 }
 
 @test "flake: no embedded script and no extra option, so nothing secret is built in" {
-  ! grep -q 'embedScript' "$SRC/flake.nix"
-  ! grep -q 'additionalOptions' "$SRC/flake.nix"
+  run ! grep -q 'embedScript' "$SRC/flake.nix"
+  run ! grep -q 'additionalOptions' "$SRC/flake.nix"
 }
 
 @test "dnsmasq chain contract is unchanged: snponly.efi, undionly.kpxe, cmd=init" {
@@ -277,7 +277,7 @@ bringup_setup() {
     cmp "$OUT/$PIN/ipxe/$f" "$TEST_DIR/tftp/$f"
   done
   grep -q "using iPXE 2.0.0 from pin $PIN" "$LOG"
-  ! grep -q 'Debian' "$LOG"
+  run ! grep -q 'Debian' "$LOG"
 }
 
 @test "bring-up is idempotent and refreshes a stale TFTP file with the pin's" {
