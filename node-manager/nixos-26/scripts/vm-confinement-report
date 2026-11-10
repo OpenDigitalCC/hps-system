@@ -144,7 +144,7 @@ check4_apparmor() {
   prof="$HPS_SYS/kernel/security/apparmor/profiles"
   if [[ -r "$prof" ]]; then
     n=$(wc -l < "$prof")
-    lv=$(grep -c '^libvirtd ' "$prof" || true)
+    lv=$(grep -cE '^(libvirtd|/nix/store/[^ ]*/sbin/\.libvirtd-wrapped) ' "$prof" || true)
     gl=$(grep -c '^libvirt-' "$prof" || true)
     printf 'CHECK4 apparmor profiles: total=%s libvirtd=%s guest=%s\n' "$n" "$lv" "$gl"
   else

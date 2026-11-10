@@ -61,7 +61,7 @@ Shipped by `nix/modules/profiles/compute-apparmor.nix` (imported by
 
 | What | Where |
 | --- | --- |
-| `libvirtd` profile (policy, enforce), named by the daemon's store path `<libvirt>/sbin/libvirtd` | loaded by `apparmor.service` |
+| `libvirtd` profile (policy, enforce), named by the daemon binary `<libvirt>/sbin/.libvirtd-wrapped` (`sbin/libvirtd` is a bash wrapper that execs it; libvirt probes `/proc/self/exe`, which is the wrapped binary) | loaded by `apparmor.service` |
 | `virt-aa-helper` profile (policy, enforce), named by `<libvirt>/libexec/virt-aa-helper` | loaded by `apparmor.service` |
 | `abstractions/libvirt-qemu`: what any guest's QEMU may do | `/etc/apparmor.d/abstractions/libvirt-qemu` |
 | `TEMPLATE.qemu`, upstream's, unchanged | `/var/lib/apparmor.d/libvirt/TEMPLATE.qemu` (tmpfiles link) |
@@ -161,7 +161,7 @@ the guest's QEMU process id, from `ps` or `virsh dominfo`).
    cat /sys/kernel/security/apparmor/profiles
    ```
 
-   `Y`, a line `<libvirt store path>/sbin/libvirtd (enforce)`, one for
+   `Y`, a line `<libvirt store path>/sbin/.libvirtd-wrapped (enforce)`, one for
    `<libvirt store path>/libexec/virt-aa-helper (enforce)` and one
    `libvirt-<uuid> (enforce)` per running guest.
 

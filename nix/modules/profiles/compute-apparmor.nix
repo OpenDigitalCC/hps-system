@@ -26,6 +26,15 @@ let
   qemu = config.virtualisation.libvirtd.qemu.package;
   aaParser = pkgs.apparmor-parser;
 
+  # nixpkgs wraps the daemon: sbin/libvirtd is a makeWrapper bash script that
+  # sets PATH and execs sbin/.libvirtd-wrapped (the ELF). The kernel attaches a
+  # profile at exec by the path of the file exec'd, and libvirt's driver probe
+  # resolves /proc/self/exe, which is the wrapped binary, so the profile is
+  # named by that path. The wrapper script needs no profile: it runs unconfined
+  # (as started by systemd) and its exec of the ELF attaches the profile. virt-aa-helper
+  # in libexec is a plain ELF.
+  libvirtdBin = "${libvirt}/sbin/.libvirtd-wrapped";
+
   # The upstream template, unchanged.
   templateQemu = ''
     #
@@ -68,9 +77,9 @@ let
     network inet stream,
     network inet6 stream,
 
-    ptrace (readby, tracedby) peer=${libvirt}/sbin/libvirtd,
-    signal (receive) peer=${libvirt}/sbin/libvirtd,
-    unix (send, receive) type=stream addr=none peer=(label=${libvirt}/sbin/libvirtd),
+    ptrace (readby, tracedby) peer=${libvirtdBin},
+    signal (receive) peer=${libvirtdBin},
+    unix (send, receive) type=stream addr=none peer=(label=${libvirtdBin}),
 
     /dev/kvm rw,
     /dev/vhost-net rw,
@@ -133,7 +142,7 @@ let
     @{UUID}=@{hextet}@{hextet}-@{hextet}-@{hextet}-@{hextet}-@{hextet}@{hextet}@{hextet}
     @{LIBVIRT}="libvirt"
 
-    ${libvirt}/sbin/libvirtd flags=(attach_disconnected) {
+    ${libvirtdBin} flags=(attach_disconnected) {
       #include <abstractions/base>
       #include <abstractions/dbus>
 
@@ -192,8 +201,8 @@ let
       signal (send) set=("kill", "term") peer=unconfined,
 
       # qemu-bridge-helper child profile (below).
-      unix (send, receive) type=stream addr=none peer=(label=${libvirt}/sbin/libvirtd//qemu_bridge_helper),
-      signal (send) set=("term") peer=${libvirt}/sbin/libvirtd//qemu_bridge_helper,
+      unix (send, receive) type=stream addr=none peer=(label=${libvirtdBin}//qemu_bridge_helper),
+      signal (send) set=("term") peer=${libvirtdBin}//qemu_bridge_helper,
 
       unix (send, receive) type=stream addr=none peer=(label=libvirt-@{UUID}),
       unix (send, receive) type=stream addr=none peer=(label=unconfined),
@@ -241,8 +250,8 @@ let
 
         network inet stream,
 
-        unix (send, receive) type=stream addr=none peer=(label=${libvirt}/sbin/libvirtd),
-        signal (receive) set=("term") peer=${libvirt}/sbin/libvirtd,
+        unix (send, receive) type=stream addr=none peer=(label=${libvirtdBin}),
+        signal (receive) set=("term") peer=${libvirtdBin},
 
         /dev/net/tun rw,
         /etc/qemu/** r,

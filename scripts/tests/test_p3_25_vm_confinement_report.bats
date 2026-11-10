@@ -15,7 +15,7 @@ setup() {
   export HPS_QEMU_CONF="$TEST_DIR/qemu.conf"
   mkdir -p "$HPS_PROC" "$HPS_SYS/module/apparmor/parameters" "$HPS_SYS/kernel/security/apparmor"
   echo Y > "$HPS_SYS/module/apparmor/parameters/enabled"
-  printf 'libvirtd (enforce)\nlibvirt-aaaa (enforce)\nlibvirt-bbbb (enforce)\nother (complain)\n' > "$HPS_SYS/kernel/security/apparmor/profiles"
+  printf '/nix/store/abc-libvirt-12.2.0/sbin/.libvirtd-wrapped (enforce)\nlibvirt-aaaa (enforce)\nlibvirt-bbbb (enforce)\nother (complain)\n' > "$HPS_SYS/kernel/security/apparmor/profiles"
   printf 'user = "qemu-libvirtd"\ngroup = "qemu-libvirtd"\nseccomp_sandbox = 1\nclear_emulator_capabilities = 1\ndynamic_ownership = 1\nallow_disk_format_probing = 0\nsecurity_default_confined = 1\nvnc_listen = "0.0.0.0"\n' > "$HPS_QEMU_CONF"
 }
 
