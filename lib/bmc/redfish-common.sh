@@ -207,7 +207,8 @@ act_power() {
 act_pxe_once() {
   local allowed mode_json target_json
   load_system
-  allowed="$(jq -r '(.Boot["BootSourceOverrideTarget@Redfish.AllowableValues"] // [])[]' <<< "$RF_SYSJSON")"
+  # Standard annotation, else iLO 4's BootSourceOverrideSupported list.
+  allowed="$(jq -r '(.Boot["BootSourceOverrideTarget@Redfish.AllowableValues"] // .Boot.BootSourceOverrideSupported // [])[]' <<< "$RF_SYSJSON")"
   if [[ -n "$allowed" ]] && ! grep -qx Pxe <<< "$allowed"; then
     die 5 "Pxe is not an allowed BootSourceOverrideTarget"
   fi

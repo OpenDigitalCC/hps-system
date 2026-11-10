@@ -18,7 +18,7 @@ teardown() {
 }
 
 ilo_system() {
-  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"'"${1:-On}"'","Model":"ProLiant DL360 Gen9","SerialNumber":"SER123","Boot":{"BootSourceOverrideMode":"UEFI"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","ForceRestart","Nmi","PushPowerButton"]}}}'
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"'"${1:-On}"'","Model":"ProLiant DL360 Gen9","SerialNumber":"SER123","Boot":{"BootSourceOverrideEnabled":"Disabled","BootSourceOverrideSupported":["None","Cd","Hdd","Usb","Pxe","UefiShell","UefiTarget"],"BootSourceOverrideTarget":"None"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","ForceRestart","Nmi","PushPowerButton"]}}}'
   p97_fix GET /redfish/v1/Managers/1/ '{"FirmwareVersion":"iLO 4 v2.55"}'
   p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{}'
   p97_fix PATCH /redfish/v1/Systems/1/ '{}'
@@ -62,12 +62,24 @@ ilo_system() {
   grep -qF '{"ResetType":"ForceRestart"}' "$CALLS_LOG"
 }
 
-@test "hpe-ilo pxe-once sets the one-time UEFI PXE override then restarts a running host" {
+@test "hpe-ilo pxe-once on iLO 4: one-time PXE override without BootSourceOverrideMode, then restart" {
   ilo_system On
   p97_run_driver hpe-ilo pxe-once
   [ "$status" -eq 0 ]
-  grep -qF 'PATCH /redfish/v1/Systems/1/ {"Boot":{"BootSourceOverrideTarget":"Pxe","BootSourceOverrideEnabled":"Once","BootSourceOverrideMode":"UEFI"}}' "$CALLS_LOG"
+  grep -qF 'PATCH /redfish/v1/Systems/1/ {"Boot":{"BootSourceOverrideTarget":"Pxe","BootSourceOverrideEnabled":"Once"}}' "$CALLS_LOG"
+  run grep -F 'BootSourceOverrideMode' "$CALLS_LOG"
+  [ "$status" -eq 1 ]
   grep -qF '{"ResetType":"ForceRestart"}' "$CALLS_LOG"
+}
+
+@test "hpe-ilo pxe-once on a later iLO that lists BootSourceOverrideMode sends UEFI mode" {
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"Off","Model":"ProLiant DL380 Gen10","SerialNumber":"SER9","Boot":{"BootSourceOverrideMode":"UEFI","BootSourceOverrideTarget":"None"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","ForceRestart"]}}}'
+  p97_fix GET /redfish/v1/Managers/1/ '{"FirmwareVersion":"iLO 5 v2.90"}'
+  p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{}'
+  p97_fix PATCH /redfish/v1/Systems/1/ '{}'
+  p97_run_driver hpe-ilo pxe-once
+  [ "$status" -eq 0 ]
+  grep -qF '"BootSourceOverrideMode":"UEFI"' "$CALLS_LOG"
 }
 
 @test "hpe-ilo pxe-once powers a stopped host on" {

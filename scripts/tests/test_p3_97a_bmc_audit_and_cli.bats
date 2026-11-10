@@ -179,7 +179,7 @@ set_credential() {
 }
 
 ilo_fixtures() {
-  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"On","Model":"ProLiant DL360 Gen9","SerialNumber":"SER123","Boot":{"BootSourceOverrideMode":"UEFI"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","ForceRestart"]}}}'
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"On","Model":"ProLiant DL360 Gen9","SerialNumber":"SER123","Boot":{"BootSourceOverrideEnabled":"Disabled","BootSourceOverrideSupported":["None","Cd","Hdd","Usb","Pxe","UefiShell","UefiTarget"],"BootSourceOverrideTarget":"None"},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","ForceRestart"]}}}'
   p97_fix GET /redfish/v1/Managers/1/ '{"FirmwareVersion":"iLO 4 v2.55"}'
   p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{}'
   p97_fix PATCH /redfish/v1/Systems/1/ '{}'

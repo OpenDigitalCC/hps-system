@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # hpe-ilo - HPE iLO (iLO 4 and later) over Redfish. The quirks proven in the
 # lab (lab/ilo.sh): the system is /redfish/v1/Systems/1/, every path carries a
-# trailing slash, and the one-time boot override sends UEFI mode, then powers
-# the host on or restarts it. See docs/BMC.md.
+# trailing slash, and the one-time boot override (target Pxe, Once) is followed
+# by power on or restart. iLO 4 (v2.76, lab 2026-11-10) has no
+# BootSourceOverrideMode and refuses it (HTTP 400, Base.0.10.PropertyUnknown):
+# the mode is sent only when the system lists it (later iLO generations).
+# See docs/BMC.md.
 set -euo pipefail
 export RF_NAME=hpe-ilo
 export RF_SYSTEM_DEFAULT=/redfish/v1/Systems/1/
 export RF_MANAGER_DEFAULT=/redfish/v1/Managers/1/
 export RF_TRAILING_SLASH=1
-export RF_PXE_MODE=send
+export RF_PXE_MODE=auto
 here="$(dirname "$(readlink -f "$0")")"
 # shellcheck source=../redfish-common.sh
 . "$here/../redfish-common.sh"
