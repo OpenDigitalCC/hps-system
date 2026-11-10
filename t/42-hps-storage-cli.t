@@ -15,20 +15,7 @@ my $tmp = tempdir(CLEANUP => 1);
 
 # A stand-in for scripts/hps-run.sh: records its arguments and stdin; in
 # --input --json mode answers like ctrl-exec-cli would.
-open(my $sh, '>', "$tmp/hps-run") or die;
-print {$sh} <<'SHIM';
-#!/usr/bin/env bash
-echo "$*" >> "$SHIM_DIR/args"
-if [[ "$1" == "--input" ]]; then
-  cat > "$SHIM_DIR/stdin.$$"
-  jq -n --argjson e "${FAKE_NODE_EXIT:-0}" '{ok:1,results:[{host:"h",exit:$e,stdout:"node says hi\n",stderr:"node complains\n"}]}'
-  exit 0
-fi
-echo "plain output"
-exit "${FAKE_RUN_RC:-0}"
-SHIM
-close $sh;
-chmod 0755, "$tmp/hps-run";
+StorageFixture::write_hps_run_shim("$tmp/hps-run");
 
 local $ENV{HPS_CONFIG_BASE}     = $f->{base};
 local $ENV{HPS_SYSTEM_REGISTRY} = "$f->{base}/system.db";
@@ -151,7 +138,15 @@ reset_shim();
     local $ENV{FAKE_NODE_EXIT} = 3;
     ($rc, $out) = cli($mac, 'up');
     is($rc, 3, 'node exit 3: refused (3)');
-    like($out, qr/dataset-unlock exited 3: node complains/, 'node stderr in the message');
+    like($out, qr/storage-pool-import exited 3: node complains/, 'node stderr in the message');
+    unlike($out, qr/-> agent/, 'hps-run banner is not taken for the reason');
+}
+{
+    local $ENV{FAKE_NODE_EXIT}   = 3;
+    local $ENV{FAKE_NODE_STDERR} = "+ test -d /lab/enc/images\n[image-fetch] refused: --dest is not an existing directory";
+    ($rc, $out) = cli($mac, 'status');
+    is($rc, 3, 'node exit 3 on a call without input: refused (3), not the client\'s 1');
+    like($out, qr/storage-status exited 3: \[image-fetch\] refused: --dest is not an existing directory/, 'the script\'s last stderr line is the reason');
 }
 {
     local $ENV{FAKE_NODE_EXIT} = 1;
@@ -162,14 +157,16 @@ reset_shim();
     local $ENV{FAKE_RUN_RC} = 4;
     ($rc, $out) = cli($mac, 'status');
     is($rc, 1, 'hps-run failing (no agent) is a failure (1)');
+    like($out, qr/not a run result.*\n?|no registered agent/, 'and says why');
 }
 
 # --- status / trim-check output
 reset_shim();
 ($rc, $out) = cli($mac, 'trim-check');
 is($rc, 0, 'trim-check: 0');
-like($out, qr/== 1\. storage-trim-check lab \(exit 0\)\nplain output/, 'plain call output shown');
+like($out, qr/== 1\. storage-trim-check lab \(exit 0\)\nnode says hi/, 'call output shown');
 unlike(join('', calls()), qr/--input/, 'a call without input does not use --input');
+like(join('', calls()), qr/^--json $mac storage-trim-check lab$/m, 'a call without input still asks for --json');
 
 # --- forget-key
 ($rc, $out) = cli($mac, 'forget-key');

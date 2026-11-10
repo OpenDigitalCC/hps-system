@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #===============================================================================
-# hps-run.sh [--input [--json]] <mac-or-hostname> <script> [args...]
+# hps-run.sh [--input] [--json] <mac-or-hostname> <script> [args...]
 # ------------------------------------------------
 # Run an allowlisted ctrl-exec script on a node, addressed the HPS way: by MAC
 # (any format: aa:bb:.., aa-bb-.., aabb.., case-insensitive) or by registry
@@ -38,6 +38,13 @@
 # it the client prints text and exits 1 if the script failed. The input never
 # appears in an argument or in this script's output.
 #
+# --json without --input: the same API client call without `--input -`
+#     $CTRL_EXEC_CLI run <agent> --script <script> --json -- args...
+# (stdin is /dev/null). Use it when the script's own exit status, stdout and
+# stderr are needed: `ced run` and the client's text mode exit 1 whenever the
+# script failed, whatever its real status was; the JSON reply carries it
+# (results[0].exit) and hps-run.sh exits 0 unless the API call itself failed.
+#
 # Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
 # $HPS_BASE/hps-system; CTRL_EXEC_DISPATCHER names the dispatcher CLI;
 # CTRL_EXEC_CLI the API client used by --input (default: ctrl-exec-cli on PATH,
@@ -52,7 +59,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: hps-run.sh [--input [--json]] <mac-or-hostname> <script> [args...]" >&2
+  echo "usage: hps-run.sh [--input] [--json] <mac-or-hostname> <script> [args...]" >&2
 }
 
 INPUT=0
@@ -64,11 +71,6 @@ while [[ $# -gt 0 ]]; do
     *) break ;;
   esac
 done
-if [[ $JSON -eq 1 && $INPUT -eq 0 ]]; then
-  usage
-  exit 2
-fi
-
 if [[ $# -lt 2 || -z "$1" || -z "$2" ]]; then
   usage
   exit 2
@@ -209,18 +211,25 @@ ce_run_input() {
   else
     transport=(--socket "${CTRL_EXEC_API_SOCKET:-/run/ctrl-exec-api/api.sock}")
   fi
-  local cmd=("$cli" "${transport[@]}" run "$agent" --script "$script" --input -)
+  local cmd=("$cli" "${transport[@]}" run "$agent" --script "$script")
+  if [[ $INPUT -eq 1 ]]; then
+    cmd+=(--input -)
+  fi
   if [[ $JSON -eq 1 ]]; then
     cmd+=(--json)
   fi
   if (( $# > 0 )); then
     cmd+=(-- "$@")
   fi
-  "${cmd[@]}"
+  if [[ $INPUT -eq 1 ]]; then
+    "${cmd[@]}"
+  else
+    "${cmd[@]}" < /dev/null
+  fi
 }
 
 rc=0
-if [[ $INPUT -eq 1 ]]; then
+if [[ $INPUT -eq 1 || $JSON -eq 1 ]]; then
   ce_run_input "$AGENT" "$SCRIPT" "$@" || rc=$?
 else
   ce_run "$AGENT" "$SCRIPT" "$@" || rc=$?

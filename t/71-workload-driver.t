@@ -355,6 +355,29 @@ my $f = StorageFixture::setup_workload();
     ok($h->{wl}->()->run('create', 't0', resume => 1)->{ok}, '--resume without a record starts from scratch');
 }
 
+#--- the real runner (HpsRun) on a shim hps-run: the script's own refusal reaches the operator
+{
+    use File::Temp qw(tempdir);
+    my $tmp = tempdir(CLEANUP => 1);
+    StorageFixture::write_hps_run_shim("$tmp/hps-run");
+    local $ENV{SHIM_DIR} = $tmp;
+    my $g = StorageFixture::setup_workload();
+    my $runner = HPS::Storage::Runner::HpsRun->new(hps_run => "$tmp/hps-run");
+    my $wl = $g->{wl}->(runner => $runner, storage => sub { $g->{mk}->(host => $_[0], runner => $runner) });
+    local $ENV{FAKE_NODE_EXIT} = 3;
+    local $ENV{FAKE_NODE_STDERR} = "+ test -d /lab/enc/images\n[image-fetch] refused: --dest '/lab/enc/images' is not an existing directory";
+    my $e = err_of(sub { $wl->run('create', 't0') });
+    is($e->kind, 'refused', 'the script\'s exit 3 is a refusal');
+    like($e->message, qr/step 1\/11 storage-zvol-create: .*storage-zvol-create exited 3: \[image-fetch\] refused: --dest '\/lab\/enc\/images' is not an existing directory/,
+        'the script\'s own last stderr line is in the message') or diag $e->message;
+    unlike($e->message, qr/-> agent/, 'not hps-run\'s banner');
+    ok((grep { /^--json \d+ storage-zvol-create / } do { open(my $a, '<', "$tmp/args") or die; <$a> }), 'the runner always asks for --json');
+    local $ENV{FAKE_NODE_EXIT} = 0;
+    local $ENV{FAKE_RUN_RC} = 4;
+    $e = err_of(sub { $wl->run('create', 't0', resume => 1) });
+    like($e->message, qr/not a run result \(hps-run exit 4\)/, 'a reply that is not a run result is rc 1 with the reason');
+}
+
 #--- a compute-only node: both legs remote, compute_host given
 {
     my $g = StorageFixture::setup_workload();

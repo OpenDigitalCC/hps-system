@@ -14,26 +14,8 @@ my $f   = StorageFixture::setup_workload();
 my $mac = $StorageFixture::MAC;
 my $tmp = tempdir(CLEANUP => 1);
 
-# A stand-in for scripts/hps-run.sh: records its arguments; in --input --json
-# mode (the storage zvol-destroy) it answers like ctrl-exec-cli would.
-open(my $sh, '>', "$tmp/hps-run") or die;
-print {$sh} <<'SHIM';
-#!/usr/bin/env bash
-echo "$*" >> "$SHIM_DIR/args"
-if [[ "$1" == "--input" ]]; then
-  cat > /dev/null
-  jq -n --argjson e "${FAKE_NODE_EXIT:-0}" '{ok:1,results:[{host:"h",exit:$e,stdout:"node says hi\n",stderr:"node complains\n"}]}'
-  exit 0
-fi
-case "$2" in
-  vm-status) echo "VM ${3} running" ;;
-  mirror-status) echo "MIRROR ${3} clean" ;;
-  *) echo "plain output of $2" ;;
-esac
-exit "${FAKE_RUN_RC:-0}"
-SHIM
-close $sh;
-chmod 0755, "$tmp/hps-run";
+# The shared stand-in for scripts/hps-run.sh: answers JSON like the real one with --json.
+StorageFixture::write_hps_run_shim("$tmp/hps-run");
 
 local $ENV{HPS_CONFIG_BASE}         = $f->{base};
 local $ENV{HPS_SYSTEM_REGISTRY}     = "$f->{base}/system.db";
@@ -117,8 +99,8 @@ is($rc, 0, 'create exits 0') or diag $out;
 like($out, qr/create ok: workload t0/, 'create prints its result');
 is(rec()->{state}, 'created', 'registry: created');
 my @c = calls();
-like($c[0], qr/^\Q--input --json $mac storage-zvol-create\E|^$mac storage-zvol-create/, 'zvol create went through the runner') or diag @c;
-ok((grep { /^\Q$mac\E image-fetch debian-13-generic-amd64 --from http:\/\/192\.0\.2\.1\/images\// } @c), 'image-fetch called');
+like($c[0], qr/^--json \Q$mac\E storage-zvol-create /, 'zvol create went through the runner, asking for --json') or diag @c;
+ok((grep { /^--json \Q$mac\E image-fetch debian-13-generic-amd64 --from http:\/\/192\.0\.2\.1\/images\// } @c), 'image-fetch called');
 
 ($rc, $out) = cli('create', 't0');
 is($rc, 3, 'second create: refused (3)');
@@ -127,7 +109,7 @@ like($out, qr/already exists/, 'says so');
 reset_shim();
 ($rc, $out) = cli('start', 't0', '--vm', 't0-db');
 is($rc, 0, 'start --vm exits 0');
-is_deeply([ map { s/^\S+ //r =~ s/\s+\z//r } calls() ], [ 'mirror-assemble t0-db-root --leg local:lab/enc/vm/t0-t0-db-root --leg iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db', 'vm-start t0-db' ], 'start --vm: only that VM');
+is_deeply([ map { s/^(?:--\S+ )*\S+ //r =~ s/\s+\z//r } calls() ], [ 'mirror-assemble t0-db-root --leg local:lab/enc/vm/t0-t0-db-root --leg iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db', 'vm-start t0-db' ], 'start --vm: only that VM');
 is(rec()->{vms}{'t0-db'}{state}, 'running', 'registry: running');
 
 ($rc, $out) = cli('status', 't0');
@@ -150,16 +132,28 @@ is(rec()->{vms}{'t0-db'}{state}, 'stopped', 'registry: stopped');
 
 # --- node failures
 {
-    local $ENV{FAKE_RUN_RC} = 1;
+    local $ENV{FAKE_NODE_EXIT} = 1;
     ($rc, $out) = cli('start', 't0', '--vm', 't0-db');
     is($rc, 1, 'a failing node call: exit 1');
-    like($out, qr/step 1\/2 mirror-assemble exited 1/, 'names the step');
-    local $ENV{FAKE_RUN_RC} = 3;
+    like($out, qr/step 1\/2 mirror-assemble exited 1: node complains/, 'names the step and carries the script\'s stderr');
+    local $ENV{FAKE_NODE_EXIT} = 3;
+    local $ENV{FAKE_NODE_STDERR} = "+ test -d /lab/enc/images\n[image-fetch] refused: --dest is not an existing directory";
     ($rc, $out) = cli('start', 't0', '--vm', 't0-db');
     is($rc, 3, 'a node refusal: exit 3');
-    local $ENV{FAKE_RUN_RC} = 1;
+    like($out, qr/step 1\/2 mirror-assemble exited 3: \[image-fetch\] refused: --dest is not an existing directory/, 'the refusal reason reaches the operator');
+    unlike($out, qr/-> agent/, 'not hps-run\'s banner');
+    ($rc, $out) = cli('start', 't0', '--vm', 't0-db', '--dry-run');
+    is($rc, 0, 'dry run does not call the node');
+    local $ENV{FAKE_NODE_EXIT} = 1;
     ($rc, $out) = cli('status', 't0');
     is($rc, 1, 'status with a failing node call: exit 1');
+    local $ENV{FAKE_NODE_EXIT} = 0;
+    local $ENV{FAKE_RUN_RC} = 4;
+    ($rc, $out) = cli('start', 't0', '--vm', 't0-db');
+    is($rc, 1, 'hps-run itself failing (no agent): exit 1');
+    like($out, qr/not a run result.*hps-run exit 4/s, 'and says the reply was not a run result');
+    ($rc, $out, my $jo) = cli('start', 't0', '--vm', 't0-db', '--json');
+    is($rc, 1, '--json failure still exits 1');
 }
 
 # --- destroy

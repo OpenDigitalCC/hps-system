@@ -446,14 +446,19 @@ sub forget_key ($self, %a) {
 #=== the default runner =======================================================================
 
 package HPS::Storage::Runner::HpsRun;
-# Calls scripts/hps-run.sh <mac> <script> [args]. Without input that is
-# `ced run <agent> <script> -- args` (output and exit status are the node
-# script's). With input it is `hps-run.sh --input --json ...`, which runs
+# Calls scripts/hps-run.sh --json [--input] <mac> <script> [args], the one runner
+# of HPS::Storage and HPS::Workload. Always --json: the ctrl-exec client exits 1
+# whenever a script failed, whatever its real status, so only the JSON reply
+# (per host: exit, stdout, stderr) says what the script did. Without input
+# hps-run.sh runs
+#   ctrl-exec-cli run <agent> --script <script> --json -- args
+# With input (--input) it runs
 #   ctrl-exec-cli run <agent> --script <script> --input - --json -- args
 # with the document on the child's stdin: ctrl-exec-cli sends it as the one
 # field "input" of POST /run, which an `input = raw` script reads whole from its
 # stdin. `ced run` has no input option on 0.14.4. The JSON reply carries the
-# node script's exit status, stdout and stderr per host.
+# node script's exit status, stdout and stderr per host. A reply that is not a run
+# result is rc 1 with the reason (and what hps-run.sh wrote on stderr).
 use strict;
 use warnings;
 use feature qw(signatures);
@@ -495,20 +500,19 @@ sub _spawn ($self, $input, @cmd) {
 # call(mac, script, args, input) -> {rc, stdout, stderr}
 sub call ($self, %c) {
     my $has_input = defined $c{input};
-    my @cmd = ($self->{hps_run}, ($has_input ? ('--input', '--json') : ()), $c{mac}, $c{script}, @{ $c{args} });
+    my @cmd = ($self->{hps_run}, ($has_input ? ('--input') : ()), '--json', $c{mac}, $c{script}, @{ $c{args} });
     my ($rc, $out, $err) = eval { $self->_spawn($c{input}, @cmd) };
     return { rc => 1, stdout => '', stderr => "cannot run $self->{hps_run}: " . ($@ =~ s/ at .*//sr) } unless defined $rc;
     # The client exits non-zero when the node script fails, but its --json
     # body still carries the script's exit, stdout and stderr: parse it
     # whenever it parses, so a node failure is reported with its own words.
-    return { rc => $rc, stdout => $out, stderr => $err } unless $has_input;
     my $doc = eval { JSON::PP->new->utf8->decode($out) };
     my $res = ref $doc eq 'HASH' && ref $doc->{results} eq 'ARRAY' ? $doc->{results}[0] : undef;
-    return { rc => 1, stdout => '', stderr => $err . "the dispatcher reply was not a run result\n" } unless ref $res eq 'HASH';
+    return { rc => 1, stdout => '', stderr => $err . "the dispatcher reply was not a run result (hps-run exit $rc)\n" } unless ref $res eq 'HASH';
     my $exit = $res->{exit};
     $exit = 1 unless defined $exit && $exit =~ /^\d+$/;
     return { rc => $exit + 0, stdout => $res->{stdout} // '',
-             stderr => ($res->{stderr} // '') . (length($res->{error} // '') ? "$res->{error}\n" : '') . $err };
+             stderr => ($res->{stderr} // '') . (length($res->{error} // '') ? "$res->{error}\n" : '') };    # hps-run's own banner is not the script's
 }
 
 1;

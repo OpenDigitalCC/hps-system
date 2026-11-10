@@ -123,10 +123,18 @@ teardown() {
   [ ! -e "$CLI_LOG" ]
 }
 
-@test "--json without --input is a usage error (2)" {
-  run bash "$RUN" --json held01 iscsi-status
-  [ "$status" -eq 2 ]
-  [ ! -e "$CLI_LOG" ]
+@test "--json without --input calls the client with --json and no --input, prints its JSON, ced run unused" {
+  FAKE_NODE_EXIT=3 run bash "$RUN" --json aabbccddeeff image-fetch debian --dest /x < /dev/null
+  [ "$status" -eq 0 ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script image-fetch --json -- debian --dest /x" ]
+  [[ "$output" == *'"exit":3'* ]]
+  ! grep -q '^run ' "$CED_LOG"
+}
+
+@test "--json without --input: the client's own failure is passed through, stdin is not read" {
+  FAKE_CLI_RC=1 run bash "$RUN" --json held01 iscsi-status
+  [ "$status" -eq 1 ]
+  [ "$(wc -c < "$TEST_DIR/node.stdin")" -eq 0 ]
 }
 
 @test "--input with an unknown host (3) or no agent (4) calls no client" {

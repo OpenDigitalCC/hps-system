@@ -16,20 +16,7 @@ my $f   = StorageFixture::setup();
 my $mac = $StorageFixture::MAC;
 my $tmp = tempdir(CLEANUP => 1);
 
-open(my $sh, '>', "$tmp/hps-run") or die;
-print {$sh} <<'SHIM';
-#!/usr/bin/env bash
-echo "$*" >> "$SHIM_DIR/args"
-if [[ "$1" == "--input" ]]; then
-  cat > "$SHIM_DIR/stdin.$$"
-  jq -n '{ok:1,results:[{host:"h",exit:0,stdout:"node says hi\n",stderr:""}]}'
-  exit 0
-fi
-echo "plain output"
-exit 0
-SHIM
-close $sh;
-chmod 0755, "$tmp/hps-run";
+StorageFixture::write_hps_run_shim("$tmp/hps-run");
 
 local $ENV{HPS_CONFIG_BASE}       = $f->{base};
 local $ENV{HPS_SYSTEM_REGISTRY}   = "$f->{base}/system.db";
@@ -140,6 +127,6 @@ is($rc, 0, 'zvol-destroy runs with the approval');
 like(join('', calls()), qr{^--input --json $mac storage-zvol-destroy lab/enc/t0 --approval-file -$}m, 'sent with --input --json');
 ($rc, $out) = cli('hps-storage', $mac, 'status');
 is($rc, 0, 'status runs');
-like(join('', calls()), qr{^\Q$mac\E storage-status lab$}m, 'status is the single storage-status call');
+like(join('', calls()), qr{^--json \Q$mac\E storage-status lab$}m, 'status is the single storage-status call');
 
 done_testing;

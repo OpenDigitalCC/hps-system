@@ -61,6 +61,46 @@ sub setup {
 #   write_def($f, $def)  writes workloads/<name>.json
 our $MAC2 = '525400000002';
 
+# write_hps_run_shim($path): a stand-in for scripts/hps-run.sh that answers like
+# `hps-run.sh --json [--input] <mac> <script> [args]` does: one JSON run result
+# {results:[{exit, stdout, stderr}]}. It appends its arguments to $SHIM_DIR/args
+# and keeps stdin of --input calls in $SHIM_DIR/stdin.<pid>. Environment:
+# FAKE_NODE_EXIT (the script's exit, default 0), FAKE_NODE_STDERR (its stderr,
+# default "node complains"), FAKE_RUN_RC (hps-run itself fails with that status
+# and no JSON, as when no agent is registered).
+sub write_hps_run_shim {
+    my ($path) = @_;
+    open(my $sh, '>', $path) or die "$path: $!";
+    print {$sh} <<'SHIM';
+#!/usr/bin/env bash
+echo "$*" >> "$SHIM_DIR/args"
+input=0
+while [[ "${1:-}" == --* ]]; do
+  [[ "$1" == --input ]] && input=1
+  shift
+done
+if [[ $input -eq 1 ]]; then cat > "$SHIM_DIR/stdin.$$"; fi
+if [[ "${FAKE_RUN_RC:-0}" -ne 0 ]]; then
+  echo "hps-run: no registered agent for $1" >&2
+  exit "$FAKE_RUN_RC"
+fi
+case "$2" in
+  vm-status) out="VM ${3} running" ;;
+  mirror-status) out="MIRROR ${3} clean" ;;
+  *) out="node says hi" ;;
+esac
+jq -n --argjson e "${FAKE_NODE_EXIT:-0}" --arg o "$out
+" --arg s "${FAKE_NODE_STDERR-node complains}
+" '{ok:1,results:[{host:"h",exit:$e,stdout:$o,stderr:$s}]}'
+echo "hps-run: $1 -> agent h, script $2" >&2
+exit 0
+SHIM
+    close $sh;
+    chmod 0755, $path;
+    return $path;
+}
+
+
 sub layout {
     return {
         mgmt => { cidr => '192.0.2.0/24',    vlan => undef, bridge => 'br-mgmt', purpose => 'workload' },
