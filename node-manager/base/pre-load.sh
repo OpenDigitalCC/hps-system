@@ -294,6 +294,29 @@ n_ips_command() {
 }
 
 #===============================================================================
+# n_ips_command_report
+# --------------------
+# n_ips_command, plus its error text on stderr when it fails. For callers that
+# run n_ips_command in a command substitution: the global
+# N_IPS_COMMAND_LAST_ERROR is set in that subshell and is lost to the caller,
+# which would then report the stale value of an earlier call.
+#
+# Usage:
+#   result=$(n_ips_command_report <command> [param=value ...] 2>"$errfile")
+#
+# Returns:
+#   the exit code of n_ips_command
+#===============================================================================
+n_ips_command_report() {
+  local rc=0
+  n_ips_command "$@" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "${N_IPS_COMMAND_LAST_ERROR:-n_ips_command failed (exit $rc)}" >&2
+  fi
+  return "$rc"
+}
+
+#===============================================================================
 # n_remote_log
 # ------------
 # Send log messages from remote nodes to the provisioning node's logging system.
@@ -307,6 +330,8 @@ n_ips_command() {
 #   $1 - Log message to send (optional if piped)
 #   $2 - Method: "syslog", "ips", or "auto" (default: "auto")
 #        auto = try syslog first, fallback to ips
+#   $3 - Severity: info (default), warning, err, debug. Not info: logger -p
+#        user.<sev>, or level= on the log_message command
 #
 # Behaviour:
 #   - Accepts input from argument or stdin
@@ -330,6 +355,12 @@ n_remote_log() {
   local message=""
   local function="${FUNCNAME[1]:-unknown}"
   local method="${2:-auto}"
+  local severity="${3:-info}"
+  local -a lgr_pri=() ips_lvl=()
+  if [[ "$severity" != "info" ]]; then
+    lgr_pri=(-p "user.${severity}")
+    ips_lvl=("level=${severity}")
+  fi
 
   # An explicit message argument is always the message. Stdin is read only
   # when no message argument is given (or it is empty) and stdin is not a tty.
@@ -364,9 +395,9 @@ n_remote_log() {
     while IFS= read -r line; do
       if [[ -n "$line" ]]; then
         if [[ "$use_method" == "syslog" ]]; then
-          logger -t "hps[${function}]" "$line"
+          logger "${lgr_pri[@]}" -t "hps[${function}]" "$line"
         else
-          n_ips_command "log_message" "message=${line}" "function=${function}" >/dev/null
+          n_ips_command "log_message" "message=${line}" "function=${function}" "${ips_lvl[@]}" >/dev/null
         fi
       fi
     done <<< "$message"
@@ -377,9 +408,9 @@ n_remote_log() {
     while IFS= read -r -t "${HPS_LOG_STDIN_TIMEOUT:-30}" line; do
       if [[ -n "$line" ]]; then
         if [[ "$use_method" == "syslog" ]]; then
-          logger -t "hps[${function}]" "$line"
+          logger "${lgr_pri[@]}" -t "hps[${function}]" "$line"
         else
-          n_ips_command "log_message" "message=${line}" "function=${function}" >/dev/null
+          n_ips_command "log_message" "message=${line}" "function=${function}" "${ips_lvl[@]}" >/dev/null
         fi
       fi
     done
@@ -434,21 +465,28 @@ n_remote_host_variable() {
   local value="${2-}"
   local result
   local exit_code
+  local errf="/tmp/n_remote_host_variable-$$-$RANDOM"
+  local err=""
   
   if [[ $# -eq 1 ]]; then
     # GET operation - no second parameter
-    result=$(n_ips_command "host_variable" "name=${name}")
+    result=$(n_ips_command_report "host_variable" "name=${name}" 2>"$errf")
     exit_code=$?
   elif [[ "$value" == "--unset" ]]; then
     # UNSET operation
-    result=$(n_ips_command "host_variable" "name=${name}" "action=unset")
+    result=$(n_ips_command_report "host_variable" "name=${name}" "action=unset" 2>"$errf")
     exit_code=$?
   else
     # SET operation - including empty string
-    result=$(n_ips_command "host_variable" "name=${name}" "value=${value}")
+    result=$(n_ips_command_report "host_variable" "name=${name}" "value=${value}" 2>"$errf")
     exit_code=$?
   fi
   
+  if [[ -s "$errf" ]]; then
+    err="$(cat "$errf")"
+  fi
+  rm -f "$errf"
+
   # Check if n_ips_command itself failed
   if [[ $exit_code -ne 0 ]]; then
     local operation
@@ -459,7 +497,9 @@ n_remote_host_variable() {
     else
       operation="set"
     fi
-    n_remote_log "Failed to $operation host variable '$name': $N_IPS_COMMAND_LAST_ERROR"
+    echo "Failed to $operation variable '$name': $err" >&2
+    n_remote_log "Failed to $operation host variable '$name': $err"
+    N_IPS_COMMAND_LAST_ERROR="$err"
     return $exit_code
   fi
   
@@ -518,21 +558,30 @@ n_remote_cluster_variable() {
   local value="${2-}"
   local result
   local exit_code
+  local errf="/tmp/n_remote_cluster_variable-$$-$RANDOM"
+  local err=""
   
   if [[ $# -ge 2 ]]; then
     # SET operation - check arg count to handle empty string values
-    result=$(n_ips_command "cluster_variable" "name=${name}" "value=${value}")
+    result=$(n_ips_command_report "cluster_variable" "name=${name}" "value=${value}" 2>"$errf")
     exit_code=$?
   else
     # GET operation
-    result=$(n_ips_command "cluster_variable" "name=${name}")
+    result=$(n_ips_command_report "cluster_variable" "name=${name}" 2>"$errf")
     exit_code=$?
   fi
   
+  if [[ -s "$errf" ]]; then
+    err="$(cat "$errf")"
+  fi
+  rm -f "$errf"
+
   # Check if n_ips_command itself failed
   if [[ $exit_code -ne 0 ]]; then
     local operation=$([[ $# -ge 2 ]] && echo "set" || echo "get")
-    n_remote_log "Failed to $operation cluster variable '$name': $N_IPS_COMMAND_LAST_ERROR"
+    echo "Failed to $operation variable '$name': $err" >&2
+    n_remote_log "Failed to $operation cluster variable '$name': $err"
+    N_IPS_COMMAND_LAST_ERROR="$err"
     return $exit_code
   fi
   

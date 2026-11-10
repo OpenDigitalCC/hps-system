@@ -21,7 +21,9 @@ sub usage {
     print STDERR "hps-onboard: $msg\n" if $msg;
     print STDERR <<'USAGE';
 Usage:
-  hps-onboard list [--json]
+  hps-onboard list [--all] [--json]
+      without --all: the held hosts. With --all: every host, with its state and
+      whether its last init succeeded (FAILED marks a failed init).
   hps-onboard show <mac> [--json]
   hps-onboard assign <mac> --type SCH,TCH,DRH --profile NAME \
       --os arch:name:version --pin PIN [--storage "note"]
@@ -41,6 +43,47 @@ sub render_list {
     return "No held hosts.\n" unless @held;
     my $out = sprintf("%-14s %-8s %s\n", 'MAC', 'AUDIT', 'AUDITED AT');
     $out .= sprintf("%-14s %-8s %s\n", $_->{mac}, $_->{has_audit} ? 'yes' : 'none', $_->{audit_at} // '-') for @held;
+    return $out;
+}
+
+sub render_list_all {
+    my (@hosts) = @_;
+    return "No hosts.\n" unless @hosts;
+    my $out = sprintf("%-14s %-12s %-8s %s\n", 'MAC', 'STATE', 'INIT', 'LAST INIT');
+    for my $h (@hosts) {
+        my $ok = $h->{init_ok};
+        my $mark = !defined $ok ? '-' : $ok eq 'true' ? 'ok' : $ok eq 'false' ? 'FAILED' : $ok;
+        $out .= sprintf("%-14s %-12s %-8s %s\n", $h->{mac}, $h->{state} // '-', $mark, $h->{init_at} // '-');
+    }
+    return $out;
+}
+
+# One init result as lines: header, then the failed steps first (rc, seconds,
+# name, message), then the steps that succeeded.
+sub render_init_result {
+    my ($r, $label) = @_;
+    my @steps = ref $r->{steps} eq 'ARRAY' ? @{ $r->{steps} } : ();
+    my @bad = grep { ($_->{rc} // 0) != 0 } @steps;
+    my @ok  = grep { ($_->{rc} // 0) == 0 } @steps;
+    my $out = sprintf("%s: %s, finished %s, pin %s, boot %s\n", $label,
+        @bad ? scalar(@bad) . " of " . scalar(@steps) . " steps FAILED" : "all " . scalar(@steps) . " steps ok",
+        $r->{finished_at} || '-', $r->{pin} || '-', $r->{boot_id} || '-');
+    for my $st (@bad, @ok) {
+        my $rc = $st->{rc} // 0;
+        $out .= sprintf("  %-6s rc=%-3s %4ss  %s\n", $rc ? 'FAILED' : 'ok', $rc, $st->{seconds} // 0, $st->{name} // '?');
+        my $m = $st->{message};
+        if ($rc && defined $m && length $m) {
+            $out .= "           $_\n" for split /\n/, $m;
+        }
+    }
+    return $out;
+}
+
+sub render_init {
+    my ($s) = @_;
+    return "\nNo init result reported by this host.\n" unless ref $s->{init} eq 'HASH';
+    my $out = "\nInit\n" . render_init_result($s->{init}, '  Last boot');
+    $out .= render_init_result($s->{init_prev}, '  Previous boot') if ref $s->{init_prev} eq 'HASH';
     return $out;
 }
 
@@ -76,6 +119,7 @@ sub render_show {
     else {
         $out .= "\nNo audit stored for this host.\n";
     }
+    $out .= render_init($s);
     if (ref $s->{nets} eq 'ARRAY' && @{ $s->{nets} }) {
         $out .= "\nNetworks attached: " . join(', ', @{ $s->{nets} }) . "\n";
     }
@@ -93,19 +137,25 @@ sub render_nets {
 
 sub main {
     my @argv = @_;
-    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach);
+    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach, $all);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
-        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all,
     ) or return usage();
     my $ob = HPS::Onboard->new;
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         if ($cmd eq 'list') {
             return usage('list takes no arguments') if @argv;
-            my @held = $ob->list_held;
-            print $json ? $js->encode(\@held) : render_list(@held);
+            if ($all) {
+                my @hosts = $ob->list_all;
+                print $json ? $js->encode(\@hosts) : render_list_all(@hosts);
+            }
+            else {
+                my @held = $ob->list_held;
+                print $json ? $js->encode(\@held) : render_list(@held);
+            }
         }
         elsif ($cmd eq 'show') {
             return usage('show needs one MAC') unless @argv == 1;

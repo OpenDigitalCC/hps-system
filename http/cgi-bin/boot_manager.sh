@@ -262,8 +262,18 @@ if [[ "$cmd" == "log_message" ]]; then
   if cgi_param exists function; then
     REMOTE_FUNCT="[$(cgi_param get function)] "
   fi
+  # Optional severity from the node (n_remote_log's third argument): err,
+  # warning, debug; anything else logs at info.
+  LOG_LEVEL=info
+  if cgi_param exists level; then
+    case "$(cgi_param get level)" in
+      err|error)  LOG_LEVEL=error ;;
+      warn|warning) LOG_LEVEL=warn ;;
+      debug)      LOG_LEVEL=debug ;;
+    esac
+  fi
   cgi_header_plain
-  hps_log info "${REMOTE_FUNCT}${LOG_MESSAGE}"
+  hps_log "$LOG_LEVEL" "${REMOTE_FUNCT}${LOG_MESSAGE}"
   exit 0
 fi
 
@@ -411,6 +421,14 @@ fi
 # POST only, size-capped, caller must be STATE=HELD (see host_audit_intake)
 if [[ "$cmd" == "node_audit" ]]; then
   host_audit_intake "$mac"
+  exit $?
+fi
+
+
+# Command: host_init_result - a node posts its init sequence result (JSON)
+# POST only, size-capped, caller must be a known host (see host_init_intake)
+if [[ "$cmd" == "host_init_result" ]]; then
+  host_init_intake "$mac"
   exit $?
 fi
 

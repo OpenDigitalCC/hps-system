@@ -923,3 +923,142 @@ host_audit_intake() {
   cgi_success "ok"
   return 0
 }
+
+#===============================================================================
+# host_init_refuse
+# ----------------
+# Refuse a host_init_result request: HTTP status line, plain-text message.
+#
+# Parameters:
+#   $1 - status, e.g. "403 Forbidden"
+#   $2 - message
+#===============================================================================
+host_init_refuse() {
+  local status="$1"
+  local msg="$2"
+  echo "Status: ${status}"
+  cgi_fail "host_init_result refused: ${msg}"
+}
+
+#===============================================================================
+# host_init_normalise
+# -------------------
+# Validate an init result body and print the stored form: only the known
+# fields, steps as {name, rc, seconds, message}, plus received_at. The pin is
+# the node's claim, else the host's system_pin.
+#
+# Parameters:
+#   $1 - file holding the body
+#   $2 - received_at text
+#   $3 - fallback pin
+#
+# Returns:
+#   0 normalised JSON on stdout, 1 body is not a valid init result
+#===============================================================================
+host_init_normalise() {
+  local file="$1" received="$2" fallback_pin="$3"
+  jq -e -c --arg rcv "$received" --arg fpin "$fallback_pin" '
+    if (type == "object") and ((.steps // null) | type == "array")
+       and (.steps | all(.[]; (type == "object") and (.name | type == "string")
+            and (.rc | type == "number") and (.rc == (.rc | floor))))
+    then {
+      boot_id: ((.boot_id // "") | tostring),
+      pin: (if ((.pin // "") | tostring) == "" then $fpin else (.pin | tostring) end),
+      started_at: ((.started_at // "") | tostring),
+      finished_at: ((.finished_at // "") | tostring),
+      received_at: $rcv,
+      steps: [.steps[] | {name: .name, rc: .rc,
+                          seconds: ((.seconds // 0) | if type == "number" then . else 0 end),
+                          message: ((.message // "") | tostring)}]
+    } else empty end' "$file" 2>/dev/null
+}
+
+#===============================================================================
+# host_init_intake
+# ----------------
+# Receive the init result a node POSTs at the end of n_init_run
+# (cmd=host_init_result).
+#
+# Behaviour:
+#   - POST only; body read up to HPS_INIT_RESULT_MAX_BYTES (default 8192)
+#   - the caller (MAC from the connection) must be a known host; an
+#     X-HPS-MAC header naming another MAC is refused (403)
+#   - body must be JSON {boot_id, pin, started_at, finished_at, steps[]}
+#   - stores host key init_result, moves the previous one to init_result_prev,
+#     sets init_ok to true (every step rc 0) or false
+#   - replies "ok" (plain text)
+#
+# Parameters:
+#   $1 - MAC of the caller
+#
+# Returns:
+#   0 stored, 1 refused
+#===============================================================================
+host_init_intake() {
+  local mac="${1:-}"
+  local max="${HPS_INIT_RESULT_MAX_BYTES:-8192}"
+  local tmp="/tmp/hps-init-in-$$"
+  local claim="${HTTP_X_HPS_MAC:-}"
+  local size pin stored prev ok nfail failed
+
+  if [[ "${REQUEST_METHOD:-}" != "POST" ]]; then
+    host_init_refuse "405 Method Not Allowed" "POST required"
+    return 1
+  fi
+
+  if [[ -z "$mac" ]] || ! host_registry "$mac" exists; then
+    hps_log warn "host_init_result refused: unknown caller '${mac}'"
+    host_init_refuse "403 Forbidden" "caller is not a known host"
+    return 1
+  fi
+  if [[ -n "$claim" && "${claim,,}" != "${mac,,}" ]]; then
+    hps_log warn "[$mac] host_init_result refused: X-HPS-MAC names ${claim}"
+    host_init_refuse "403 Forbidden" "MAC is not the caller's"
+    return 1
+  fi
+
+  if [[ "${CONTENT_LENGTH:-}" =~ ^[0-9]+$ ]] && (( CONTENT_LENGTH > max )); then
+    hps_log warn "[$mac] host_init_result refused: Content-Length ${CONTENT_LENGTH} over ${max}"
+    host_init_refuse "413 Payload Too Large" "body over ${max} bytes"
+    return 1
+  fi
+  head -c $((max + 1)) > "$tmp"
+  size="$(wc -c < "$tmp")"
+  if (( size > max )); then
+    rm -f "$tmp"
+    hps_log warn "[$mac] host_init_result refused: body over ${max} bytes"
+    host_init_refuse "413 Payload Too Large" "body over ${max} bytes"
+    return 1
+  fi
+
+  pin="$(host_registry "$mac" get system_pin 2>/dev/null)" || pin=""
+  pin="${pin//\"/}"
+  if ! stored="$(host_init_normalise "$tmp" "$(make_timestamp)" "$pin")"; then
+    rm -f "$tmp"
+    hps_log warn "[$mac] host_init_result refused: not a valid init result"
+    host_init_refuse "400 Bad Request" "body is not a valid init result"
+    return 1
+  fi
+  rm -f "$tmp"
+
+  if prev="$(host_registry "$mac" get init_result 2>/dev/null)" && [[ -n "$prev" ]]; then
+    host_registry "$mac" set init_result_prev "$prev"
+  fi
+  if ! host_registry "$mac" set init_result "$stored"; then
+    hps_log error "[$mac] host_init_result: could not store the result"
+    host_init_refuse "500 Internal Server Error" "could not store the result"
+    return 1
+  fi
+  nfail="$(jq -r '[.steps[] | select(.rc != 0)] | length' <<< "$stored")"
+  failed="$(jq -r '[.steps[] | select(.rc != 0) | .name] | join(", ")' <<< "$stored")"
+  ok=true
+  (( nfail > 0 )) && ok=false
+  host_registry "$mac" set init_ok "$ok"
+  if [[ "$ok" == true ]]; then
+    hps_log info "[$mac] host_init_result stored: ${size} bytes, all steps ok"
+  else
+    hps_log error "[$mac] host_init_result stored: ${nfail} step(s) failed: ${failed}"
+  fi
+  cgi_success "ok"
+  return 0
+}

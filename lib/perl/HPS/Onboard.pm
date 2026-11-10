@@ -47,6 +47,25 @@ sub list_held ($self) {
     return @held;
 }
 
+# Every host, as [{mac, state, init_ok, init_at}], sorted by MAC. init_ok is
+# 'true', 'false' or undef (no init result reported); init_at is the finished_at
+# of the last reported init.
+sub list_all ($self) {
+    my $reg = $self->{registry};
+    my @all;
+    for my $mac ($reg->host_list_all) {
+        my $res = $reg->host_get_json($mac, 'init_result');
+        my $ok  = $reg->host_get($mac, 'init_ok');
+        push @all, {
+            mac     => $mac,
+            state   => $reg->host_get($mac, 'STATE'),
+            init_ok => $ok,
+            init_at => (ref $res eq 'HASH' ? ($res->{finished_at} || $res->{received_at}) : undef),
+        };
+    }
+    return @all;
+}
+
 # {mac, identity => {key => raw value, audit excluded}, audit => decoded|undef, audit_at}
 sub show ($self, $mac) {
     my $reg = $self->{registry};
@@ -55,7 +74,7 @@ sub show ($self, $mac) {
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my %identity;
     for my $key ($reg->host_list($m)) {
-        next if $key eq 'audit' || $key eq 'nets';
+        next if $key eq 'audit' || $key eq 'nets' || $key eq 'init_result' || $key eq 'init_result_prev';
         $identity{$key} = $reg->host_get($m, $key);
     }
     return {
@@ -65,6 +84,9 @@ sub show ($self, $mac) {
         audit    => $reg->host_get_json($m, 'audit'),
         audit_at => $identity{audit_at},
         nets     => $reg->host_get_json($m, 'nets'),
+        init      => $reg->host_get_json($m, 'init_result'),
+        init_prev => $reg->host_get_json($m, 'init_result_prev'),
+        init_ok   => $identity{init_ok},
     };
 }
 

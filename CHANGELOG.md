@@ -102,6 +102,11 @@ Work committed on `claude/*` branches, not yet on `main`:
 - `claude/dedup-functions` — changed: consolidated the duplicated
   `host_config` / `cluster_config` compatibility aliases to a single
   definition.
+- IPS-02 — added: `n_init_run` reports each step's result (rc, seconds, own
+  stderr tail) to the IPS (`cmd=host_init_result`); host keys `init_result`,
+  `init_result_prev`, `init_ok`; `hps-onboard show` Init section and
+  `list --all`; failed init steps log at `err`. Fixed: `n_remote_host_variable`
+  and `n_remote_cluster_variable` reported the stale error of an earlier call.
 
 ## 25f4602–94eef2e — Registry refactor and bootstrap (2026-07-08 migration)
 
