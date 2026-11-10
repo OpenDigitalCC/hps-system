@@ -43,9 +43,10 @@ stanza() {
   [[ "$output" == *"startsecs=0"* ]]
 }
 
-@test "hps-ips-check logs to syslog like every other program" {
+@test "hps-ips-check does not forward stdout to syslog; the tool's own logger lines are the single path" {
   run stanza hps-ips-check
-  [[ "$output" == *"stdout_logfile=syslog"* ]]
+  [[ "$output" == *"stdout_logfile=/dev/null"* ]]
+  [[ "$output" != *"stdout_logfile=syslog"* ]]
   [[ "$output" == *"stderr_logfile=syslog"* ]]
 }
 

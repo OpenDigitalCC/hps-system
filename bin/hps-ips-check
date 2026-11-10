@@ -7,8 +7,9 @@
 #
 # Checks (PASS / FAIL / WARN, one line reason each):
 #   1 boot_manager over HTTP from the IPS's own address, as a node calls it:
-#       init, log_message (POST, empty body: not 411), cluster_variable,
-#       the latest pin's boot.json under /nixos/
+#       log_message (POST, empty body: not 411), cluster_variable, the latest
+#       pin's boot.json under /nixos/. cmd=init is NOT probed: from the IPS's
+#       own address it would register that address as a held host.
 #   2 TFTP boot files exist and are non-empty
 #   3 dnsmasq answers DNS for the IPS's own name and for one registry host
 #   4 ctrl-exec: dispatcher, API, CLI present with versions; API socket and
@@ -24,9 +25,9 @@
 # --wait SECONDS first waits (up to that long) for the IPS HTTP port and the
 # ctrl-exec API socket, then checks whatever the wait ended with.
 #
-# The checks read only; the log_message probe writes one tagged log line, and
-# the init probe is an ordinary iPXE request from the IPS's own address (it is
-# answered like any node's). No secret is read or printed.
+# The checks read only; the log_message probe writes one tagged log line and
+# nothing else (no registry write; see docs/IPS-CHECK.md). No secret is read or
+# printed.
 #
 # Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH (default: this script's
 # parent directory); CTRL_EXEC_DISPATCHER_CONF; HPS_IPS_CHECK_SYSLOG_WAIT
@@ -188,23 +189,12 @@ wait_for_services() {
 # 1 boot_manager
 #===============================================================================
 check_boot_manager() {
-  local base url first
+  local base url
   if [[ -z "$IPS" ]]; then
     record FAIL "boot_manager" "no IPS address (network_dhcp_ip) in the cluster registry"
     return 0
   fi
   base="http://${IPS}/cgi-bin/boot_manager.sh"
-
-  url="${base}?cmd=init"
-  http_probe GET "$url"
-  first="$(head -n 1 "$TMP/body")"
-  if [[ "$HTTP_CODE" != 200 ]]; then
-    record FAIL "boot_manager init" "$(http_status_reason "$url")"
-  elif [[ "$first" != '#!ipxe'* ]]; then
-    record FAIL "boot_manager init" "HTTP 200 but the body is not an iPXE script"
-  else
-    record PASS "boot_manager init" "HTTP 200, iPXE script"
-  fi
 
   url="${base}?cmd=log_message&function=hps-ips-check&message=self-check+probe"
   http_probe POST "$url"

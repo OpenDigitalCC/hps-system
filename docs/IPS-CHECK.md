@@ -35,8 +35,7 @@ hand.
 
 | Check | PASS when | Notes |
 |---|---|---|
-| `boot_manager init` | `GET ?cmd=init` from the IPS's own address returns 200 and an iPXE script (`#!ipxe`) | A 4xx or 5xx is a FAIL naming the status. The request is answered like any node's, so an unknown source is registered as a held host. |
-| `boot_manager POST log_message` | an empty-body POST returns 200 | A `411` here is the lighttpd Length Required fault: the node calls are POSTs with `--data-binary ""`. Writes one tagged log line. |
+| `boot_manager POST log_message` | an empty-body POST returns 200 | A `411` here is the lighttpd Length Required fault: node calls are POSTs with `--data-binary ""`. Writes one tagged log line. |
 | `boot_manager cluster_variable` | `?cmd=cluster_variable&name=network_dns_domain` returns 200 and a non-empty value | |
 | `nixos boot.json` | `/nixos/<latest pin>/<profile>/boot.json` returns 200 and JSON with `pin` | No `nixos/latest` is a WARN (no image built or seeded). |
 | `tftp boot files` | `snponly.efi` and `undionly.kpxe` exist and are non-empty in the TFTP root | |
@@ -49,8 +48,26 @@ hand.
 | `disk resources`, `disk log` | free space on `$HPS_RESOURCES` and `$HPS_LOG` is at least 15% | Below 15% WARN, below 5% FAIL. |
 | `registry` | `cluster.db` of the active cluster is readable and the IPS address is set | |
 
-The checks read only, except the `log_message` probe (one tagged log line)
-and the `init` request (see the table). No secret is read or printed.
+## What is probed over HTTP, and why it is safe
+
+The check is read-only. It sends boot_manager requests from the IPS's own
+address, which has no registry host, so it probes only commands that change
+no registry state for such a caller:
+
+- `cmd=log_message` (POST, empty body): the handler calls `hps_log` and
+  nothing else. `hps_log` writes one syslog line and only reads the registry.
+  This probe is what catches a `411`.
+- `cmd=cluster_variable&name=network_dns_domain` (GET): a registry read; a
+  write (`value=`) is refused with 403 by the handler.
+- `/nixos/<pin>/<profile>/boot.json` (GET): a static file.
+
+`cmd=init` is not probed. From an address with no registry host the init
+handler registers the caller as a held host, so probing it would add the IPS
+address to the registry on every start. Commands that set state
+(`set_status`, `host_variable` set or unset, `node_audit`) are not probed
+either.
+
+No secret is read or printed.
 
 ## Environment
 

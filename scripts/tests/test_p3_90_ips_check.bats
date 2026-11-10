@@ -149,7 +149,7 @@ EOF
 @test "all checks pass: exit 0, summary, versions shown, JSON result written" {
   run "$ROOT/bin/hps-ips-check"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PASS boot_manager init:"* ]]
+  [[ "$output" == *"PASS boot_manager POST log_message:"* ]]
   [[ "$output" == *"ctrl-exec-dispatcher 0.14.4"* ]]
   [[ "$output" == *"ctrl-exec-cli 0.3.11"* ]]
   [[ "$output" == *"summary: "*"0 WARN, 0 FAIL"* ]]
@@ -190,13 +190,41 @@ EOF
   [[ "$output" == *"FAIL boot_manager POST log_message: HTTP 411"* ]]
 }
 
-@test "init: a 500 is a FAIL naming 500; a body that is not iPXE is a FAIL" {
-  FAKE_INIT=500 run "$ROOT/bin/hps-ips-check"
+# Side-effect-free probes. For a caller with no registry host (the IPS's own
+# address), boot_manager.sh resolves the caller tag with hps_origin_tag
+# (boot_manager.sh:7; no registry call) and, per command:
+#   cmd=init            ipxe_init_handler -> host_initialise_config <tag> HELD
+#                       (ipxe-menu-functions.sh) REGISTERS the caller: not probed
+#   cmd=log_message     boot_manager.sh log_message block: hps_log only; hps_log
+#                       reads host_registry (exists/get) and writes syslog/file
+#   cmd=cluster_variable  cluster_registry ... get (read); a value= param is a 403
+# set_status, host_variable (set/unset) and the others write: not probed.
+@test "the probe set never includes cmd=init and only log_message and cluster_variable" {
+  run "$ROOT/bin/hps-ips-check"
+  [ "$status" -eq 0 ]
+  run grep -c 'cmd=init' "$CURL_LOG"
+  [ "$output" = "0" ]
+  cmds="$(grep -o 'cmd=[a-z_]*' "$CURL_LOG" | sort -u | tr '\n' ' ')"
+  [ "$cmds" = "cmd=cluster_variable cmd=log_message " ]
+  run grep -n 'cmd=init' "$ROOT/bin/hps-ips-check"
+  [[ "$output" != *'url='* ]]
+}
+
+# The probed command blocks in the real boot_manager.sh contain no registry write.
+@test "boot_manager.sh log_message and cluster_variable blocks write no registry state" {
+  bm="$ROOT/http/cgi-bin/boot_manager.sh"
+  for c in log_message cluster_variable; do
+    block="$(awk -v c="$c" '$0 ~ "^if \\[\\[ \"\\$cmd\" == \"" c "\" \\]\\]; then" {on=1} on {print} on && /^fi/ {exit}' "$bm")"
+    [ -n "$block" ]
+    run grep -E 'host_registry .* (set|unset)|host_initialise_config|cluster_registry .* set|system_registry set|registry_set' <<< "$block"
+    [ "$status" -eq 1 ]
+  done
+}
+
+# hps_log (what log_message calls) uses the registry read-only.
+@test "hps_log calls only read-side registry commands" {
+  run grep -nE 'host_registry[^|]*\b(set|unset|delete|init)' "$ROOT/lib/functions-core-lib.sh"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"FAIL boot_manager init: HTTP 500"* ]]
-  FAKE_INIT_BODY="<html>" run "$ROOT/bin/hps-ips-check"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"FAIL boot_manager init: HTTP 200 but the body is not an iPXE script"* ]]
 }
 
 @test "cluster_variable: a 404 and an empty value are FAILs" {
@@ -229,7 +257,7 @@ EOF
 @test "nothing answering HTTP fails every boot_manager check and says so" {
   FAKE_CURL_DOWN=1 run "$ROOT/bin/hps-ips-check"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"FAIL boot_manager init: no HTTP answer"* ]]
+  [[ "$output" == *"FAIL boot_manager cluster_variable: no HTTP answer"* ]]
   [[ "$output" == *"FAIL boot_manager POST log_message: no HTTP answer"* ]]
 }
 

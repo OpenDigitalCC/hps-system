@@ -357,7 +357,8 @@ EOF
   # pass, 1 a FAIL; supervisord logs a FAIL exit as unexpected). --wait lets the
   # HTTP port and the ctrl-exec API socket come up first. startsecs=0: a
   # program that exits at once is not a failed start. Result: syslog lines
-  # tagged hps-ips-check and <cluster>/services/ips-check.json.
+  # tagged hps-ips-check (written by the tool itself with logger, so stdout is
+  # not forwarded: each line appears once) and <cluster>/services/ips-check.json.
   _supervisor_append_once "program:hps-ips-check" "$(cat <<EOF
 [program:hps-ips-check]
 command=${HPS_SYSTEM_BASE}/bin/hps-ips-check --wait 60
@@ -367,7 +368,7 @@ autorestart=false
 startsecs=0
 startretries=0
 user=root
-stdout_logfile=syslog
+stdout_logfile=/dev/null
 stderr_logfile=syslog
 environment=$(_get_hps_environment)
 EOF
