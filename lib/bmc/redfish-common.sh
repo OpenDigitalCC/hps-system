@@ -64,7 +64,9 @@ rf_req() {
   local method="$1" path out rc=0 insecure=(-k)
   path="$(norm_path "$2")"
   local body="${3:-}"
-  local args=(-sS --max-time "${BMC_OPT_timeout:-20}" -K - -X "$method" -w '\n%{http_code}')
+  # -L as lab/ilo.sh (proven on iLO 4): iLO redirects some Redfish paths. curl
+  # sends the credential to the same host only (no --location-trusted).
+  local args=(-sS -L --max-time "${BMC_OPT_timeout:-20}" -K - -X "$method" -w '\n%{http_code}')
   if [[ "${BMC_OPT_tls_verify:-}" == yes ]]; then
     insecure=()
   fi
