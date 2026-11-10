@@ -114,7 +114,7 @@ tree_sum() {
 
 @test "the IPS DNS and dhcp-hosts files are generated" {
   shared
-  [ "$(cat "$CFG/clusters/lab/services/dns_hosts")" = "10.100.1.1 ips ips.lab.hps ntp syslog dhcp dns" ]
+  [ "$(cat "$CFG/clusters/lab/services/dns_hosts")" = "10.100.1.1 ips.lab.hps ips ntp syslog dhcp dns" ]
   [ -f "$CFG/clusters/lab/services/dhcp_addresses" ]
   [ -d "$CFG/clusters/lab/hosts" ]
 }

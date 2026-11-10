@@ -1,36 +1,41 @@
 #!/bin/bash
 
 #===============================================================================
-# update_dns_dhcp_files
-# ---------------------
-# Orchestrator function to rebuild both DNS and DHCP configuration files.
+# dns_regenerate
+# --------------
+# THE entry point that makes dnsmasq's name data match the registry. Call it
+# after any change to a host's IP or HOSTNAME, after a host is added or removed
+# from the registry (hps-onboard forget), and after a cluster DNS domain change.
 #
 # Usage:
-#   update_dns_dhcp_files [cluster_name] [reload_services]
+#   dns_regenerate [cluster_name] [reload_services]
 #
 # Parameters:
 #   cluster_name     - Optional. Cluster to update (default: active cluster)
-#   reload_services  - Optional. "true" to reload services (default: "true")
+#   reload_services  - Optional. "true" (default) sends dnsmasq a SIGHUP once,
+#                      at the end, and only for the active cluster. "false"
+#                      writes the files only (service start, before dnsmasq runs).
 #
 # Behaviour:
-#   - Calls build_dhcp_addresses_file to create DHCP reservations
-#   - Calls init_dns_hosts_file to create DNS hosts file
-#   - Optionally updates resolv.conf
-#   - Optionally reloads dnsmasq service
-#   - Both files are written atomically (temp file then move)
-#   - Logs all operations
+#   - build_dhcp_addresses_file: MAC,IP,label reservations (dhcp_addresses)
+#   - build_dns_hosts_file: dns_hosts, from the registry, whether the host is
+#     powered on or not (a host with a reserved address always resolves)
+#   - rewrites the IPS's own /etc/resolv.conf (active cluster only)
+#   - one dnsmasq reload (supervisor_reload_services dnsmasq); a failed reload
+#     is logged and is not an error: the files are right and the next start
+#     reads them
+#   - both files are written atomically (temp file then move)
 #
 # Returns:
-#   0 if both files created successfully
-#   1 if either file creation fails
+#   0 if both files were written
+#   1 if either file failed (nothing is reloaded)
 #
 # Example usage:
-#   update_dns_dhcp_files                    # Active cluster, reload services
-#   update_dns_dhcp_files "cluster-1"        # Specific cluster, reload services
-#   update_dns_dhcp_files "cluster-1" "false" # Specific cluster, no reload
+#   dns_regenerate                  # Active cluster, reload
+#   dns_regenerate "lab" "false"    # Specific cluster, no reload
 #
 #===============================================================================
-update_dns_dhcp_files() {
+dns_regenerate() {
   local cluster="${1:-}"
   local reload_services="${2:-true}"
   
@@ -42,39 +47,48 @@ update_dns_dhcp_files() {
     }
   fi
   
-  hps_log info "Updating DNS and DHCP configuration files for cluster: $cluster"
+  hps_log info "Regenerating DNS and DHCP files for cluster: $cluster"
   
   local dhcp_result=0
   local dns_result=0
   
-  # Build DHCP addresses file
   if ! build_dhcp_addresses_file "$cluster"; then
     hps_log error "Failed to build DHCP addresses file"
     dhcp_result=1
   fi
   
-  # Initialize DNS hosts file
-  if ! init_dns_hosts_file "$cluster" "$reload_services"; then
+  if ! build_dns_hosts_file "$cluster"; then
     hps_log error "Failed to build DNS hosts file"
     dns_result=1
   fi
   
-  # Return failure if either failed
   if [[ $dhcp_result -ne 0 ]] || [[ $dns_result -ne 0 ]]; then
-    hps_log error "DNS/DHCP file update completed with errors"
+    hps_log error "DNS/DHCP regeneration completed with errors"
     return 1
   fi
 
-  # Update local resolv.conf only if this is the active cluster
   local active_cluster
   active_cluster=$(hps_get_config active_cluster 2>/dev/null) || active_cluster=""
   
   if [[ "$cluster" == "$active_cluster" ]]; then
-    _ips_resolv_conf_update "$cluster"
+    _ips_resolv_conf_update "$cluster" || hps_log warn "resolv.conf not updated"
+    if [[ "$reload_services" == "true" ]]; then
+      supervisor_reload_services dnsmasq || hps_log warn "dnsmasq reload failed; the files are written and are read at the next dnsmasq start"
+    fi
   fi
 
-  hps_log info "DNS/DHCP file update completed successfully"
+  hps_log info "DNS/DHCP regeneration completed successfully"
   return 0
+}
+
+#===============================================================================
+# update_dns_dhcp_files
+# ---------------------
+# Older name of dns_regenerate; same arguments, same behaviour. Kept because
+# host_post_config_hooks, commit_changes and service start call it by this name.
+#===============================================================================
+update_dns_dhcp_files() {
+  dns_regenerate "$@"
 }
 
 #===============================================================================
@@ -149,7 +163,7 @@ build_dhcp_addresses_file() {
   fi
   
   # Start with empty temp file
-  > "$dhcp_addresses_tmp"
+  : > "$dhcp_addresses_tmp"
   
   local mac
   local hostname
@@ -212,7 +226,8 @@ build_dhcp_addresses_file() {
     fi
     
     # Write entry to temp file
-    echo "${mac_formatted},${ip},${hostname}" >> "$dhcp_addresses_tmp"
+    # dnsmasq takes the bare label here; the domain is added from domain=
+    echo "${mac_formatted},${ip},${hostname%%.*}" >> "$dhcp_addresses_tmp"
     
     # Track this MAC and IP
     seen_macs[$mac_formatted]="$hostname"
@@ -233,45 +248,36 @@ build_dhcp_addresses_file() {
 }
 
 #===============================================================================
-# init_dns_hosts_file
-# -------------------
-# Initialize DNS hosts file for dnsmasq.
+# build_dns_hosts_file
+# --------------------
+# Write the dnsmasq addn-hosts file from the registry.
 #
 # Usage:
-#   init_dns_hosts_file [cluster_name] [reload_service]
-#
-# Parameters:
-#   cluster_name   - Optional. Cluster to initialize (default: active cluster)
-#   reload_service - Optional. "true" to reload dnsmasq (default: "true")
+#   build_dns_hosts_file [cluster_name]
 #
 # Behaviour:
-#   - Creates DNS hosts file with IPS entry
-#   - Gets DNS domain and IPS IP from cluster config
-#   - Adds IPS with standard service aliases using dns_host_add
-#   - Creates parent directory if needed
-#   - Optionally reloads dnsmasq service
+#   - first line: the IPS (network_dhcp_ip) with its service aliases
+#   - one line per registry host that has both IP and HOSTNAME, powered on or
+#     off: "<ip> <fqdn> <label>". The FQDN is first so the reverse answer is
+#     the FQDN; the label gives the short forward name. HOSTNAME that already
+#     holds a dot is taken as the FQDN, otherwise <HOSTNAME>.<network_dns_domain>.
+#   - one line per recorded storage address: "<ip> <label>-storageN <fqdn>"
+#   - a host whose name or address repeats an earlier line is skipped, logged
+#   - names are lower case; the file is written atomically
 #
 # Output File:
 #   /srv/hps-config/clusters/<cluster>/services/dns_hosts
 #
 # Format:
-#   10.99.1.1 ips ips.cluster.local ntp syslog dhcp dns
+#   10.99.1.1 ips.cluster.local ips ntp syslog dhcp dns
+#   10.99.1.10 tch-001.cluster.local tch-001
 #
 # Returns:
-#   0 on success (file created)
-#   1 on failure (invalid data, write error, missing dependencies)
-#
-# Example usage:
-#   init_dns_hosts_file                      # Active cluster, reload
-#   init_dns_hosts_file "cluster-1"          # Specific cluster, reload
-#   init_dns_hosts_file "cluster-1" "false"  # Specific cluster, no reload
-#
+#   0 on success, 1 on failure (missing domain/IPS address, write error)
 #===============================================================================
-init_dns_hosts_file() {
+build_dns_hosts_file() {
   local cluster="${1:-}"
-  local reload_service="${2:-true}"
   
-  # Get cluster name (provided or active)
   if [[ -z "$cluster" ]]; then
     cluster=$(hps_get_config active_cluster) || {
       hps_log error "No cluster specified and no active cluster configured"
@@ -279,59 +285,105 @@ init_dns_hosts_file() {
     }
   fi
   
-  # Build explicit path
   local config_base
   config_base=$(hps_get_config config_base) || return 1
   local services_dir="${config_base}/clusters/${cluster}/services"
   local dns_hosts_file="${services_dir}/dns_hosts"
+  local tmp_file="${dns_hosts_file}.tmp"
   
-  hps_log info "Initializing DNS hosts file: $dns_hosts_file"
-  
-  # Create services directory if it doesn't exist
-  if [[ ! -d "$services_dir" ]]; then
-    if ! mkdir -p "$services_dir"; then
-      hps_log error "Failed to create services directory: $services_dir"
-      return 1
-    fi
-  fi
-  
-  # Create empty file
-  if ! touch "$dns_hosts_file"; then
-    hps_log error "Failed to create DNS hosts file: $dns_hosts_file"
+  if ! mkdir -p "$services_dir"; then
+    hps_log error "Failed to create services directory: $services_dir"
     return 1
   fi
   
-  # Get DNS domain from cluster config
   local dns_domain
-  dns_domain=$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null)
-  if [[ $? -ne 0 ]] || [[ -z "$dns_domain" ]]; then
+  dns_domain=$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null) || dns_domain=""
+  dns_domain=$(strip_quotes "$dns_domain")
+  if [[ -z "$dns_domain" ]]; then
     hps_log error "Failed to get network_dns_domain from cluster $cluster"
     return 1
   fi
-  dns_domain=$(strip_quotes "$dns_domain")
+  dns_domain="${dns_domain,,}"
   
-  # Get IPS IP address (use network_dhcp_ip as IPS address)
   local ips_ip
-  ips_ip=$(cluster_registry "$cluster" get network_dhcp_ip 2>/dev/null)
-  if [[ $? -ne 0 ]] || [[ -z "$ips_ip" ]]; then
-    hps_log error "Failed to get network_dhcp_ip from cluster $cluster"
+  ips_ip=$(cluster_registry "$cluster" get network_dhcp_ip 2>/dev/null) || ips_ip=""
+  if [[ -z "$ips_ip" ]] || ! validate_ip_address "$ips_ip"; then
+    hps_log error "Missing or invalid network_dhcp_ip for cluster $cluster: $ips_ip"
     return 1
   fi
   
-  # Validate IPS IP
-  if ! validate_ip_address "$ips_ip"; then
-    hps_log error "Invalid network_dhcp_ip: $ips_ip"
+  hps_log info "Building DNS hosts file: $dns_hosts_file"
+  
+  declare -A seen_names=()
+  declare -A seen_ips=()
+  
+  if ! echo "$ips_ip ips.${dns_domain} ips ntp syslog dhcp dns" > "$tmp_file"; then
+    hps_log error "Failed to write $tmp_file"
+    return 1
+  fi
+  seen_names["ips"]=1
+  seen_names["ips.${dns_domain}"]=1
+  seen_ips["$ips_ip"]=1
+  
+  local hosts mac
+  hosts=$(list_cluster_hosts "$cluster") || {
+    hps_log error "Failed to list cluster hosts for $cluster"
+    rm -f "$tmp_file"
+    return 1
+  }
+  
+  local hostname ip label fqdn i s_ip s_label s_fqdn count=0
+  for mac in $hosts; do
+    hostname=$(host_registry "$mac" get HOSTNAME 2>/dev/null) || hostname=""
+    ip=$(host_registry "$mac" get IP 2>/dev/null) || ip=""
+    if [[ -z "$hostname" ]] || [[ -z "$ip" ]]; then
+      continue
+    fi
+    if ! validate_ip_address "$ip" || ! validate_hostname "$hostname"; then
+      hps_log warn "dns_hosts: skipping $mac: invalid IP or HOSTNAME ($ip, $hostname)"
+      continue
+    fi
+    hostname="${hostname,,}"
+    label="${hostname%%.*}"
+    if [[ "$hostname" == *.* ]]; then
+      fqdn="$hostname"
+    else
+      fqdn="${hostname}.${dns_domain}"
+    fi
+    if [[ -n "${seen_names[$fqdn]:-}" ]] || [[ -n "${seen_names[$label]:-}" ]] || [[ -n "${seen_ips[$ip]:-}" ]]; then
+      hps_log warn "dns_hosts: skipping $mac: $fqdn / $ip repeats an earlier entry"
+      continue
+    fi
+    echo "$ip $fqdn $label" >> "$tmp_file"
+    seen_names["$fqdn"]=1
+    seen_names["$label"]=1
+    seen_ips["$ip"]=1
+    count=$((count + 1))
+    
+    # Storage-network addresses recorded for this host
+    for i in 0 1 2 3 4 5 6 7; do
+      s_ip=$(host_registry "$mac" get "storage${i}_ip" 2>/dev/null) || s_ip=""
+      [[ -n "$s_ip" ]] || continue
+      validate_ip_address "$s_ip" || continue
+      s_label="${label}-storage$((i + 1))"
+      s_fqdn="${s_label}.${fqdn#*.}"
+      if [[ -n "${seen_names[$s_fqdn]:-}" ]] || [[ -n "${seen_ips[$s_ip]:-}" ]]; then
+        continue
+      fi
+      echo "$s_ip $s_fqdn $s_label" >> "$tmp_file"
+      seen_names["$s_fqdn"]=1
+      seen_names["$s_label"]=1
+      seen_ips["$s_ip"]=1
+    done
+  done
+  
+  if ! mv "$tmp_file" "$dns_hosts_file"; then
+    hps_log error "Failed to write DNS hosts file: $dns_hosts_file"
+    rm -f "$tmp_file"
     return 1
   fi
   
-  # Add IPS entry with service aliases
-  local ips_aliases=("ntp" "syslog" "dhcp" "dns")
-  if ! dns_host_add "$ips_ip" "ips" "$dns_domain" "$cluster" "$reload_service" "${ips_aliases[@]}"; then
-    hps_log error "Failed to add IPS entry to DNS hosts file"
-    return 1
-  fi
-  
-  hps_log info "DNS hosts file initialized successfully"
+  hps_log info "DNS hosts file written with $count registry hosts"
   return 0
 }
 
@@ -498,7 +550,10 @@ dns_host_add() {
 # Behaviour:
 #   - Gets IPS IP address from cluster config
 #   - Gets DNS domain from cluster config
-#   - Writes /etc/resolv.conf with nameserver and search domain
+#   - Writes /etc/resolv.conf with the nameserver and NO search line: glibc
+#     appends the search domain to a dotted name after an NXDOMAIN whatever
+#     ndots says, which produced <fqdn>.<domain> lookups. Every name the IPS
+#     uses is an FQDN or a label dns_hosts carries.
 #
 # Returns:
 #   0 on success
@@ -520,15 +575,10 @@ _ips_resolv_conf_update() {
     }
   fi
   
-  local ips_ip dns_domain
+  local ips_ip
   
   ips_ip=$(cluster_registry "$cluster" get network_dhcp_ip 2>/dev/null) || {
     hps_log error "Failed to get network_dhcp_ip from cluster $cluster"
-    return 1
-  }
-  
-  dns_domain=$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null) || {
-    hps_log error "Failed to get network_dns_domain from cluster $cluster"
     return 1
   }
   
@@ -536,9 +586,9 @@ _ips_resolv_conf_update() {
   local resolv_conf="${HPS_RESOLV_CONF:-/etc/resolv.conf}"
   cat > "$resolv_conf" <<EOF
 nameserver ${ips_ip}
-search ${dns_domain}
+options ndots:1
 EOF
   
-  hps_log info "Created $resolv_conf with nameserver ${ips_ip} and search ${dns_domain}"
+  hps_log info "Created $resolv_conf with nameserver ${ips_ip} (no search domain)"
   return 0
 }

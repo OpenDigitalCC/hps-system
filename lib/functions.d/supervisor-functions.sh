@@ -155,8 +155,9 @@ supervisor_reload_services() {
   # Execute HUP signal and capture output
   local result
   local exit_code
-  result=$(supervisorctl -c "${SUPERVISORD_CONF}" signal HUP "${target}" 2>&1 | tr '\n' ' ' | sed 's/  */ /g' | sed 's/ $//')
+  result=$(supervisorctl -c "${SUPERVISORD_CONF}" signal HUP "${target}" 2>&1)
   exit_code=$?
+  result=$(printf '%s' "$result" | tr '\n' ' ' | sed 's/  */ /g' | sed 's/ $//')
   
   # Log results
   if [[ ${exit_code} -eq 0 ]]; then
