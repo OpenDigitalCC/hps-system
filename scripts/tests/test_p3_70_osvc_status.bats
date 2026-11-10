@@ -49,7 +49,14 @@ JSON
   [[ "$output" == *"OSVC sch-001 peers=2 beating=2 stale=- frozen=no"* ]]
   grep -qx 'om daemon status --format json' "$SHIM_LOG"
   grep -qx 'om mon --format json' "$SHIM_LOG"
-  [[ "$output" == *"+ om daemon status --format json"* ]]
+  [[ "$output" == *"+ timeout 20 om daemon status --format json"* ]]
+}
+
+@test "both om calls are bounded by a timeout (a hung daemon must not hold the ctrl-exec call)" {
+  write_status false true true
+  run -0 bash "$SCRIPT"
+  [[ "$output" == *"+ timeout 20 om daemon status --format json"* ]]
+  [[ "$output" == *"+ timeout 20 om mon --format json"* ]]
 }
 
 @test "a peer that no stream sees beating is stale: exit 2, named" {

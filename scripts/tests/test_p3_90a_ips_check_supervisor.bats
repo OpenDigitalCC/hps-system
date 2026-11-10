@@ -37,17 +37,17 @@ stanza() {
 
 @test "hps-ips-check is a one-shot supervisor program that waits for the services" {
   run stanza hps-ips-check
-  [[ "$output" == *"command=/srv/hps-system/bin/hps-ips-check --wait 60"* ]]
+  [[ "$output" == *"command=/srv/hps-system/bin/hps-ips-check --wait 60 --no-logger"* ]]
   [[ "$output" == *"autostart=true"* ]]
   [[ "$output" == *"autorestart=false"* ]]
   [[ "$output" == *"startsecs=0"* ]]
 }
 
-@test "hps-ips-check does not forward stdout to syslog; the tool's own logger lines are the single path" {
+@test "hps-ips-check logs through stdout to syslog like every program, with --no-logger so each line appears once" {
   run stanza hps-ips-check
-  [[ "$output" == *"stdout_logfile=/dev/null"* ]]
-  [[ "$output" != *"stdout_logfile=syslog"* ]]
+  [[ "$output" == *"stdout_logfile=syslog"* ]]
   [[ "$output" == *"stderr_logfile=syslog"* ]]
+  [[ "$output" == *"--no-logger"* ]]
 }
 
 @test "the program block is added once however often the services are configured" {

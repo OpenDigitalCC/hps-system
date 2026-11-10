@@ -39,11 +39,11 @@ main() {
     usage
     exit 3
   fi
-  if ! status=$(run om daemon status --format json); then
+  if ! status=$(run timeout 20 om daemon status --format json); then
     log "om daemon status failed: the daemon is not running or not answering"
     exit 1
   fi
-  if ! mon=$(run om mon --format json); then
+  if ! mon=$(run timeout 20 om mon --format json); then
     log "om mon failed"
     exit 1
   fi

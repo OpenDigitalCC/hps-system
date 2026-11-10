@@ -166,6 +166,16 @@ EOF
   [ "$lines" -eq "$(jq '.checks | length' "$TEST_DIR/services/ips-check.json")" ]
 }
 
+@test "--no-logger (under supervisord): lines and summary on stdout only; the rsyslog probe still uses logger" {
+  run "$ROOT/bin/hps-ips-check" --no-logger
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PASS boot_manager POST log_message: "* ]]
+  [[ "$output" == *"summary: "* ]]
+  run grep -c '^hps-ips-check|' "$LOGGER_LOG"
+  [ "$output" = 0 ]
+  grep -q '^hps-ips-check-probe|' "$LOGGER_LOG"
+}
+
 @test "--json prints the result on stdout" {
   run "$ROOT/bin/hps-ips-check" --json
   [ "$status" -eq 0 ]

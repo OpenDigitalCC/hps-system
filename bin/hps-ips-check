@@ -36,14 +36,18 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: hps-ips-check [--json] [--wait SECONDS]" >&2
+  echo "usage: hps-ips-check [--json] [--wait SECONDS] [--no-logger]" >&2
 }
 
 JSON=0
 WAIT=0
+# --no-logger: under supervisord stdout already goes to syslog (the rule for
+# every program); the tool then does not log each line a second time.
+LOGGER=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON=1; shift ;;
+    --no-logger) LOGGER=0; shift ;;
     --wait)
       if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
         usage
@@ -103,7 +107,9 @@ record() {
   if [[ $JSON -eq 0 ]]; then
     printf '%s %s: %s\n' "$status" "$name" "$reason"
   fi
-  logger -t hps-ips-check "${status} ${name}: ${reason}" || true
+  if [[ $LOGGER -eq 1 ]]; then
+    logger -t hps-ips-check "${status} ${name}: ${reason}" || true
+  fi
   jq -cn --arg name "$name" --arg status "$status" --arg reason "$reason" \
     '{name: $name, status: $status, reason: $reason}' >> "$TMP/checks.ndjson"
 }
@@ -491,7 +497,11 @@ write_result() {
     --argjson pass "$N_PASS" --argjson warn "$N_WARN" --argjson fail "$N_FAIL" \
     '{timestamp: $ts, cluster: $cluster, summary: {pass: $pass, warn: $warn, fail: $fail}, checks: .}' \
     "$TMP/checks.ndjson" > "$TMP/result.json"
-  logger -t hps-ips-check "summary: ${summary}" || true
+  if [[ $LOGGER -eq 1 ]]; then
+    logger -t hps-ips-check "summary: ${summary}" || true
+  else
+    printf 'summary: %s\n' "$summary"
+  fi
   if [[ $JSON -eq 1 ]]; then
     cat "$TMP/result.json"
   else

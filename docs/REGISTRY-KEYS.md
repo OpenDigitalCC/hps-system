@@ -50,6 +50,9 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `repinned_at` | `stamp` | hps-onboard repin | When the pin last changed. |
 | `nets` | `json` | hps-onboard, HPS::Workload | Array of network names the node attaches to. |
 | `audit` | `json` | node_audit CGI (host_audit_store) | The hps-audit/1 document the node uploaded. |
+| `init_result` | `json` | host_init_intake (boot_manager cmd=host_init_result) | The node's last init sequence: boot_id, pin, times, steps with rc, seconds and message (IPS-02). |
+| `init_result_prev` | `json` | host_init_intake | The init result of the boot before the last one. |
+| `init_ok` | `bool` | host_init_intake | True when every step of the last init sequence exited 0. |
 | `audit_at` | `stamp` | node_audit CGI | When the audit was stored. |
 | `storage_note` | `string` | hps-onboard | Operator note about the node storage plan. |
 | `storage_last` | `json` | HPS::Storage | Outcome of the last storage operation: op, ok, at. |
