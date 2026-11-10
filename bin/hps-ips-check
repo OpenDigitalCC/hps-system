@@ -1,0 +1,542 @@
+#!/usr/bin/env bash
+#===============================================================================
+# hps-ips-check [--json] [--wait SECONDS]
+# ---------------------
+# IPS self-check: is this IPS healthy after a start? Runs under supervisord as a
+# one-shot program once the services are up (program:hps-ips-check), and by hand.
+#
+# Checks (PASS / FAIL / WARN, one line reason each):
+#   1 boot_manager over HTTP from the IPS's own address, as a node calls it:
+#       init, log_message (POST, empty body: not 411), cluster_variable,
+#       the latest pin's boot.json under /nixos/
+#   2 TFTP boot files exist and are non-empty
+#   3 dnsmasq answers DNS for the IPS's own name and for one registry host
+#   4 ctrl-exec: dispatcher, API, CLI present with versions; API socket and
+#       group; ctrl-exec-cli health over the socket
+#   5 rsyslog files a tagged logger message in ips/<date>.log within 5 s
+#   6 chrony runs; unsynchronised is a WARN (no upstream may be by design)
+#   7 free space on the resources and log directories (< 15% WARN, < 5% FAIL)
+#   8 registry: cluster.db readable, active cluster set
+#
+# Result: one syslog line per check (tag hps-ips-check), a summary line, and
+# <cluster services dir>/ips-check.json. Exit 0 no FAIL, 1 any FAIL, 2 usage.
+# WARNs do not fail. --json prints the JSON on stdout instead of the text lines.
+# --wait SECONDS first waits (up to that long) for the IPS HTTP port and the
+# ctrl-exec API socket, then checks whatever the wait ended with.
+#
+# The checks read only; the log_message probe writes one tagged log line, and
+# the init probe is an ordinary iPXE request from the IPS's own address (it is
+# answered like any node's). No secret is read or printed.
+#
+# Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH (default: this script's
+# parent directory); CTRL_EXEC_DISPATCHER_CONF; HPS_IPS_CHECK_SYSLOG_WAIT
+# (seconds, default 5).
+#===============================================================================
+set -euo pipefail
+
+usage() {
+  echo "usage: hps-ips-check [--json] [--wait SECONDS]" >&2
+}
+
+JSON=0
+WAIT=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) JSON=1; shift ;;
+    --wait)
+      if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+        usage
+        exit 2
+      fi
+      WAIT="$2"
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+
+HPS_BASE="${HPS_BASE:-/srv}"
+export HPS_BASE
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SYSTEM_PATH="${HPS_SYSTEM_PATH:-$SELF_DIR}"
+
+if [[ ! -f "${SYSTEM_PATH}/lib/functions.sh" ]]; then
+  echo "hps-ips-check: function library not found: ${SYSTEM_PATH}/lib/functions.sh" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${SYSTEM_PATH}/lib/functions.sh"
+
+TMP="/tmp/hps-ips-check-$$"
+mkdir -p "$TMP"
+cleanup() {
+  rm -rf "$TMP"
+}
+trap cleanup EXIT INT TERM
+
+: > "$TMP/checks.ndjson"
+N_PASS=0
+N_FAIL=0
+N_WARN=0
+HTTP_CODE=000
+HTTP_ERR=""
+
+CLUSTER=""
+IPS=""
+DOMAIN=""
+API_SOCKET=""
+API_GROUP=""
+
+#-------------------------------------------------------------------------------
+# record <PASS|FAIL|WARN> <name> <reason>
+# Print the line, send it to syslog, keep it for the JSON result.
+#-------------------------------------------------------------------------------
+record() {
+  local status="$1" name="$2" reason="$3"
+  case "$status" in
+    PASS) N_PASS=$((N_PASS + 1)) ;;
+    FAIL) N_FAIL=$((N_FAIL + 1)) ;;
+    WARN) N_WARN=$((N_WARN + 1)) ;;
+  esac
+  if [[ $JSON -eq 0 ]]; then
+    printf '%s %s: %s\n' "$status" "$name" "$reason"
+  fi
+  logger -t hps-ips-check "${status} ${name}: ${reason}" || true
+  jq -cn --arg name "$name" --arg status "$status" --arg reason "$reason" \
+    '{name: $name, status: $status, reason: $reason}' >> "$TMP/checks.ndjson"
+}
+
+#-------------------------------------------------------------------------------
+# conf_value <key>: value of "key = value" in the dispatcher config, else empty.
+#-------------------------------------------------------------------------------
+conf_value() {
+  local key="$1" conf
+  conf="${CTRL_EXEC_DISPATCHER_CONF:-/etc/ctrl-exec-dispatcher/ctrl-exec.conf}"
+  [[ -r "$conf" ]] || return 0
+  sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$conf" | tail -n 1 | sed 's/[[:space:]]*$//'
+}
+
+#-------------------------------------------------------------------------------
+# http_probe <GET|POST> <url>
+# Sets HTTP_CODE (000 when nothing answered), HTTP_ERR and the body file.
+#-------------------------------------------------------------------------------
+http_probe() {
+  local method="$1" url="$2"
+  local -a args=(-sS --max-time 5 -o "$TMP/body" -w '%{http_code}')
+  if [[ "$method" == POST ]]; then
+    args+=(-X POST --data-binary "")
+  fi
+  : > "$TMP/body"
+  : > "$TMP/curl.err"
+  if ! HTTP_CODE="$(curl "${args[@]}" "$url" 2> "$TMP/curl.err")"; then
+    HTTP_CODE=000
+  fi
+  HTTP_ERR="$(head -n 1 "$TMP/curl.err")"
+  [[ -n "$HTTP_CODE" ]] || HTTP_CODE=000
+}
+
+#-------------------------------------------------------------------------------
+# http_status_reason <url>: one-line reason for a non-200 answer, naming the
+# status.
+#-------------------------------------------------------------------------------
+http_status_reason() {
+  local url="$1"
+  if [[ "$HTTP_CODE" == 000 ]]; then
+    printf 'no HTTP answer from %s (%s)' "$url" "${HTTP_ERR:-no error text}"
+  else
+    printf 'HTTP %s from %s' "$HTTP_CODE" "$url"
+  fi
+}
+
+load_context() {
+  CLUSTER="$(hps_get_config active_cluster 2> /dev/null)" || CLUSTER=""
+  if [[ -n "$CLUSTER" ]]; then
+    IPS="$(cluster_registry "$CLUSTER" get network_dhcp_ip 2> /dev/null)" || IPS=""
+    DOMAIN="$(cluster_registry "$CLUSTER" get network_dns_domain 2> /dev/null)" || DOMAIN=""
+  fi
+  API_SOCKET="$(conf_value api_socket)"
+  API_SOCKET="${API_SOCKET:-${CTRL_EXEC_API_SOCKET:-/run/ctrl-exec-api/api.sock}}"
+  API_GROUP="$(conf_value api_socket_group)"
+  API_GROUP="${API_GROUP:-${CTRL_EXEC_API_SOCKET_GROUP:-ctrl-exec}}"
+}
+
+#-------------------------------------------------------------------------------
+# wait_for_services: up to $WAIT seconds for the HTTP port and the API socket.
+#-------------------------------------------------------------------------------
+wait_for_services() {
+  local i http_up socket_up
+  [[ $WAIT -gt 0 ]] || return 0
+  for ((i = 0; i < WAIT; i++)); do
+    http_up=0
+    socket_up=0
+    if [[ -n "$IPS" ]] && curl -s -o /dev/null --max-time 2 "http://${IPS}/" 2> /dev/null; then
+      http_up=1
+    fi
+    if [[ -S "$API_SOCKET" ]]; then
+      socket_up=1
+    fi
+    if [[ $http_up -eq 1 && $socket_up -eq 1 ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "hps-ips-check: waited ${WAIT}s; HTTP port or API socket still not up, checking anyway" >&2
+}
+
+#===============================================================================
+# 1 boot_manager
+#===============================================================================
+check_boot_manager() {
+  local base url first
+  if [[ -z "$IPS" ]]; then
+    record FAIL "boot_manager" "no IPS address (network_dhcp_ip) in the cluster registry"
+    return 0
+  fi
+  base="http://${IPS}/cgi-bin/boot_manager.sh"
+
+  url="${base}?cmd=init"
+  http_probe GET "$url"
+  first="$(head -n 1 "$TMP/body")"
+  if [[ "$HTTP_CODE" != 200 ]]; then
+    record FAIL "boot_manager init" "$(http_status_reason "$url")"
+  elif [[ "$first" != '#!ipxe'* ]]; then
+    record FAIL "boot_manager init" "HTTP 200 but the body is not an iPXE script"
+  else
+    record PASS "boot_manager init" "HTTP 200, iPXE script"
+  fi
+
+  url="${base}?cmd=log_message&function=hps-ips-check&message=self-check+probe"
+  http_probe POST "$url"
+  if [[ "$HTTP_CODE" == 200 ]]; then
+    record PASS "boot_manager POST log_message" "HTTP 200 (empty-body POST accepted)"
+  else
+    record FAIL "boot_manager POST log_message" "$(http_status_reason "$url")"
+  fi
+
+  url="${base}?cmd=cluster_variable&name=network_dns_domain"
+  http_probe GET "$url"
+  if [[ "$HTTP_CODE" != 200 ]]; then
+    record FAIL "boot_manager cluster_variable" "$(http_status_reason "$url")"
+  elif [[ -z "$(tr -d '[:space:]' < "$TMP/body")" ]]; then
+    record FAIL "boot_manager cluster_variable" "HTTP 200 but network_dns_domain is empty"
+  else
+    record PASS "boot_manager cluster_variable" "HTTP 200, network_dns_domain non-empty"
+  fi
+
+  check_boot_json "$IPS"
+}
+
+# The latest pin's boot.json, fetched over HTTP as a node does.
+check_boot_json() {
+  local ips="$1" resources pin dir profile url
+  resources="$(hps_get_config resources 2> /dev/null)" || resources=""
+  if [[ -z "$resources" || ! -r "${resources}/nixos/latest" ]]; then
+    record WARN "nixos boot.json" "no ${resources:-resources}/nixos/latest: no NixOS image built or seeded"
+    return 0
+  fi
+  pin="$(tr -d '[:space:]' < "${resources}/nixos/latest")"
+  profile=""
+  for dir in "${resources}/nixos/${pin}"/*/; do
+    if [[ -f "${dir}boot.json" ]]; then
+      profile="$(basename "$dir")"
+      break
+    fi
+  done
+  if [[ -z "$profile" ]]; then
+    record FAIL "nixos boot.json" "latest pin ${pin} has no profile with a boot.json"
+    return 0
+  fi
+  url="http://${ips}/nixos/${pin}/${profile}/boot.json"
+  http_probe GET "$url"
+  if [[ "$HTTP_CODE" != 200 ]]; then
+    record FAIL "nixos boot.json" "$(http_status_reason "$url")"
+  elif ! jq -e '.pin | strings | length > 0' "$TMP/body" > /dev/null 2>&1; then
+    record FAIL "nixos boot.json" "HTTP 200 but not JSON with a pin: ${url}"
+  else
+    record PASS "nixos boot.json" "HTTP 200, JSON with pin (${pin}/${profile})"
+  fi
+}
+
+#===============================================================================
+# 2 TFTP boot files
+#===============================================================================
+check_tftp() {
+  local tftp f missing=""
+  tftp="$(hps_get_config tftp 2> /dev/null)" || tftp=""
+  if [[ -z "$tftp" ]]; then
+    record FAIL "tftp" "cannot determine the TFTP root"
+    return 0
+  fi
+  for f in snponly.efi undionly.kpxe; do
+    if [[ ! -s "${tftp}/${f}" ]]; then
+      missing="${missing} ${f}"
+    fi
+  done
+  if [[ -n "$missing" ]]; then
+    record FAIL "tftp boot files" "missing or empty in ${tftp}:${missing}"
+  else
+    record PASS "tftp boot files" "snponly.efi and undionly.kpxe present, non-empty"
+  fi
+}
+
+#===============================================================================
+# 3 DNS (dnsmasq)
+#===============================================================================
+dns_query() {
+  local name="$1"
+  if command -v dig > /dev/null 2>&1; then
+    dig +short +time=2 +tries=1 "@${IPS}" "$name" A
+  elif command -v host > /dev/null 2>&1; then
+    host -W 2 "$name" "$IPS" | sed -n 's/.* has address //p'
+  else
+    return 127
+  fi
+}
+
+# dns_check_name <label> <fqdn>
+dns_check_name() {
+  local label="$1" fqdn="$2" answer rc=0
+  answer="$(dns_query "$fqdn")" || rc=$?
+  if [[ $rc -eq 127 ]]; then
+    record WARN "dns ${label}" "no dig or host on the IPS (package dnsutils); not checked"
+  elif [[ -z "$answer" ]]; then
+    record FAIL "dns ${label}" "${IPS} gave no answer for ${fqdn}"
+  else
+    record PASS "dns ${label}" "${fqdn} -> $(head -n 1 <<< "$answer")"
+  fi
+}
+
+check_dns() {
+  local mac name suffix="" registry_name=""
+  if [[ -z "$IPS" ]]; then
+    record FAIL "dns" "no IPS address in the cluster registry"
+    return 0
+  fi
+  [[ -z "$DOMAIN" ]] || suffix=".${DOMAIN}"
+  dns_check_name "ips" "ips${suffix}"
+  while read -r mac; do
+    [[ -n "$mac" ]] || continue
+    name="$(host_registry "$mac" get HOSTNAME 2> /dev/null)" || name=""
+    if [[ -n "$name" ]]; then
+      registry_name="$name"
+      break
+    fi
+  done < <(list_cluster_hosts 2> /dev/null || true)
+  if [[ -z "$registry_name" ]]; then
+    record WARN "dns registry host" "no registry host with a HOSTNAME to look up"
+  else
+    dns_check_name "registry host" "${registry_name}${suffix}"
+  fi
+}
+
+#===============================================================================
+# 4 ctrl-exec
+#===============================================================================
+find_ce_cli() {
+  if command -v ctrl-exec-cli > /dev/null 2>&1; then
+    command -v ctrl-exec-cli
+  elif [[ -x "${CTRL_EXEC_CLI_INSTALLED:-/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli}" ]]; then
+    printf '%s\n' "${CTRL_EXEC_CLI_INSTALLED:-/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli}"
+  fi
+}
+
+check_ctrl_exec() {
+  local out cli ver group
+  # dispatcher
+  if ! command -v "${CTRL_EXEC_DISPATCHER:-ctrl-exec-dispatcher}" > /dev/null 2>&1; then
+    record FAIL "ctrl-exec dispatcher" "${CTRL_EXEC_DISPATCHER:-ctrl-exec-dispatcher} not found"
+  elif out="$("${CTRL_EXEC_DISPATCHER:-ctrl-exec-dispatcher}" --version 2>&1)"; then
+    record PASS "ctrl-exec dispatcher" "$(head -n 1 <<< "$out")"
+  else
+    record FAIL "ctrl-exec dispatcher" "--version failed: $(head -n 1 <<< "$out")"
+  fi
+
+  # API server (has no --version; its version comes from the health call below)
+  if command -v "${CTRL_EXEC_API_BIN:-ctrl-exec-api}" > /dev/null 2>&1; then
+    record PASS "ctrl-exec api" "ctrl-exec-api present"
+  else
+    record FAIL "ctrl-exec api" "${CTRL_EXEC_API_BIN:-ctrl-exec-api} not found"
+  fi
+
+  # CLI
+  cli="$(find_ce_cli)"
+  if [[ -z "$cli" ]]; then
+    record FAIL "ctrl-exec cli" "ctrl-exec-cli not found"
+  elif out="$("$cli" --version 2>&1)"; then
+    record PASS "ctrl-exec cli" "$(head -n 1 <<< "$out")"
+  else
+    record FAIL "ctrl-exec cli" "--version failed: $(head -n 1 <<< "$out")"
+  fi
+
+  # API socket and its group
+  if [[ ! -S "$API_SOCKET" ]]; then
+    record FAIL "ctrl-exec api socket" "${API_SOCKET} is not a socket"
+  else
+    group="$(stat -c %G "$API_SOCKET" 2> /dev/null)" || group="?"
+    if [[ "$group" == "$API_GROUP" ]]; then
+      record PASS "ctrl-exec api socket" "${API_SOCKET} group ${group}"
+    else
+      record FAIL "ctrl-exec api socket" "${API_SOCKET} group is ${group}, configured ${API_GROUP}"
+    fi
+  fi
+
+  # The API answers: health needs no target and no authentication.
+  if [[ -z "$cli" ]]; then
+    record FAIL "ctrl-exec api health" "no CLI to call the API with"
+  elif out="$("$cli" --socket "$API_SOCKET" health 2>&1)"; then
+    ver="$(sed -n 's/^VERSION[[:space:]]*//p' <<< "$out" | head -n 1)"
+    record PASS "ctrl-exec api health" "API answers over the socket (version ${ver:-?})"
+  else
+    record FAIL "ctrl-exec api health" "health over ${API_SOCKET} failed: $(head -n 1 <<< "$out")"
+  fi
+}
+
+#===============================================================================
+# 5 rsyslog
+#===============================================================================
+check_rsyslog() {
+  local log token file waited="${HPS_IPS_CHECK_SYSLOG_WAIT:-5}" i found=0
+  log="$(hps_get_config log 2> /dev/null)" || log=""
+  if [[ -z "$log" ]]; then
+    record FAIL "rsyslog" "cannot determine the log directory"
+    return 0
+  fi
+  token="selfcheck-$$-$(date +%s)"
+  file="${log}/ips/$(date +%Y-%m-%d).log"
+  if ! logger -t hps-ips-check-probe "$token"; then
+    record FAIL "rsyslog" "logger failed (no /dev/log?)"
+    return 0
+  fi
+  for ((i = 0; i < waited * 5; i++)); do
+    if [[ -r "$file" ]] && grep -qF "$token" "$file"; then
+      found=1
+      break
+    fi
+    sleep 0.2
+  done
+  if [[ $found -eq 1 ]]; then
+    record PASS "rsyslog" "tagged message filed in ${file}"
+  else
+    record FAIL "rsyslog" "tagged message not in ${file} within ${waited}s"
+  fi
+}
+
+#===============================================================================
+# 6 chrony
+#===============================================================================
+check_chrony() {
+  local out leap stratum
+  if ! command -v chronyc > /dev/null 2>&1; then
+    record FAIL "chrony" "chronyc not found"
+  elif ! out="$(chronyc tracking 2>&1)"; then
+    record FAIL "chrony" "chronyd not answering: $(head -n 1 <<< "$out")"
+  else
+    leap="$(sed -n 's/^Leap status[[:space:]]*:[[:space:]]*//p' <<< "$out" | head -n 1)"
+    stratum="$(sed -n 's/^Stratum[[:space:]]*:[[:space:]]*//p' <<< "$out" | head -n 1)"
+    if [[ "$leap" == "Normal" ]]; then
+      record PASS "chrony" "running, synchronised (stratum ${stratum:-?})"
+    else
+      record WARN "chrony" "running, ${leap:-state unknown} (no upstream may be by design)"
+    fi
+  fi
+}
+
+#===============================================================================
+# 7 disk space
+#===============================================================================
+check_disk_one() {
+  local label="$1" path="$2" used free
+  if [[ -z "$path" || ! -d "$path" ]]; then
+    record FAIL "disk ${label}" "${path:-path unknown} does not exist"
+    return 0
+  fi
+  used="$(df -P "$path" | awk 'NR==2 {gsub("%","",$5); print $5}')"
+  if [[ ! "$used" =~ ^[0-9]+$ ]]; then
+    record FAIL "disk ${label}" "cannot read free space of ${path}"
+    return 0
+  fi
+  free=$((100 - used))
+  if [[ $free -lt 5 ]]; then
+    record FAIL "disk ${label}" "${path} ${free}% free (below 5%)"
+  elif [[ $free -lt 15 ]]; then
+    record WARN "disk ${label}" "${path} ${free}% free (below 15%)"
+  else
+    record PASS "disk ${label}" "${path} ${free}% free"
+  fi
+}
+
+check_disk() {
+  check_disk_one resources "$(hps_get_config resources 2> /dev/null || true)"
+  check_disk_one log "$(hps_get_config log 2> /dev/null || true)"
+}
+
+#===============================================================================
+# 8 registry
+#===============================================================================
+check_registry() {
+  local db
+  if [[ -z "$CLUSTER" ]]; then
+    record FAIL "registry" "no active cluster set"
+    return 0
+  fi
+  db="$(hps_get_config cluster_registry 2> /dev/null)" || db=""
+  if [[ -z "$db" || ! -r "$db" ]]; then
+    record FAIL "registry" "cluster.db of ${CLUSTER} not readable (${db:-path unknown})"
+  elif [[ -z "$IPS" ]]; then
+    record FAIL "registry" "cluster ${CLUSTER}: network_dhcp_ip unreadable"
+  else
+    record PASS "registry" "cluster.db readable, active cluster ${CLUSTER}"
+  fi
+}
+
+#-------------------------------------------------------------------------------
+# write_result: summary line to syslog and stdout, JSON file (atomic).
+#-------------------------------------------------------------------------------
+write_result() {
+  local ts summary dir out
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  summary="${N_PASS} PASS, ${N_WARN} WARN, ${N_FAIL} FAIL"
+  jq -s --arg ts "$ts" --arg cluster "$CLUSTER" \
+    --argjson pass "$N_PASS" --argjson warn "$N_WARN" --argjson fail "$N_FAIL" \
+    '{timestamp: $ts, cluster: $cluster, summary: {pass: $pass, warn: $warn, fail: $fail}, checks: .}' \
+    "$TMP/checks.ndjson" > "$TMP/result.json"
+  logger -t hps-ips-check "summary: ${summary}" || true
+  if [[ $JSON -eq 1 ]]; then
+    cat "$TMP/result.json"
+  else
+    printf 'summary: %s\n' "$summary"
+  fi
+  dir="$(hps_get_config cluster_services 2> /dev/null)" || dir=""
+  if [[ -z "$dir" || ! -d "$dir" ]]; then
+    echo "hps-ips-check: cannot write result: no cluster services directory" >&2
+    return 1
+  fi
+  out="${dir}/ips-check.json"
+  if ! cp "$TMP/result.json" "${out}.tmp" || ! mv -f "${out}.tmp" "$out"; then
+    echo "hps-ips-check: cannot write ${out}" >&2
+    return 1
+  fi
+  return 0
+}
+
+main() {
+  local wrote=0
+  load_context
+  wait_for_services
+  check_boot_manager
+  check_tftp
+  check_dns
+  check_ctrl_exec
+  check_rsyslog
+  check_chrony
+  check_disk
+  check_registry
+  write_result || wrote=1
+  if [[ $N_FAIL -gt 0 || $wrote -eq 1 ]]; then
+    exit 1
+  fi
+  exit 0
+}
+
+main
