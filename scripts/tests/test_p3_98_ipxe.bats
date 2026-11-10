@@ -120,7 +120,9 @@ build_pin() {
   grep -q '"bin/undionly.kpxe" = null' "$F"
   grep -q 'firmwareBinary = "ipxe.efi"' "$F"
   grep -q 'ipxe = ipxeArtefacts;' "$F"
-  grep -q 'checks.${system}.ipxe' "$F"
+  # one checks.${system} set (a dynamic attribute may be defined only once)
+  [ "$(grep -cE '^ *checks\.\$\{system\}' "$F")" -eq 1 ]
+  grep -A3 'checks.\${system} = {' "$F" | grep -q 'ipxe = ipxeArtefacts;'
   run grep -c '" = null;' "$F"
   [ "$output" -eq 3 ]
 }

@@ -134,15 +134,17 @@
           om3 = (pkgs.extend om3Overlay).om3;
         };
 
-      # The iPXE outputs build (their derivation fails on a missing or empty target).
-      checks.${system}.ipxe = ipxeArtefacts;
-
       # The AppArmor profiles of the compute role, parsed (no kernel load) from
       # the evaluated node-converged configuration, so the check sees exactly
       # the text the node ships. A sample generated per-guest profile exercises
       # the `include if exists <libvirt/<uuid>.files>` route the parser takes
       # when virt-aa-helper loads a guest's profile.
-      checks.${system}.apparmor-profiles =
+      # One checks.${system} set: a dynamic attribute may be defined only once.
+      checks.${system} = {
+      # The iPXE outputs build (their derivation fails on a missing or empty target).
+      ipxe = ipxeArtefacts;
+
+      apparmor-profiles =
         let
           aa = self.nixosConfigurations.node-converged.config.security.apparmor;
           incDir = pkgs.linkFarm "hps-apparmor-includes"
@@ -171,5 +173,6 @@
           parse -I gen gen/libvirt/libvirt-00000000-0000-0000-0000-000000000000
           touch $out
         '';
+      };
     };
 }
