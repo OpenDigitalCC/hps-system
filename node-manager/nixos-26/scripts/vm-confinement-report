@@ -87,7 +87,9 @@ R_AA="-"
 check1_capabilities() {
   local caps models
   if caps=$(run virsh -c qemu:///system capabilities 2> /dev/null); then
-    models=$(sed -n -E 's/.*<model>([^<]*)<\/model>.*/\1/p' <<< "$caps" | paste -sd, -)
+    # only the <model> inside <secmodel> blocks: the host <cpu> has a <model>
+    # too (it printed "Haswell-v4" as the security model on sch-001).
+    models=$(awk '/<secmodel>/ { s = 1 } /<\/secmodel>/ { s = 0 } s && /<model>/ { sub(/.*<model>/, ""); sub(/<\/model>.*/, ""); print }' <<< "$caps" | paste -sd, -)
     printf 'CHECK1 libvirt secmodels: %s\n' "${models:-none listed}"
     R_MODEL=${models%%,*}
   else

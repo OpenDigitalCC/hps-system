@@ -85,6 +85,7 @@ case "$cmd" in
     fi ;;
   capabilities)
     echo "<capabilities><host>"
+    echo "  <cpu><arch>x86_64</arch><model>Haswell-v4</model></cpu>"
     for m in ${FAKE_CAPS:-apparmor dac}; do echo "  <secmodel>"; echo "    <model>$m</model>"; echo "    <doi>0</doi>"; echo "  </secmodel>"; done
     echo "</host></capabilities>" ;;
 esac
