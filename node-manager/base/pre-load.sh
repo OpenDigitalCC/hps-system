@@ -248,8 +248,11 @@ n_ips_command() {
   local curl_exit
   
   # Execute POST request with separate capture of HTTP code
-  # Use a unique delimiter instead of newline
-  response=$(curl -sS -w "HTTPCODE:%{http_code}" -X POST "$url" 2>&1)
+  # Use a unique delimiter instead of newline. The parameters are in the query
+  # string; the empty body is explicit so curl sends Content-Length: 0. Without
+  # it lighttpd answers 411 Length Required to every call (lab 2026-11-10: 220
+  # of 221 boot_manager POSTs, host_variable and log_message included).
+  response=$(curl -sS -w "HTTPCODE:%{http_code}" -X POST --data-binary "" "$url" 2>&1)
   curl_exit=$?
   
   # Check if curl itself failed
