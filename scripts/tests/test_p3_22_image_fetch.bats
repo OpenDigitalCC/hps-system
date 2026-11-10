@@ -123,3 +123,44 @@ body() {
   [ "$status" -eq 1 ]
   [ ! -e "$DEST/base.qcow2" ]
 }
+zfs_shim() {
+  mkdir -p "$TEST_DIR/bin"
+  cat > "$TEST_DIR/bin/zfs" <<'SH'
+#!/usr/bin/env bash
+echo "zfs $*" >> "$SHIM_LOG"
+case "$1" in
+  list) [[ -d "$HPS_POOL_ROOT/$3" ]] && exit 0; exit 1 ;;
+  create) mkdir -p "$HPS_POOL_ROOT/$2"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$TEST_DIR/bin/zfs"
+  export HPS_POOL_ROOT="$TEST_DIR/mnt"
+  mkdir -p "$HPS_POOL_ROOT/lab/enc"
+}
+
+@test "--dest /<pool>/enc/images absent: the dataset is created below <pool>/enc, then used" {
+  body
+  zfs_shim
+  PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/images"
+  [ "$status" -eq 0 ]
+  grep -qF "zfs create lab/enc/images" "$SHIM_LOG"
+  [ -f "$HPS_POOL_ROOT/lab/enc/images/base.qcow2" ]
+}
+
+@test "--dest /<pool>/enc/images present: no zfs create" {
+  body
+  zfs_shim
+  mkdir -p "$HPS_POOL_ROOT/lab/enc/images"
+  PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/images"
+  [ "$status" -eq 0 ]
+  run ! grep -q "zfs" "$SHIM_LOG"
+}
+
+@test "an absent --dest that is not a pool's images path is refused, nothing created" {
+  body
+  zfs_shim
+  PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/other"
+  [ "$status" -eq 3 ]
+  run ! grep -q "zfs" "$SHIM_LOG"
+}

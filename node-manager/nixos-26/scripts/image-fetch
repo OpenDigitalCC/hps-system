@@ -11,7 +11,8 @@
 #             no redirect is followed, so the transfer cannot leave that host.
 #             Any other scheme (https, ftp, file, ...) is refused.
 #   --sha256  64 hex digits; the download is verified before it gets its name
-#   --dest    an existing directory (the pool's images dataset mount)
+#   --dest    an existing directory; /<pool>/enc/images is created as a
+#             dataset below <pool>/enc on first use (zfs create, logged)
 #
 # Downloads to <dir>/<name>.qcow2.part, checks the hash, renames. A file
 # already there with the right hash: nothing is fetched (exit 0). One with the
@@ -21,6 +22,7 @@
 # Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
 
 set -euo pipefail
+: "${HPS_POOL_ROOT:=}"
 
 NAME=""
 URL=""
@@ -81,7 +83,27 @@ check_args() {
   [[ "$SUM" =~ ^[0-9a-f]{64}$ ]] || refuse "--sha256 is not 64 lowercase hex digits"
   [[ "$URL" == http://* ]] || refuse "--from must be an http:// URL (got a different scheme)"
   [[ "$URL" =~ ^http://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9/_.-]+$ && "$URL" != *..* ]] || refuse "--from is not http://<host>[:port]/<path> with a plain path"
-  [[ "$DEST" == /* && "$DEST" != *..* && -d "$DEST" ]] || refuse "--dest '$DEST' is not an existing absolute directory"
+  [[ "$DEST" == /* && "$DEST" != *..* ]] || refuse "--dest '$DEST' is not an absolute directory"
+  ensure_images_dataset
+  [[ -d "$DEST" ]] || refuse "--dest '$DEST' is not an existing directory"
+}
+
+# <pool>/enc/images: the images dataset of a pool. Like <pool>/enc/vm in
+# storage-zvol-create, it is a plain filesystem dataset below the unlocked
+# <pool>/enc (inherits the encryption; zfs mounts it at --dest). Created on
+# first use, so a pool made before this script gets it; any other --dest must
+# already exist. HPS_POOL_ROOT (tests) prefixes the mount path.
+ensure_images_dataset() {
+  local pool
+  [[ -d "$DEST" ]] && return 0
+  [[ "$DEST" =~ ^${HPS_POOL_ROOT}/([a-z][a-z0-9_.-]*)/enc/images$ ]] || return 0
+  pool=${BASH_REMATCH[1]}
+  command -v zfs > /dev/null 2>&1 || return 0
+  if zfs list -H -o type "$pool/enc/images" > /dev/null 2>&1; then
+    return 0
+  fi
+  log "creating $pool/enc/images (inherits the encryption of $pool/enc)"
+  run zfs create "$pool/enc/images"
 }
 
 file_sum() {
