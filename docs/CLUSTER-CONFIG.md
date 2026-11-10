@@ -11,11 +11,12 @@ questions`). Three entry points answer that same list.
 - A web form is planned for after the control API provides authentication; it
   will read the same list from `hps-cluster-config questions --json`.
 
-The menu scripts still carry their own prompts and rules. `t/80` parses them
-and fails if a prompt or a stored key has no catalogue entry, so the two
-cannot drift apart unnoticed. The menu's commit step (`commit_changes` in
-`lib/functions.d/cluster-interactive-functions.sh`) does not yet call
-`apply`; see "Menu" below.
+The menu scripts still carry their own prompts; `t/80` parses them and fails if a
+prompt or a stored key has no catalogue entry, so the two cannot drift apart
+unnoticed. The menu's commit step (`commit_changes` in
+`lib/functions.d/cluster-interactive-functions.sh`) sends its pending pairs to
+`hps-cluster-config apply -`, so the menu, `scripts/cluster-bootstrap.sh` and
+a file are validated, derived and written by one implementation.
 
 ## Commands
 
@@ -85,19 +86,35 @@ network_time_server = $IPS_ADDRESS
 osvc_hb_type = unicast
 ```
 
-## Menu
+## Menu and bootstrap
 
-`commit_changes` writes the menu's `CLUSTER_CONFIG_PENDING` pairs straight to
-the registry. It is shared with `scripts/cluster-bootstrap.sh`, which also
-stores `network_static_start`, `network_static_end`, `network_reserved` and
-`network_time_upstream` (not menu questions), so the menu has not been moved
-onto `hps-cluster-config apply -` yet.
+`commit_changes` writes the pending `key:value` pairs (split at the first `:`) as
+`key = value` lines to `bin/hps-cluster-config apply - --cluster NAME`, then
+generates the DNS/DHCP files. When validation rejects the set it returns
+non-zero after the errors were printed and nothing is written; the pending
+array is kept. A key pended twice keeps its last value. Bootstrap's storage
+values are derived keys like any other: they must equal the computed value.
+
+Keys with `menu: false` are not asked by the menu: they come from the
+interface, from bootstrap or from a file.
+
+### Network layout
+
+`network_layout` is one JSON object, as `net-bridge-ensure` reads it:
+`{"<name>": {"cidr", "vlan", "bridge", "purpose", "nic"?}}`. Names match
+`^[a-z][a-z0-9-]{0,15}$`; `cidr` is IPv4/prefix; `vlan` is 1 to 4094, or
+`null` or absent for untagged; `bridge` matches `^br-[a-z0-9-]{1,12}$`;
+`purpose` is a short word; `nic` is a MAC address when present. VLANs and
+bridges may not repeat. In the text file format the JSON goes on one line
+after `network_layout =`; in a JSON file it may be an object. It is stored,
+compared and exported as canonical one-line JSON.
 
 ## Catalogue
 
 Produced by `hps-cluster-config questions --json` (rows in menu order). The
 rule is `text`, `regex:`, `enum:`, `int:MIN..MAX`, `bool`, `ip`, `cidr`,
-`host` (address or host name), `dnsdomain` or `subnet_base` (`X.Y`). Optional
+`host` (address or host name), `dnsdomain`, `subnet_base` (`X.Y`), `iplist` and
+`hostlist` (comma or space separated) or `layout`. Optional
 keys may be empty.
 
 | Key | Group | Prompt | Rule | Default | Required |
@@ -110,6 +127,9 @@ keys may be empty.
 | `network_dhcp_rangesize` | dhcp | DHCP range size (number of IPs) | `int:1..16777216` | `100` | no |
 | `network_dhcp_range_start` | dhcp | DHCP range start (blank: from the range size) | `ip` | (empty) | no |
 | `network_dhcp_range_end` | dhcp | DHCP range end (blank: from the range size) | `ip` | (empty) | no |
+| `network_static_start` | dhcp | Static address range start (inside the DHCP network) | `ip` | - | no |
+| `network_static_end` | dhcp | Static address range end (inside the DHCP network) | `ip` | - | no |
+| `network_reserved` | dhcp | Reserved addresses (IPv4, comma or space separated; may be empty) | `iplist` | (empty) | no |
 | `network_storage_count` | storage-networks | Number of storage networks to configure (1-10) | `int:0..10` | `2` | no |
 | `network_storage_base_vlan` | storage-networks | Storage network base VLAN ID (31-99) | `int:31..99` | `31` | no |
 | `network_storage_subnet_base` | storage-networks | Storage subnet base | `subnet_base` | from `network_storage_base_vlan` | no |
@@ -118,6 +138,8 @@ keys may be empty.
 | `network_syslog_server` | services | Syslog server IP address | `ip` | from `network_dhcp_ip` | no |
 | `network_name_server` | services | DNS server IP address | `ip` | from `network_dhcp_ip` | no |
 | `network_time_server` | services | NTP server address | `host` | from `network_dhcp_ip` | no |
+| `network_time_upstream` | services | Upstream time servers (host names or IPv4, comma or space separated; may be empty) | `hostlist` | (empty) | no |
+| `network_layout` | networks | Workload network layout (one-line JSON object) | `layout` | - | no |
 | `osvc_log_level` | opensvc | Log level (debug/info/warn/error) | `enum:debug,info,warn,error` | `info` | no |
 | `osvc_listener_port` | opensvc | Listener port (1024-65535) | `int:1024..65535` | `1215` | no |
 | `osvc_web_ui` | opensvc | Enable Web UI? | `enum:yes,no` | `yes` | no |

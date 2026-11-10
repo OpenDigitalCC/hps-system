@@ -157,4 +157,55 @@ is(scalar @$errors, 2, 'a bad line and a duplicate are both reported');
 ($entries, $errors) = HPS::ClusterConfig::parse_file('{"osvc_hb_interval": 7, "network_dhcp_enabled": true}');
 is_deeply({ map { $_->{key} => $_->{value} } @$entries }, { osvc_hb_interval => '7', network_dhcp_enabled => 'true' }, 'JSON object parses, booleans become true/false');
 
+# --- bootstrap keys and the layout
+good('network_static_start', '10.99.1.200', 'an ip');
+good('network_reserved', '', 'empty reserved list');
+good('network_reserved', '10.99.1.5,10.99.1.6', 'a comma list');
+good('network_reserved', '10.99.1.5 10.99.1.6', 'a space list (what bootstrap writes)');
+bad('network_reserved', '10.99.1.5,host', 'a name in an ip list');
+good('network_time_upstream', '', 'empty upstream list');
+good('network_time_upstream', 'pool.ntp.org 10.0.0.1', 'names and addresses');
+bad('network_time_upstream', 'a_b', 'an underscore name');
+bad('network_time_upstream', '10.0.0', 'a malformed address');
+
+my $L = '{"prod":{"cidr":"10.50.0.0/24","vlan":50,"bridge":"br-prod","purpose":"workload"},'
+      . '"flat":{"cidr":"10.60.0.0/24","vlan":null,"bridge":"br-flat","purpose":"storage","nic":"52:54:00:aa:bb:cc"}}';
+good('network_layout', $L, 'a layout (vlan, untagged, nic)');
+good('network_layout', '{}', 'an empty layout');
+bad('network_layout', 'not json', 'text');
+bad('network_layout', '[]', 'an array');
+bad('network_layout', '{"Prod":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload"}}', 'an upper-case name');
+bad('network_layout', '{"' . ('a' x 17) . '":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload"}}', 'a 17-character name');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0","bridge":"br-p","purpose":"workload"}}', 'a cidr without a prefix');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"p","purpose":"workload"}}', 'a bridge without br-');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-' . ('x' x 13) . '","purpose":"workload"}}', 'a long bridge');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-p"}}', 'a missing purpose');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload","vlan":4095}}', 'vlan 4095');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload","vlan":0}}', 'vlan 0');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload","nic":"52:54:00"}}', 'a short nic');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"workload","colour":"red"}}', 'an unknown field');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","vlan":5,"bridge":"br-p","purpose":"w"},"q":{"cidr":"10.51.0.0/24","vlan":5,"bridge":"br-q","purpose":"w"}}', 'a repeated vlan');
+bad('network_layout', '{"p":{"cidr":"10.50.0.0/24","bridge":"br-p","purpose":"w"},"q":{"cidr":"10.51.0.0/24","bridge":"br-p","purpose":"w"}}', 'a repeated bridge');
+
+$plan = $cc->plan([ { key => 'network_static_start', value => '10.98.0.5', line => 3 } ]);
+like($plan->{errors}[0]{message}, qr/not inside 10\.99\.1\.0\/24/, 'a static address outside the DHCP network is refused');
+$plan = $cc->plan([ { key => 'network_reserved', value => '10.99.1.5,10.77.0.1', line => 4 } ]);
+like($plan->{errors}[0]{message}, qr/10\.77\.0\.1/, 'a reserved address outside the network is refused');
+$plan = $cc->plan([ { key => 'network_static_start', value => '10.99.1.50', line => 1 }, { key => 'network_static_end', value => '10.99.1.40', line => 2 } ]);
+like($plan->{errors}[0]{message}, qr/after end/, 'an inverted static range is refused');
+$plan = $cc->plan([ { key => 'network_static_start', value => '10.99.1.10', line => 1 }, { key => 'network_static_end', value => '10.99.1.40', line => 2 } ]);
+is(scalar @{ $plan->{errors} }, 0, 'a static range inside the network plans');
+# a derived key that disagrees (bootstrap's own storage values are held to the same rule)
+$plan = $cc->plan([ { key => 'network_storage_vlan31_gateway', value => '10.31.0.9', line => 1 } ]);
+like($plan->{errors}[0]{message}, qr/derived value is 10\.31\.0\.1/, 'a wrong storage gateway is reported');
+
+# layout is compared and stored in canonical form
+my $pretty = '{ "flat" : {"purpose":"storage","bridge":"br-flat","vlan":null,"cidr":"10.60.0.0/24"} }';
+$cc->apply([ { key => 'network_layout', value => $pretty, line => 1 } ]);
+$plan = $cc->plan([ { key => 'network_layout', value => '{"flat":{"cidr":"10.60.0.0/24","vlan":null,"bridge":"br-flat","purpose":"storage"}}', line => 1 } ]);
+is(scalar @{ $plan->{changes} }, 0, 'the same layout in another key order is unchanged');
+($entries, $errors) = HPS::ClusterConfig::parse_file('{"network_layout": {"a":{"cidr":"10.1.0.0/24","bridge":"br-a","purpose":"workload"}}}');
+is(scalar @$errors, 0, 'a JSON file may carry the layout as an object');
+like($entries->[0]{value}, qr/^\{"a":\{/, 'and it becomes one-line canonical JSON');
+
 done_testing;

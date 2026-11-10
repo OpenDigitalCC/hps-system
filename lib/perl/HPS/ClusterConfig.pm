@@ -16,6 +16,9 @@ package HPS::ClusterConfig;
 #   host            IPv4 address or host name
 #   dnsdomain       DNS domain, labels of at most 63 characters
 #   subnet_base     X.Y, the first two octets of the storage subnets
+#   iplist          IPv4 addresses separated by commas and/or spaces
+#   hostlist        host names or IPv4 addresses separated by commas and/or spaces
+#   layout          JSON object {"<name>": {cidr, vlan, bridge, purpose, nic?}}
 # An optional (not required) key may be the empty string.
 use strict;
 use warnings;
@@ -79,6 +82,13 @@ my @CATALOGUE = (
     _q(key => 'network_dhcp_range_end', group => 'dhcp', menu => 0,
         prompt => 'DHCP range end (blank: from the range size)', rule => 'ip', default => ''),
 
+    _q(key => 'network_static_start', group => 'dhcp', menu => 0,
+        prompt => 'Static address range start (inside the DHCP network)', rule => 'ip'),
+    _q(key => 'network_static_end', group => 'dhcp', menu => 0,
+        prompt => 'Static address range end (inside the DHCP network)', rule => 'ip'),
+    _q(key => 'network_reserved', group => 'dhcp', menu => 0,
+        prompt => 'Reserved addresses (IPv4, comma or space separated; may be empty)', rule => 'iplist', default => ''),
+
     _q(key => 'network_storage_count', group => 'storage-networks',
         prompt => 'Number of storage networks to configure (1-10)', rule => 'int:0..10', default => '2',
         derives => ['network_storage_vlanN_*']),
@@ -100,6 +110,12 @@ my @CATALOGUE = (
         prompt => 'DNS server IP address', rule => 'ip', default_from => 'network_dhcp_ip'),
     _q(key => 'network_time_server', group => 'services',
         prompt => 'NTP server address', rule => 'host', default_from => 'network_dhcp_ip'),
+
+    _q(key => 'network_time_upstream', group => 'services', menu => 0,
+        prompt => 'Upstream time servers (host names or IPv4, comma or space separated; may be empty)',
+        rule => 'hostlist', default => ''),
+    _q(key => 'network_layout', group => 'networks', menu => 0,
+        prompt => 'Workload network layout (one-line JSON object)', rule => 'layout'),
 
     _q(key => 'osvc_log_level', group => 'opensvc',
         prompt => 'Log level (debug/info/warn/error)', rule => 'enum:debug,info,warn,error', default => 'info'),
@@ -199,7 +215,62 @@ sub validate_value ($q, $value) {
         return 'must be X.Y, such as 10.31' unless defined $a && $a <= 255 && $b <= 255;
         return undef;
     }
+    if ($kind eq 'iplist') {
+        my @bad = grep { !_valid_ip($_) } split /[,\s]+/, $v;
+        return @bad ? 'not an IPv4 address: ' . join(', ', @bad) : undef;
+    }
+    if ($kind eq 'hostlist') {
+        for my $h (split /[,\s]+/, $v) {
+            next if _valid_ip($h);
+            return "not a host name or IPv4 address: $h" if $h =~ /^[0-9.]+\z/;
+            return "not a host name or IPv4 address: $h" unless $h =~ /^[A-Za-z0-9][A-Za-z0-9.-]*\z/;
+        }
+        return undef;
+    }
+    if ($kind eq 'layout') { return validate_layout($v) }
     die "Unknown rule '$q->{rule}' for $q->{key}\n";
+}
+
+# network_layout (the shape net-bridge-ensure reads). Returns an error or undef.
+sub validate_layout ($text) {
+    my $data = eval { JSON::PP->new->decode($text) };
+    return 'not valid JSON' unless defined $data;
+    return 'must be a JSON object of networks' unless ref $data eq 'HASH';
+    my (%vlans, %bridges);
+    for my $name (sort keys %$data) {
+        my $n = $data->{$name};
+        return "network name '$name' must match ^[a-z][a-z0-9-]{0,15}\$" unless $name =~ /^[a-z][a-z0-9-]{0,15}\z/;
+        return "network '$name' must be an object" unless ref $n eq 'HASH';
+        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic);
+        my ($extra) = grep { !$ok{$_} } sort keys %$n;
+        return "network '$name': unknown field '$extra'" if defined $extra;
+        for my $req (qw(cidr bridge purpose)) {
+            return "network '$name': $req is required" unless defined $n->{$req} && !ref $n->{$req} && length $n->{$req};
+        }
+        return "network '$name': cidr must be IPv4/prefix" if defined validate_value({ rule => 'cidr', required => 1 }, $n->{cidr});
+        return "network '$name': bridge must match ^br-[a-z0-9-]{1,12}\$" unless $n->{bridge} =~ /^br-[a-z0-9-]{1,12}\z/;
+        return "network '$name': purpose must be a short word" unless $n->{purpose} =~ /^[a-z][a-z0-9-]{0,15}\z/;
+        if (defined $n->{vlan}) {
+            return "network '$name': vlan must be 1 to 4094"
+                unless !ref $n->{vlan} && $n->{vlan} =~ /^[1-9][0-9]{0,3}\z/ && $n->{vlan} <= 4094;
+            return "network '$name': vlan $n->{vlan} is also used by '$vlans{$n->{vlan}}'" if $vlans{ $n->{vlan} };
+            $vlans{ $n->{vlan} } = $name;
+        }
+        if (defined $n->{nic}) {
+            return "network '$name': nic must be a MAC address"
+                unless !ref $n->{nic} && $n->{nic} =~ /^(?:[0-9A-Fa-f]{2}([:-]?)){5}[0-9A-Fa-f]{2}\z/;
+        }
+        return "network '$name': bridge '$n->{bridge}' is also used by another network" if $bridges{ $n->{bridge} }++;
+    }
+    return undef;
+}
+
+# The stored form compared and shown: layout as canonical one-line JSON.
+sub normalise_value ($key, $value) {
+    return $value unless $key eq 'network_layout' && defined $value;
+    my $data = eval { JSON::PP->new->decode($value) };
+    return $value unless ref $data eq 'HASH';
+    return JSON::PP->new->canonical->encode($data);
 }
 
 #--- derived keys (the arithmetic of 050-set-storage-network.sh) ----------------------
@@ -311,6 +382,7 @@ sub parse_file ($text) {
         return ([], [ { line => 0, key => undef, message => 'invalid JSON: ' . ($@ =~ s/ at .*//sr) } ]) unless ref $data eq 'HASH';
         for my $k (sort keys %$data) {
             my $v = $data->{$k};
+            $v = JSON::PP->new->canonical->encode($v) if $k eq 'network_layout' && ref $v eq 'HASH';
             if (!defined $v || ref $v && !JSON::PP::is_bool($v)) {
                 push @errors, { line => 0, key => $k, message => 'value must be a string, number or boolean' };
                 next;
@@ -349,6 +421,7 @@ sub plan ($self, $entries) {
         my ($k, $v) = ($e->{key}, $e->{value});
         $v //= '';
         $v =~ s/^\s+|\s+\z//g;
+        $v = normalise_value($k, $v) if $BY_KEY{$k} && !defined validate_value($BY_KEY{$k}, $v);
         $line{$k} = $e->{line};
         $given{$k} = $v;
         if (my $q = $BY_KEY{$k}) {
@@ -364,7 +437,7 @@ sub plan ($self, $entries) {
 
     # The effective value: given, else stored, else the literal default.
     my %stored;
-    my $stored = sub ($k) { return $stored{$k} //= { v => scalar $reg->cluster_get($c, $k) } };
+    my $stored = sub ($k) { return $stored{$k} //= { v => normalise_value($k, scalar $reg->cluster_get($c, $k)) } };
     my $eff = sub ($k) {
         return $given{$k} if exists $given{$k};
         my $s = $stored->($k)->{v};
@@ -401,6 +474,28 @@ sub plan ($self, $entries) {
                     if exists $given{$k} && $given{$k} ne $derived{$k};
             }
         }
+    }
+
+    # Static range and reserved addresses lie inside the DHCP network.
+    if (grep { exists $given{$_} } qw(network_static_start network_static_end network_reserved network_dhcp_cidr)) {
+        my $net = $derived{network_cidr} // $eff->('network_cidr');
+        if (defined $net && $net =~ m{^([0-9.]+)/([0-9]+)\z} && _valid_ip($1)) {
+            my ($nip, $p) = ($1, $2);
+            my $mask = $p == 0 ? 0 : (0xFFFFFFFF << (32 - $p)) & 0xFFFFFFFF;
+            my $nint = _ip_to_int($nip) & $mask;
+            my $inside = sub ($ip) { return _valid_ip($ip) && (_ip_to_int($ip) & $mask) == $nint };
+            for my $k (qw(network_static_start network_static_end)) {
+                $err->($k, "$given{$k} is not inside $net")
+                    if exists $given{$k} && length $given{$k} && !$inside->($given{$k});
+            }
+            if (exists $given{network_reserved}) {
+                my @out = grep { !$inside->($_) } split /[,\s]+/, $given{network_reserved};
+                $err->('network_reserved', "not inside $net: " . join(', ', @out)) if @out;
+            }
+        }
+        my ($s, $en) = ($eff->('network_static_start'), $eff->('network_static_end'));
+        $err->($firstline->(qw(network_static_start network_static_end)), "static range start $s is after end $en")
+            if defined $s && defined $en && _valid_ip($s) && _valid_ip($en) && _ip_to_int($s) > _ip_to_int($en);
     }
 
     # Derived keys: storage networks.
@@ -491,7 +586,7 @@ sub apply ($self, $entries, %opt) {
     return $plan if @{ $plan->{errors} } || $opt{dry_run};
     for my $ch (@{ $plan->{changes} }) {
         $self->{registry}->cluster_set($c, $ch->{key}, $ch->{new});
-        $self->_log('info', "cluster $c: set $ch->{key} (" . ($ch->{derived} ? 'derived' : 'given') . ')');
+        $self->_log('info', "cluster $c: Set: $ch->{key}=$ch->{new}" . ($ch->{derived} ? ' (derived)' : ''));
     }
     $self->_log('info', "cluster $c: applied " . scalar(@{ $plan->{changes} }) . ' change(s), '
         . scalar(@{ $plan->{unchanged} }) . ' unchanged');
@@ -512,7 +607,7 @@ sub show ($self) {
     my %have = map { $_ => 1 } $reg->cluster_list($c);
     my (@keys, @derived, @other);
     for my $q (@CATALOGUE) {
-        my $v = $have{ $q->{key} } ? $reg->cluster_get($c, $q->{key}) : undef;
+        my $v = $have{ $q->{key} } ? normalise_value($q->{key}, scalar $reg->cluster_get($c, $q->{key})) : undef;
         push @keys, {
             key => $q->{key}, group => $q->{group}, value => $v, set => defined $v ? JSON::PP::true : JSON::PP::false,
             missing_required => ($q->{required} && !(defined $v && length $v)) ? JSON::PP::true : JSON::PP::false,
@@ -550,7 +645,14 @@ sub export_text ($self) {
 
 sub export_data ($self) {
     my $s = $self->show;
-    return { map { $_->{key} => $_->{value} } grep { $_->{set} } @{ $s->{keys} } };
+    return { map {
+        my $v = $_->{value};
+        if ($_->{key} eq 'network_layout') {
+            my $d = eval { JSON::PP->new->decode($v) };
+            $v = $d if ref $d eq 'HASH';
+        }
+        ($_->{key} => $v);
+    } grep { $_->{set} } @{ $s->{keys} } };
 }
 
 1;

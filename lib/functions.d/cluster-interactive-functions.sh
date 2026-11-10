@@ -5,14 +5,36 @@
 #!/bin/bash
 
 #===============================================================================
+# cluster_config_pending_as_file
+# ------------------------------
+# Print CLUSTER_CONFIG_PENDING as "key = value" lines for
+# "hps-cluster-config apply -". Each item is split at the first ':'. A key
+# pended twice keeps its last value, as sequential writes did.
+#===============================================================================
+cluster_config_pending_as_file() {
+  local -A last=()
+  local -a order=()
+  local item key
+  for item in "${CLUSTER_CONFIG_PENDING[@]}"; do
+    key="${item%%:*}"
+    [[ -n "${last[$key]+x}" ]] || order+=("$key")
+    last[$key]="${item#*:}"
+  done
+  for key in "${order[@]}"; do
+    printf '%s = %s\n' "$key" "${last[$key]}"
+  done
+}
+
+#===============================================================================
 # commit_changes
 # --------------
 # Commit all pending cluster configuration changes
 #
 # Behaviour:
 #   - Processes all settings from CLUSTER_CONFIG_PENDING array
-#   - Applies changes using cluster_registry with explicit cluster name
-#   - Handles JSON types correctly (booleans, numbers, strings)
+#   - Pipes them as "key = value" lines to bin/hps-cluster-config apply -
+#     (validation, derived keys and registry writes all happen there; an
+#     invalid set writes nothing and the errors are printed)
 #   - Generates DNS/DHCP files without reloading services
 #   - Clears the pending array
 #
@@ -47,34 +69,18 @@ commit_changes() {
   fi
   
   cli_info "Committing configuration changes for cluster: $cluster"
-  
-  # Process all pending configuration
-  local config_item
-  for config_item in "${CLUSTER_CONFIG_PENDING[@]}"; do
-    local key="${config_item%%:*}"
-    local value="${config_item#*:}"
-    
-    # Determine if value is already valid JSON (boolean, number, null, object, array)
-    local json_value
-    if [[ "$value" =~ ^(true|false|null)$ ]] || \
-       [[ "$value" =~ ^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$ ]] || \
-       [[ "$value" =~ ^\{.*\}$ ]] || \
-       [[ "$value" =~ ^\[.*\]$ ]]; then
-      # Already valid JSON - use as-is
-      json_value="$value"
-    else
-      # String value - wrap in quotes
-      json_value="\"$value\""
-    fi
-    
-    if ! cluster_registry "$cluster" set "$key" "$json_value"; then
-      hps_log error "Failed to set: $key=$value"
-      return 1
-    fi
-    
-    hps_log info "Set: $key=$value"
-  done
-  
+
+  # One implementation validates, derives and writes: hps-cluster-config apply.
+  # It checks the whole set first and writes nothing when any pair is invalid.
+  local bin="${HPS_CLUSTER_CONFIG_BIN:-}"
+  if [[ -z "$bin" ]]; then
+    bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../bin" && pwd)/hps-cluster-config"
+  fi
+  if ! cluster_config_pending_as_file | "$bin" apply - --cluster "$cluster"; then
+    hps_log error "Cluster configuration rejected for $cluster (nothing written); see the errors above"
+    return 1
+  fi
+
   # Generate DNS/DHCP files without reloading services
   if ! update_dns_dhcp_files "$cluster" "false"; then
     hps_log warn "Failed to update DNS/DHCP files (non-fatal)"

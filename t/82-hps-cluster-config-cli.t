@@ -136,6 +136,34 @@ my $json_cfg = $out;
 ($rc, $out) = run_cli($json_cfg, 'apply', '-', '--json');
 is(scalar @{ decode_json($out)->{changes} }, 0, 'a JSON file applies and round trips');
 
+# --- bootstrap keys and the layout through the CLI
+my $boot = <<'CFG';
+network_static_start = 10.99.1.200
+network_static_end = 10.99.1.220
+network_reserved = 10.99.1.5 10.99.1.6
+network_time_upstream = pool.ntp.org
+network_layout = {"prod":{"cidr":"10.50.0.0/24","vlan":50,"bridge":"br-prod","purpose":"workload"}}
+CFG
+($rc, $out, $err) = run_cli($boot, 'apply', '-');
+is($rc, 0, 'static range, reserved, upstream and a one-line JSON layout apply');
+like($reg->cluster_get('lab', 'network_layout'), qr/"prod"/, 'the layout is stored as a JSON object');
+is($reg->cluster_get_json('lab', 'network_layout')->{prod}{vlan}, 50, 'with its fields');
+is($reg->cluster_get('lab', 'network_reserved'), '10.99.1.5 10.99.1.6', 'a space-separated list is stored as given');
+($rc, $out) = run_cli($boot, 'apply', '-', '--json');
+is(scalar @{ decode_json($out)->{changes} }, 0, 'applying the layout again changes nothing');
+($rc, $out) = run_cli('', 'export');
+like($out, qr/^network_layout = \{"prod":\{[^\n]*\}\}$/m, 'export writes the layout on one line');
+($rc, $out) = run_cli($out, 'apply', '-', '--json');
+is(scalar @{ decode_json($out)->{changes} }, 0, 'the export with a layout round-trips');
+($rc, $out) = run_cli('', 'export', '--json');
+is(ref decode_json($out)->{network_layout}, 'HASH', 'export --json carries the layout as an object');
+($rc, $out) = run_cli($out, 'apply', '-', '--json');
+is(scalar @{ decode_json($out)->{changes} }, 0, 'and it round-trips');
+($rc, $out, $err) = run_cli("network_layout = {\"x\":{\"cidr\":\"10.1.0.0/24\",\"bridge\":\"x\",\"purpose\":\"w\"}}\nnetwork_static_end = 10.1.1.1\n", 'apply', '-');
+is($rc, 3, 'a bad layout and an outside static address exit 3');
+like($err, qr/line 1: network_layout: network 'x': bridge must match/, 'the layout error names the network and field');
+like($err, qr/line 2: network_static_end: 10\.1\.1\.1 is not inside/, 'the static range error is reported too');
+
 # --- usage and not found
 ($rc) = run_cli('', 'frobnicate');
 is($rc, 2, 'unknown command exits 2');

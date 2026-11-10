@@ -75,12 +75,24 @@ my %osvc_default;
 is($by_key{$_}{default}, $osvc_default{$_}, "$_ default matches 090") for @osvc;
 
 # Catalogue shape.
-my %groups = map { $_ => 1 } qw(description dns dhcp storage-networks services opensvc);
+my %groups = map { $_ => 1 } qw(description dns dhcp storage-networks services networks opensvc);
 for my $q (HPS::ClusterConfig::questions()) {
     ok($groups{ $q->{group} }, "$q->{key}: group $q->{group} is a known group");
     ok(length $q->{prompt} && length $q->{rule}, "$q->{key}: prompt and rule present");
     unlike($q->{key}, HPS::ClusterConfig::secret_name_re(), "$q->{key}: not a secret name");
 }
 is(scalar(keys %by_key), scalar(HPS::ClusterConfig::questions()), 'no key appears twice');
+
+# The keys cluster-bootstrap.sh pends beyond the menu are catalogued too, so
+# the menu's commit step (shared with bootstrap) can send every pair through apply.
+open($fh, '<', "$Bin/../scripts/cluster-bootstrap.sh") or die $!;
+my $boot = do { local $/; <$fh> };
+close $fh;
+my %boot_keys = map { $_ => 1 } $boot =~ /CLUSTER_CONFIG_PENDING\+=\("([A-Za-z0-9_-]+):/g;
+cmp_ok(scalar(keys %boot_keys), '>=', 30, 'the bootstrap key scan found the keys');
+for my $k (sort keys %boot_keys) {
+    ok($by_key{$k} || HPS::ClusterConfig::is_derived_key($k), "bootstrap key $k is catalogued or derived");
+}
+ok($by_key{network_layout}, 'network_layout is catalogued (written by bootstrap outside commit_changes)');
 
 done_testing;
