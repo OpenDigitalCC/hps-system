@@ -15,6 +15,9 @@ setup() {
   RUN="$ROOT/scripts/hps-run.sh"
   mkdir -p "$TEST_DIR/sys/lib" "$TEST_DIR/hosts"
   cat > "$TEST_DIR/sys/lib/functions.sh" <<EOT
+source "$ROOT/lib/functions.d/host-functions.sh"
+hps_get_config() { echo c1; }
+cluster_registry() { echo lab.hps; }
 hps_log() { :; }
 normalise_mac() {
   local m="\${1//[:.-]/}"
@@ -67,7 +70,7 @@ fi
 exit "${FAKE_CLI_RC:-0}"
 EOT
   chmod +x "$CTRL_EXEC_DISPATCHER" "$CTRL_EXEC_CLI"
-  printf 'held01  10.0.0.5  7443\n' > "$TEST_DIR/agents"
+  printf 'held01.lab.hps  10.0.0.5  7443\n' > "$TEST_DIR/agents"
   mkdir -p "$TEST_DIR/hosts/aabbccddeeff"
   echo -n held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
   KEY_DOC='{"key_hex":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}'
@@ -85,18 +88,18 @@ teardown() {
 
 @test "the client is called as: --socket <api.sock> run <agent> --script <script> --input - -- args" {
   printf '%s' "$KEY_DOC" | bash "$RUN" --input AA:BB:CC:DD:EE:FF dataset-unlock lab/enc
-  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script dataset-unlock --input - -- lab/enc" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script dataset-unlock --input - -- lab/enc" ]
 }
 
 @test "no script arguments: no '--' is sent" {
   printf '%s' "$KEY_DOC" | bash "$RUN" --input held01 iscsi-status
-  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script iscsi-status --input -" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script iscsi-status --input -" ]
 }
 
 @test "--input --json adds --json and prints the client's JSON untouched" {
   run bash -c "printf '%s' '$KEY_DOC' | bash '$RUN' --input --json aabbccddeeff dataset-unlock lab/enc 2>/dev/null"
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script dataset-unlock --input - --json -- lab/enc" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script dataset-unlock --input - --json -- lab/enc" ]
   [[ "$output" == '{"ok":1,"results":[{"host":"held01","exit":0,'* ]]
 }
 
@@ -119,14 +122,14 @@ teardown() {
 @test "without --input the call is 'ced run' and the client is not used" {
   run bash "$RUN" aabbccddeeff storage-pool-import lab
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CED_LOG")" = "run held01 storage-pool-import -- lab" ]
+  [ "$(tail -n 1 "$CED_LOG")" = "run held01.lab.hps storage-pool-import -- lab" ]
   [ ! -e "$CLI_LOG" ]
 }
 
 @test "--json without --input calls the client with --json and no --input, prints its JSON, ced run unused" {
   FAKE_NODE_EXIT=3 run bash "$RUN" --json aabbccddeeff image-fetch debian --dest /x < /dev/null
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script image-fetch --json -- debian --dest /x" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script image-fetch --json -- debian --dest /x" ]
   [[ "$output" == *'"exit":3'* ]]
   ! grep -q '^run ' "$CED_LOG"
 }
@@ -156,7 +159,7 @@ teardown() {
   ' "$doc"
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_DIR/node.stdin")" = "$doc" ]
-  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01 --script storage-pool-create --input - --json -- lab --disk ata-A --disk ata-B --approval-file -" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script storage-pool-create --input - --json -- lab --disk ata-A --disk ata-B --approval-file -" ]
   [[ "$output" == *'"rc":0'* ]]
   [[ "$output" == *'"stdout":"unlocked\n"'* ]]
   FAKE_NODE_EXIT=3 run perl -I"$ROOT/lib/perl" -MHPS::Storage -MJSON::PP -e '

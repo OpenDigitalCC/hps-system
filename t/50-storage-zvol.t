@@ -12,8 +12,8 @@ use StorageFixture;
 
 my $mac = $StorageFixture::MAC;
 my $DS  = 'lab/enc/t0';
-my $IQN = 'iqn.2026-11.example:t0';
-my $INI = 'iqn.2026-11.example:ips';
+my $IQN = 'iqn.2026-11.example.lab:t0';
+my $INI = 'iqn.2026-11.example.lab:ips';
 
 sub err_of { my $c = shift; eval { $c->(); 1 } and return; return $@ }
 sub fresh { my %o = @_; my $f = StorageFixture::setup(%o); $f->{st} = $f->{mk}->(); return $f }
@@ -100,7 +100,7 @@ for my $op (qw(zvol-create zvol-destroy zvol-list export unexport status trim-ch
     # refusals: nothing called, nothing recorded
     $f->{ce}{calls} = [];
     is(err_of(sub { $f->{st}->run('export', dataset => 'lab/enc/t1', iqn => $IQN, initiator => $INI) })->kind, 'refused', 'iqn already used by another zvol');
-    is(err_of(sub { $f->{st}->run('export', dataset => $DS, iqn => 'iqn.2026-11.example:t9', initiator => $INI) })->kind, 'refused', 'zvol already exported under another iqn');
+    is(err_of(sub { $f->{st}->run('export', dataset => $DS, iqn => 'iqn.2026-11.example.lab:t9', initiator => $INI) })->kind, 'refused', 'zvol already exported under another iqn');
     is(err_of(sub { $f->{st}->run('export', dataset => $DS, iqn => 'bogus', initiator => $INI) })->kind, 'usage', 'bad target iqn');
     is(err_of(sub { $f->{st}->run('export', dataset => $DS, iqn => $IQN, initiator => 'bogus') })->kind, 'usage', 'bad initiator iqn');
     is(err_of(sub { $f->{st}->run('export', dataset => $DS, iqn => $IQN, initiator => $INI, portal => '0.0.0.0') })->kind, 'usage', 'wildcard portal refused');

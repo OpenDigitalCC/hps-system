@@ -11,6 +11,7 @@ setup() {
   mkdir -p "$TEST_DIR/sys/lib" "$TEST_DIR/hosts/aabbccddeeff"
   echo -n stale-held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
   cat > "$TEST_DIR/sys/lib/functions.sh" <<EOF
+source "$ROOT/lib/functions.d/host-functions.sh"
 hps_log() { :; }
 normalise_mac() { local m="\${1//[:.-]/}"; echo "\${m,,}"; }
 host_registry() {
@@ -51,7 +52,7 @@ teardown() {
   ! grep -q '^run' "$CE_LOG"
 }
 
-@test "the <name>.<domain> registration wins over a bare name and the name used is printed" {
+@test "only the <name>.<domain> registration is used and the name used is printed" {
   echo -n held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
   printf 'held01  10.0.0.5  7443\nheld01.lab.example  10.0.0.5  7443\nstale-held01.lab.example  10.0.0.5  7443\n' > "$TEST_DIR/agents"
   run bash "$RUN" aabbccddeeff node-facts

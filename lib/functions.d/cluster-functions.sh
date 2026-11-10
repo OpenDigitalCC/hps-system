@@ -503,10 +503,13 @@ cluster_has_installed_sch() {
 #   cluster <active cluster name>
 #   node <node name> <ip>        one per paired host that has a HOSTNAME and an IP
 #
-# The node name is the host's registry HOSTNAME, lower case, followed by
-# .<network_dns_domain> when the cluster has one - the same name hps-pair gives
-# the node's hostname, which is the name OpenSVC uses for the node. A host that
-# is not paired (no ctrl_exec_paired_at, or the old ctrl_exec_paired) is not listed. Sorted by node name.
+# The node name is the host's FQDN (fqdn_join: registry HOSTNAME, lower case,
+# .<network_dns_domain> when the cluster has one) - the same name hps-node-init
+# gives the node's kernel hostname, which is the name OpenSVC uses for the node.
+# A host that is not paired (no ctrl_exec_paired_at, or the old ctrl_exec_paired)
+# is not listed; a forgotten host (hps-onboard forget) has no registry entry and
+# so is not listed either. A host whose FQDN is refused (over 63 characters) is
+# skipped with an error in the log. Sorted by node name.
 #
 # Returns:
 #   0 on success, 1 when no cluster is active
@@ -515,8 +518,7 @@ osvc_cluster_node_list() {
   local cluster domain mac name ip
   cluster=$(hps_get_config active_cluster 2>/dev/null) || return 1
   [[ -n "$cluster" ]] || return 1
-  domain=$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null) || domain=""
-  [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || domain=""
+  domain=$(cluster_dns_domain "$cluster")
   printf 'cluster %s\n' "$cluster"
   while IFS= read -r mac; do
     [[ -z "$mac" ]] && continue
@@ -524,11 +526,12 @@ osvc_cluster_node_list() {
       || host_registry "$mac" get ctrl_exec_paired >/dev/null 2>&1 || continue
     name=$(host_registry "$mac" get HOSTNAME 2>/dev/null) || continue
     ip=$(host_registry "$mac" get IP 2>/dev/null) || continue
-    name="${name%%.*}"
-    name="${name,,}"
-    [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
     [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || continue
-    printf 'node %s%s %s\n' "$name" "${domain:+.$domain}" "$ip"
+    name=$(fqdn_join "$name" "$domain" 2>/dev/null) || {
+      hps_log error "osvc_cluster_node_list: host $mac not listed: no usable FQDN"
+      continue
+    }
+    printf 'node %s %s\n' "$name" "$ip"
   done < <(list_cluster_hosts) | sort
   return 0
 }

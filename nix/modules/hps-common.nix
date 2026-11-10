@@ -47,8 +47,10 @@
     # item (plans/phase-1.md §6).
     networking.hostId = "48505331";
 
-    # Empty: the kernel/DHCP name applies until hps-node-init sets the
-    # transient hostname from the registry.
+    # Empty: no name is baked into the image. hps-node-init sets the kernel
+    # hostname (static and transient) to the FQDN <label>.<cluster dns domain>
+    # from the registry (docs/NAMING.md); nothing else may change it, and
+    # DHCP does not (UseHostname=false below).
     networking.hostName = "";
     # ---- networking: systemd-networkd, the boot NIC only ----------------------
     # No dhcpcd. hps-net (below) writes the .network files at boot from hps.mac=
@@ -56,8 +58,8 @@
     # other interface unmanaged (a second NIC on a switch that carries another
     # LAN once took a lease and a foreign domain there). The lease gives no
     # hostname and no search domain (UseHostname/UseDomains=false): only HPS
-    # names the node (hps-node-init / hps-pair, from the registry) and the
-    # agent therefore registers under the short name. DNS servers still come
+    # names the node (hps-node-init / hps-pair, from the registry, as the FQDN)
+    # and the agent therefore registers under that FQDN. DNS servers still come
     # from the lease, written by systemd-resolved.
     networking.useDHCP = false;
     networking.useNetworkd = true;

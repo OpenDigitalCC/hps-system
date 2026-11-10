@@ -67,6 +67,13 @@ EOT
     esac
   }
   export -f hps_log host_registry
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME (first label) + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
 
   source "${BATS_TEST_DIRNAME}/../../lib/hps-state.sh"
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/jobs-functions.sh"
@@ -97,7 +104,7 @@ seed() {
   host_registry "$MAC" set IP 10.0.0.50
   host_registry "$MAC" set HOSTNAME node-50
   host_registry "$MAC" set last_boot_at "$(date +%s)"
-  printf 'ab12cd34  node-50  10.0.0.50  -  1234\n' > "$TEST_DIR/list.row"
+  printf 'ab12cd34  node-50.lab.hps  10.0.0.50  -  1234\n' > "$TEST_DIR/list.row"
 }
 
 @test "as the web user the pairing window opens through a job" {

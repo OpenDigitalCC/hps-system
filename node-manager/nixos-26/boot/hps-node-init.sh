@@ -7,8 +7,8 @@
 # logged:
 #   1. read hps.ips, hps.mac, hps.profile from the kernel command line
 #      (fallbacks: default gateway; MAC of the default-route interface)
-#   2. transient hostname from the registry (cmd=host_variable&name=HOSTNAME;
-#      fallback hps-<mac without colons>), as <name>.<hps.domain> when the
+#   2. kernel hostname (static and transient) from the registry
+#      (cmd=host_variable&name=HOSTNAME; fallback hps-<mac without colons>), as <name>.<hps.domain> when the
 #      command line carries hps.domain (see hps-pair for why)
 #      then net-bridge-ensure builds the bridges for the networks attached to
 #      this host in the registry (non-fatal: a missing script or a failure is
@@ -81,22 +81,44 @@ fetch_hostname() {
   run curl -fsS "http://${ips}/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"
 }
 
-# fqdn_of <name>: <first label>.<hps.domain> when the command line has a valid
-# domain, else the name unchanged.
+# fqdn_of <name>: the node's one identity, <first label>.<hps.domain>
+# (docs/NAMING.md). The label alone when the command line carries no domain.
+# Fails, naming the reason, when the domain is malformed or the result is
+# longer than 63 characters (the om3 node-name cap).
 fqdn_of() {
   local label="${1%%.*}"
-  local domain
+  local domain name
+  label="${label,,}"
   domain=$(cmdline_value hps.domain || true)
-  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ && -n "$label" ]]; then
-    printf '%s.%s\n' "$label" "$domain"
-    return 0
+  domain="${domain,,}"
+  if [[ ! "$label" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    log "'$label' is not a usable host label"
+    return 1
   fi
-  printf '%s\n' "$1"
+  if [[ -n "$domain" && ! "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    log "hps.domain '$domain' is not a usable DNS domain"
+    return 1
+  fi
+  name="$label"
+  if [[ -n "$domain" ]]; then
+    name="${label}.${domain}"
+  fi
+  if [[ ${#name} -gt 63 ]]; then
+    log "$name is ${#name} characters; the limit is 63 (om3 node names): the cluster DNS domain is too long"
+    return 1
+  fi
+  printf '%s\n' "$name"
 }
 
+# set_hostname <fqdn>: the static and the transient kernel hostname. hostnamectl
+# without --transient writes both; where the static name cannot be written the
+# transient name alone is set. systemd-networkd takes no hostname from DHCP
+# (UseHostname=false, hps-net), so nothing replaces it later.
 set_hostname() {
   local name="$1"
   if command -v hostnamectl > /dev/null 2>&1; then
+    run hostnamectl set-hostname "$name" && return 0
+    log "hostnamectl (static) failed; trying --transient"
     run hostnamectl set-hostname --transient "$name" && return 0
     log "hostnamectl failed; falling back to hostname(1)"
   fi
@@ -164,7 +186,7 @@ main() {
     name="hps-${mac//:/}"
     log "registry returned no HOSTNAME; using $name"
   fi
-  name=$(fqdn_of "$name")
+  name=$(fqdn_of "$name") || return 1
   set_hostname "$name"
   mkdir -p "$HPS_RUN_DIR"
   printf '%s\n' "${profile}" > "$HPS_RUN_DIR/profile"

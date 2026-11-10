@@ -56,7 +56,13 @@ EOF
         ;;
     esac
   }
-  export -f host_registry
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
 
   # No delay: the approver closes the pairing window synchronously.
   export CTRL_EXEC_PAIR_CLOSE_DELAY=0
@@ -89,7 +95,7 @@ seed_request() {
 
 @test "approves when state, IP and hostname all bind" {
   seed_host "52:54:00:11:22:33" INSTALLING "10.99.1.50" "tch-050"
-  seed_request "abc123" "tch-050" "10.99.1.50"
+  seed_request "abc123" "tch-050.lab.hps" "10.99.1.50"
 
   run ce_approve_pair_request "52:54:00:11:22:33" "abc123"
   [ "$status" -eq 0 ]
@@ -101,7 +107,7 @@ seed_request() {
 
 @test "denies when host state is not enrolment-eligible" {
   seed_host "52:54:00:11:22:33" INSTALLED "10.99.1.50" "tch-050"
-  seed_request "abc123" "tch-050" "10.99.1.50"
+  seed_request "abc123" "tch-050.lab.hps" "10.99.1.50"
 
   run ce_approve_pair_request "52:54:00:11:22:33" "abc123"
   [ "$status" -eq 1 ]
@@ -109,14 +115,14 @@ seed_request() {
 }
 
 @test "denies unknown MAC" {
-  seed_request "abc123" "tch-050" "10.99.1.50"
+  seed_request "abc123" "tch-050.lab.hps" "10.99.1.50"
   run ce_approve_pair_request "52:54:00:99:99:99" "abc123"
   [ "$status" -eq 1 ]
 }
 
 @test "denies when request source IP does not match allocation" {
   seed_host "52:54:00:11:22:33" INSTALLING "10.99.1.50" "tch-050"
-  seed_request "abc123" "tch-050" "10.99.1.99"
+  seed_request "abc123" "tch-050.lab.hps" "10.99.1.99"
 
   run ce_approve_pair_request "52:54:00:11:22:33" "abc123"
   [ "$status" -eq 1 ]
@@ -133,11 +139,11 @@ seed_request() {
 
 @test "denies a second approval in the same cycle" {
   seed_host "52:54:00:11:22:33" INSTALLING "10.99.1.50" "tch-050"
-  seed_request "abc123" "tch-050" "10.99.1.50"
+  seed_request "abc123" "tch-050.lab.hps" "10.99.1.50"
   run ce_approve_pair_request "52:54:00:11:22:33" "abc123"
   [ "$status" -eq 0 ]
 
-  seed_request "def456" "tch-050" "10.99.1.50"
+  seed_request "def456" "tch-050.lab.hps" "10.99.1.50"
   run ce_approve_pair_request "52:54:00:11:22:33" "def456"
   [ "$status" -eq 1 ]
 }
@@ -158,7 +164,7 @@ seed_request() {
 
 @test "does not record pairing when the dispatcher approve fails" {
   seed_host "52:54:00:11:22:33" INSTALLING "10.99.1.50" "tch-050"
-  seed_request "abc123" "tch-050" "10.99.1.50"
+  seed_request "abc123" "tch-050.lab.hps" "10.99.1.50"
   export FAKE_CED_RC=1
 
   run ce_approve_pair_request "52:54:00:11:22:33" "abc123"

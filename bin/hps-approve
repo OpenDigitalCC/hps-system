@@ -31,12 +31,15 @@ Usage:
   hps-approve zvol-destroy <mac> --dataset POOL/enc/[vm/]NAME [--expires SECONDS]
       [--allow-any-pool-name] [--json]
   hps-approve workload-destroy <mac> --workload NAME [--expires SECONDS] [--json]
+  hps-approve host-forget <mac> [--expires SECONDS] [--json]
   hps-approve list <mac> [--json]
   hps-approve revoke <mac> <action> <pool> [--json]
 The pool (for zvol-destroy the pool part of the dataset) is named after the
 active cluster; any other name needs --allow-any-pool-name. Default expiry 3600 s.
 workload-destroy: <mac> is the compute host of the workload's first VM; NAME is the
 workload (no cluster-name rule); it covers the zvols of the workload's local legs.
+host-forget: approves hps-onboard forget <mac> (removes the host from the registry, its
+DHCP/DNS entries and its ctrl-exec agent); the approval goes with the host entry.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
     return 2;
@@ -91,7 +94,7 @@ sub main {
         \@argv, 'json' => \$json, 'pool=s' => \$pool, 'dataset=s' => \$dataset, 'workload=s' => \$workload, 'disk=s' => \@disks, 'wipe' => \$wipe,
         'expires=s' => \$expires, 'allow-any-pool-name' => \$any,
     ) or return usage();
-    return usage("unknown command '$cmd'") unless $cmd =~ /^(?:pool-create|pool-destroy|zvol-destroy|workload-destroy|list|revoke)$/;
+    return usage("unknown command '$cmd'") unless $cmd =~ /^(?:pool-create|pool-destroy|zvol-destroy|workload-destroy|host-forget|list|revoke)$/;
     my $js  = JSON::PP->new->canonical->pretty->allow_nonref;
     my $reg = HPS::Registry->new;
     my $rc = eval {
@@ -133,6 +136,17 @@ sub main {
                 if defined $expires && $expires !~ /^[1-9][0-9]{0,8}$/;
             my $mac = check_policy($reg, $cmd, $argv[0], $workload, 1);
             my %f = (action => $cmd, mac => $mac, pool => $workload, disks => [], wipe => 0);
+            $f{expires} = $ap->now + $expires if defined $expires;
+            my $a = decode_json($ap->issue(\%f));
+            print $json ? $js->encode($a) : render_approval($a, 'Approved');
+        }
+        elsif ($cmd eq 'host-forget') {
+            return usage('host-forget needs one MAC') unless @argv == 1;
+            return usage('host-forget takes only a MAC and --expires') if defined $pool || defined $dataset || defined $workload || @disks || $wipe;
+            return usage('--expires must be a positive number of seconds')
+                if defined $expires && $expires !~ /^[1-9][0-9]{0,8}$/;
+            my $mac = check_policy($reg, $cmd, $argv[0], 'host', 1);
+            my %f = (action => $cmd, mac => $mac, pool => 'host', disks => [], wipe => 0);
             $f{expires} = $ap->now + $expires if defined $expires;
             my $a = decode_json($ap->issue(\%f));
             print $json ? $js->encode($a) : render_approval($a, 'Approved');

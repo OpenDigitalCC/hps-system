@@ -13,6 +13,9 @@ setup() {
   RUN="$ROOT/scripts/hps-run.sh"
   mkdir -p "$TEST_DIR/sys/lib" "$TEST_DIR/hosts/aabbccddeeff" "$TEST_DIR/bin"
   cat > "$TEST_DIR/sys/lib/functions.sh" <<EOT
+source "$ROOT/lib/functions.d/host-functions.sh"
+hps_get_config() { echo c1; }
+cluster_registry() { echo lab.hps; }
 hps_log() { :; }
 normalise_mac() { echo "\${1//[:.-]/}"; }
 host_registry() {
@@ -26,7 +29,7 @@ EOT
   echo -n held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
   export HPS_SYSTEM_PATH="$TEST_DIR/sys"
   export CTRL_EXEC_DISPATCHER="$TEST_DIR/ced"
-  printf '#!/usr/bin/env bash\nprintf "HOSTNAME\\n--\\nheld01 10.0.0.5 7443\\n"\n' > "$CTRL_EXEC_DISPATCHER"
+  printf '#!/usr/bin/env bash\nprintf "HOSTNAME\\n--\\nheld01.lab.hps 10.0.0.5 7443\\n"\n' > "$CTRL_EXEC_DISPATCHER"
   cat > "$TEST_DIR/bin/ctrl-exec-cli" <<'EOT'
 #!/usr/bin/env bash
 cat > /dev/null

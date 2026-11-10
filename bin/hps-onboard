@@ -14,6 +14,12 @@ my $netconf_hook = "$RealBin/../scripts/hps-netconf-hook.sh";
 $ENV{HPS_ONBOARD_NETCONF_CMD} = $netconf_hook
     if !defined $ENV{HPS_ONBOARD_NETCONF_CMD} && -x $netconf_hook;
 
+# IPS-side steps of forget and prune-agents (agent removal, DHCP/DNS regeneration):
+# the script, unless the caller overrides it (HPS_ONBOARD_FORGET_CMD set to a path).
+my $forget_hook = "$RealBin/../scripts/hps-forget-hook.sh";
+$ENV{HPS_ONBOARD_FORGET_CMD} = $forget_hook
+    if !defined $ENV{HPS_ONBOARD_FORGET_CMD} && -x $forget_hook;
+
 my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
 
 sub usage {
@@ -32,6 +38,16 @@ Usage:
       without --attach: the networks attached to the host. With --attach:
       REPLACE the list (names from the cluster network layout; an empty
       --attach '' clears it).
+  hps-onboard forget <mac> [--dry-run]
+      Remove a host that will not come back: its ctrl-exec agent registration, its
+      registry entry, and its DHCP reservation and DNS entries (files regenerated,
+      dnsmasq reloaded); each removal is printed. Needs a host-forget approval
+      (hps-approve host-forget <mac>). Refused for a host with storage exports, a
+      pool or workloads recorded. --dry-run lists what would be removed.
+  hps-onboard prune-agents [--dry-run]
+      Remove the ctrl-exec agent registrations that are not the FQDN agent of a
+      registry host (stale-*, old short-name or hps-<mac> duplicates, agents of
+      forgotten hosts). --dry-run lists them and removes nothing.
 Exit: 0 ok, 2 usage, 3 refused (assign: host not HELD; repin: host HELD
 or already on that pin), 4 not found (host, OS, or pin artefacts).
 USAGE
@@ -137,11 +153,11 @@ sub render_nets {
 
 sub main {
     my @argv = @_;
-    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach, $all);
+    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach, $all, $dry);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
-        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all, 'dry-run' => \$dry,
     ) or return usage();
     my $ob = HPS::Onboard->new;
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
@@ -178,6 +194,31 @@ sub main {
                 my $r = $ob->nets($argv[0]);
                 print $json ? $js->encode($r) : render_nets($r);
             }
+        }
+        elsif ($cmd eq 'forget') {
+            return usage('forget needs one MAC') unless @argv == 1;
+            my $r = $ob->forget($argv[0], dry_run => $dry);
+            if ($json) { print $js->encode($r) }
+            else {
+                print(($r->{dry_run} ? 'Dry run' : 'Forgot') . " host $r->{mac}" . (defined $r->{hostname} ? " ($r->{hostname})" : '') . ", agent name $r->{fqdn}\n");
+                print "  $_\n" for @{ $r->{steps} };
+            }
+        }
+        elsif ($cmd eq 'prune-agents') {
+            return usage('prune-agents takes no arguments') if @argv;
+            my $r = $ob->prune_agents(dry_run => $dry);
+            if ($json) { print $js->encode($r) }
+            else {
+                print "Agents kept (a registry host's FQDN): " . scalar(@{ $r->{keep} }) . "\n";
+                print "  $_\n" for @{ $r->{keep} };
+                print(($r->{dry_run} ? 'Stale agents that would be removed: ' : 'Stale agents: ') . scalar(@{ $r->{stale} }) . "\n");
+                print "  $_\n" for @{ $r->{stale} };
+                unless ($r->{dry_run}) {
+                    print "Removed: " . scalar(@{ $r->{removed} }) . "\n";
+                    print "FAILED: $_\n" for @{ $r->{failed} };
+                }
+            }
+            return 1 if @{ $r->{failed} };
         }
         elsif ($cmd eq 'repin') {
             return usage('repin needs one MAC') unless @argv == 1;

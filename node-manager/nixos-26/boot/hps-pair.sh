@@ -8,7 +8,7 @@
 #   1. exit 0 at once if the agent certificate exists (idempotent)
 #   2. read hps.ips and hps.mac from the kernel command line (fallbacks: default
 #      gateway; MAC of the default-route interface)
-#   3. unless --no-hostname: make the transient hostname the registry HOSTNAME
+#   3. unless --no-hostname: make the kernel hostname the registry HOSTNAME
 #      (first label only, validated as an RFC 1123 label; fallback
 #      hps-<mac without colons>), followed by ".<hps.domain>" when the kernel
 #      command line carries hps.domain. The agent registers under it and the
@@ -114,18 +114,27 @@ valid_hostname() {
   return 1
 }
 
-# fqdn_of <label>: <label>.<hps.domain> when the command line has a valid
-# domain, else the label alone.
+# fqdn_of <label>: <label>.<hps.domain> (docs/NAMING.md), the label alone when
+# the command line has no domain. A malformed domain, or an FQDN over 63
+# characters (the om3 node-name cap), fails.
 fqdn_of() {
-  local label="$1"
-  local domain
+  local label="${1,,}"
+  local domain name
   domain=$(cmdline_value hps.domain || true)
-  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
-    printf '%s.%s\n' "$label" "$domain"
-    return 0
+  domain="${domain,,}"
+  if [[ -n "$domain" && ! "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    log "hps.domain '$domain' is not a usable DNS domain"
+    return 1
   fi
-  [[ -n "$domain" ]] && log "ignoring invalid hps.domain on the command line"
-  printf '%s\n' "$label"
+  name="$label"
+  if [[ -n "$domain" ]]; then
+    name="${label}.${domain}"
+  fi
+  if [[ ${#name} -gt 63 ]]; then
+    log "$name is ${#name} characters; the limit is 63 (om3 node names): the cluster DNS domain is too long"
+    return 1
+  fi
+  printf '%s\n' "$name"
 }
 
 # check_self_resolves <name>: the agent's hostfqdn() needs gethostbyname() to
@@ -141,6 +150,8 @@ check_self_resolves() {
 set_hostname() {
   local name="$1"
   if command -v hostnamectl > /dev/null 2>&1; then
+    run hostnamectl set-hostname "$name" && return 0
+    log "hostnamectl (static) failed; trying --transient"
     run hostnamectl set-hostname --transient "$name" && return 0
     log "hostnamectl failed; falling back to hostname(1)"
   fi
@@ -157,7 +168,7 @@ ensure_hostname() {
     name="hps-${mac//:/}"
     log "registry returned no usable HOSTNAME; using $name"
   fi
-  name=$(fqdn_of "$name")
+  name=$(fqdn_of "$name") || return 1
   set_hostname "$name"
   check_self_resolves "$name"
   REGISTER_NAME="$name"
@@ -285,8 +296,24 @@ pair() {
   return 0
 }
 
-# The name just set as the transient hostname (empty with --no-hostname).
+# The name the agent registers under: the FQDN just set as the hostname, or,
+# with --no-hostname (hps-node-init set it), the kernel hostname as it is now.
 REGISTER_NAME=""
+
+# use_current_hostname: with --no-hostname, register under the kernel hostname,
+# which hps-node-init made the FQDN. A name with no dot (no cluster domain) is
+# used as it is; an empty answer leaves the agent to choose its own name.
+use_current_hostname() {
+  local name
+  name=$(hostname 2> /dev/null || true)
+  name="${name,,}"
+  if [[ "$name" =~ ^[a-z0-9][a-z0-9.-]*$ && "$name" != localhost ]]; then
+    REGISTER_NAME="$name"
+    log "registering under the kernel hostname $name"
+  else
+    log "no usable kernel hostname ('$name'); the agent registers under its own name"
+  fi
+}
 
 main() {
   local ips mac set_name=1
@@ -311,6 +338,8 @@ main() {
 
   if [[ $set_name -eq 1 ]]; then
     ensure_hostname "$ips" "$mac"
+  else
+    use_current_hostname
   fi
   pair "$ips" "$mac" "$REGISTER_NAME"
 }

@@ -49,13 +49,20 @@ EOT
     esac
   }
   export -f hps_log host_registry
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME (first label) + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/ctrl-exec-functions.sh"
   MAC="52:54:00:11:22:33"
   host_registry "$MAC" set IP "10.0.0.50"
   host_registry "$MAC" set HOSTNAME "node-50"
   host_registry "$MAC" set STATE NETWORK_BOOT
   host_registry "$MAC" set last_boot_at "$(( $(date +%s) - 30 ))"
-  jq -n '{id:"abc123", hostname:"node-50.lab.example", source_ip:"10.0.0.50"}' \
+  jq -n '{id:"abc123", hostname:"node-50.lab.hps", source_ip:"10.0.0.50"}' \
     > "$CTRL_EXEC_PAIRING_DIR/abc123.json"
 }
 

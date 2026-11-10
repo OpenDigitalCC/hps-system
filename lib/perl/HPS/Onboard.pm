@@ -6,6 +6,7 @@ use feature qw(signatures);
 no warnings 'experimental::signatures';
 
 use JSON::PP ();
+use POSIX ();
 use HPS::Registry;
 use HPS::Pins;
 
@@ -20,7 +21,7 @@ my %TYPES = map { $_ => 1 } qw(SCH TCH DRH);
 
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
-    return bless { registry => $reg, resources => $opt{resources} }, $class;
+    return bless { registry => $reg, resources => $opt{resources}, approval => $opt{approval}, keysafe => $opt{keysafe}, forget_cmd => $opt{forget_cmd} }, $class;
 }
 
 sub registry ($self) { return $self->{registry} }
@@ -275,6 +276,180 @@ sub repin ($self, $mac, $a) {
     $reg->host_set($m, 'system_pin',  $pin);
     $reg->host_set($m, 'repinned_at', $reg->timestamp);
     return { mac => $m, from => $old, to => $pin };
+}
+
+#--- forgetting a host -------------------------------------------------------------
+# forget($mac, dry_run => 0|1): remove a host that will not come back (each
+# nested-node run boots a VM with a new MAC, so the registry otherwise keeps
+# every one). Refuses a host with storage exports, a pool or workloads recorded,
+# and (unless dry_run) one without a valid host-forget approval (hps-approve
+# host-forget <mac>). Then, in this order, so a failure leaves the host in the
+# registry for a second try: the ctrl-exec agent registration is removed, the
+# registry host is removed, the DHCP/DNS files are regenerated. The IPS-side
+# steps are the program in $HPS_ONBOARD_FORGET_CMD (scripts/hps-forget-hook.sh):
+# `agent <fqdn>` and `dns-dhcp`; without it they are reported as not done.
+# Returns {mac, hostname, fqdn, dry_run, steps => [text...]}, one line per removal.
+
+sub _forget_cmd ($self) {
+    my $cmd = $self->{forget_cmd} // $ENV{HPS_ONBOARD_FORGET_CMD};
+    return (defined $cmd && length $cmd) ? $cmd : undef;
+}
+
+# _hook($verb, @args): run the forget hook; (rc, output).
+sub _hook ($self, $verb, @args) {
+    my $cmd = $self->_forget_cmd or return (undef, '');
+    my $pid = open(my $out, '-|') // _fail('failed', "cannot run $cmd: $!");
+    if (!$pid) {
+        open(STDERR, '>&', \*STDOUT);
+        exec($cmd, $verb, @args) or POSIX::_exit(127);
+    }
+    my $text = do { local $/; <$out> };
+    close $out;
+    return ($? >> 8, $text // '');
+}
+
+# The agent name a host registers under: its FQDN, or the FQDN of hps-<mac> for
+# a host that has no HOSTNAME yet (what hps-node-init names such a node).
+sub agent_name ($self, $mac) {
+    my $reg = $self->{registry};
+    my $name = $reg->host_get($mac, 'HOSTNAME');
+    $name = "hps-$mac" unless defined $name && length $name;
+    return HPS::Registry::fqdn_of($name, $reg->cluster_dns_domain);
+}
+
+# Every value of a key named host or compute_host in a decoded structure.
+sub _host_refs ($v, $out = []) {
+    if (ref $v eq 'HASH') {
+        for my $k (sort keys %$v) {
+            if (($k eq 'host' || $k eq 'compute_host') && defined $v->{$k} && !ref $v->{$k}) { push @$out, $v->{$k} }
+            else { _host_refs($v->{$k}, $out) }
+        }
+    }
+    elsif (ref $v eq 'ARRAY') { _host_refs($_, $out) for @$v }
+    return $out;
+}
+
+# Names of the workloads with an instance record that names this host (by MAC,
+# label or FQDN). A destroyed workload keeps only its definition file and is not
+# a reason to keep the host.
+sub workloads_on ($self, $mac) {
+    my $reg = $self->{registry};
+    my $cluster = $reg->active_cluster;
+    my $label = HPS::Registry::short_name($reg->host_get($mac, 'HOSTNAME'));
+    my @found;
+    for my $key (grep { /^workload_[a-z][a-z0-9-]*\z/ && !/_destroyed\z/ } $reg->cluster_list($cluster)) {
+        my $rec = $reg->cluster_get_json($cluster, $key);
+        next unless ref $rec eq 'HASH';
+        my $hit = 0;
+        for my $ref (@{ _host_refs($rec) }) {
+            my $m = eval { HPS::Registry::normalise_mac($ref) };
+            if ((defined $m && $m eq $mac) || (length $label && HPS::Registry::short_name($ref) eq $label)) { $hit = 1; last }
+        }
+        (my $name = $key) =~ s/^workload_//;
+        push @found, $name if $hit;
+    }
+    return @found;
+}
+
+sub _forget_refusals ($self, $mac) {
+    my $reg = $self->{registry};
+    my @why;
+    my $ex = $reg->host_exists($mac, 'storage_exports') ? $reg->host_get_json($mac, 'storage_exports') : undef;
+    push @why, 'storage exports are recorded (' . scalar(@$ex) . ')' if ref $ex eq 'ARRAY' && @$ex;
+    my $pool = $reg->host_get($mac, 'storage_pool');
+    push @why, "a pool is recorded ($pool)" if defined $pool && length $pool;
+    my @wl = $self->workloads_on($mac);
+    push @why, 'workloads are recorded (' . join(', ', @wl) . ')' if @wl;
+    return @why;
+}
+
+sub _forget_approval ($self, $mac) {
+    require HPS::Approval;
+    require HPS::Keysafe;
+    my $ks = $self->{keysafe} //= HPS::Keysafe->new(registry => $self->{registry});
+    my $ap = $self->{approval} //= HPS::Approval->new(registry => $self->{registry}, keysafe => $ks);
+    my $json = $ap->get($mac, 'host-forget', 'host')
+        // _fail('refused', "no host-forget approval for host $mac (run: hps-approve host-forget $mac)");
+    my $f = eval { $ap->verify($json, $ks->cluster_secret('approval')) };
+    unless ($f) {
+        my $e = $@;
+        _fail('refused', 'the host-forget approval is not usable: ' . (ref $e ? $e->message : $e));
+    }
+    _fail('refused', 'the approval is for another host') unless $f->{mac} eq $mac;
+    _fail('refused', "the approval is for $f->{action}, not host-forget") unless $f->{action} eq 'host-forget';
+    return $f;
+}
+
+sub forget ($self, $mac, %opt) {
+    my $reg = $self->{registry};
+    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    _fail('usage', "Invalid MAC address: $mac") unless defined $m;
+    _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
+    my $hostname = $reg->host_get($m, 'HOSTNAME');
+    my $agent = eval { $self->agent_name($m) };
+    _fail('refused', "Host $m has no usable FQDN: $@") unless defined $agent;
+    my @why = $self->_forget_refusals($m);
+    _fail('refused', "Host $m is not forgotten: " . join('; ', @why)) if @why;
+
+    my @steps;
+    my $res = { mac => $m, hostname => $hostname, fqdn => $agent, dry_run => $opt{dry_run} ? 1 : 0, steps => \@steps };
+    if ($opt{dry_run}) {
+        my $ok = eval { $self->_forget_approval($m); 1 };
+        push @steps, $ok ? 'host-forget approval: present and valid' : 'host-forget approval: missing or not usable (run: hps-approve host-forget ' . $m . ')';
+        push @steps, "would remove ctrl-exec agent $agent";
+        push @steps, "would remove registry host $m" . (defined $hostname ? " ($hostname)" : '');
+        push @steps, 'would regenerate DHCP and DNS files and reload dnsmasq';
+        return $res;
+    }
+    $self->_forget_approval($m);
+
+    if (defined $self->_forget_cmd) {
+        my ($rc, $out) = $self->_hook('agent', $agent);
+        if ($rc == 0)    { push @steps, "removed ctrl-exec agent $agent" }
+        elsif ($rc == 4) { push @steps, "no ctrl-exec agent registered as $agent" }
+        else             { _fail('failed', "removing the ctrl-exec agent $agent failed (exit $rc); the host is still in the registry: $out") }
+    }
+    else { push @steps, "ctrl-exec agent $agent NOT removed: no forget hook (HPS_ONBOARD_FORGET_CMD)" }
+
+    $reg->host_remove($m);
+    push @steps, "removed registry host $m" . (defined $hostname ? " ($hostname)" : '');
+
+    if (defined $self->_forget_cmd) {
+        my ($rc, $out) = $self->_hook('dns-dhcp');
+        _fail('failed', "the host and its agent are removed, but regenerating the DHCP and DNS files failed (exit $rc): $out")
+            if $rc != 0;
+        push @steps, 'regenerated DHCP and DNS files, dnsmasq reloaded';
+    }
+    else { push @steps, 'DHCP and DNS files NOT regenerated: no forget hook (HPS_ONBOARD_FORGET_CMD)' }
+    return $res;
+}
+
+# prune_agents(dry_run => 0|1): remove the ctrl-exec agent registrations that are
+# not the agent of a registry host. A registry host's agent is the one under its
+# FQDN (agent_name); everything else is stale: stale-* records, duplicates such as
+# an old short-name or hps-<mac> registration of a host now known by name, and
+# agents of hosts that were forgotten. Returns {keep, stale, removed, failed}.
+sub prune_agents ($self, %opt) {
+    my $reg = $self->{registry};
+    defined $self->_forget_cmd or _fail('refused', 'no forget hook: set HPS_ONBOARD_FORGET_CMD (scripts/hps-forget-hook.sh)');
+    my %keep;
+    for my $mac ($reg->host_list_all) {
+        my $n = eval { $self->agent_name($mac) };
+        $keep{$n} = $mac if defined $n;
+    }
+    my ($rc, $out) = $self->_hook('agents');
+    _fail('failed', "listing the dispatcher's agents failed (exit $rc): $out") if $rc != 0;
+    my (@have, @stale, @kept);
+    @have = grep { length } map { s/\s+//gr } split /\n/, $out;
+    for my $a (sort @have) { push @{ $keep{$a} ? \@kept : \@stale }, $a }
+    my (@removed, @failed);
+    unless ($opt{dry_run}) {
+        for my $a (@stale) {
+            my ($r, $o) = $self->_hook('agent', $a);
+            if ($r == 0 || $r == 4) { push @removed, $a } else { push @failed, "$a (exit $r)" }
+        }
+    }
+    return { keep => \@kept, stale => \@stale, removed => \@removed, failed => \@failed, dry_run => $opt{dry_run} ? 1 : 0 };
 }
 
 #--- audit presentation -------------------------------------------------------

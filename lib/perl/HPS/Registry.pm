@@ -324,6 +324,75 @@ sub host_get_epoch ($self, $mac, $key) {
 
 sub host_list_all ($self) { return _subdirs($self->hosts_dir, '.db') }
 
+# host_remove($mac): delete the host's whole registry entry (its directory of
+# keys, locks included). Returns 1 when it was there, 0 when it was not. The
+# only deletion of a host; hps-onboard forget is its caller.
+sub host_remove ($self, $mac) {
+    my $db = $self->_host_db($mac);
+    return 0 unless -d $db;
+    require File::Path;
+    File::Path::remove_tree($db);
+    die "Cannot remove $db\n" if -d $db;
+    return 1;
+}
+
+#--- names: the one hostname rule (docs/NAMING.md) --------------------------------
+# A host's identity everywhere is the FQDN <label>.<cluster dns domain>; the
+# registry keeps the label (HOSTNAME). These are the only places Perl joins or
+# splits names; the Bash twins are fqdn_join / host_fqdn (host-functions.sh).
+
+use constant FQDN_MAX => 63;     # om3's node-name cap
+
+# short_name($name): the first label, lower case.
+sub short_name ($name) {
+    my $l = lc($name // '');
+    $l =~ s/\..*//s;
+    return $l;
+}
+
+# fqdn_of($label, $domain): <first label>.<domain> (the label alone when the
+# domain is empty); dies when the label or domain is unusable or the result is
+# longer than 63 characters.
+sub fqdn_of ($name, $domain = '') {
+    my $label = short_name($name);
+    $domain = lc($domain // '');
+    die "'" . ($name // '') . "' has no usable host label\n"
+        unless $label =~ /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/;
+    die "'$domain' is not a usable DNS domain\n"
+        if length $domain && $domain !~ /^[a-z0-9][a-z0-9.-]*\z/;
+    my $fqdn = length $domain ? "$label.$domain" : $label;
+    die "$fqdn is " . length($fqdn) . " characters; the limit is " . FQDN_MAX . " (om3 node names). Use a shorter cluster DNS domain.\n"
+        if length $fqdn > FQDN_MAX;
+    return $fqdn;
+}
+
+# cluster_dns_domain($cluster): network_dns_domain, lower case; '' when unset or
+# not a usable domain. The active cluster when none is named.
+sub cluster_dns_domain ($self, $cluster = undef) {
+    $cluster //= $self->active_cluster;
+    return '' unless $self->cluster_exists($cluster, 'network_dns_domain');
+    my $d = $self->cluster_get($cluster, 'network_dns_domain');
+    $d = lc($d // '');
+    $d =~ s/\A"|"\z//g;
+    return $d =~ /^[a-z0-9][a-z0-9.-]*\z/ ? $d : '';
+}
+
+# fqdn($mac): the host's FQDN, or undef when it has no HOSTNAME yet.
+sub fqdn ($self, $mac) {
+    my $name = $self->host_get($mac, 'HOSTNAME');
+    return undef unless defined $name && length $name;
+    return fqdn_of($name, $self->cluster_dns_domain);
+}
+
+# initiator_iqn($mac): the iSCSI initiator name the node writes at boot
+# (hps-iscsi-name): iqn.2026-11.hps.<cluster>:<fqdn>. The second dot after the
+# date is what LIO requires of an IQN (rtslib-fb).
+sub initiator_iqn ($self, $mac) {
+    my $f = $self->fqdn($mac);
+    return undef unless defined $f;
+    return 'iqn.2026-11.hps.' . lc($self->active_cluster) . ":$f";
+}
+
 #--- os --------------------------------------------------------------------------
 
 sub os_base ($self) { return $self->config_base . '/os.db' }

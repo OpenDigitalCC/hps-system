@@ -16,7 +16,7 @@ sub fresh { my %o = @_; my $f = StorageFixture::setup(%o); $f->{st} = $f->{mk}->
 sub with_exports {
     my $f = shift;
     $f->{reg}->host_set($mac, 'storage_exports', [
-        { zvol => 'lab/enc/t0', iqn => 'iqn.2026-11.example:t0', initiator => 'iqn.2026-11.example:ips', portal => '192.0.2.10' } ]);
+        { zvol => 'lab/enc/t0', iqn => 'iqn.2026-11.example.lab:t0', initiator => 'iqn.2026-11.example.lab:ips', portal => '192.0.2.10' } ]);
 }
 # every byte of every registry file under the temp base, keysafe excluded
 sub registry_text {
@@ -140,7 +140,7 @@ sub registry_text {
     $f->{reg}->host_set($mac, 'storage_state', 'up');
     $f->{st}->run('down');
     is_deeply([ $f->{ce}->scripts ], ['iscsi-unexport'], 'down: unexport only');
-    is_deeply(($f->{ce}->calls)[0]{args}, ['iqn.2026-11.example:t0'], 'target iqn');
+    is_deeply(($f->{ce}->calls)[0]{args}, ['iqn.2026-11.example.lab:t0'], 'target iqn');
     is($f->{reg}->host_get($mac, 'storage_state'), 'down', 'storage_state=down');
     ok($f->{reg}->host_exists($mac, 'storage_down_at'), 'storage_down_at');
     $f->{ce}{calls} = [];

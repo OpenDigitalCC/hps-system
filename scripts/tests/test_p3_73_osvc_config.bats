@@ -147,14 +147,13 @@ teardown() {
   [[ "$output" != *"$(printf 'ab%.0s' {1..16})"* ]]
 }
 
-@test "a short kernel hostname matches the IPS FQDN and the conf uses short names" {
-  HPS_HOSTNAME=sch-001 run -0 bash "$GEN"
-  grep -qx 'nodes = sch-001 tch-001' "$OSVC_ETC/cluster.conf"
-  grep -qx 'addr@sch-001 = 192.0.2.11' "$OSVC_ETC/node.conf"
-  grep -qx 'addr@tch-001 = 192.0.2.12' "$OSVC_ETC/node.conf"
+@test "a short kernel hostname is refused, not mapped to the IPS FQDN (IPS-06: one name)" {
+  HPS_HOSTNAME=sch-001 run -3 bash "$GEN"
+  [[ "$output" == *"not in the IPS node list"* ]]
+  [ ! -e "$OSVC_ETC/cluster.conf" ]
 }
 
-@test "a short hostname that matches no first label is still refused" {
-  HPS_HOSTNAME=sch-009 run -3 bash "$GEN"
+@test "an FQDN that is not in the IPS list is refused" {
+  HPS_HOSTNAME=sch-009.lab.example run -3 bash "$GEN"
   [[ "$output" == *"not in the IPS node list"* ]]
 }

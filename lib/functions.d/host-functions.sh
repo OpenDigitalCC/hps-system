@@ -392,6 +392,76 @@ _find_available_ip() {
 }
 
 #===============================================================================
+# fqdn_join / host_fqdn / cluster_dns_domain
+# ------------------------------------------
+# The one hostname rule (docs/NAMING.md): a host's identity everywhere (kernel
+# hostname, om3 node name, ctrl-exec agent name, iSCSI IQN) is the FQDN
+# <label>.<cluster dns domain>. The registry keeps the label (HOSTNAME); the
+# FQDN is derived here and nowhere else on the IPS.
+#
+#   fqdn_join <name> [domain]   <first label of name, lower case>.<domain>; the
+#                               label alone when the domain is empty. Returns 1
+#                               (message on stderr) for an unusable label or
+#                               domain, or an FQDN over 63 characters (om3's
+#                               node-name cap).
+#   cluster_dns_domain [cluster] the cluster's network_dns_domain, empty when
+#                               unset or not a usable domain (active cluster
+#                               when none is named)
+#   host_fqdn <mac>             fqdn_join of the host's HOSTNAME and its
+#                               cluster's domain. Returns 1 when the host has no
+#                               HOSTNAME or the FQDN is refused.
+#===============================================================================
+fqdn_join() {
+  local label="${1%%.*}"
+  local domain="${2:-}"
+  local name
+  label="${label,,}"
+  domain="${domain,,}"
+  if [[ ! "$label" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+    echo "fqdn_join: '${1:-}' has no usable host label" >&2
+    return 1
+  fi
+  if [[ -n "$domain" && ! "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    echo "fqdn_join: '${domain}' is not a usable DNS domain" >&2
+    return 1
+  fi
+  name="$label"
+  if [[ -n "$domain" ]]; then
+    name="${label}.${domain}"
+  fi
+  if [[ ${#name} -gt 63 ]]; then
+    echo "fqdn_join: ${name} is ${#name} characters; the limit is 63 (om3 node names). Use a shorter cluster DNS domain." >&2
+    return 1
+  fi
+  printf '%s\n' "$name"
+}
+
+cluster_dns_domain() {
+  local cluster="${1:-}" domain
+  if [[ -z "$cluster" ]]; then
+    cluster=$(hps_get_config active_cluster 2>/dev/null) || cluster=""
+  fi
+  [[ -n "$cluster" ]] || return 0
+  domain=$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null) || domain=""
+  domain="${domain//\"/}"
+  domain="${domain,,}"
+  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    printf '%s\n' "$domain"
+  fi
+  return 0
+}
+
+host_fqdn() {
+  local mac="${1:?Usage: host_fqdn <mac>}" name domain
+  name=$(host_registry "$mac" get HOSTNAME 2>/dev/null) || name=""
+  if [[ -z "$name" ]]; then
+    return 1
+  fi
+  domain=$(cluster_dns_domain)
+  fqdn_join "$name" "$domain"
+}
+
+#===============================================================================
 # _find_available_hostname
 # ------------------------
 # Find available hostname with sequential numbering.
@@ -559,6 +629,13 @@ host_network_configure() {
   else
     hps_log debug "Preserving existing hostname: $assigned_hostname"
   fi
+
+  # One hostname rule: the FQDN <hostname>.<cluster dns domain> must be usable
+  # (om3 refuses node names over 63 characters). Refuse before anything is written.
+  fqdn_join "$assigned_hostname" "$(cluster_dns_domain)" > /dev/null || {
+    hps_log error "[$macid] $assigned_hostname plus the cluster DNS domain is not a usable host name (63 character limit); not configuring"
+    return 1
+  }
   
   # Write configuration (only updates changed values)
   host_registry "$macid" set IP "$assigned_ip" || {

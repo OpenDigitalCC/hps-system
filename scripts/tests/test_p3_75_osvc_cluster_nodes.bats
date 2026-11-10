@@ -8,6 +8,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   source "$ROOT/lib/functions.d/cluster-functions.sh"
+  source "$ROOT/lib/functions.d/host-functions.sh"
   DOMAIN="lab.example"
   hps_get_config() { [[ "$1" == active_cluster ]] && echo "lab"; }
   cluster_registry() { [[ "$1" == lab && "$2" == get && "$3" == network_dns_domain && -n "$DOMAIN" ]] && echo "$DOMAIN"; return 0; }
@@ -30,7 +31,8 @@ setup() {
       *) return 1 ;;
     esac
   }
-  export -f hps_get_config cluster_registry list_cluster_hosts host_registry
+  hps_log() { :; }
+  export -f hps_get_config cluster_registry list_cluster_hosts host_registry hps_log
 }
 
 @test "lists the cluster, then the paired nodes with domain, lower case, sorted" {

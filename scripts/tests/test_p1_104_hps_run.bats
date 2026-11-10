@@ -12,6 +12,8 @@ setup() {
   RUN="$ROOT/scripts/hps-run.sh"
   mkdir -p "$TEST_DIR/sys/lib" "$TEST_DIR/hosts"
   cat > "$TEST_DIR/sys/lib/functions.sh" <<EOF
+# the real name helpers first; the stubs below replace the registry accessors
+source "$ROOT/lib/functions.d/host-functions.sh"
 hps_log() { :; }
 normalise_mac() {
   local m="\${1//[:.-]/}"
@@ -32,6 +34,8 @@ get_host_mac_by_keyvalue() {
     [[ -f "\$f" && "\$(cat "\$f")" == "\$2" ]] && basename "\$(dirname "\$f")"
   done | head -n 1 | grep .
 }
+hps_get_config() { [[ "\$1" == active_cluster ]] && echo lab; }
+cluster_registry() { [[ -f "$TEST_DIR/domain" ]] && cat "$TEST_DIR/domain"; }
 source "$ROOT/lib/functions.d/ctrl-exec-functions.sh"
 EOF
   export HPS_SYSTEM_PATH="$TEST_DIR/sys"
@@ -50,7 +54,8 @@ echo "ced-stderr" >&2
 exit "${FAKE_CED_RC:-0}"
 EOT
   chmod +x "$CTRL_EXEC_DISPATCHER"
-  printf 'held01  10.0.0.5  7443\nhps-112233445566  10.0.0.6  7443\n' > "$TEST_DIR/agents"
+  printf 'held01.lab.hps  10.0.0.5  7443\nhps-112233445566.lab.hps  10.0.0.6  7443\nheld01  10.0.0.7  7443\n' > "$TEST_DIR/agents"
+  echo -n lab.hps > "$TEST_DIR/domain"
   mkdir -p "$TEST_DIR/hosts/aabbccddeeff" "$TEST_DIR/hosts/112233445566"
   echo -n held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
 }
@@ -77,26 +82,48 @@ teardown() {
     : > "$CE_LOG"
     run bash "$RUN" "$m" node-facts
     [ "$status" -eq 0 ]
-    [ "$(tail -n 1 "$CE_LOG")" = "run held01 node-facts" ]
+    [ "$(tail -n 1 "$CE_LOG")" = "run held01.lab.hps node-facts" ]
   done
 }
 
 @test "a hostname resolves through the registry to the same agent" {
   run bash "$RUN" held01 node-facts
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CE_LOG")" = "run held01 node-facts" ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run held01.lab.hps node-facts" ]
 }
 
 @test "arguments follow -- exactly as given" {
   run bash "$RUN" held01 storage-pool-inspect tank --import-missing-log
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CE_LOG")" = "run held01 storage-pool-inspect -- tank --import-missing-log" ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run held01.lab.hps storage-pool-inspect -- tank --import-missing-log" ]
+}
+
+@test "the FQDN is the one agent name: a short-name registration is not used" {
+  printf 'held01  10.0.0.7  7443\n' > "$TEST_DIR/agents"
+  run bash "$RUN" held01 node-facts
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"expected the FQDN held01.lab.hps"* ]]
+  ! grep -q "^run" "$CE_LOG"
+}
+
+@test "a hostname given as its FQDN resolves to the same host" {
+  run bash "$RUN" held01.lab.hps node-facts
+  [ "$status" -eq 0 ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run held01.lab.hps node-facts" ]
+}
+
+@test "an FQDN over 63 characters is refused (1) and ced is not run" {
+  printf 'd%.0s' {1..60} > "$TEST_DIR/domain"
+  run bash "$RUN" held01 node-facts
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"limit is 63"* ]]
+  ! grep -q "^run" "$CE_LOG"
 }
 
 @test "a MAC whose host has no HOSTNAME uses the hps-<mac> fallback agent name" {
   run bash "$RUN" 11:22:33:44:55:66 node-dmesg hpsa
   [ "$status" -eq 0 ]
-  [ "$(tail -n 1 "$CE_LOG")" = "run hps-112233445566 node-dmesg -- hpsa" ]
+  [ "$(tail -n 1 "$CE_LOG")" = "run hps-112233445566.lab.hps node-dmesg -- hpsa" ]
 }
 
 @test "an unknown MAC or hostname is refused (3) and ced is not called" {

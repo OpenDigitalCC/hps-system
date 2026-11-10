@@ -42,6 +42,13 @@ while true; do
     fi
   done
   
+  # One hostname rule (docs/NAMING.md): node FQDNs <name>.<domain> must stay
+  # within 63 characters (om3 node names); 10 are kept for the name.
+  if [[ ${#dnsdomain} -gt 52 ]]; then
+    hps_log "error" "DNS domain '$dnsdomain' is ${#dnsdomain} characters; at most 52 so node FQDNs stay within 63"
+    valid=false
+  fi
+
   [[ "$valid" == "true" ]] && break
 done
 

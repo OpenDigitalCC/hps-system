@@ -39,8 +39,8 @@ sub calls { return -e "$tmp/args" ? do { open(my $h, '<', "$tmp/args") or die; m
 sub reset_shim { unlink "$tmp/args", glob("$tmp/stdin.*") }
 
 my $DS  = 'lab/enc/t0';
-my $IQN = 'iqn.2026-11.example:t0';
-my $INI = 'iqn.2026-11.example:ips';
+my $IQN = 'iqn.2026-11.example.lab:t0';
+my $INI = 'iqn.2026-11.example.lab:ips';
 
 # --- hps-approve zvol-destroy
 my ($rc, $out, $so) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', $DS);

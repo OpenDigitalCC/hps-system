@@ -32,12 +32,19 @@ setup() {
     esac
   }
   export -f hps_log host_registry
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME (first label) + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
   export TEST_DIR
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/ctrl-exec-functions.sh"
   MAC="52:54:00:11:22:33"
   host_registry "$MAC" set IP "10.0.0.50"
   host_registry "$MAC" set HOSTNAME "node-50"
-  jq -n '{id:"abc123", hostname:"node-50", ip:"10.0.0.50", source_ip:"10.0.0.50"}' \
+  jq -n '{id:"abc123", hostname:"node-50.lab.hps", ip:"10.0.0.50", source_ip:"10.0.0.50"}' \
     > "$CTRL_EXEC_PAIRING_DIR/abc123.json"
 }
 
@@ -74,7 +81,7 @@ held() {
 
 @test "a HELD node whose request comes from another IP is refused" {
   held 30
-  jq -n '{id:"abc123", hostname:"node-50", source_ip:"10.0.0.99"}' > "$CTRL_EXEC_PAIRING_DIR/abc123.json"
+  jq -n '{id:"abc123", hostname:"node-50.lab.hps", source_ip:"10.0.0.99"}' > "$CTRL_EXEC_PAIRING_DIR/abc123.json"
   run ce_approve_pair_request "$MAC" abc123
   [ "$status" -eq 1 ]
 }

@@ -33,6 +33,13 @@ setup() {
     esac
   }
   export -f id hps_log host_registry
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME (first label) + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
   export CTRL_EXEC_PAIR_CLOSE_DELAY=0
   source "$ROOT/lib/functions.d/ctrl-exec-functions.sh"
   MAC="52:54:00:11:22:33"
@@ -47,7 +54,7 @@ seed_pairable() {
   host_registry "$MAC" set IP 10.99.1.50
   host_registry "$MAC" set HOSTNAME tch-050
   host_registry "$MAC" set last_boot_at "$(date +%s)"
-  jq -n '{id:"abc123", hostname:"tch-050", ip:"10.99.1.50", source_ip:"10.99.1.50", code:"123456"}' \
+  jq -n '{id:"abc123", hostname:"tch-050.lab.hps", ip:"10.99.1.50", source_ip:"10.99.1.50", code:"123456"}' \
     > "$CTRL_EXEC_PAIRING_DIR/abc123.json"
 }
 
@@ -103,6 +110,8 @@ seed_pairable() {
 
 @test "the node list reads ctrl_exec_paired_at" {
   source "$ROOT/lib/functions.d/cluster-functions.sh"
+  source "$ROOT/lib/functions.d/host-functions.sh"
+  hps_log() { :; }
   hps_get_config() { [[ "$1" == active_cluster ]] && echo lab; return 0; }
   cluster_registry() { return 1; }
   list_cluster_hosts() { printf '%s\n' aabbccddee01; }

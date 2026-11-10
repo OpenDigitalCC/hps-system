@@ -2,8 +2,8 @@
 #
 # CS-1.15: node names carry the cluster DNS domain. IPS side: hps.domain on the
 # kernel line. Node side: hps-pair / hps-node-init set <name>.<domain>.
-# hps-run.sh: candidate order <name>.<domain>, <name>, <name>.. against the
-# dispatcher's list-agents.
+# hps-run.sh: the agent name is the FQDN <name>.<domain> only (IPS-06), checked
+# against the dispatcher's list-agents.
 
 setup() {
   TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p1-140.XXXXXX")"
@@ -92,27 +92,28 @@ PAIR_SH() { echo "$ROOT/node-manager/nixos-26/boot/hps-pair.sh"; }
   node_setup "hps.domain=lab.hps"
   FAKE_HOSTNAME=held01 run timeout 30 bash "$(PAIR_SH)"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname --transient held01.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname held01.lab.hps' "$SHIM_LOG"
   grep -qx 'getent hosts held01.lab.hps' "$SHIM_LOG"
 }
 
 @test "hps-pair uses hps-<mac12>.<domain> without a registry HOSTNAME" {
   node_setup "hps.domain=lab.hps"
   FAKE_HOSTNAME= run timeout 30 bash "$(PAIR_SH)"
-  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
 }
 
 @test "hps-pair keeps the bare name when hps.domain is absent" {
   node_setup "hps.profile=audit"
   FAKE_HOSTNAME=held01 run timeout 30 bash "$(PAIR_SH)"
-  grep -qx 'hostnamectl set-hostname --transient held01' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname held01' "$SHIM_LOG"
   ! grep -q '^getent' "$SHIM_LOG"
 }
 
-@test "hps-pair ignores an invalid hps.domain" {
+@test "hps-pair refuses an invalid hps.domain: no hostname is set (IPS-06)" {
   node_setup "hps.domain=Bad_Domain"
   FAKE_HOSTNAME=held01 run timeout 30 bash "$(PAIR_SH)"
-  grep -qx 'hostnamectl set-hostname --transient held01' "$SHIM_LOG"
+  [ "$status" -ne 0 ]
+  ! grep -q '^hostnamectl' "$SHIM_LOG"
 }
 
 @test "hps-pair warns, and carries on, when the FQDN does not resolve" {
@@ -128,7 +129,7 @@ PAIR_SH() { echo "$ROOT/node-manager/nixos-26/boot/hps-pair.sh"; }
   printf '#!/usr/bin/env bash\necho "pair $*" >> "$SHIM_LOG"\n' > "$TEST_DIR/pair"
   chmod +x "$TEST_DIR/pair"
   HPS_PAIR="$TEST_DIR/pair" FAKE_HOSTNAME=node01 run timeout 30 bash "$ROOT/node-manager/nixos-26/boot/hps-node-init.sh"
-  grep -qx 'hostnamectl set-hostname --transient node01.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname node01.lab.hps' "$SHIM_LOG"
   grep -qx 'pair --no-hostname' "$SHIM_LOG"
 }
 
@@ -137,7 +138,7 @@ PAIR_SH() { echo "$ROOT/node-manager/nixos-26/boot/hps-pair.sh"; }
   printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_DIR/pair"
   chmod +x "$TEST_DIR/pair"
   HPS_PAIR="$TEST_DIR/pair" FAKE_HOSTNAME= run timeout 30 bash "$ROOT/node-manager/nixos-26/boot/hps-node-init.sh"
-  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
 }
 
 # ---- hps-run.sh -----------------------------------------------------------
@@ -147,6 +148,7 @@ run_setup() {
   mkdir -p "$TEST_DIR/sys/lib" "$TEST_DIR/hosts/aabbccddeeff" "$TEST_DIR/hosts/112233445566"
   echo -n held01 > "$TEST_DIR/hosts/aabbccddeeff/HOSTNAME"
   cat > "$TEST_DIR/sys/lib/functions.sh" <<EOT
+source "$ROOT/lib/functions.d/host-functions.sh"
 normalise_mac() { local m="\${1//[:.-]/}"; echo "\${m,,}"; }
 hps_get_config() { echo c1; }
 cluster_registry() { [[ -f "$TEST_DIR/domain" ]] && cat "$TEST_DIR/domain"; }
@@ -176,7 +178,7 @@ EOT
   chmod +x "$CTRL_EXEC_DISPATCHER"
 }
 
-@test "hps-run prefers <name>.<domain> when it is registered" {
+@test "hps-run uses the FQDN and no other registered form" {
   run_setup
   printf 'lab.hps' > "$TEST_DIR/domain"
   printf 'held01  1.1.1.1  7443\nheld01.lab.hps  1.1.1.2  7443\nheld01..  1.1.1.3  7443\n' > "$TEST_DIR/agents"
@@ -185,15 +187,13 @@ EOT
   [ "$(tail -n 1 "$CE_LOG")" = "run held01.lab.hps node-facts" ]
 }
 
-@test "hps-run falls back to the bare name, then to <name>.." {
+@test "hps-run does not fall back to the bare name or <name>.." {
   run_setup
   printf 'lab.hps' > "$TEST_DIR/domain"
   printf 'held01  1.1.1.1  7443\nheld01..  1.1.1.3  7443\n' > "$TEST_DIR/agents"
   run bash "$RUN" held01 node-facts
-  [ "$(tail -n 1 "$CE_LOG")" = "run held01 node-facts" ]
-  printf 'held01..  1.1.1.3  7443\n' > "$TEST_DIR/agents"
-  run bash "$RUN" held01 node-facts
-  [ "$(tail -n 1 "$CE_LOG")" = "run held01.. node-facts" ]
+  [ "$status" -eq 4 ]
+  ! grep -q '^run ' "$CE_LOG"
 }
 
 @test "hps-run resolves an hps-<mac12> node under the domain" {
@@ -204,21 +204,21 @@ EOT
   [ "$(tail -n 1 "$CE_LOG")" = "run hps-112233445566.lab.hps node-facts" ]
 }
 
-@test "hps-run without a cluster domain tries the bare name and <name>.. only" {
+@test "hps-run without a cluster domain expects the bare label" {
   run_setup
   printf 'held01.lab.hps  1.1.1.2  7443\n' > "$TEST_DIR/agents"
   run bash "$RUN" held01 node-facts
   [ "$status" -eq 4 ]
-  [[ "$output" == *"tried: held01 held01.. "* ]]
+  [[ "$output" == *"expected the FQDN held01"* ]]
 }
 
-@test "hps-run names every candidate tried when none is registered" {
+@test "hps-run names the FQDN it expected when none is registered" {
   run_setup
   printf 'lab.hps' > "$TEST_DIR/domain"
   printf 'other  1.1.1.1  7443\n' > "$TEST_DIR/agents"
   run bash "$RUN" held01 node-facts
   [ "$status" -eq 4 ]
-  [[ "$output" == *"tried: held01.lab.hps held01 held01.. "* ]]
+  [[ "$output" == *"expected the FQDN held01.lab.hps"* ]]
   ! grep -q '^run ' "$CE_LOG"
 }
 

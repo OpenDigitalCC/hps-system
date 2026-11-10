@@ -16,7 +16,7 @@
 #    template) are in compute-apparmor.nix.
 #  - open-iscsi as an INITIATOR only. The initiator name cannot be in the image:
 #    one image serves every node. hps-iscsi-initiator writes it at boot from the
-#    registry hostname (iqn.2026-11.hps:<hostname>) and /etc/iscsi/
+#    node FQDN and cluster (iqn.2026-11.hps.<cluster>:<fqdn>) and /etc/iscsi/
 #    initiatorname.iscsi points at that runtime file.
 #  - mdadm, with the udev auto-assembly and the degraded "last resort" timer
 #    OFF. HPS assembles every mirror explicitly (mirror-assemble) and a degraded
@@ -123,15 +123,15 @@
     mode = "0755";
   };
 
-  # After hps-node-init: that unit sets the transient hostname from the registry.
+  # After hps-node-init: that unit sets the kernel hostname (the FQDN) from the registry.
   # iscsid must not start before the name exists (it is socket activated, so
   # the requires/after below make the first connection wait for the file).
   systemd.services.hps-iscsi-initiator = {
-    description = "HPS: iSCSI initiator name from the registry hostname";
+    description = "HPS: iSCSI initiator name from the node FQDN";
     wantedBy = [ "multi-user.target" ];
     after = [ "hps-node-init.service" ];
     before = [ "iscsid.service" ];
-    path = with pkgs; [ bash coreutils hostname ];
+    path = with pkgs; [ bash coreutils hostname curl jq iproute2 ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;

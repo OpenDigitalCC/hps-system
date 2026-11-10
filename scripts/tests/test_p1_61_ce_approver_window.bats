@@ -45,6 +45,13 @@ EOT
     esac
   }
   export -f hps_log host_registry
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME (first label) + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
   export TEST_DIR
 
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/ctrl-exec-functions.sh"
@@ -66,7 +73,7 @@ seed() {
 }
 
 seed_request() {
-  jq -n '{id:"abc123", hostname:"node-50", ip:"10.0.0.50", source_ip:"10.0.0.50"}' \
+  jq -n '{id:"abc123", hostname:"node-50.lab.hps", ip:"10.0.0.50", source_ip:"10.0.0.50"}' \
     > "$CTRL_EXEC_PAIRING_DIR/abc123.json"
 }
 
@@ -130,7 +137,7 @@ seed_request() {
 @test "reads the request from the dispatcher list-requests table first" {
   seed NETWORK_BOOT 10
   # No queue file: only the CLI knows the request.
-  export FAKE_LIST_ROW="abc123  node-50  10.0.0.50  -  482917 (v2)"
+  export FAKE_LIST_ROW="abc123  node-50.lab.hps  10.0.0.50  -  482917 (v2)"
   run ce_approve_pair_request "$MAC" abc123
   [ "$status" -eq 0 ]
   grep -q "^list-requests" "$CE_LOG"

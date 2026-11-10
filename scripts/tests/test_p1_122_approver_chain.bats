@@ -3,9 +3,9 @@
 # CS-1.12: ce_approve_pair_request
 #  - calls `ctrl-exec-dispatcher approve <reqid>` with no --ip (0.14.1 refuses
 #    the extra argument: "Too many arguments for subroutine mode_approve")
-#  - compares the FIRST LABEL of the request hostname with the registry
-#    HOSTNAME: the agent registers under an FQDN and a foreign domain (second
-#    NIC on another LAN) or .lab.hps must not break the binding. The peer IP
+#  - IPS-06 (one hostname rule): the request hostname must be exactly the host's
+#    FQDN (host_fqdn: registry HOSTNAME + cluster DNS domain). A foreign domain
+#    (second NIC on another LAN) or a bare label is refused. The peer IP
 #    binding is unchanged.
 
 setup() {
@@ -44,6 +44,13 @@ SHIM
       set) printf '%s|%s=%s\n' "$mac" "$key" "$value" >> "$REG_FILE" ;;
     esac
   }
+  # host_fqdn (host-functions.sh) stubbed: registry HOSTNAME (first label) + .lab.hps
+  host_fqdn() {
+    local h
+    h=$(host_registry "$1" get HOSTNAME) || return 1
+    printf '%s.lab.hps\n' "${h%%.*}"
+  }
+  export -f host_fqdn
   export -f hps_log host_registry
   export TEST_DIR
   source "${BATS_TEST_DIRNAME}/../../lib/functions.d/ctrl-exec-functions.sh"
@@ -64,7 +71,7 @@ request() {
 }
 
 @test "approve is called with the reqid alone" {
-  request held01
+  request held01.lab.hps
   run ce_approve_pair_request "$MAC" abc123
   [ "$status" -eq 0 ]
   grep -qx "approve abc123" "$CE_LOG"
@@ -74,8 +81,22 @@ request() {
   ! grep -n 'approve "\$reqid" --ip' "${BATS_TEST_DIRNAME}/../../lib/functions.d/ctrl-exec-functions.sh"
 }
 
-@test "a foreign-domain FQDN with the registry short name approves" {
+@test "a foreign-domain FQDN is refused: the agent name is exactly the host's FQDN" {
   request held01.foreign.example
+  run ce_approve_pair_request "$MAC" abc123
+  [ "$status" -eq 1 ]
+  ! grep -q "^approve" "$CE_LOG" 2>/dev/null
+}
+
+@test "a bare label (a short-name registration) is refused" {
+  request held01
+  run ce_approve_pair_request "$MAC" abc123
+  [ "$status" -eq 1 ]
+  ! grep -q "^approve" "$CE_LOG" 2>/dev/null
+}
+
+@test "the FQDN compares case-insensitively" {
+  request HELD01.LAB.HPS
   run ce_approve_pair_request "$MAC" abc123
   [ "$status" -eq 0 ]
 }
@@ -93,11 +114,19 @@ request() {
   ! grep -q "^approve" "$CE_LOG" 2>/dev/null
 }
 
-@test "a registry FQDN compares by first label too" {
+@test "a registry HOSTNAME that already carries a domain still yields the one FQDN" {
   host_registry "$MAC" set HOSTNAME "held01.lab.hps"
-  request held01.foreign.example
+  request held01.lab.hps
   run ce_approve_pair_request "$MAC" abc123
   [ "$status" -eq 0 ]
+}
+
+@test "a host whose FQDN is refused (host_fqdn fails) is not approved" {
+  host_fqdn() { return 1; }
+  export -f host_fqdn
+  request held01.lab.hps
+  run ce_approve_pair_request "$MAC" abc123
+  [ "$status" -eq 1 ]
 }
 
 @test "the peer IP binding still refuses a wrong source address" {

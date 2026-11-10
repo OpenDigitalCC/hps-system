@@ -14,7 +14,10 @@ package HPS::ClusterConfig;
 #   ip              dotted-quad IPv4 address
 #   cidr            IPv4 address with /prefix
 #   host            IPv4 address or host name
-#   dnsdomain       DNS domain, labels of at most 63 characters
+#   dnsdomain       DNS domain, labels of at most 63 characters, the whole domain at
+#                   most 52 (every node FQDN <label>.<domain> must stay within 63,
+#                   om3's node-name cap; 10 characters are kept for the label,
+#                   the longest generated being nixos-001; docs/NAMING.md)
 #   subnet_base     X.Y, the first two octets of the storage subnets
 #   iplist          IPv4 addresses separated by commas and/or spaces
 #   hostlist        host names or IPv4 addresses separated by commas and/or spaces
@@ -209,7 +212,9 @@ sub validate_value ($q, $value) {
     if ($kind eq 'dnsdomain') {
         return 'must be a DNS domain such as cluster.local'
             unless $v =~ /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?))*\z/;
-        return (grep { length($_) > 63 } split /\./, $v) ? 'a label is longer than 63 characters' : undef;
+        return 'a label is longer than 63 characters' if grep { length($_) > 63 } split /\./, $v;
+        return 'is longer than 52 characters: a node FQDN <name>.<domain> must stay within 63 (om3 node names)' if length($v) > 52;
+        return undef;
     }
     if ($kind eq 'subnet_base') {
         my ($a, $b) = $v =~ /^([0-9]{1,3})\.([0-9]{1,3})\z/;

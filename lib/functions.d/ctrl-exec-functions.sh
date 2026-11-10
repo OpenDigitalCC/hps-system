@@ -455,8 +455,8 @@ _ce_dispatcher_supports_replace() {
 #   1. Host registry entry exists for MAC and STATE is enrolment-eligible
 #      (INSTALLING, CONFIGURING, NETWORK_BOOT for a RAM-booted node, or HELD:
 #      a held node in the audit image pairs so it can be inspected).
-#   2. Pairing request exists and its hostname + IP match the registry
-#      allocation.
+#   2. Pairing request exists and its hostname (exactly the host's FQDN) + IP
+#      match the registry allocation.
 #   3. The request arrives within CTRL_EXEC_PAIR_WINDOW seconds of the host's
 #      last boot-script issue (last_boot_at); a missing key refuses.
 #   4. No prior approval this provisioning cycle (ctrl_exec_paired_at unset;
@@ -551,12 +551,19 @@ ce_approve_pair_request() {
     return 1
   fi
   # Hostname is advisory: only enforce when the registry has one recorded.
-  # Compare first labels: the agent registers under its FQDN, and a node with
-  # a second NIC on a foreign LAN can pick up a foreign domain (or .lab.hps),
-  # which must not decide the binding; the peer IP above is the strong check.
-  if [[ -n "$reg_hostname" && "${req_hostname%%.*}" != "${reg_hostname%%.*}" ]]; then
-    hps_log error "ce_approve: ${mac} request hostname '${req_hostname}' != '${reg_hostname}'"
-    return 1
+  # The one hostname rule (docs/NAMING.md): the agent registers under the host's
+  # FQDN, so the request must carry exactly host_fqdn (registry HOSTNAME plus
+  # the cluster DNS domain). The peer IP above remains the strong check.
+  if [[ -n "$reg_hostname" ]]; then
+    local reg_fqdn
+    reg_fqdn=$(host_fqdn "$mac" 2>/dev/null) || {
+      hps_log error "ce_approve: ${mac} has no usable FQDN for '${reg_hostname}'"
+      return 1
+    }
+    if [[ "${req_hostname,,}" != "$reg_fqdn" ]]; then
+      hps_log error "ce_approve: ${mac} request hostname '${req_hostname}' != '${reg_fqdn}'"
+      return 1
+    fi
   fi
 
   # All bindings satisfied - approve. The binding to the allocated IP was
@@ -630,4 +637,72 @@ ce_run() {
   else
     "$CTRL_EXEC_DISPATCHER" run "$host" "$script"
   fi
+}
+
+#===============================================================================
+# ce_agent_names
+# --------------
+# The names of the agents registered with the dispatcher, one per line (the
+# HOSTNAME column of `list-agents`, through its --json form). Needs the
+# dispatcher's config, so it runs as root (the CLI, tests); the CGI cannot.
+#
+# Returns: 0 (a registry with no agents prints nothing), 1 when the dispatcher
+# cannot be run or answers something that is not JSON.
+#===============================================================================
+ce_agent_names() {
+  local out
+  if ! _ce_is_root; then
+    hps_log error "ce_agent_names: needs root (the dispatcher config is ctrl-exec-only)"
+    return 1
+  fi
+  out=$("$CTRL_EXEC_DISPATCHER" list-agents --json 2>&1) || {
+    hps_log error "ce_agent_names: list-agents failed: ${out}"
+    return 1
+  }
+  if [[ "$out" == "No registered agents."* ]]; then
+    return 0
+  fi
+  printf '%s\n' "$out" | jq -r '.[].hostname // empty' || {
+    hps_log error "ce_agent_names: list-agents did not return JSON"
+    return 1
+  }
+}
+
+#===============================================================================
+# ce_unpair_agent
+# ---------------
+# Remove one agent registration from the dispatcher (`unpair <name>`): the
+# record under agents/<name>.json goes, so the dispatcher no longer addresses
+# it. ctrl-exec has no dispatcher-side certificate revocation (as of 0.14.5):
+# the agent's certificate stays valid until its expiry, and the revocation list
+# lives on agents (revoked-serials), where a forgotten host has no agent left
+# to hold it. The name is the agent's registered name (an FQDN under the one
+# hostname rule, docs/NAMING.md). Used by hps-onboard forget and
+# hps-onboard prune-agents (scripts/hps-forget-hook.sh).
+#
+# Arguments: $1 - the agent name
+#
+# Returns: 0 removed; 4 no such agent (nothing to remove); 1 failed or not root.
+#===============================================================================
+ce_unpair_agent() {
+  local name="${1:?Usage: ce_unpair_agent <agent-name>}" out
+  # The dispatcher's own rule for a name that may become a file name.
+  if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    hps_log error "ce_unpair_agent: '${name}' is not a valid agent name"
+    return 1
+  fi
+  if ! _ce_is_root; then
+    hps_log error "ce_unpair_agent: needs root (the dispatcher config is ctrl-exec-only)"
+    return 1
+  fi
+  out=$("$CTRL_EXEC_DISPATCHER" unpair "$name" 2>&1) || {
+    if [[ "$out" == *"No registry entry"* ]]; then
+      hps_log info "ce_unpair_agent: no agent registered as ${name}"
+      return 4
+    fi
+    hps_log error "ce_unpair_agent: unpair ${name} failed: ${out}"
+    return 1
+  }
+  hps_log info "ce_unpair_agent: unregistered agent ${name}"
+  return 0
 }

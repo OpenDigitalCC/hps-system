@@ -25,6 +25,9 @@ use HPS::Approval;
 my $POOL_RE = qr/^[a-z][a-z0-9_.-]*$/;
 my $ZVOL_RE = qr{^[A-Za-z0-9][A-Za-z0-9_.:/-]*$};
 my $IQN_RE  = qr/^iqn\.[A-Za-z0-9._:-]+$/;
+# LIO (rtslib-fb utils.py) refuses an IQN without a second dot after the date:
+# re.match(r"iqn\.[0-9]{4}-[0-1][0-9]\..*\..*"). Checked here so the refusal is early.
+my $LIO_IQN_RE = qr/^iqn\.[0-9]{4}-[0-1][0-9]\..*\..*/;
 my $ADDR_RE = qr/^[0-9A-Fa-f:.]+$/;
 my $DS_RE   = qr{^([a-z][a-z0-9_.-]*)/enc/(?:vm/)?([A-Za-z0-9_-]+)$};    # <pool>/enc/<name> or <pool>/enc/vm/<name>
 my $SIZE_RE = qr/^[1-9][0-9]*[KMGT]$/;
@@ -297,6 +300,8 @@ sub _steps_export ($self, %a) {
     my ($iqn, $init) = ($a{iqn}, $a{initiator});
     _fail('usage', '--iqn must be an iqn name') unless defined $iqn && $iqn =~ $IQN_RE;
     _fail('usage', '--initiator must be an iqn name') unless defined $init && $init =~ $IQN_RE;
+    _fail('refused', "--iqn '$iqn' would be refused by LIO: an IQN is iqn.YYYY-MM.<authority containing a dot>[:name]") unless $iqn =~ $LIO_IQN_RE;
+    _fail('refused', "--initiator '$init' would be refused by LIO: an IQN is iqn.YYYY-MM.<authority containing a dot>[:name]") unless $init =~ $LIO_IQN_RE;
     my $portal = $a{portal} // $self->_get('IP');
     _fail('usage', 'no --portal given and the host has no IP in the registry') unless defined $portal;
     _fail('usage', '--portal must be a specific address') unless $portal =~ $ADDR_RE && $portal ne '0.0.0.0';

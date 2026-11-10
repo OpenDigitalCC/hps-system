@@ -11,7 +11,7 @@ use JSON::PP;
 use HPS::Registry;
 use HPS::Keysafe;
 
-my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe zvol-destroy peer-gone mirror-create workload-destroy);
+my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe zvol-destroy peer-gone mirror-create workload-destroy host-forget);
 my $POOL_RE = qr/^[A-Za-z][A-Za-z0-9_-]*$/;
 # zvol-destroy carries the dataset <pool>/enc/[vm/]<name> in the 'pool' member; no '__'
 # so the registry key (which maps '/' to '__') stays unambiguous.
@@ -73,10 +73,13 @@ sub _normalise ($f) {
     _fail('usage', "$action needs at least one disk") if $action eq 'pool-create' && !@$disks;
     _fail('usage', 'zvol-destroy takes no disks') if $action eq 'zvol-destroy' && @$disks;
     _fail('usage', 'workload-destroy takes no disks') if $action eq 'workload-destroy' && @$disks;
+    _fail('usage', 'host-forget takes no disks') if $action eq 'host-forget' && @$disks;
+    _fail('usage', "host-forget carries the fixed word 'host' in pool") if $action eq 'host-forget' && $pool ne 'host';
     my $wipe = $f->{wipe} // 0;
     _fail('usage', 'wipe must be 0 or 1') unless !ref $wipe && $wipe =~ /^[01]$/;
     _fail('usage', 'zvol-destroy takes wipe 0') if $action eq 'zvol-destroy' && $wipe != 0;
     _fail('usage', 'workload-destroy takes wipe 0') if $action eq 'workload-destroy' && $wipe != 0;
+    _fail('usage', 'host-forget takes wipe 0') if $action eq 'host-forget' && $wipe != 0;
     my $exp = $f->{expires};
     _fail('usage', 'expires must be an epoch') unless defined $exp && !ref $exp && $exp =~ /^[0-9]{1,12}$/;
     my $by = $f->{issued_by};
@@ -213,7 +216,7 @@ HPS::Approval - HMAC-signed human approvals for storage actions
 
 An approval is a JSON object with exactly these members: C<action>
 (C<pool-create>, C<pool-destroy>, C<dataset-wipe>, C<zvol-destroy>,
-C<peer-gone>, C<mirror-create> or C<workload-destroy>), C<disks> (array of by-id names or
+C<peer-gone>, C<mirror-create>, C<workload-destroy> or C<host-forget>), C<disks> (array of by-id names or
 C</dev/disk/by-id/...> paths, sorted bytewise, unique; for C<peer-gone> and
 C<mirror-create> exactly the two leg specs of the mirror, C<local:...> or
 C<iscsi:...>, with the mirror name in C<pool>),
@@ -227,6 +230,8 @@ the HMAC are otherwise identical. The registry key maps C</> to C<__>
 For C<workload-destroy> the C<pool> member carries the workload name
 (C<^[a-z][a-z0-9-]{0,31}$>), C<disks> is empty and C<wipe> is 0; the host is the
 compute host of the workload's first VM.
+For C<host-forget> the C<pool> member is the fixed word C<host>, C<disks> is empty and C<wipe> is 0;
+the host is the one in C<mac> (it is forgotten with its registry entry, so the approval goes with it).
 
 The signed bytes are that object encoded as UTF-8 JSON with the members
 sorted bytewise by name, no whitespace anywhere, strings escaped as

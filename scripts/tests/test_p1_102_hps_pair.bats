@@ -85,7 +85,7 @@ teardown() {
 @test "sets the registry hostname, requests pairing, reports the reqid, waits, restarts the agent" {
   FAKE_REQID=ab12cd run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname --transient held01' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname held01' "$SHIM_LOG"
   grep -qx 'ctrl-exec-agent request-pairing --background --timeout 4 --dispatcher 10.99.1.1' "$SHIM_LOG"
   grep -q '^curl .*-X POST .*-H X-HPS-MAC: aa:bb:cc:dd:ee:ff .*http://10.99.1.1/api/api.sh$' "$SHIM_LOG"
   body="$(grep '^body ' "$SHIM_LOG" | sed 's/^body //')"
@@ -98,7 +98,7 @@ teardown() {
 @test "falls back to hps-<mac> when the registry has no HOSTNAME" {
   FAKE_HOSTNAME_RC=22 run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff' "$SHIM_LOG"
 }
 
 @test "--no-hostname leaves the hostname alone and does not ask the registry for it" {

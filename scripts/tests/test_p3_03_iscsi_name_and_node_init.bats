@@ -8,16 +8,17 @@ setup() {
   T="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p3-03.XXXXXX")"
   export HPS_RUN_DIR="$T/run/hps"
   NAME="$ROOT/node-manager/nixos-26/boot/hps-iscsi-name.sh"
+  export HPS_CLUSTER=lab
 }
 
 teardown() {
   rm -rf "$T"
 }
 
-@test "the initiator name is iqn.2026-11.hps:<short hostname>, lower case" {
+@test "the initiator name is iqn.2026-11.hps.<cluster>:<fqdn>, lower case" {
   HPS_HOSTNAME=Node01.lab.example run bash "$NAME"
   [ "$status" -eq 0 ]
-  [ "$(cat "$HPS_RUN_DIR/initiatorname.iscsi")" = "InitiatorName=iqn.2026-11.hps:node01" ]
+  [ "$(cat "$HPS_RUN_DIR/initiatorname.iscsi")" = "InitiatorName=iqn.2026-11.hps.lab:node01.lab.example" ]
   [ ! -e "$HPS_RUN_DIR/initiatorname.iscsi.tmp" ]
 }
 
@@ -49,7 +50,7 @@ teardown() {
   chmod +x "$T/bin/hostname"
   PATH="$T/bin:$PATH" run bash "$NAME"
   [ "$status" -eq 0 ]
-  grep -qx 'InitiatorName=iqn.2026-11.hps:sch-007' "$HPS_RUN_DIR/initiatorname.iscsi"
+  grep -qx 'InitiatorName=iqn.2026-11.hps.lab:sch-007.lab.example' "$HPS_RUN_DIR/initiatorname.iscsi"
 }
 
 # ---- hps-node-init -----------------------------------------------------------

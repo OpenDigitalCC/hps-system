@@ -28,20 +28,20 @@ like(err_of(sub { $st->plan('up') })->message, qr/pool not created by HPS/, 'mes
 ok(!$f->{ks}->has_key($mac, 'enc'), 'the refused plan did not create a key');
 $f->{ks}->get_or_create_key($mac, 'enc');
 $reg->host_set($mac, 'storage_exports', [
-    { zvol => 'lab/enc/t0', iqn => 'iqn.2026-11.example:t0', initiator => 'iqn.2026-11.example:ips', portal => '192.0.2.10' },
+    { zvol => 'lab/enc/t0', iqn => 'iqn.2026-11.example.lab:t0', initiator => 'iqn.2026-11.example.lab:ips', portal => '192.0.2.10' },
 ]);
 my $plan = $st->plan('up');
 is_deeply([ scripts($plan) ], [ 'storage-pool-import', 'dataset-unlock', 'iscsi-export' ], 'up: import, unlock, export');
 is_deeply($plan->[0]{args}, ['lab'], 'import takes the cluster-named pool');
 is_deeply($plan->[1]{args}, ['lab/enc'], 'unlock takes <pool>/enc');
-is_deeply($plan->[2]{args}, [ 'lab/enc/t0', '--iqn', 'iqn.2026-11.example:t0', '--initiator', 'iqn.2026-11.example:ips', '--portal', '192.0.2.10' ], 'export arguments');
+is_deeply($plan->[2]{args}, [ 'lab/enc/t0', '--iqn', 'iqn.2026-11.example.lab:t0', '--initiator', 'iqn.2026-11.example.lab:ips', '--portal', '192.0.2.10' ], 'export arguments');
 like($plan->[1]{input}, qr/"key_hex":"<redacted/, 'unlock input described, redacted');
 is($plan->[0]{input}, undef, 'import has no input');
 is_deeply([ map { $_->{n} } @$plan ], [ 1, 2, 3 ], 'steps are numbered');
 
 # --- down / trim-check / status
 is_deeply([ scripts($st->plan('down')) ], ['iscsi-unexport'], 'down unexports each target only');
-is_deeply($st->plan('down')->[0]{args}, ['iqn.2026-11.example:t0'], 'unexport takes the target iqn');
+is_deeply($st->plan('down')->[0]{args}, ['iqn.2026-11.example.lab:t0'], 'unexport takes the target iqn');
 is_deeply([ scripts($st->plan('trim-check')) ], ['storage-trim-check'], 'trim-check');
 is_deeply([ scripts($st->plan('status')) ], [ 'storage-status' ], 'status = the read-only storage-status (imports nothing)');
 like(err_of(sub { $st->plan('explode') })->message, qr/unknown operation/, 'unknown op');
