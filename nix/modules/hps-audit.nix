@@ -14,7 +14,11 @@
   imports = [ ./hps-ctrl-exec.nix ];
 
   hardware.enableAllHardware = true;
-  hardware.enableRedistributableFirmware = true;
+  # The full linux-firmware set (owner, 2026-11-10: keep it whole for now,
+  # revisit later), and nothing else: enableRedistributableFirmware also adds
+  # sound (sof, alsa), TV-tuner (libreelec-dvb) and Wi-Fi firmware packages
+  # (IPS-03 measurement: ~57 MiB of the audit closure, none of it for a server).
+  hardware.firmware = [ pkgs.linux-firmware ];
 
   # Netboot needs none of these in stage 1 (root is RAM); listed so the audit
   # kernel has every storage/NIC driver module available at stage 2 as well.
