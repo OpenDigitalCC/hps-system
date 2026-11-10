@@ -146,27 +146,11 @@ ips_allocate_storage_ip() {
   host_registry "$source_mac" "set" "storage${storage_index}_vlan" "$vlan_id"
   host_registry "$source_mac" "set" "storage${storage_index}_ip" "$new_ip"
   
-  # Get hostname from host config
-  local hostname=$(host_registry "$source_mac" "get" "hostname")
-  if [[ -z "$hostname" ]]; then
-    # Try to derive from MAC
-    hostname="host-${source_mac//:/-}"
-  fi
-
-  # Get cluster domain instead of storage-specific domain
-  local domain=$(cluster_registry "$cluster" "get" "network_dns_domain")
-  domain=${domain:-"local"}
+  # dns_hosts has one writer: dns_regenerate builds the <label>-storageN line
+  # from the storage${N}_ip key just stored. A failure is logged, not fatal.
+  dns_regenerate >/dev/null || hps_log "warn" "dns_regenerate failed after allocating $new_ip to $source_mac"
   
-  # Register in DNS
-  # Storage hostname format: hostname-storageN
-  local storage_hostname="${hostname}-storage$((storage_index + 1))"
-  dns_host_add "$new_ip" "$storage_hostname" "$domain"
-  
-  # Also add a CNAME-style entry for the base hostname on storage network
-  # (positions 4 and 5 are cluster and reload_service; aliases follow)
-  dns_host_add "$new_ip" "$hostname" "$domain" "" "true" "${hostname}-vlan${vlan_id}"
-  
-  hps_log "info" "Allocated $new_ip to $source_mac, DNS: ${storage_hostname}.${domain}"
+  hps_log "info" "Allocated $new_ip to $source_mac"
   
   echo "${vlan_id}:${new_ip}:${netmask}:${gateway}:${mtu}"
   return 0
@@ -226,14 +210,13 @@ storage_register_dns() {
       if [[ -n "$ip" ]] && [[ -n "$vlan" ]]; then
         local storage_hostname="${hostname,,}-storage$((i + 1))"
         
-        # Register with cluster domain, not storage-specific subdomain
-        # (dns_host_add is add-or-update, so no exists-check is needed)
-        dns_host_add "$ip" "$storage_hostname" "$cluster_domain"
-        hps_log "info" "Registered DNS: ${storage_hostname}.${cluster_domain} -> $ip"
+        # The line is written by build_dns_hosts_file from the registry
+        hps_log "info" "Storage address ${storage_hostname}.${cluster_domain} -> $ip (written by dns_regenerate)"
       fi
     done
   done
   
+  dns_regenerate >/dev/null || return 1
   return 0
 }
 

@@ -178,3 +178,49 @@ teardown() {
   PATH="$TEST_DIR/bin:$PATH" run supervisor_reload_services dnsmasq
   [ "$status" -eq 2 ]
 }
+
+@test "allocating a storage address keeps the host's primary line and adds the -storageN line" {
+  mkdir -p "$TEST_DIR/hosts"
+  normalise_mac() { echo "$1"; }
+  hps_get_config() {
+    case "$1" in
+      active_cluster) echo lab ;;
+      config_base) echo "$CFG" ;;
+      cluster_hosts) echo "$TEST_DIR/hosts" ;;
+      *) return 1 ;;
+    esac
+  }
+  cluster_registry() {
+    case "$3" in
+      network_dns_domain) echo "lab.hps" ;;
+      network_dhcp_ip) echo "10.100.1.1" ;;
+      network_storage_base_vlan) echo 31 ;;
+      network_storage_count) echo 2 ;;
+      network_storage_vlan31_subnet) echo "10.31.0.0/24" ;;
+      network_storage_vlan31_netmask) echo "255.255.255.0" ;;
+      network_storage_vlan31_gateway) echo "10.31.0.1" ;;
+      network_storage_mtu) echo 9000 ;;
+    esac
+  }
+  host_registry() {
+    if [[ "$2" == set ]]; then
+      printf '%s|%s=%s\n' "$1" "$3" "$4" >> "$REG"
+      return 0
+    fi
+    local line
+    line=$(grep -F "${1}|${3}=" "$REG" | tail -n1) || return 1
+    printf '%s\n' "${line#*=}"
+  }
+  run ips_allocate_storage_ip 0 aabbccddee01
+  [ "$status" -eq 0 ]
+  [ "$output" = "31:10.31.0.100:255.255.255.0:10.31.0.1:9000" ]
+  grep -qx '10.100.1.10 sch-001.lab.hps sch-001' "$DNS"
+  grep -qx '10.31.0.100 sch-001-storage1.lab.hps sch-001-storage1' "$DNS"
+  [ "$(grep -c 'sch-001.lab.hps' "$DNS")" -eq 1 ]
+  [ "$(cat "$CALLS")" = "reload dnsmasq" ]
+}
+
+@test "dns_host_add has no caller outside dns-dhcp-functions.sh" {
+  run grep -rln "dns_host_add" "$ROOT/lib" "$ROOT/http" "$ROOT/bin"
+  [ "$output" = "$ROOT/lib/functions.d/dns-dhcp-functions.sh" ]
+}
