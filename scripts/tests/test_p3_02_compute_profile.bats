@@ -66,6 +66,13 @@ setup() {
   grep -q 'security_require_confined = 0' "$COMPUTE"
 }
 
+@test "confinement: the guest abstraction allows the wrapped QEMU ELFs nixpkgs execs" {
+  local aa="$(dirname "$COMPUTE")/compute-apparmor.nix"
+  grep -qF '${qemu}/bin/qemu-system-x86_64 rmix,' "$aa"
+  grep -qF '${qemu}/bin/.qemu-system-x86_64-wrapped rmix,' "$aa"
+  grep -qF '${qemu}/bin/.qemu-kvm-wrapped rmix,' "$aa"
+}
+
 @test "open-iscsi is an initiator whose name comes from the runtime file, not the image" {
   grep -q 'services.openiscsi = {' "$COMPUTE"
   grep -q 'environment.etc."iscsi/initiatorname.iscsi".source' "$COMPUTE"

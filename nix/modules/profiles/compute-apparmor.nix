@@ -111,9 +111,16 @@ let
     owner /var/lib/libvirt/qemu/nvram/*_VARS.fd rwk,
     owner /var/lib/libvirt/qemu/nvram/*_VARS.ms.fd rwk,
 
-    # The QEMU binaries.
+    # The QEMU binaries. nixpkgs wraps them like the daemon: bin/qemu-system-x86_64
+    # is a makeWrapper script that execs bin/.qemu-system-x86_64-wrapped (the ELF),
+    # and the exec of the ELF is mediated by this profile too. Lab 2026-11-10:
+    # without the wrapped names every guest start failed with "process exited
+    # while connecting to monitor" (apparmor="DENIED" operation="exec" on
+    # .qemu-system-x86_64-wrapped).
     ${qemu}/bin/qemu-system-x86_64 rmix,
+    ${qemu}/bin/.qemu-system-x86_64-wrapped rmix,
     ${qemu}/bin/qemu-kvm rmix,
+    ${qemu}/bin/.qemu-kvm-wrapped rmix,
 
     /{,var/}tmp/ r,
     owner /{,var/}tmp/**/ r,
