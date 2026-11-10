@@ -168,7 +168,31 @@ ok($f->{reg}->cluster_exists('lab', 'workload_t0'), 'dry run removes nothing');
 ($rc, $out) = cli('destroy', 't0');
 is($rc, 0, 'destroy exits 0') or diag $out;
 ok(!$f->{reg}->cluster_exists('lab', 'workload_t0'), 'registry key gone');
-ok(!-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition gone');
+ok(-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition kept (IPS-07)');
+like($out, qr/definition workloads\/t0\.json kept; create t0 runs again from it, destroy --forget removes it/, 'destroy says the definition is kept');
+my $gone = $f->{reg}->cluster_get_json('lab', 'workload_t0_destroyed');
+is($gone->{by}, 'tester', 'the destroyed record says who');
+like($gone->{at}, qr/UTC$/, '... and when');
+
+# --- create after destroy needs no restored file; --forget removes the definition too
+($rc, $out) = cli('create', 't0');
+is($rc, 0, 'create after destroy works from the kept definition') or diag $out;
+ok(!$f->{reg}->cluster_exists('lab', 'workload_t0_destroyed'), 'the destroyed record is removed by the create');
+($rc, $out) = cli('destroy', 't0', '--forget', '--dry-run');
+is($rc, 3, 'destroy --forget needs the approval too (3)');
+StorageFixture::approve($f, 'workload-destroy', pool => 't0', expires => $StorageFixture::NOW + 7200);
+($rc, $out) = cli('destroy', 't0', '--forget');
+is($rc, 0, 'destroy --forget exits 0') or diag $out;
+like($out, qr/definition workloads\/t0\.json removed \(--forget\)/, 'says the definition is removed');
+ok(!-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition gone with --forget');
+is($f->{reg}->cluster_get_json('lab', 'workload_t0_destroyed')->{forgotten}, JSON::PP::true, 'the audit record notes the forget');
+($rc, $out) = cli('create', 't0');
+is($rc, 4, 'after --forget there is no definition: not found (4)');
+($rc, $out) = cli('create', 't0', '--forget');
+is($rc, 2, '--forget on create: usage (2)');
+like($out, qr/--forget is only for destroy/, 'says so');
+($rc, $out) = cli('status', 't0', '--forget');
+is($rc, 2, '--forget on status: usage (2)');
 
 # --- destroy of an unfinished create
 {

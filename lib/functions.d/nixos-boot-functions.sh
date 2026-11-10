@@ -209,6 +209,7 @@ ipxe_boot_nixos() {
 # window is single and shared; a failure to open is logged, never fatal.
 nixos_open_pairing_window() {
   local mac="$1"
+  host_registry "$mac" delete ctrl_exec_paired_at > /dev/null 2>&1 || true
   host_registry "$mac" delete ctrl_exec_paired > /dev/null 2>&1 || true
   if ! ce_pairing_window_open "${CTRL_EXEC_PAIR_WINDOW:-300}" > /dev/null 2>&1 < /dev/null; then
     hps_log warn "[$mac] pairing window not opened (already open, or dispatcher error)"

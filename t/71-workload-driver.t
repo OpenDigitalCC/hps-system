@@ -213,14 +213,14 @@ my $f = StorageFixture::setup_workload();
     is_deeply([ map { $_->{args}[0] } @zv ], [ $APP, $DB ], 'both zvols destroyed');
     ok(defined $zv[0]{input} && length $zv[0]{input}, 'the zvol destroy carries its approval document');
     ok(!$f->{reg}->cluster_exists('lab', 'workload_t0'), 'registry key removed');
-    ok(!-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition file removed last');
+    ok(-e $f->{reg}->workload_dir('lab') . '/t0.json', 'the definition file is kept (IPS-07)');
     is($f->{ap}->get($MAC, 'workload-destroy', 't0'), undef, 'the workload approval is spent');
     is($f->{ap}->get($MAC, 'zvol-destroy', $APP), undef, 'the derived zvol approvals are revoked');
     is($f->{ap}->get($MAC, 'zvol-destroy', $DB), undef, '... all of them');
     is(scalar(grep { /approval|zvol-destroy/ && /[0-9a-f]{64}/ } @{ $f->{log} }), 0, 'no secret or signature in the log');
 
     $e = err_of(sub { $wl->plan('status', 't0') });
-    is($e->kind, 'notfound', 'the definition is gone: notfound');
+    is($e->kind, 'notfound', 'no record any more: notfound');
 }
 
 #--- a failing destroy keeps the record and the definition; derived approvals are revoked
@@ -407,7 +407,7 @@ my $f = StorageFixture::setup_workload();
     is(scalar(@{ $r->{notes} }), 5, 'the rest is skipped with notes') or diag explain $r->{notes};
     like($r->{notes}[0], qr/skipped .*never created/, 'a note says why');
     ok(!$g->{reg}->cluster_exists('lab', 'workload_t0'), 'record removed');
-    ok(!-e $g->{reg}->workload_dir('lab') . '/t0.json', 'definition removed');
+    ok(-e $g->{reg}->workload_dir('lab') . '/t0.json', 'definition kept');
     is($g->{ap}->get($MAC, 'zvol-destroy', $APP), undef, 'derived approval revoked');
 }
 {
@@ -421,7 +421,7 @@ my $f = StorageFixture::setup_workload();
     ok($r->{ok}, 'destroy ok');
     is(nodecalls($g), 0, 'no node call');
     is(scalar @{ $r->{notes} }, 6, 'every step skipped with a note');
-    ok(!$g->{reg}->cluster_exists('lab', 'workload_t0') && !-e $g->{reg}->workload_dir('lab') . '/t0.json', 'only the record and the definition are removed');
+    ok(!$g->{reg}->cluster_exists('lab', 'workload_t0') && -e $g->{reg}->workload_dir('lab') . '/t0.json', 'only the record is removed; the definition stays');
 }
 {
     # a create that failed in vm-define: the VM, mirror and zvol of that VM are all tried

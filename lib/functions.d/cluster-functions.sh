@@ -506,7 +506,7 @@ cluster_has_installed_sch() {
 # The node name is the host's registry HOSTNAME, lower case, followed by
 # .<network_dns_domain> when the cluster has one - the same name hps-pair gives
 # the node's hostname, which is the name OpenSVC uses for the node. A host that
-# is not paired (no ctrl_exec_paired) is not listed. Sorted by node name.
+# is not paired (no ctrl_exec_paired_at, or the old ctrl_exec_paired) is not listed. Sorted by node name.
 #
 # Returns:
 #   0 on success, 1 when no cluster is active
@@ -520,7 +520,8 @@ osvc_cluster_node_list() {
   printf 'cluster %s\n' "$cluster"
   while IFS= read -r mac; do
     [[ -z "$mac" ]] && continue
-    host_registry "$mac" get ctrl_exec_paired >/dev/null 2>&1 || continue
+    host_registry "$mac" get ctrl_exec_paired_at >/dev/null 2>&1 \
+      || host_registry "$mac" get ctrl_exec_paired >/dev/null 2>&1 || continue
     name=$(host_registry "$mac" get HOSTNAME 2>/dev/null) || continue
     ip=$(host_registry "$mac" get IP 2>/dev/null) || continue
     name="${name%%.*}"

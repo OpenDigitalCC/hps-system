@@ -1,0 +1,30 @@
+#!/usr/bin/env perl
+# hps-registry-keys: print the registry key catalogue (HPS::Registry::Keys).
+#   hps-registry-keys --markdown   the text of docs/REGISTRY-KEYS.md
+#   hps-registry-keys --list       one line per key: scope name type
+#   hps-registry-keys --type <scope> <key>   the declared type of a key
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use HPS::Registry::Keys;
+
+sub main {
+    my @argv = @_;
+    my $mode = shift @argv // '';
+    if ($mode eq '--markdown') { print HPS::Registry::Keys::render_markdown(); return 0 }
+    if ($mode eq '--list') {
+        print "$_->{scope} $_->{name} $_->{type}\n" for HPS::Registry::Keys::keys_table();
+        return 0;
+    }
+    if ($mode eq '--type' && @argv == 2) {
+        my $t = HPS::Registry::Keys::type_of(@argv);
+        return 4 unless defined $t;
+        print "$t\n";
+        return 0;
+    }
+    print STDERR "Usage: hps-registry-keys --markdown | --list | --type <scope> <key>\n";
+    return 2;
+}
+
+exit main(@ARGV);

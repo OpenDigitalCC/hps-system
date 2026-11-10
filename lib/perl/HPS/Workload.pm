@@ -261,6 +261,14 @@ sub load ($self, $name) {
 
 sub _rec_key ($name) { return "workload_$name" }
 
+# The audit record a destroy leaves (when, by whom); the next create removes it.
+sub _destroyed_key ($name) { return "workload_${name}_destroyed" }
+
+sub destroyed_record ($self, $name) {
+    my $reg = $self->{registry};
+    return $reg->cluster_exists($self->_cluster, _destroyed_key($name)) ? $reg->cluster_get_json($self->_cluster, _destroyed_key($name)) : undef;
+}
+
 sub record ($self, $name) {
     my $reg = $self->{registry};
     return $reg->cluster_exists($self->_cluster, _rec_key($name)) ? $reg->cluster_get_json($self->_cluster, _rec_key($name)) : undef;
@@ -563,6 +571,7 @@ sub _prepare ($self, $op, $name, %a) {
     my $m = $STEPS{ $op // '' } // _fail('usage', 'unknown operation; one of: ' . join(', ', ops()));
     _fail('usage', '--vm is not for ' . $op) if defined $a{vm} && ($op eq 'create' || $op eq 'destroy');
     _fail('usage', '--resume is only for create') if $a{resume} && $op ne 'create';
+    _fail('usage', '--forget is only for destroy') if $a{forget} && $op ne 'destroy';
     my $def = $self->load($name);
     return ($def, $self->$m($def, %a));
 }
@@ -625,6 +634,7 @@ sub run ($self, $op, $name, %a) {
         my $rec = $self->record($name);
         if ($rec) { %done = map { $_ => 1 } @{ $rec->{done} // [] } }
         else { $self->_rec_set($name, $self->_new_record($def)) }
+        $self->{registry}->cluster_unset($self->_cluster, _destroyed_key($name));
     }
     my (@results, $n);
     $n = 0;
@@ -684,7 +694,13 @@ sub _post ($self, $op, $def, $out, %a) {
         my $f = $self->{destroy_approval};
         my $mac = $self->_mac($def->{vms}[0]{compute});
         $self->{registry}->cluster_unset($self->_cluster, _rec_key($name));
-        unlink $self->definition_path($name);
+        $self->{registry}->cluster_set($self->_cluster, _destroyed_key($name),
+            { at => $self->_stamp, by => $self->{by}, approved_by => $f->{issued_by}, forgotten => $a{forget} ? JSON::PP::true : JSON::PP::false });
+        # The definition is the operator's intent: it stays unless --forget.
+        if ($a{forget}) {
+            unlink $self->definition_path($name);
+            $out->{forgotten} = 1;
+        }
         eval { $self->{approval}->revoke($mac, 'workload-destroy', $name) };
         $out->{approval} = { map { $_ => $f->{$_} } qw(action pool expires issued_by mac) } if $f;
     }

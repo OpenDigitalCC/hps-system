@@ -459,13 +459,15 @@ _ce_dispatcher_supports_replace() {
 #      allocation.
 #   3. The request arrives within CTRL_EXEC_PAIR_WINDOW seconds of the host's
 #      last boot-script issue (last_boot_at); a missing key refuses.
-#   4. No prior approval this provisioning cycle (ctrl_exec_paired unset).
+#   4. No prior approval this provisioning cycle (ctrl_exec_paired_at unset;
+#      ctrl_exec_paired, the pre-IPS-07 name, is read as a fallback).
 #
 # On approval the dispatcher pairing window is closed (after a short delay;
 # see _ce_close_window_after_approval). On a window refusal it is closed at once.
 #
 # Returns:
-#   0  approved (records ctrl_exec_paired=<epoch>)
+#   0  approved (records ctrl_exec_paired_at=<epoch>, and for one release the
+#      same epoch under the old name ctrl_exec_paired)
 #   1  denied (reason logged)
 #   2  usage / internal error
 #===============================================================================
@@ -505,7 +507,10 @@ ce_approve_pair_request() {
 
   # Check 4 (cheap, do before reading files): one approval per cycle.
   local already
-  already=$(host_registry "$mac" get ctrl_exec_paired 2>/dev/null) || already=""
+  already=$(host_registry "$mac" get ctrl_exec_paired_at 2>/dev/null) || already=""
+  if [[ -z "$already" ]]; then
+    already=$(host_registry "$mac" get ctrl_exec_paired 2>/dev/null) || already=""
+  fi
   if [[ -n "$already" ]]; then
     hps_log error "ce_approve: ${mac} already paired this cycle (${already})"
     return 1
@@ -589,7 +594,13 @@ ce_approve_pair_request() {
     [[ -n "$replaced_line" ]] && hps_log info "ce_approve: replaced registration: ${replaced_line}"
   done < <(printf '%s\n' "$approve_out" | grep -E 'REPLACED_BY|Replaced:' || true)
 
-  host_registry "$mac" set ctrl_exec_paired "$(date +%s)" || {
+  local paired_at
+  paired_at="$(date +%s)"
+  host_registry "$mac" set ctrl_exec_paired_at "$paired_at" || {
+    hps_log warn "ce_approve: approved ${reqid} but failed to record ctrl_exec_paired_at for ${mac}"
+  }
+  # Compatibility window (IPS-07): the old key, same epoch value, for one release.
+  host_registry "$mac" set ctrl_exec_paired "$paired_at" || {
     hps_log warn "ce_approve: approved ${reqid} but failed to record ctrl_exec_paired for ${mac}"
   }
   _ce_close_window_after_approval

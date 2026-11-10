@@ -19,7 +19,7 @@ for my $ok (
     [ 'workload-start', 't0' ], [ 'workload-start', 't0', '--vm', 't0-app' ],
     [ 'workload-stop', 't0' ], [ 'workload-stop', 't0', '--vm', 't0-app' ],
     [ 'workload-status', 't0' ], [ 'workload-status', 'odoo-test', '--vm', 'odoo-test-db' ],
-    [ 'workload-destroy', 't0' ],
+    [ 'workload-destroy', 't0' ], [ 'workload-destroy', 't0', '--forget' ],
 ) {
     is(HPS::Jobs::validate(@$ok), undef, "allowed: @$ok");
 }
@@ -37,7 +37,7 @@ for my $bad (
     my $why = HPS::Jobs::validate(@$bad);
     ok(defined $why, 'refused: ' . join(' ', map { s/\n/\\n/gr } @$bad));
 }
-like(HPS::Jobs::validate('workload-destroy', 't0', 'x'), qr/^workload-destroy: needs exactly <workload>/, 'the reason carries the kind');
+like(HPS::Jobs::validate('workload-destroy', 't0', 'x'), qr/^workload-destroy: the second argument can only be --forget/, 'the reason carries the kind');
 
 is_deeply([ HPS::Jobs::command('workload-create', ['t0'], workload => 'hw') ], [qw(hw create t0)], 'create');
 is_deeply([ HPS::Jobs::command('workload-create', [ 't0', '--resume' ], workload => 'hw') ], [qw(hw create t0 --resume)], 'create --resume');

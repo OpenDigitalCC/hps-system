@@ -40,10 +40,13 @@ the following bind the request to a node HPS is actively provisioning:
    time is the host key `last_boot_at` (epoch), written by
    `ipxe_init_handler`; a missing or unreadable value refuses.
 4. No approval has already been granted for this host in this
-   provisioning cycle (`ctrl_exec_paired` unset in the host registry).
+   provisioning cycle (`ctrl_exec_paired_at` unset in the host registry; the pre-IPS-07 name
+   `ctrl_exec_paired` is read as a fallback).
 
-On approval, `ctrl_exec_paired=<epoch>` is recorded in the host registry.
-`ipxe_boot_nixos` clears `ctrl_exec_paired` and opens the dispatcher
+On approval, `ctrl_exec_paired_at=<epoch>` is recorded in the host registry,
+and for one release the same epoch under the old name `ctrl_exec_paired` (the
+name reads as a boolean; it is not one: see `docs/REGISTRY-KEYS.md`).
+`ipxe_boot_nixos` clears both keys and opens the dispatcher
 pairing window (`pairing-mode start`, one window at a time) when it issues
 a boot script, since a RAM node loses its certificate on every boot. The
 approver closes the window shortly after approval (delayed, so the
@@ -75,8 +78,8 @@ the exposure is confined to the pairing window.
   gains a ticket parameter and the approver gains a validation step.
 - The approver must run on the IPS (where `ced` and the CA live);
   approval never crosses the network.
-- Re-provisioning a node requires clearing `ctrl_exec_paired` (and
-  unpairing/revoking the old cert) as part of the reinstall path.
+- Re-provisioning a node requires clearing `ctrl_exec_paired_at` (and `ctrl_exec_paired`,
+  and unpairing/revoking the old cert) as part of the reinstall path.
 - From ctrl-exec 0.14.3 the agent registers under the HPS-chosen name
   (`request-pairing --name`) and the approver passes `approve --replace`,
   so re-pairing a node replaces its previous registration; older agents

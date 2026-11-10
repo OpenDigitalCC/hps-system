@@ -23,12 +23,14 @@ Usage:
   hps-workload create  <name> [--resume] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload start   <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload stop    <name> [--vm <vm>] [--dry-run] [--json]
-  hps-workload destroy <name> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]
 <name> is the workload: workloads/<name>.json under the cluster's config directory.
 create refuses a workload that already exists unless --resume (continue an
-unfinished create). destroy needs an unexpired approval: on the compute host of
-the first VM, hps-approve workload-destroy <mac> --workload <name>.
+unfinished create). destroy removes the instance (VMs, zvols, mirrors, record) and
+keeps workloads/<name>.json, so a later create works; destroy --forget also removes
+the definition. Both need an unexpired approval: on the compute host of the first
+VM, hps-approve workload-destroy <mac> --workload <name>.
 --dry-run prints the node calls and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
@@ -72,22 +74,23 @@ sub render_status {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm);
+    my ($json, $dry, $resume, $any, $vm, $forget);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
-        'allow-any-pool-name' => \$any, 'vm=s' => \$vm,
+        'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     my $name = shift @argv // return usage('workload name required');
     return usage("unknown operation '$op'") unless grep { $_ eq $op } HPS::Workload::ops();
     return usage("$op takes no further arguments") if @argv;
     return usage('--resume is only for create') if $resume && $op ne 'create';
+    return usage('--forget is only for destroy') if $forget && $op ne 'destroy';
     return usage("--vm is not for $op") if defined $vm && ($op eq 'create' || $op eq 'destroy');
     return usage('--allow-any-pool-name is only for create and destroy') if $any && $op ne 'create' && $op ne 'destroy';
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         my $wl = HPS::Workload->new(allow_any_pool_name => $any);
-        my %a = (vm => $vm, resume => $resume, dry_run => $dry);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget);
         if ($dry) {
             my $r = $wl->run($op, $name, %a);
             if ($json) { print $js->encode($r) }
@@ -101,7 +104,12 @@ sub main {
         my $r = $wl->run($op, $name, %a);
         if ($json) { print $js->encode($r) }
         elsif ($op eq 'status') { print render_status($r) }
-        else { print render_run($r) . join('', map {"note: $_\n"} @{ $r->{notes} // [] }) . "$op ok: workload $name\n" }
+        else {
+            print render_run($r) . join('', map {"note: $_\n"} @{ $r->{notes} // [] }) . "$op ok: workload $name\n";
+            print $r->{forgotten} ? "definition workloads/$name.json removed (--forget)\n"
+                : "definition workloads/$name.json kept; create $name runs again from it, destroy --forget removes it\n"
+                if $op eq 'destroy';
+        }
         return $r->{ok} ? 0 : 1;
     };
     return $rc if defined $rc;

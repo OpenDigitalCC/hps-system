@@ -42,7 +42,7 @@ my %KINDS = (
     'workload-create'      => [ \&_args_wl_create,  3600 ],
     'workload-start'       => [ \&_args_wl_vm,      1800 ],
     'workload-stop'        => [ \&_args_wl_vm,      1800 ],
-    'workload-destroy'     => [ \&_args_wl_name,    3600 ],
+    'workload-destroy'     => [ \&_args_wl_destroy, 3600 ],
     'workload-status'      => [ \&_args_wl_vm,      600 ],
 );
 
@@ -71,8 +71,11 @@ sub _args_mac (@args) {
 
 my $WL_RE = qr/^[a-z][a-z0-9-]{0,31}\z/;
 
-sub _args_wl_name (@args) {
-    return 'needs exactly <workload> (^[a-z][a-z0-9-]{0,31}$)' unless @args == 1 && $args[0] =~ $WL_RE;
+# <workload> [--forget]
+sub _args_wl_destroy (@args) {
+    return 'needs <workload> [--forget]' unless @args == 1 || @args == 2;
+    return 'workload must match ^[a-z][a-z0-9-]{0,31}$' unless $args[0] =~ $WL_RE;
+    return 'the second argument can only be --forget' if @args == 2 && $args[1] ne '--forget';
     return undef;
 }
 

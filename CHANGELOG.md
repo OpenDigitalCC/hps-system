@@ -12,6 +12,20 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## IPS-07: registry key catalogue, workload destroy keeps the definition (2026-11-10)
+
+- registry: new `HPS::Registry::Keys` table and generated `docs/REGISTRY-KEYS.md`
+  (name, scope, type, writer, meaning for every key the code writes; a test fails
+  on an uncatalogued key); typed accessors `host_get_epoch` and `host_get_bool`
+  refuse a wrong-typed value and name the key; `bin/hps-registry-keys`.
+- compatibility: host key `ctrl_exec_paired_at` (epoch) is written at pairing and
+  read first; `ctrl_exec_paired` keeps the same epoch value for one release and is
+  then removed. Registry keys added: `ctrl_exec_paired_at`,
+  `workload_<name>_destroyed`.
+- workloads: `hps-workload destroy` keeps `workloads/<name>.json`; `destroy
+  --forget` removes it too (job kind `workload-destroy <name> [--forget]`).
+  Changed behaviour: destroy no longer deletes the definition.
+
 ## 3935261–dd1c254 — Phase 1: NixOS lab trial (2026-11-09)
 
 Everything on `main` after `91c9272`: changesets CS-1.1 to CS-1.16 plus

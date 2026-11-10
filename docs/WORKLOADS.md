@@ -52,7 +52,7 @@ else that host's registry `IP`.
 
 ## Operations
 
-`hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume]`.
+`hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`.
 Each operation is an ordered list of node calls (`--dry-run` prints it, changes
 nothing). A node call that exits non-zero ends the run at once.
 
@@ -81,8 +81,18 @@ nothing). A node call that exits non-zero ends the run at once.
 :   Needs the approval below. Allowed in every recorded state. From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
     defined is tolerated), `vm-undefine`, `mirror-stop`; then
     `storage-zvol-destroy` of every local leg (through `HPS::Storage`). The
-    registry key and the definition file are removed last, only when every call
-    succeeded; the workload approval is then spent (revoked).
+    registry record `workload_<name>` is removed last, only when every call
+    succeeded, and replaced by `workload_<name>_destroyed` (`at`, `by`,
+    `approved_by`, `forgotten`) for audit; the next `create` removes that
+    audit record. The workload approval is then spent (revoked).
+    **The definition `workloads/<name>.json` is kept**: destroy removes the
+    instance, not the operator's intent, so `create` runs again from the same
+    file.
+
+`destroy --forget`
+:   As `destroy`, and the definition file is removed too (the audit record
+    says `forgotten`). Same approval, same exit codes; `--forget` is refused
+    (usage, 2) on every other operation.
 
 `status`
 :   Per VM `vm-status` and per mirror `mirror-status`; reports the recorded and
@@ -102,6 +112,10 @@ Cluster key `workload_<name>`:
                  "disks": {"root": {"md": "/dev/md/$VM-root", "legs": ["local:...", "iscsi:..."]}},
                  "last_owner": "$NODE", "started_at": "..."}}}
 ```
+
+After `destroy`, cluster key `workload_<name>_destroyed` is
+`{"at": "...", "by": "operator", "approved_by": "...", "forgotten": false}`; the next `create` removes it.
+All registry keys, with their types: `docs/REGISTRY-KEYS.md`.
 
 A `boot: network` VM has `"disks": {}` and `"macs": ["$MAC", ...]`, the MACs
 `vm-define` reported (`VM $VM defined mac=$MAC`, one per NIC), which are the
@@ -141,7 +155,7 @@ syslog off). No log line carries a key, secret or signature.
 
 The root job runner (`hps-jobs`, ADR 0006) accepts `workload-create <name>
 [--resume]`, `workload-start|stop|status <name> [--vm $VM]` and
-`workload-destroy <name>`; `workload-status` runs `hps-workload status <name> --json`.
+`workload-destroy <name> [--forget]`; `workload-status` runs `hps-workload status <name> --json`.
 Environment: `HPS_WORKLOAD_CMD` (default `bin/hps-workload`), `HPS_RUN_CMD`
 (`hps-run.sh`), `HPS_RESOURCES` (default `$HPS_BASE/hps-resources`).
 

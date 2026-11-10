@@ -13,6 +13,7 @@ use JSON::PP;
 use Sys::Hostname qw(hostname);
 use Time::HiRes qw(sleep);
 use POSIX qw(strftime);
+use HPS::Registry::Keys;
 
 my $KEY_RE = qr/^[A-Za-z0-9_-]+$/;
 
@@ -290,6 +291,35 @@ sub host_set ($self, $mac, $key, $v) {
     $self->_db_set($db, $key, $v);
     $self->_db_set($db, 'UPDATED', $self->timestamp);
     return 1;
+}
+
+#--- typed host accessors ----------------------------------------------------------
+# Refuse, naming the key, a value that is not of the type asked for, and a key the
+# catalogue (HPS::Registry::Keys) declares as another type. undef when unset.
+
+sub _typed ($self, $mac, $key, $type) {
+    my $declared = HPS::Registry::Keys::type_of('host', $key);
+    die "Registry key '$key' is declared $declared, not $type\n"
+        if defined $declared && $declared ne $type;
+    my $v = $self->host_get($mac, $key);
+    return undef unless defined $v;
+    (my $t = $v) =~ s/\A"|"\z//g;
+    die "Registry key '$key' holds '$v', which is not $type\n"
+        unless HPS::Registry::Keys::valid($type, $t);
+    return $t;
+}
+
+# 1 or 0 from true/false/1/0.
+sub host_get_bool ($self, $mac, $key) {
+    my $v = $self->_typed($mac, $key, 'bool');
+    return undef unless defined $v;
+    return $v eq 'true' || $v eq '1' ? 1 : 0;
+}
+
+# Unix time in seconds, as an integer.
+sub host_get_epoch ($self, $mac, $key) {
+    my $v = $self->_typed($mac, $key, 'epoch');
+    return defined $v ? $v + 0 : undef;
 }
 
 sub host_list_all ($self) { return _subdirs($self->hosts_dir, '.db') }
