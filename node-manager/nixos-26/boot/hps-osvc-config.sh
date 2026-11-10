@@ -200,7 +200,7 @@ write_cluster_conf() {
   local secret_file="$HPS_RUN_DIR/osvc-cluster-secret" csec
   [[ -s "$secret_file" ]] || refuse "no cluster secret at $secret_file (hps-osvc deliver has not run for this node)"
   csec=$(cat "$secret_file")
-  [[ "$csec" =~ ^[0-9a-f]{32,}$ ]] || refuse "the cluster secret at $secret_file is not hex"
+  [[ "$csec" =~ ^[0-9a-f]{32}$ ]] || refuse "the cluster secret at $secret_file is not 32 hex characters (an AES key size)"
   write_file "$OSVC_ETC/cluster.conf" 0600 "[cluster]
 name = $CLUSTER
 nodes = ${NODES[*]}

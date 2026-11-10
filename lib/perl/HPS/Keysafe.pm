@@ -137,28 +137,28 @@ sub _random ($n) {
     return $buf;
 }
 
-sub _read_key ($path) {
+sub _read_key ($path, $len = $KEY_BYTES) {
     my $p = _perm_problem($path, 'file');
     _fail('perms', "Key file $path $p") if $p;
     sysopen(my $fh, $path, O_RDONLY | O_NOFOLLOW) or _fail('failed', "Cannot open $path: $!");
     binmode $fh;
     my $size = -s $fh;
-    _fail('perms', "Key file $path is not $KEY_BYTES bytes") unless defined $size && $size == $KEY_BYTES;
+    _fail('perms', "Key file $path is not $len bytes") unless defined $size && $size == $len;
     my $buf = '';
-    my $got = read($fh, $buf, $KEY_BYTES);
+    my $got = read($fh, $buf, $len);
     close $fh;
-    _fail('failed', "Cannot read $path") unless defined $got && $got == $KEY_BYTES;
+    _fail('failed', "Cannot read $path") unless defined $got && $got == $len;
     return $buf;
 }
 
 # Write 32 fresh random bytes to a temp file, then link() it into place: the
 # name appears complete or not at all, and a racing creator loses cleanly.
 # Returns the bytes that are now stored under $path (ours or the winner's).
-sub _create_key ($path) {
+sub _create_key ($path, $len = $KEY_BYTES) {
     my $dir = $path =~ s{/[^/]+\z}{}r;
     my $tmp = sprintf('%s/.tmp.%d.%s', $dir, $$, unpack('H*', _random(6)));
     my $old = umask(077);
-    my $key = _random($KEY_BYTES);
+    my $key = _random($len);
     my $ok  = sysopen(my $fh, $tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     my $err = "$!";
     umask($old);
@@ -168,7 +168,7 @@ sub _create_key ($path) {
     $fh->flush;
     $fh->sync;
     my $closed = close $fh;
-    if (!defined $wrote || $wrote != $KEY_BYTES || !$closed) {
+    if (!defined $wrote || $wrote != $len || !$closed) {
         unlink $tmp;
         _fail('failed', "Cannot write a temporary key file in $dir");
     }
@@ -179,13 +179,13 @@ sub _create_key ($path) {
     my $lerr = $!;
     unlink $tmp;
     _fail('failed', "Cannot place $path: $lerr") unless -e $path || -l $path;
-    return _read_key($path);   # lost the race, or it was already there
+    return _read_key($path, $len);   # lost the race, or it was already there
 }
 
-sub _get_or_create ($self, $dir, $file) {
+sub _get_or_create ($self, $dir, $file, $len = $KEY_BYTES) {
     my $path = "$dir/$file";
-    return _read_key($path) if -e $path || -l $path;
-    return _create_key($path);
+    return _read_key($path, $len) if -e $path || -l $path;
+    return _create_key($path, $len);
 }
 
 # The key for one host and name; created on first use. Returns raw bytes.
@@ -221,10 +221,13 @@ sub list ($self, $mac) {
 }
 
 # The per-cluster secret for a purpose (e.g. 'approval'); created on first use.
-sub cluster_secret ($self, $purpose) {
+# $bytes is the length (default 32); a purpose whose consumer needs another
+# length (OpenSVC: 16) passes it every time, and a file of another length is refused.
+sub cluster_secret ($self, $purpose, $bytes = $KEY_BYTES) {
     _check_name('purpose', $purpose);
+    _fail('usage', "Invalid secret length: $bytes") unless $bytes =~ /^[0-9]+\z/ && $bytes >= 1 && $bytes <= 128;
     my $dir = $self->_ensure;
-    return $self->_get_or_create($dir, "$purpose.hmac");
+    return $self->_get_or_create($dir, "$purpose.hmac", $bytes);
 }
 
 #--- operator repair ---------------------------------------------------------------

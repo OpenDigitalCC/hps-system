@@ -16,7 +16,7 @@ sub usage {
 Usage:
   hps-osvc deliver <host> [--dry-run]
 <host> is a MAC (any format) or a registry HOSTNAME. deliver sends the cluster's
-OpenSVC secret (keysafe purpose 'opensvc', created on first use) as confidential
+OpenSVC secret (keysafe purpose 'opensvc-cluster', 16 random bytes sent as 32 hex characters, created on first use) as confidential
 input to the node script osvc-secret-set, through scripts/hps-run.sh --input.
 The node stores it in RAM and (re)starts opensvc-daemon, which rewrites its
 config, including the node list, from the IPS. Run it for every node, and again
@@ -36,7 +36,7 @@ sub deliver {
         print "Dry run: would send the cluster secret (redacted) to:\n  @cmd\n";
         return 0;
     }
-    my $hex = unpack('H*', HPS::Keysafe->new->cluster_secret('opensvc'));
+    my $hex = unpack('H*', HPS::Keysafe->new->cluster_secret('opensvc-cluster', 16));
     open(my $fh, '|-', @cmd) or die "cannot run $cmd[0]: $!\n";
     print {$fh} "$hex\n";
     close $fh;    # sets $? to the runner's wait status

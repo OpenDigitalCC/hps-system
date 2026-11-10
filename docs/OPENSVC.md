@@ -128,7 +128,7 @@ IPS and writes the files above:
 ### The cluster secret
 
 om3's listener and heartbeat share one secret. It is in the keysafe
-(`HPS::Keysafe`, purpose `opensvc`, 32 random bytes, created on first use), never
+(`HPS::Keysafe`, purpose `opensvc-cluster`, 16 random bytes sent as 32 hex characters, created on first use). om3 uses the secret string itself as the AES key of its heartbeat secret, so it must be 16, 24 or 32 characters; a 64-character value stops the daemon at bootstrap ("crypto/aes: invalid key size"). The unit runs with `HOME=/var/lib/opensvc`, which the daemon bootstrap needs, never
 in an image, a log or an argument. On the IPS:
 
 ```

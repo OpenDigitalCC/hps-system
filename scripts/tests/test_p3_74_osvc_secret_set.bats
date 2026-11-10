@@ -15,7 +15,7 @@ setup() {
   printf '#!/usr/bin/env bash\necho "systemctl $*" >> "$SHIM_LOG"\nexit "${FAKE_SYSTEMCTL_RC:-0}"\n' > "$T/bin/systemctl"
   chmod +x "$T/bin/systemctl"
   export PATH="$T/bin:$PATH"
-  SECRET="$(printf 'cd%.0s' {1..32})"
+  SECRET="$(printf 'cd%.0s' {1..16})"
 }
 
 teardown() {
@@ -35,9 +35,9 @@ teardown() {
   run ! grep -q "$SECRET" "$SHIM_LOG"
 }
 
-@test "anything but 32-128 lower-case hex digits is refused (3) and stores nothing" {
+@test "anything but exactly 32 lower-case hex digits (a 64-digit value is not an AES key size) is refused (3) and stores nothing" {
   local v
-  for v in "" "abc" "ABCDEF0123456789ABCDEF0123456789" "$SECRET;rm" "$SECRET$SECRET$SECRET"; do
+  for v in "" "abc" "ABCDEF0123456789ABCDEF0123456789" "$SECRET;rm" "$SECRET$SECRET" "${SECRET:1}" "${SECRET}a"; do
     run -3 bash "$SCRIPT" <<< "$v"
     [ ! -e "$HPS_RUN_DIR/osvc-cluster-secret" ]
   done
@@ -55,6 +55,6 @@ teardown() {
 
 @test "a second delivery replaces the first" {
   run -0 bash "$SCRIPT" <<< "$SECRET"
-  run -0 bash "$SCRIPT" <<< "$(printf 'ef%.0s' {1..32})"
-  [ "$(cat "$HPS_RUN_DIR/osvc-cluster-secret")" = "$(printf 'ef%.0s' {1..32})" ]
+  run -0 bash "$SCRIPT" <<< "$(printf 'ef%.0s' {1..16})"
+  [ "$(cat "$HPS_RUN_DIR/osvc-cluster-secret")" = "$(printf 'ef%.0s' {1..16})" ]
 }

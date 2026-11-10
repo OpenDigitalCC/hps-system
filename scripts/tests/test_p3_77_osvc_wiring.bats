@@ -36,6 +36,8 @@ SCRIPTS="osvc-status osvc-object-set osvc-object-start osvc-object-stop osvc-obj
   local m="$ROOT/nix/modules/hps-opensvc.nix"
   grep -q 'ExecStart = "${pkgs.om3}/bin/om daemon run $OSVC_DAEMON_ARGS";' "$m"
   grep -q 'Restart = "always";' "$m"
+  grep -q 'Environment = \[ "HOME=/var/lib/opensvc" \];' "$m"
+  grep -q 'WorkingDirectory = "/var/lib/opensvc";' "$m"
   grep -q '"hps-node-init.service"' "$m"
   grep -q 'network-online.target' "$m"
   grep -q 'ConditionPathExists = "/run/hps/osvc-cluster-secret";' "$m"

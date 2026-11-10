@@ -35,8 +35,8 @@ SH
   chmod +x "$T/bin/curl"
   export PATH="$T/bin:$PATH"
   printf 'cluster lab\nnode sch-001.lab.example 192.0.2.11\nnode tch-001.lab.example 192.0.2.12\n' > "$KEYS/nodes"
-  # a fake 32-byte secret, as delivered by osvc-secret-set
-  printf '%s\n' "$(printf 'ab%.0s' {1..32})" > "$HPS_RUN_DIR/osvc-cluster-secret"
+  # a fake 32-character secret, as delivered by osvc-secret-set
+  printf '%s\n' "$(printf 'ab%.0s' {1..16})" > "$HPS_RUN_DIR/osvc-cluster-secret"
 }
 
 teardown() {
@@ -48,7 +48,7 @@ teardown() {
   grep -qx '\[cluster\]' "$OSVC_ETC/cluster.conf"
   grep -qx 'name = lab' "$OSVC_ETC/cluster.conf"
   grep -qx 'nodes = sch-001.lab.example tch-001.lab.example' "$OSVC_ETC/cluster.conf"
-  grep -qx "secret = $(printf 'ab%.0s' {1..32})" "$OSVC_ETC/cluster.conf"
+  grep -qx "secret = $(printf 'ab%.0s' {1..16})" "$OSVC_ETC/cluster.conf"
 }
 
 @test "defaults: node.conf has listener 1215 and unicast hb 5s/15s with one addr per node" {
@@ -107,6 +107,12 @@ teardown() {
   [ ! -e "$OSVC_ETC/cluster.conf" ]
 }
 
+@test "a 64-character secret is refused: om3 uses the string as an AES key" {
+  printf '%s\n' "$(printf 'ab%.0s' {1..32})" > "$HPS_RUN_DIR/osvc-cluster-secret"
+  run -3 bash "$GEN"
+  [ ! -e "$OSVC_ETC/cluster.conf" ]
+}
+
 @test "this node missing from the IPS list is refused" {
   printf 'cluster lab\nnode tch-001.lab.example 192.0.2.12\n' > "$KEYS/nodes"
   run -3 bash "$GEN"
@@ -138,5 +144,5 @@ teardown() {
 
 @test "the secret value is never logged" {
   run -0 bash "$GEN"
-  [[ "$output" != *"$(printf 'ab%.0s' {1..32})"* ]]
+  [[ "$output" != *"$(printf 'ab%.0s' {1..16})"* ]]
 }

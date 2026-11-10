@@ -50,6 +50,9 @@
     ];
     serviceConfig = {
       Type = "simple";
+      # The daemon's bootstrap needs a home directory ($HOME is otherwise unset).
+      Environment = [ "HOME=/var/lib/opensvc" ];
+      WorkingDirectory = "/var/lib/opensvc";
       Restart = "always";
       RestartSec = 15;
       # opensvc.env (OSVC_DAEMON_ARGS, the log level) is written by the generator.
