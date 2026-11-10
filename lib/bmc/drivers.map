@@ -1,0 +1,22 @@
+# drivers.map - which BMC driver the audit selects (IPS-08, docs/BMC.md).
+#
+# One rule per line, tried in order, the first match wins. A rule is a driver
+# name followed by field=regex conditions (all must match, case-insensitive,
+# unanchored unless the regex is); a rule with no condition matches anything.
+# Regexes contain no spaces (use \s). Fields, from the audit:
+#   vendor              dmi.sys_vendor
+#   product             dmi.product_name
+#   mc_manufacturer_id  bmc.mc.manufacturer_id from `ipmitool mc info` (IANA number)
+#   redfish_host_if     true when DMI type 42 (management controller host
+#                       interface) is present
+#   ipmi                true when a local IPMI interface, DMI type 38 or an
+#                       `mc info` answer was seen
+# An operator choice (hps-bmc set) is never replaced by this table.
+
+hpe-ilo          vendor=^(HP|HPE|Hewlett.Packard.*)$  product=ProLiant|Synergy|Apollo|Edgeline
+hpe-ilo          mc_manufacturer_id=^11$
+dell-idrac       vendor=^Dell
+dell-idrac       mc_manufacturer_id=^674$
+redfish-generic  redfish_host_if=^true$
+ipmi             ipmi=^true$
+manual

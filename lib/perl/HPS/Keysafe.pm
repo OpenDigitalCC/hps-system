@@ -230,6 +230,78 @@ sub cluster_secret ($self, $purpose, $bytes = $KEY_BYTES) {
     return $self->_get_or_create($dir, "$purpose.hmac", $bytes);
 }
 
+#--- stored secrets (credentials) ---------------------------------------------------
+
+# A secret chosen by the operator (a BMC or PDU credential), unlike the random
+# keys above. One file per name under <keysafe>/credentials/, dir 0700, file
+# 0600, written through a temporary file and rename. The value is returned only
+# by get_secret and never appears in an error message.
+sub _secret_dir ($self, $create) {
+    my $dir = $create ? $self->_ensure : ($self->_existing // return undef);
+    my $sub = "$dir/credentials";
+    if ($create) { _make_dir($sub) }
+    elsif (!-d $sub) { return undef }
+    _check_dir($sub);
+    return $sub;
+}
+
+sub put_secret ($self, $name, $value) {
+    _check_name('secret', $name);
+    _fail('usage', 'An empty secret is refused') unless defined $value && length $value;
+    my $dir  = $self->_secret_dir(1);
+    my $path = "$dir/$name.cred";
+    my $tmp  = sprintf('%s/.tmp.%d.%s', $dir, $$, unpack('H*', _random(6)));
+    my $old  = umask(077);
+    my $ok   = sysopen(my $fh, $tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    my $err  = "$!";
+    umask($old);
+    _fail('failed', "Cannot create a temporary secret file in $dir: $err") unless $ok;
+    binmode $fh;
+    my $wrote = syswrite($fh, $value);
+    my $closed = close $fh;
+    if (!defined $wrote || $wrote != length $value || !$closed) {
+        unlink $tmp;
+        _fail('failed', "Cannot write the secret file in $dir");
+    }
+    unless (rename($tmp, $path)) {
+        my $e = "$!";
+        unlink $tmp;
+        _fail('failed', "Cannot place $path: $e");
+    }
+    return 1;
+}
+
+# The secret's bytes, or undef when none is stored under that name.
+sub get_secret ($self, $name) {
+    _check_name('secret', $name);
+    my $dir  = $self->_secret_dir(0) // return undef;
+    my $path = "$dir/$name.cred";
+    return undef unless -e $path || -l $path;
+    my $p = _perm_problem($path, 'file');
+    _fail('perms', "Secret file $path $p") if $p;
+    sysopen(my $fh, $path, O_RDONLY | O_NOFOLLOW) or _fail('failed', "Cannot open $path: $!");
+    binmode $fh;
+    local $/;
+    my $buf = <$fh>;
+    close $fh;
+    return $buf;
+}
+
+sub has_secret ($self, $name) {
+    _check_name('secret', $name);
+    my $dir = $self->_secret_dir(0) // return 0;
+    return -f "$dir/$name.cred" ? 1 : 0;
+}
+
+sub delete_secret ($self, $name) {
+    _check_name('secret', $name);
+    my $dir = $self->_secret_dir(0) // return 0;
+    my $path = "$dir/$name.cred";
+    return 0 unless -e $path || -l $path;
+    unlink $path or _fail('failed', "Cannot remove $path: $!");
+    return 1;
+}
+
 #--- operator repair ---------------------------------------------------------------
 
 # Explicit operator action: set 0700 on the directories and 0600 on the key

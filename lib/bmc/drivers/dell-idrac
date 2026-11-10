@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# dell-idrac - Dell iDRAC over Redfish. Written to the same contract as the
+# other Redfish drivers; UNPROVEN until a Dell is in the lab. iDRAC quirks used:
+# fixed System.Embedded.1 / iDRAC.Embedded.1 paths, and a one-time boot override
+# that does not send BootSourceOverrideMode (iDRAC takes the mode from the BIOS
+# boot mode). See docs/BMC.md.
+set -euo pipefail
+export RF_NAME=dell-idrac
+export RF_SYSTEM_DEFAULT=/redfish/v1/Systems/System.Embedded.1
+export RF_MANAGER_DEFAULT=/redfish/v1/Managers/iDRAC.Embedded.1
+export RF_PXE_MODE=omit
+here="$(dirname "$(readlink -f "$0")")"
+# shellcheck source=../redfish-common.sh
+. "$here/../redfish-common.sh"
+rf_main "$@"

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# redfish-generic - DMTF Redfish BMC driver, standard paths only. The system
+# and manager are discovered from the collections; ResetType values come from
+# @Redfish.AllowableValues. See docs/BMC.md.
+set -euo pipefail
+export RF_NAME=redfish-generic
+here="$(dirname "$(readlink -f "$0")")"
+# shellcheck source=../redfish-common.sh
+. "$here/../redfish-common.sh"
+rf_main "$@"

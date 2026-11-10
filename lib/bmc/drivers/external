@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# external - power by an outside device: a switched PDU outlet or a smart plug.
+# The device is configured as a command template (power_devices, option cmd):
+#   cmd=pdu-ctl --host {addr} --outlet {outlet} {action}
+# The template is split on spaces (no shell); {addr}, {outlet} and {action}
+# are replaced in each word; {action} is on, off or status. The credential is
+# passed to the command on its stdin (user, password), never on argv. status
+# prints on or off. pxe-once and identify exit 5 (the node relies on
+# network-first boot order). Options: cmd, outlet, cycle_delay (seconds
+# between off and on for reset, default 5). See docs/BMC.md.
+set -euo pipefail
+
+die() {
+  printf 'external: %s\n' "$2" >&2
+  exit "$1"
+}
+
+cred=""
+
+# pdu <on|off|status>: run the template; stdout of the command on stdout.
+pdu() {
+  local action="$1" word out rc=0
+  local -a words argv=()
+  [[ -n "${BMC_OPT_cmd:-}" ]] || die 1 "no cmd template configured for this power device"
+  [[ -n "${BMC_OPT_outlet:-}" ]] || die 1 "no outlet configured for this host"
+  read -ra words <<< "$BMC_OPT_cmd"
+  for word in "${words[@]}"; do
+    word="${word//\{action\}/$action}"
+    word="${word//\{outlet\}/$BMC_OPT_outlet}"
+    word="${word//\{addr\}/${BMC_ADDR:-}}"
+    argv+=("$word")
+  done
+  out="$(printf '%s' "$cred" | "${argv[@]}")" || rc=$?
+  case $rc in
+    0) printf '%s\n' "$out" ;;
+    3 | 4 | 5) die "$rc" "power device command exited $rc" ;;
+    *) die 1 "power device command failed (exit $rc)" ;;
+  esac
+}
+
+act_status() {
+  local out power
+  out="$(pdu status)"
+  case "${out,,}" in
+    *on*) power=on ;;
+    *off*) power=off ;;
+    *) power=unknown ;;
+  esac
+  jq -cn --arg power "$power" '{power: $power, model: "", serial: "", bmc_firmware: ""}'
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status | on | off | force-off | reset | pxe-once | identify) ;;
+    *) die 1 "usage: external status|on|off|force-off|reset|pxe-once|identify" ;;
+  esac
+  case "$action" in
+    pxe-once | identify) die 5 "$action is not supported by a power device" ;;
+  esac
+  cred="$(cat || true)"
+  case "$action" in
+    status) act_status ;;
+    on) pdu on > /dev/null ;;
+    off | force-off) pdu off > /dev/null ;;
+    reset)
+      pdu off > /dev/null
+      sleep "${BMC_OPT_cycle_delay:-5}"
+      pdu on > /dev/null
+      ;;
+  esac
+}
+
+main "$@"

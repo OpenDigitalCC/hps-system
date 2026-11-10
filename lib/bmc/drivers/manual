@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# manual - no automation. Every action logs an instruction for the operator and
+# exits 5, so the controller knows to escalate. status also prints an unknown
+# power state. The credential on stdin is not read.
+set -euo pipefail
+action="${1:-}"
+case "$action" in
+  status | on | off | force-off | reset | pxe-once | identify) ;;
+  *) printf 'manual: usage: manual status|on|off|force-off|reset|pxe-once|identify\n' >&2; exit 1 ;;
+esac
+printf 'manual: no out-of-band control for %s; operator: perform "%s" at the device by hand\n' "${BMC_HOST:-this host}" "$action" >&2
+if [[ "$action" == status ]]; then
+  printf '{"power":"unknown","model":"","serial":"","bmc_firmware":""}\n'
+fi
+exit 5

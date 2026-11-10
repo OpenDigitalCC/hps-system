@@ -12,6 +12,20 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## IPS-08: modular out-of-band power control (2026-11-10)
+
+- new: `hps-bmc status|on|off|force-off|reset|pxe-once|identify <host>`, `set`,
+  `credential`, `device`, `select`, `list` (`HPS::BMC`, `docs/BMC.md`); drivers
+  `hpe-ilo`, `redfish-generic`, `dell-idrac` (unproven), `ipmi`, `external`,
+  `manual` under `lib/bmc/drivers`; the driver is chosen from the audit by
+  `lib/bmc/drivers.map` and an operator choice is never replaced by an audit.
+- audit: the audit records the BMC identity (`ipmitool lan print`, `mc info`,
+  DMI types 38 and 42); the audit image carries `ipmitool` and the IPMI modules.
+- keysafe: `put_secret`, `get_secret`, `has_secret`, `delete_secret` for
+  operator-set credentials. Registry keys added: `bmc_driver`,
+  `bmc_driver_source`, `bmc_addr`, `bmc_options`, `bmc_evidence`, `bmc_last`,
+  `power_devices`.
+
 ## IPS-07: registry key catalogue, workload destroy keeps the definition (2026-11-10)
 
 - registry: new `HPS::Registry::Keys` table and generated `docs/REGISTRY-KEYS.md`

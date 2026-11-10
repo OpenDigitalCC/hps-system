@@ -28,6 +28,10 @@
     "tg3" "bnx2" "bnx2x" "igb" "ixgbe" "i40e" "e1000e"
   ];
 
+  # Local IPMI (KCS) interface, so the audit can read the BMC identity with
+  # ipmitool (IPS-08). Without the hardware there is simply no /dev/ipmi0.
+  boot.kernelModules = [ "ipmi_si" "ipmi_devintf" ];
+
   # Lab debugging aid: a root console on a held node. The audit image holds no
   # secrets and has no role, so the console exposes nothing; node images never
   # get this (no autologin anywhere outside this file).
@@ -45,7 +49,7 @@
     wants = [ "network-online.target" ];
     path = with pkgs; [
       bash coreutils util-linux pciutils numactl iproute2 jq curl gawk
-      gnugrep gnused smartmontools config.boot.zfs.package
+      gnugrep gnused smartmontools ipmitool config.boot.zfs.package
     ];
     serviceConfig = {
       Type = "oneshot";

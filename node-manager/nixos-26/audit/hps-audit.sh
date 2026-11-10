@@ -25,6 +25,13 @@
 # console devices), HPS_AUDIT_OUT (keep the JSON here), HPS_IPS (skip
 # discovery), HPS_AUDIT_TRIM_BYTES
 # (default 204800), HPS_DMESG_LINES (default 2000).
+#
+# BMC identity (IPS-08): `ipmitool lan print` and `ipmitool mc info` when a local
+# IPMI (KCS) device node exists under HPS_DEV (read-only queries), and the DMI
+# types 38 (IPMI device) and 42 (management controller host interface, i.e. a
+# Redfish host interface) from $HPS_SYS/firmware/dmi/entries. The controller maps
+# this, with dmi.sys_vendor and dmi.product_name, to a BMC driver
+# (lib/bmc/drivers.map).
 
 set -euo pipefail
 
@@ -35,6 +42,7 @@ set -euo pipefail
 : "${HPS_AUDIT_OUT:=/run/hps/audit.json}"
 : "${HPS_AUDIT_TRIM_BYTES:=204800}"
 : "${HPS_DMESG_LINES:=2000}"
+: "${HPS_DEV:=/dev}"
 
 WORK="/tmp/hps-audit-$$"
 mkdir -p "$WORK"
@@ -113,6 +121,54 @@ collect_dmi() {
     --arg board_name "$(read_sys "$base/board_name")" \
     --arg bios_version "$(read_sys "$base/bios_version")" \
     '$ARGS.named' > "$WORK/dmi.json"
+}
+
+# ipmi_device_present: a local IPMI interface node exists (needs ipmi_si and
+# ipmi_devintf loaded; hps-audit.nix loads them).
+ipmi_device_present() {
+  local n
+  for n in "$HPS_DEV/ipmi0" "$HPS_DEV/ipmi/0" "$HPS_DEV/ipmidev/0"; do
+    [[ -e "$n" ]] && return 0
+  done
+  return 1
+}
+
+# dmi_entry_count <type>: number of DMI entries of that type (0 when none).
+dmi_entry_count() {
+  local type="$1" n=0 e
+  for e in "$HPS_SYS/firmware/dmi/entries/$type-"*; do
+    [[ -e "$e" ]] && n=$((n + 1))
+  done
+  printf '%s\n' "$n"
+}
+
+# collect_bmc: bmc.json {ipmi_device, lan:{mac,ip_source,ip}, mc:{manufacturer_id,
+# product_id, firmware}, dmi38, dmi42}. The ipmitool calls only read.
+collect_bmc() {
+  local present=false
+  if ipmi_device_present; then
+    present=true
+    capture bmc-lan ipmitool lan print
+    capture bmc-mc ipmitool mc info
+  else
+    log "no local IPMI device node; skipping ipmitool"
+    : > "$WORK/bmc-lan"
+    : > "$WORK/bmc-mc"
+  fi
+  jq -n \
+    --argjson present "$present" \
+    --rawfile lan "$WORK/bmc-lan" \
+    --rawfile mc "$WORK/bmc-mc" \
+    --argjson dmi38 "$(dmi_entry_count 38)" \
+    --argjson dmi42 "$(dmi_entry_count 42)" \
+    'def val($txt; $k): ($txt | split("\n") | map(select(test("^" + $k + "\\s*:"))) | .[0] // "" | sub("^[^:]*:\\s*"; "") | sub("\\s+$"; ""));
+     {
+       ipmi_device: $present,
+       lan: { mac: val($lan; "MAC Address"), ip_source: val($lan; "IP Address Source"), ip: val($lan; "IP Address") },
+       mc: { manufacturer_id: (val($mc; "Manufacturer ID")), product_id: (val($mc; "Product ID") | sub("\\s.*$"; "")), firmware: val($mc; "Firmware Revision") },
+       dmi38: $dmi38,
+       dmi42: $dmi42
+     }' > "$WORK/bmc.json"
 }
 
 collect_memory() {
@@ -241,6 +297,7 @@ assemble() {
     --arg collected_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg hostname "$(hostname 2>/dev/null || true)" \
     --slurpfile dmi "$WORK/dmi.json" \
+    --slurpfile bmc "$WORK/bmc.json" \
     --argjson cpu "$(json_or_null "$WORK/lscpu")" \
     --slurpfile memory "$WORK/meminfo.json" \
     --rawfile numa "$WORK/numactl" \
@@ -264,6 +321,7 @@ assemble() {
       collected_at: $collected_at,
       hostname: $hostname,
       dmi: $dmi[0],
+      bmc: $bmc[0],
       cpu: $cpu,
       memory: $memory[0],
       numa: $numa,
@@ -329,6 +387,7 @@ main() {
   log "IPS: ${ips:-<none>}"
 
   collect_dmi
+  collect_bmc
   capture lscpu lscpu -J
   collect_memory
   capture numactl numactl -H

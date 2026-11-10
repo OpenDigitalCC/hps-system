@@ -1,0 +1,164 @@
+#!/usr/bin/env perl
+# hps-bmc: out-of-band power control through the host's BMC driver (HPS::BMC,
+# docs/BMC.md).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::BMC;
+
+# Exit: 0 ok, 3 refused, 4 target unreachable, 5 not supported, 1 failed
+# (usage mistakes: 2). IPS-04 calls `hps-bmc <action> <host>`.
+my %EXIT = (usage => 2, notfound => 1, refused => 3, failed => 1);
+my %ACTION = map { $_ => 1 } qw(status on off force-off reset pxe-once identify);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-bmc: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json]
+  hps-bmc status <host> --json      {"power":"on|off|unknown","model","serial","bmc_firmware"}
+  hps-bmc set <host> --driver NAME|auto [--addr A] [--option k=v]...
+  hps-bmc credential <host|device:NAME> [--user U]
+      stdin: the user line then the password line (with --user: the password only)
+  hps-bmc device set <name> [--addr A] [--option k=v]... | list | delete <name>
+  hps-bmc select <host>             choose the driver from the stored audit
+  hps-bmc list [--json]
+<host> is a MAC (any format) or a registry HOSTNAME.
+Exit: 0 ok, 3 refused, 4 target unreachable, 5 not supported by this device,
+1 failed, 2 usage.
+USAGE
+    return 2;
+}
+
+sub kv {
+    my ($list) = @_;
+    my %o;
+    for my $kv (@$list) {
+        my ($k, $v) = split /=/, $kv, 2;
+        die HPS::BMC::Error->new('usage', "--option needs k=v, got '$kv'") unless defined $v;
+        $o{$k} = $v;
+    }
+    return \%o;
+}
+
+sub cmd_action {
+    my ($bmc, $action, @args) = @_;
+    my ($json);
+    GetOptionsFromArray(\@args, 'json' => \$json) or return usage();
+    return usage("$action needs one host") unless @args == 1;
+    my $r = $bmc->run($args[0], $action);
+    print STDERR $r->{stderr} if length $r->{stderr};
+    if ($action eq 'status' && $r->{status}) {
+        if ($json) { print JSON::PP->new->canonical->encode($r->{status}), "\n" }
+        else { print "$_: $r->{status}{$_}\n" for qw(power model serial bmc_firmware) }
+    }
+    elsif ($action ne 'status' && length $r->{stdout}) { print $r->{stdout} }
+    return $r->{rc};
+}
+
+sub cmd_set {
+    my ($bmc, @args) = @_;
+    my ($driver, $addr, @opt);
+    GetOptionsFromArray(\@args, 'driver=s' => \$driver, 'addr=s' => \$addr, 'option=s' => \@opt) or return usage();
+    return usage('set needs one host') unless @args == 1;
+    my $r = $bmc->set($args[0], driver => $driver, addr => $addr, options => kv(\@opt));
+    print "$r->{mac}: driver $r->{driver} (source $r->{source})\n";
+    return 0;
+}
+
+sub cmd_credential {
+    my ($bmc, @args) = @_;
+    my $user;
+    GetOptionsFromArray(\@args, 'user=s' => \$user) or return usage();
+    return usage('credential needs one host or device:NAME') unless @args == 1;
+    my $pass;
+    if (defined $user) { $pass = <STDIN> }
+    else { $user = <STDIN>; $pass = <STDIN> }
+    chomp $user if defined $user;
+    chomp $pass if defined $pass;
+    my $r = $bmc->credential_set($args[0], $user, $pass);
+    print "credential stored for $r->{name}\n";
+    return 0;
+}
+
+sub cmd_device {
+    my ($bmc, $sub, @args) = @_;
+    return usage('device needs set|list|delete') unless defined $sub;
+    if ($sub eq 'list') {
+        my $d = $bmc->devices;
+        for my $n (sort keys %$d) {
+            printf "%-16s addr=%s options=%s\n", $n, $d->{$n}{addr} // '', join(',', map {"$_=$d->{$n}{options}{$_}"} sort keys %{ $d->{$n}{options} // {} });
+        }
+        print "No power devices.\n" unless %$d;
+        return 0;
+    }
+    if ($sub eq 'delete') {
+        return usage('device delete needs a name') unless @args == 1;
+        $bmc->device_delete($args[0]);
+        print "deleted $args[0]\n";
+        return 0;
+    }
+    if ($sub eq 'set') {
+        my ($addr, @opt);
+        GetOptionsFromArray(\@args, 'addr=s' => \$addr, 'option=s' => \@opt) or return usage();
+        return usage('device set needs a name') unless @args == 1;
+        my $r = $bmc->device_set($args[0], addr => $addr, options => kv(\@opt));
+        print "device $r->{name}: addr=$r->{addr}\n";
+        return 0;
+    }
+    return usage("unknown device command '$sub'");
+}
+
+sub cmd_select {
+    my ($bmc, @args) = @_;
+    return usage('select needs one host') unless @args == 1;
+    my $r = $bmc->select_from_audit($args[0]);
+    print "$r->{mac}: driver " . ($r->{driver} // '-') . " ($r->{reason})\n";
+    return 0;
+}
+
+sub cmd_list {
+    my ($bmc, @args) = @_;
+    my $json;
+    GetOptionsFromArray(\@args, 'json' => \$json) or return usage();
+    my @rows = $bmc->list;
+    if ($json) { print JSON::PP->new->canonical->encode(\@rows), "\n"; return 0 }
+    print "No hosts with a BMC driver.\n" and return 0 unless @rows;
+    printf "%-14s %-16s %-16s %-9s %-18s %s\n", qw(MAC HOST DRIVER SOURCE ADDRESS LAST);
+    for my $r (@rows) {
+        my $l = $r->{last};
+        my $last = ref $l eq 'HASH' ? "$l->{action} rc=$l->{rc}" . ($l->{power} ? " power=$l->{power}" : '') . " $l->{at}" : '-';
+        printf "%-14s %-16s %-16s %-9s %-18s %s\n", $r->{mac}, $r->{hostname} || '-', $r->{driver}, $r->{source} || '-', $r->{addr} || '-', $last;
+    }
+    return 0;
+}
+
+sub main {
+    my @args = @_;
+    my $cmd = shift @args;
+    return usage() unless defined $cmd;
+    return usage() if $cmd =~ /^(?:-h|--help|help)$/;
+    my $bmc = HPS::BMC->new;
+    return cmd_action($bmc, $cmd, @args) if $ACTION{$cmd};
+    return cmd_set($bmc, @args)        if $cmd eq 'set';
+    return cmd_credential($bmc, @args) if $cmd eq 'credential';
+    return cmd_device($bmc, @args)     if $cmd eq 'device';
+    return cmd_select($bmc, @args)     if $cmd eq 'select';
+    return cmd_list($bmc, @args)       if $cmd eq 'list';
+    return usage("unknown command '$cmd'");
+}
+
+my $rc = eval { main(@ARGV) };
+if (my $e = $@) {
+    if (ref $e && $e->can('kind')) {
+        print STDERR "hps-bmc: " . $e->message . "\n";
+        exit($EXIT{ $e->kind } // 1);
+    }
+    print STDERR "hps-bmc: $e";
+    exit 1;
+}
+exit($rc);

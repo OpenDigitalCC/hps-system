@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# ipmi - IPMI over LAN with ipmitool, for devices that have IPMI and no
+# Redfish. The password reaches ipmitool through its environment (-E), never
+# argv. The user name is on argv (ipmitool offers no other way). Options:
+# interface (default lanplus), identify_seconds (default 15). See docs/BMC.md.
+#
+# Contract: <driver> <action>; BMC_ADDR; credential on stdin (user, password).
+set -euo pipefail
+
+user=""
+pass=""
+
+die() {
+  printf 'ipmi: %s\n' "$2" >&2
+  exit "$1"
+}
+
+read_credential() {
+  IFS= read -r user || true
+  IFS= read -r pass || true
+  [[ -n "$user" && -n "$pass" ]] || die 3 "no credential supplied on stdin"
+  [[ -n "${BMC_ADDR:-}" ]] || die 1 "BMC_ADDR is not set"
+}
+
+# ipmi_run <ipmitool args...>: stdout on stdout; exit 0, 3, 4 or 1.
+ipmi_run() {
+  local err out rc=0
+  err="/tmp/hps-ipmi-$$.err"
+  out="$(IPMI_PASSWORD="$pass" ipmitool -I "${BMC_OPT_interface:-lanplus}" -H "$BMC_ADDR" -U "$user" -E "$@" 2> "$err")" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    local msg
+    msg="$(head -c 400 "$err" || true)"
+    rm -f "$err"
+    if grep -qiE 'unauthorized|invalid user|insufficient privilege|password invalid|authentication' <<< "$msg"; then
+      die 3 "BMC $BMC_ADDR refused the credential"
+    fi
+    if grep -qiE 'unable to establish|timed? ?out|refused|unreachable|no route|get auth capabilities' <<< "$msg"; then
+      die 4 "BMC $BMC_ADDR unreachable"
+    fi
+    die 1 "ipmitool failed (exit $rc)"
+  fi
+  rm -f "$err"
+  printf '%s\n' "$out"
+}
+
+field() {
+  # field <label> <text>: value of the first "label : value" line.
+  awk -F' *: *' -v k="$1" '$1 ~ "^" k "$" { print $2; exit }' <<< "$2"
+}
+
+act_status() {
+  local chassis mc fru power fw model serial
+  chassis="$(ipmi_run chassis power status)"
+  case "${chassis,,}" in
+    *" is on"*) power=on ;;
+    *" is off"*) power=off ;;
+    *) power=unknown ;;
+  esac
+  mc="$(ipmi_run mc info || true)"
+  fru="$(ipmi_run fru print 0 || true)"
+  fw="$(field 'Firmware Revision' "$mc")"
+  model="$(field 'Product Name' "$fru")"
+  serial="$(field 'Product Serial' "$fru")"
+  jq -cn --arg power "$power" --arg model "$model" --arg serial "$serial" --arg fw "$fw" \
+    '{power: $power, model: $model, serial: $serial, bmc_firmware: $fw}'
+}
+
+current_power() {
+  local chassis
+  chassis="$(ipmi_run chassis power status)"
+  case "${chassis,,}" in *" is on"*) echo on ;; *) echo off ;; esac
+}
+
+main() {
+  local action="${1:-}"
+  case "$action" in
+    status | on | off | force-off | reset | pxe-once | identify) ;;
+    *) die 1 "usage: ipmi status|on|off|force-off|reset|pxe-once|identify" ;;
+  esac
+  read_credential
+  case "$action" in
+    status) act_status ;;
+    on) ipmi_run chassis power on > /dev/null ;;
+    off) ipmi_run chassis power soft > /dev/null ;;
+    force-off) ipmi_run chassis power off > /dev/null ;;
+    reset) ipmi_run chassis power reset > /dev/null ;;
+    identify) ipmi_run chassis identify "${BMC_OPT_identify_seconds:-15}" > /dev/null ;;
+    pxe-once)
+      ipmi_run chassis bootdev pxe options=efiboot > /dev/null
+      if [[ "$(current_power)" == on ]]; then
+        ipmi_run chassis power reset > /dev/null
+      else
+        ipmi_run chassis power on > /dev/null
+      fi
+      ;;
+  esac
+}
+
+main "$@"

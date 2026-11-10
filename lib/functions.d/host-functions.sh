@@ -848,6 +848,26 @@ host_audit_refuse() {
 }
 
 #===============================================================================
+# host_bmc_select
+# ---------------
+# After an audit is stored: let the controller pick the BMC driver from it
+# (hps-bmc select, IPS-08). An operator choice is kept by hps-bmc itself. A
+# failure is logged and never fails the audit intake.
+#
+# Parameters:
+#   $1 - MAC of the host
+#===============================================================================
+host_bmc_select() {
+  local mac="${1:-}"
+  local bin="${HPS_BMC_BIN:-${HPS_SYSTEM_BASE:-}/bin/hps-bmc}"
+  [[ -x "$bin" ]] || return 0
+  if ! "$bin" select "$mac" > /dev/null 2>&1; then
+    hps_log warn "[$mac] BMC driver selection from the audit failed (hps-bmc select)"
+  fi
+  return 0
+}
+
+#===============================================================================
 # host_audit_intake
 # -----------------
 # Receive a hardware audit (schema hps-audit/1) POSTed by a held node.
@@ -919,6 +939,7 @@ host_audit_intake() {
   fi
   rm -f "$tmp"
   host_registry "$mac" set audit_at "$(make_timestamp)"
+  host_bmc_select "$mac"
   hps_log info "[$mac] node_audit stored: ${size} bytes ${detail} (hba_mode_enabled per controller)"
   cgi_success "ok"
   return 0
