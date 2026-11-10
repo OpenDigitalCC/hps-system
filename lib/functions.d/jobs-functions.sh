@@ -73,6 +73,28 @@ hps_job_validate() {
       [[ $# -eq 1 && "$1" =~ ^[0-9a-f]{12}$ ]] \
         || { echo "$kind: needs exactly <mac> (12 lowercase hex digits)" >&2; return 1; }
       ;;
+    workload-create)
+      local wl_re='^[a-z][a-z0-9-]{0,31}$'
+      if (( $# == 1 )) || { (( $# == 2 )) && [[ "$2" == "--resume" ]]; }; then
+        [[ "$1" =~ $wl_re ]] || { echo "$kind: workload must match $wl_re" >&2; return 1; }
+      else
+        echo "$kind: needs <workload> [--resume]" >&2
+        return 1
+      fi
+      ;;
+    workload-start | workload-stop | workload-status)
+      local wl_re='^[a-z][a-z0-9-]{0,31}$'
+      if (( $# == 1 )) || { (( $# == 3 )) && [[ "$2" == "--vm" && "$3" =~ $wl_re ]]; }; then
+        [[ "$1" =~ $wl_re ]] || { echo "$kind: workload must match $wl_re" >&2; return 1; }
+      else
+        echo "$kind: needs <workload> [--vm <vm>]" >&2
+        return 1
+      fi
+      ;;
+    workload-destroy)
+      [[ $# -eq 1 && "$1" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+        || { echo "$kind: needs exactly <workload>" >&2; return 1; }
+      ;;
     "")
       echo "hps_job_submit: no kind" >&2
       return 1

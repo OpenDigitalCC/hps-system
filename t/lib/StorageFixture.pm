@@ -13,18 +13,19 @@ use HPS::Registry;
 use HPS::Keysafe;
 use HPS::Approval;
 use HPS::Storage;
+use HPS::Workload;
 
 our $MAC = '525400000001';
 our $NOW = 1_800_000_000;
 
 package FakeCE {
-    sub new { my ($c, %o) = @_; return bless { calls => [], rc => $o{rc} || {} }, $c }
+    sub new { my ($c, %o) = @_; return bless { calls => [], rc => $o{rc} || {}, out => $o{out} || {} }, $c }
     sub call {
         my ($self, %c) = @_;
         push @{ $self->{calls} }, { %c };
         my $rc = $self->{rc}{ $c{script} } // 0;
         $rc = shift @$rc if ref $rc eq 'ARRAY';
-        return { rc => $rc, stdout => "out of $c{script}\n", stderr => $rc ? "boom from $c{script}\n" : '' };
+        return { rc => $rc, stdout => $self->{out}{ $c{script} } // "out of $c{script}\n", stderr => $rc ? "boom from $c{script}\n" : '' };
     }
     sub calls { return @{ $_[0]{calls} } }
     sub scripts { return map { $_->{script} } @{ $_[0]{calls} } }
@@ -50,6 +51,78 @@ sub setup {
             sleep => sub { $NOW += $_[0] }, %x);
     };
     return { base => $base, reg => $reg, ks => $ks, ap => $ap, ce => $ce, log => \@log, mk => $mk };
+}
+
+# --- workloads (CS-3.6) -----------------------------------------------------------
+# setup_workload(): setup() plus a network layout, the IPS address, an image on
+# the IPS, and a runner-backed workload driver factory:
+#   $f->{wl}->(%opt)  an HPS::Workload on the fake runner (storage objects from $f->{mk})
+#   $f->{def}         the base definition (two VMs on host sch-001, one remote leg each)
+#   write_def($f, $def)  writes workloads/<name>.json
+our $MAC2 = '525400000002';
+
+sub layout {
+    return {
+        mgmt => { cidr => '192.0.2.0/24',    vlan => undef, bridge => 'br-mgmt', purpose => 'workload' },
+        db   => { cidr => '198.51.100.0/24', vlan => 41,    bridge => 'br-db',   purpose => 'workload' },
+    };
+}
+
+sub base_def {
+    my $t = JSON::PP::true;
+    return {
+        name => 't0', project => 'lab',
+        access => { ssh_keys => ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest tester'], console => $t },
+        vms => [
+            { name => 't0-app', memory_mib => 2048, vcpus => 2, image => 'debian-13-generic-amd64', nets => ['mgmt'],
+              priority => 3,
+              disks => [ { name => 'root', size => '20G', legs => [
+                  { host => 'sch-001', pool => 'lab' },
+                  { host => 'nas', iqn => 'iqn.2026-01.lab.nas:hpslab-t0-root', portal => '192.0.2.50' } ] } ] },
+            { name => 't0-db', memory_mib => 4096, vcpus => 4, image => 'debian-13-generic-amd64', nets => ['mgmt', 'db'],
+              priority => 1,
+              disks => [ { name => 'root', size => '40G', legs => [
+                  { host => 'sch-001', pool => 'lab' },
+                  { host => 'nas', iqn => 'iqn.2026-01.lab.nas:hpslab-t0-db', portal => '192.0.2.50' } ] } ] },
+        ],
+    };
+}
+
+sub write_def {
+    my ($f, $def) = @_;
+    my $dir = $f->{reg}->workload_dir('lab');
+    make_path($dir);
+    open(my $fh, '>', "$dir/$def->{name}.json") or die "$dir: $!";
+    print {$fh} JSON::PP->new->canonical->pretty->encode($def);
+    close $fh;
+    return "$dir/$def->{name}.json";
+}
+
+sub setup_workload {
+    my %o = @_;
+    my $f = setup(%o);
+    $f->{reg}->cluster_set('lab', 'network_layout', layout());
+    $f->{reg}->cluster_set('lab', 'network_dhcp_ip', '192.0.2.1');
+    my $images = "$f->{base}/images";
+    make_path($images);
+    for my $img ('debian-13-generic-amd64') {
+        open(my $fh, '>', "$images/$img.qcow2") or die;
+        print {$fh} "qcow2 stand-in\n";
+        close $fh;
+        open($fh, '>', "$images/$img.sha256") or die;
+        print {$fh} 'ab' x 32, "  $img.qcow2\n";
+        close $fh;
+    }
+    $f->{images} = $images;
+    $f->{def} = base_def();
+    write_def($f, $f->{def}) unless $o{no_def};
+    $f->{wl} = sub {
+        my %x = @_;
+        return HPS::Workload->new(registry => $f->{reg}, keysafe => $f->{ks}, approval => $f->{ap},
+            storage => sub { $f->{mk}->(host => $_[0]) }, runner => $f->{ce}, logger => sub { push @{ $f->{log} }, "$_[0] $_[1]" },
+            now => sub { $NOW }, images_dir => $images, by => 'tester', %x);
+    };
+    return $f;
 }
 
 sub approve {

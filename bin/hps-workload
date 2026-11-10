@@ -1,0 +1,117 @@
+#!/usr/bin/env perl
+# hps-workload: create, start, stop, destroy and inspect a workload (HPS::Workload).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::Keysafe;
+use HPS::Workload;
+
+# 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, approval, node refusal), 4 not found
+my %EXIT = (
+    usage => 2, refused => 3, perms => 3, tampered => 3, expired => 3,
+    malformed => 3, notfound => 4, failed => 1,
+);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-workload: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-workload create  <name> [--resume] [--dry-run] [--json] [--allow-any-pool-name]
+  hps-workload start   <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload stop    <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload destroy <name> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]
+<name> is the workload: workloads/<name>.json under the cluster's config directory.
+create refuses a workload that already exists unless --resume (continue an
+unfinished create). destroy needs an unexpired approval: on the compute host of
+the first VM, hps-approve workload-destroy <mac> --workload <name>.
+--dry-run prints the node calls and changes nothing.
+Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
+USAGE
+    return 2;
+}
+
+sub render_plan {
+    my ($plan) = @_;
+    my $out = '';
+    for my $s (@$plan) {
+        $out .= "  $s->{n}. [$s->{host}] $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . "\n";
+        $out .= "     input: $s->{input}\n" if defined $s->{input};
+    }
+    return $out;
+}
+
+sub render_run {
+    my ($r) = @_;
+    my $out = '';
+    for my $s (@{ $r->{steps} }) {
+        if ($s->{skipped}) {
+            $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . " (skipped, done earlier)\n";
+            next;
+        }
+        $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . " (exit $s->{rc})\n";
+        $out .= $s->{stdout} . ($s->{stdout} =~ /\n\z/ || !length $s->{stdout} ? '' : "\n");
+    }
+    return $out;
+}
+
+sub render_status {
+    my ($r) = @_;
+    my $out = "Workload $r->{name}: $r->{state}\n";
+    for my $v (@{ $r->{vms} }) {
+        $out .= sprintf("  %-20s host %-14s recorded %-9s node %s%s\n", $v->{vm}, $v->{host} // '-',
+            $v->{recorded_state} // '-', $v->{state}, $v->{ok} ? '' : ' (a node call failed)');
+        $out .= "    mirror $_->{name}: $_->{state}\n" for @{ $v->{mirrors} };
+    }
+    return $out;
+}
+
+sub main {
+    my @argv = @_;
+    my ($json, $dry, $resume, $any, $vm);
+    GetOptionsFromArray(
+        \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
+        'allow-any-pool-name' => \$any, 'vm=s' => \$vm,
+    ) or return usage();
+    my $op   = shift @argv // return usage('operation required');
+    my $name = shift @argv // return usage('workload name required');
+    return usage("unknown operation '$op'") unless grep { $_ eq $op } HPS::Workload::ops();
+    return usage("$op takes no further arguments") if @argv;
+    return usage('--resume is only for create') if $resume && $op ne 'create';
+    return usage("--vm is not for $op") if defined $vm && ($op eq 'create' || $op eq 'destroy');
+    return usage('--allow-any-pool-name is only for create and destroy') if $any && $op ne 'create' && $op ne 'destroy';
+    my $js = JSON::PP->new->canonical->pretty->allow_nonref;
+    my $rc = eval {
+        my $wl = HPS::Workload->new(allow_any_pool_name => $any);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry);
+        if ($dry) {
+            my $r = $wl->run($op, $name, %a);
+            if ($json) { print $js->encode($r) }
+            else {
+                print "Dry run: $op $name; nothing is sent or changed.\nNode calls:\n"
+                    . (@{ $r->{plan} } ? render_plan($r->{plan}) : "  (none)\n");
+            }
+            return 0;
+        }
+        my $r = $wl->run($op, $name, %a);
+        if ($json) { print $js->encode($r) }
+        elsif ($op eq 'status') { print render_status($r) }
+        else { print render_run($r) . "$op ok: workload $name\n" }
+        return $r->{ok} ? 0 : 1;
+    };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::Keysafe::Error')) {
+        print STDERR 'hps-workload: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    $err =~ s/\s+\z//;
+    print STDERR "hps-workload: $err\n";
+    return 1;
+}
+
+exit main(@ARGV);

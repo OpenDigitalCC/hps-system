@@ -39,6 +39,11 @@ my %KINDS = (
     'storage-down'         => [ \&_args_mac,     900 ],
     'storage-trim-check'   => [ \&_args_mac,     900 ],
     'storage-status'       => [ \&_args_mac,     900 ],
+    'workload-create'      => [ \&_args_wl_create,  3600 ],
+    'workload-start'       => [ \&_args_wl_vm,      1800 ],
+    'workload-stop'        => [ \&_args_wl_vm,      1800 ],
+    'workload-destroy'     => [ \&_args_wl_name,    3600 ],
+    'workload-status'      => [ \&_args_wl_vm,      600 ],
 );
 
 sub kinds { return sort keys %KINDS }
@@ -64,6 +69,31 @@ sub _args_mac (@args) {
     return undef;
 }
 
+my $WL_RE = qr/^[a-z][a-z0-9-]{0,31}\z/;
+
+sub _args_wl_name (@args) {
+    return 'needs exactly <workload> (^[a-z][a-z0-9-]{0,31}$)' unless @args == 1 && $args[0] =~ $WL_RE;
+    return undef;
+}
+
+# <workload> [--vm <vm>]
+sub _args_wl_vm (@args) {
+    return 'needs <workload> [--vm <vm>]' unless @args == 1 || @args == 3;
+    return 'workload must match ^[a-z][a-z0-9-]{0,31}$' unless $args[0] =~ $WL_RE;
+    return undef if @args == 1;
+    return 'the second argument can only be --vm <vm>' unless $args[1] eq '--vm';
+    return 'vm must match ^[a-z][a-z0-9-]{0,31}$' unless $args[2] =~ $WL_RE;
+    return undef;
+}
+
+# <workload> [--resume]
+sub _args_wl_create (@args) {
+    return 'needs <workload> [--resume]' unless @args == 1 || @args == 2;
+    return 'workload must match ^[a-z][a-z0-9-]{0,31}$' unless $args[0] =~ $WL_RE;
+    return 'the second argument can only be --resume' if @args == 2 && $args[1] ne '--resume';
+    return undef;
+}
+
 # validate($kind, @args): undef when allowed, else the reason.
 sub validate ($kind, @args) {
     return 'no kind' unless defined $kind && length $kind;
@@ -76,7 +106,7 @@ sub validate ($kind, @args) {
 sub timeout_for ($kind) { return $KINDS{$kind} ? $KINDS{$kind}[1] : 60 }
 
 # command($kind, \@args, %env): the argv for the kind (never a shell string).
-# env: dispatcher (CLI name/path), storage (hps-storage path).
+# env: dispatcher (CLI name/path), storage (hps-storage path), workload (hps-workload path).
 sub command ($kind, $args, %env) {
     my $ced = $env{dispatcher} // 'ctrl-exec-dispatcher';
     my @a   = @$args;
@@ -89,6 +119,10 @@ sub command ($kind, $args, %env) {
     return ($st, $a[0], 'down')                                        if $kind eq 'storage-down';
     return ($st, $a[0], 'trim-check')                                  if $kind eq 'storage-trim-check';
     return ($st, $a[0], 'status')                                      if $kind eq 'storage-status';
+    if ($kind =~ /^workload-(create|start|stop|destroy|status)\z/) {
+        my $wl = $env{workload} // 'hps-workload';
+        return ($wl, $1, @a, ($1 eq 'status' ? ('--json') : ()));
+    }
     die "no command for kind '$kind'\n";
 }
 

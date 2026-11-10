@@ -246,6 +246,12 @@ sub cluster_set ($self, $name, $key, $v) { return $self->_db_set($self->_cluster
 sub cluster_unset ($self, $name, $key) { return $self->_db_unset($self->_cluster_checked($name), $key) }
 sub cluster_list ($self, $name)       { return _db_list($self->_cluster_checked($name)) }
 
+# workload_dir($cluster): <cluster dir>/workloads, one <name>.json definition per
+# workload (HPS::Workload); the active cluster when no name is given.
+sub workload_dir ($self, $cluster = undef) {
+    return $self->cluster_dir($cluster // $self->active_cluster) . '/workloads';
+}
+
 sub cluster_list_all ($self) {
     my $dir = $self->config_base . '/clusters';
     return grep { -d "$dir/$_/cluster.db" } _subdirs($dir, '');

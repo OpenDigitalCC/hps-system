@@ -26,8 +26,10 @@ sub usage {
 Usage: hps-jobs [--once] [--interval SECONDS] [--dir JOBS_DIR]
 Runs queued privileged jobs. Without --once it polls new/ until stopped.
 Kinds: pairing-window-open [seconds], pairing-window-close, pairing-list,
-pairing-approve <reqid> [--replace], storage-up|down|trim-check|status <mac>.
-Environment: HPS_JOBS_DIR, CTRL_EXEC_DISPATCHER, HPS_STORAGE_CMD.
+pairing-approve <reqid> [--replace], storage-up|down|trim-check|status <mac>,
+workload-create <name> [--resume], workload-start|stop|status <name> [--vm <vm>],
+workload-destroy <name>.
+Environment: HPS_JOBS_DIR, CTRL_EXEC_DISPATCHER, HPS_STORAGE_CMD, HPS_WORKLOAD_CMD.
 USAGE
     return 2;
 }
@@ -150,6 +152,7 @@ sub main {
     my $env = {
         dispatcher => $ENV{CTRL_EXEC_DISPATCHER} // 'ctrl-exec-dispatcher',
         storage    => $ENV{HPS_STORAGE_CMD} // "$RealBin/hps-storage",
+        workload   => $ENV{HPS_WORKLOAD_CMD} // "$RealBin/hps-workload",
     };
     log_line(info => 'started; queue ' . $jobs->dir);
     recover_stale($jobs);

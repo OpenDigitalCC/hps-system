@@ -78,7 +78,7 @@ sub fresh {
     eval { $j->submit('storage-up', 'bad') };
     like($@, qr/storage-up: needs exactly <mac>/, 'submit refuses a bad argument');
     is(nfiles($j->sub_dir('new')), 0, 'nothing was queued');
-    is_deeply([ HPS::Jobs::kinds() ], [ sort qw(pairing-window-open pairing-window-close pairing-list pairing-approve storage-up storage-down storage-trim-check storage-status) ], 'the kind list is the allowlist');
+    is_deeply([ HPS::Jobs::kinds() ], [ sort qw(pairing-window-open pairing-window-close pairing-list pairing-approve storage-up storage-down storage-trim-check storage-status workload-create workload-start workload-stop workload-destroy workload-status) ], 'the kind list is the allowlist');
 }
 
 # --- the command table: argument lists, never a shell string
