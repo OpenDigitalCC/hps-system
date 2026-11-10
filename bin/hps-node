@@ -1,0 +1,60 @@
+#!/usr/bin/env perl
+# hps-node: node power control from the IPS (HPS::Node).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use HPS::Node;
+use HPS::Keysafe;
+
+# 0 off (or no BMC: requested), 1 failed, 2 usage, 3 refused, 4 not found, 6 forced off (fault)
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-node: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-node power-off <host> [--force-after SECONDS]
+<host> is a MAC (any format) or a registry HOSTNAME. power-off runs
+hps-storage <host> down, then the node script node-poweroff (the node stops
+guests and mirrors and exports its pools), then waits for the BMC to report
+Off. Only after --force-after seconds (default 120) is the BMC asked to force
+power off, and that is logged as a fault. With no BMC driver (hps-bmc missing,
+or exit 5) it stops after the node script and says the power state is not
+confirmed. HPS_BMC_CMD names the BMC command (default hps-bmc).
+Exit: 0 off or requested without a BMC, 1 failed, 2 usage, 4 not found,
+6 forced off through the BMC.
+USAGE
+    return 2;
+}
+
+sub main {
+    my @argv = @_;
+    my $force_after;
+    GetOptionsFromArray(\@argv, 'force-after=i' => \$force_after) or return usage();
+    my $op   = shift @argv // return usage('operation required');
+    return usage("unknown operation '$op'") unless $op eq 'power-off';
+    my $host = shift @argv // return usage('host required');
+    return usage('power-off takes one host') if @argv;
+    return usage('--force-after must be 0 or more seconds') if defined $force_after && $force_after < 0;
+    my $res = eval {
+        my $n = HPS::Node->new(host => $host);
+        $n->power_off(defined $force_after ? (force_after => $force_after) : ());
+    };
+    unless ($res) {
+        my $err = $@;
+        if (ref $err && $err->isa('HPS::Keysafe::Error')) {
+            print STDERR 'hps-node: ' . $err->message . "\n";
+            return $EXIT{ $err->kind } // 1;
+        }
+        $err =~ s/\s+\z//;
+        print STDERR "hps-node: $err\n";
+        return 1;
+    }
+    print "$host: $res->{message}\n";
+    return $HPS::Node::CODE{ $res->{result} } // 1;
+}
+
+exit main(@ARGV);

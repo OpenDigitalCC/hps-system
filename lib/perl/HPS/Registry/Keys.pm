@@ -60,6 +60,7 @@ my @KEYS = (
     [ 'init_ok', 'host', 'bool', 'host_init_intake', 'True when every step of the last init sequence exited 0.' ],
     [ 'audit_at', 'host', 'stamp', 'node_audit CGI', 'When the audit was stored.' ],
     [ 'storage_note', 'host', 'string', 'hps-onboard', 'Operator note about the node storage plan.' ],
+    [ 'poweroff_last', 'host', 'json', 'HPS::Node', 'Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail.' ],
     [ 'storage_last', 'host', 'json', 'HPS::Storage', 'Outcome of the last storage operation: op, ok, at.' ],
     [ 'storage_pool', 'host', 'string', 'HPS::Storage', 'Name of the pool created on the node.' ],
     [ 'storage_created_at', 'host', 'stamp', 'HPS::Storage', 'When the pool was created.' ],

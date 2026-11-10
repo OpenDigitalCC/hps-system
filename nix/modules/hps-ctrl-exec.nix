@@ -145,6 +145,9 @@ in
       # Lab test only (rig test 2); remove with the script once the rig results are recorded.
       osvc-rig-probe.source = mkScript "osvc-rig-probe" (scriptsDir + "/osvc-rig-probe");
       osvc-rig-probe.options.profile = "node";
+      # IPS-04: clean power-off (systemctl poweroff, queued); the storage shutdown is hps-shutdown-storage.service.
+      node-poweroff.source = mkScript "node-poweroff" (scriptsDir + "/node-poweroff");
+      node-poweroff.options.profile = "node";
       # CS-3.12a: node-to-node iSCSI proof (open-iscsi comes with the compute profile).
       iscsi-login-test.source = mkScript "iscsi-login-test" (scriptsDir + "/iscsi-login-test");
       iscsi-login-test.options.profile = "node";

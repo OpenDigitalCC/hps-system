@@ -175,6 +175,49 @@
       };
     };
 
+    # ---- power-off: the node honours the request, storage first ----------------
+    # IPS-04. An ACPI power button press (iLO GracefulShutdown, an operator, a
+    # BMC policy) is a poweroff: logind acts on it, and the `button` module makes
+    # sure the event reaches logind on hardware that does not load it by itself.
+    # (If a DL360 press shows no logind line in the journal, add services.acpid
+    # with a poweroff handler; not added until the lab shows it is needed.)
+    services.logind.settings.Login.HandlePowerKey = "poweroff";
+    boot.kernelModules = [ "button" ];
+
+    # Stops are the reverse of starts: a unit that is After= X stops BEFORE X.
+    # This unit is after libvirt, the iSCSI initiator, the network, the resolver
+    # and the log forwarder, so on any poweroff or reboot its ExecStop runs while
+    # all of them are still up: guests stop, md mirrors stop, iSCSI targets and
+    # sessions go, ZFS pools are exported, and only then the network and the
+    # log forwarding stop. Every step is bounded by a timeout inside the script
+    # and TimeoutStopSec bounds the whole unit; output goes to the journal (and
+    # so to the IPS) and the console. After= on a unit this profile does not
+    # have (libvirtd on a storage-only node) is harmless.
+    environment.etc."hps/hps-shutdown-storage" = {
+      source = ../../node-manager/nixos-26/boot/hps-shutdown-storage.sh;
+      mode = "0755";
+    };
+
+    systemd.services.hps-shutdown-storage = {
+      description = "HPS: stop guests and mirrors and export pools before power-off";
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "libvirtd.service" "iscsid.service" "iscsid.socket" "ctrl-exec-agent.service"
+        "network-online.target" "systemd-networkd.service" "systemd-resolved.service"
+        "rsyslog.service" "local-fs.target"
+      ];
+      path = with pkgs; [ bash coreutils ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.coreutils}/bin/true";
+        ExecStop = "${pkgs.bash}/bin/bash /etc/hps/hps-shutdown-storage";
+        TimeoutStopSec = 300;
+        StandardOutput = "journal+console";
+        StandardError = "journal+console";
+      };
+    };
+
     services.openssh.enable = false;
     users.mutableUsers = false;
     users.allowNoPasswordLogin = true;

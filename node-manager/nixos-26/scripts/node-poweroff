@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# node-poweroff - power this node off cleanly.
+#
+# ctrl-exec allowlisted node script. Queues `systemctl poweroff` a few seconds
+# from now (a transient timer, so this call returns and ctrl-exec can deliver
+# its reply before the agent is stopped). systemd then stops every unit in
+# order; hps-shutdown-storage.service stops guests, mirrors, iSCSI and exports
+# the pools before the network goes (nix/modules/hps-common.nix).
+#
+# Usage: node-poweroff [--delay <seconds, 0-60, default 3>]
+# Last line on success: poweroff queued
+# Exit: 0 queued, 2 usage, 1 failed.
+
+set -euo pipefail
+
+DELAY=3
+
+log() {
+  printf '[node-poweroff] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: node-poweroff [--delay <seconds>]
+Exit: 0 ok, 2 usage, 1 failed.
+USAGE
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --delay)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        DELAY=$2
+        shift 2
+        ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  [[ "$DELAY" =~ ^[0-9]{1,2}$ ]] || { log "bad --delay"; usage; exit 2; }
+  DELAY=$((10#$DELAY))
+  if ((DELAY > 60)); then
+    log "--delay is at most 60"
+    usage
+    exit 2
+  fi
+}
+
+main() {
+  parse_args "$@"
+  log "power-off requested; storage is quiesced by hps-shutdown-storage.service"
+  if ! run systemd-run --unit=hps-node-poweroff --on-active="${DELAY}s" systemctl poweroff; then
+    log "systemd-run failed; queuing poweroff without a delay"
+    run systemctl poweroff --no-block
+  fi
+  printf 'poweroff queued\n'
+}
+
+main "$@"

@@ -55,6 +55,7 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `init_ok` | `bool` | host_init_intake | True when every step of the last init sequence exited 0. |
 | `audit_at` | `stamp` | node_audit CGI | When the audit was stored. |
 | `storage_note` | `string` | hps-onboard | Operator note about the node storage plan. |
+| `poweroff_last` | `json` | HPS::Node | Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail. |
 | `storage_last` | `json` | HPS::Storage | Outcome of the last storage operation: op, ok, at. |
 | `storage_pool` | `string` | HPS::Storage | Name of the pool created on the node. |
 | `storage_created_at` | `stamp` | HPS::Storage | When the pool was created. |
