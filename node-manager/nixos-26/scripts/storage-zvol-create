@@ -4,7 +4,9 @@
 #
 # ctrl-exec allowlisted node script. Usage: storage-zvol-create <dataset> <size>
 #
-#   <dataset>  <pool>/enc/<name>   (only directly below the encrypted parent)
+#   <dataset>  <pool>/enc/<name> or <pool>/enc/vm/<name>  (guest disks live under
+#              <pool>/enc/vm, apart from other zvols; that filesystem dataset is
+#              created here when absent and inherits the encryption of <pool>/enc)
 #   <size>     ^[0-9]+[KMGT]$      binary multiples, a multiple of 16K, > 0
 #
 # The parent <pool>/enc must have keystatus "available" (a locked parent is
@@ -21,6 +23,7 @@ set -euo pipefail
 DATASET=""
 SIZE=""
 POOL=""
+VM_PARENT=""
 BYTES=0
 
 log() {
@@ -35,7 +38,7 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-zvol-create <pool>/enc/<name> <size>   (size like 1G, 512M, 2T)
+Usage: storage-zvol-create <pool>/enc/[vm/]<name> <size>   (size like 1G, 512M, 2T)
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
 }
@@ -58,10 +61,14 @@ parse_args() {
   fi
   DATASET=$1
   SIZE=$2
-  if [[ ! "$DATASET" =~ ^([a-z][a-z0-9_.-]*)/enc/[A-Za-z0-9_-]+$ ]]; then
-    refuse "dataset '$DATASET' is not <pool>/enc/<name>"
+  if [[ ! "$DATASET" =~ ^([a-z][a-z0-9_.-]*)/enc/(vm/)?[A-Za-z0-9_-]+$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/enc/<name> or <pool>/enc/vm/<name>"
   fi
   POOL=${BASH_REMATCH[1]}
+  VM_PARENT=""
+  if [[ -n "${BASH_REMATCH[2]}" ]]; then
+    VM_PARENT="$POOL/enc/vm"
+  fi
   if [[ ! "$SIZE" =~ ^[0-9]+[KMGT]$ ]]; then
     refuse "size '$SIZE' does not match ^[0-9]+[KMGT]\$"
   fi
@@ -95,6 +102,17 @@ require_unlocked_parent() {
   fi
 }
 
+# <pool>/enc/vm: a plain filesystem dataset below the unlocked <pool>/enc; it
+# inherits the encryption, so no key is given.
+ensure_vm_parent() {
+  [[ -n "$VM_PARENT" ]] || return 0
+  if zfs list -H -o type "$VM_PARENT" > /dev/null 2>&1; then
+    return 0
+  fi
+  log "creating $VM_PARENT (inherits the encryption of $POOL/enc)"
+  run zfs create "$VM_PARENT"
+}
+
 # Exits 0 when the dataset is already a zvol of the requested size.
 check_existing() {
   local type have
@@ -118,6 +136,7 @@ main() {
   size_bytes
   require_unlocked_parent
   check_existing
+  ensure_vm_parent
   run zfs create -V "$SIZE" -s -o volblocksize=16k -o compression=lz4 "$DATASET"
   log "created $DATASET ($SIZE, sparse)"
 }

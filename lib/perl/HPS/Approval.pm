@@ -13,9 +13,9 @@ use HPS::Keysafe;
 
 my %ACTIONS = map { $_ => 1 } qw(pool-create pool-destroy dataset-wipe zvol-destroy peer-gone mirror-create workload-destroy);
 my $POOL_RE = qr/^[A-Za-z][A-Za-z0-9_-]*$/;
-# zvol-destroy carries the dataset <pool>/enc/<name> in the 'pool' member; no '__'
+# zvol-destroy carries the dataset <pool>/enc/[vm/]<name> in the 'pool' member; no '__'
 # so the registry key (which maps '/' to '__') stays unambiguous.
-my $DATASET_RE = qr{^(?!.*__)[A-Za-z][A-Za-z0-9_-]*/enc/[A-Za-z0-9_-]+$};
+my $DATASET_RE = qr{^(?!.*__)[A-Za-z][A-Za-z0-9_-]*/enc/(?:vm/)?[A-Za-z0-9_-]+$};
 my $DISK_RE = qr{^(?:/dev/disk/by-id/)?[A-Za-z0-9][A-Za-z0-9_.:+-]*$};
 # peer-gone and mirror-create list mirror legs, not disks: the two leg specs
 # (local:<pool>/enc/vm/<name> or iscsi:<ip>:<iqn>) of the mirror named in pool.
@@ -55,7 +55,7 @@ sub _normalise ($f) {
     my $mac = eval { HPS::Registry::normalise_mac($f->{mac}) };
     _fail('usage', 'mac is not a valid MAC address') unless defined $mac;
     my $pool = $f->{pool};
-    _fail('usage', $action eq 'zvol-destroy' ? "pool must be a dataset <pool>/enc/<name> (matching $DATASET_RE)" : "pool must match $POOL_RE")
+    _fail('usage', $action eq 'zvol-destroy' ? "pool must be a dataset <pool>/enc/[vm/]<name> (matching $DATASET_RE)" : "pool must match $POOL_RE")
         unless _pool_ok($action, $pool);
     my $disks = $f->{disks} // [];
     _fail('usage', 'disks must be a list') unless ref $disks eq 'ARRAY';

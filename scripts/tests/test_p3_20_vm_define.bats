@@ -24,6 +24,13 @@ teardown() {
   [ -s "$STATE/xml.vm1" ]
 }
 
+@test "a second --disk is refused (2): one disk per guest, nothing defined" {
+  run bash "$S/vm-define" vm1 --memory 2048 --vcpus 2 --disk "$DISK" --disk "$DISK" --net br-work --image "$IMG"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"only one --disk per guest"* ]]
+  [ ! -e "$STATE/xml.vm1" ]
+}
+
 @test "the XML: q35, OVMF loader and nvram, raw virtio disk on the given device, one NIC per bridge" {
   run p3_20_define
   [ "$status" -eq 0 ]

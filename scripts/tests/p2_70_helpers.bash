@@ -39,6 +39,7 @@ case "$verb" in
     for ((i = 1; i <= $#; i++)); do
       if [[ "${!i}" == "-V" ]]; then j=$((i + 1)); size="${!j}"; fi
     done
+    if [[ -z "$size" ]]; then echo "$last" >> "$STATE/datasets"; exit 0; fi
     echo "$last $(bytes_of "$size")" >> "$STATE/zvols"
     exit 0 ;;
   destroy)

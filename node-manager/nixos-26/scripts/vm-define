@@ -101,7 +101,14 @@ parse_args() {
         case "$1" in
           --memory) MEMORY=$2 ;;
           --vcpus) VCPUS=$2 ;;
-          --disk) DISK=$2 ;;
+          --disk)
+            if [[ -n "$DISK" ]]; then
+              log "only one --disk per guest"
+              usage
+              exit 2
+            fi
+            DISK=$2
+            ;;
           --net) NETS+=("$2") ;;
           --image) IMAGE=$2 ;;
           --serial-log) SERIAL=$2 ;;

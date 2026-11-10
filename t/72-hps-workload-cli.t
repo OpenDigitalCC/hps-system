@@ -86,7 +86,7 @@ like($out, qr/no workload definition/, 'says so');
 ($rc, $out) = cli('create', 't0', '--dry-run');
 is($rc, 0, 'create --dry-run exits 0');
 like($out, qr/Dry run: create t0; nothing is sent or changed/, 'dry-run header');
-like($out, qr/\[$mac\] storage-zvol-create lab\/enc\/t0-t0-app-root 20G/, 'dry-run lists the node calls');
+like($out, qr/\[$mac\] storage-zvol-create lab\/enc\/vm\/t0-t0-app-root 20G/, 'dry-run lists the node calls');
 like($out, qr/vm-define t0-db --memory 4096 --vcpus 4 --disk \/dev\/md\/t0-db-root --net br-mgmt --net br-db/, 'dry-run lists vm-define');
 is(scalar(() = calls()), 0, 'dry run runs nothing');
 ok(!$f->{reg}->cluster_exists('lab', 'workload_t0'), 'dry run records nothing');
@@ -127,7 +127,7 @@ like($out, qr/already exists/, 'says so');
 reset_shim();
 ($rc, $out) = cli('start', 't0', '--vm', 't0-db');
 is($rc, 0, 'start --vm exits 0');
-is_deeply([ map { s/^\S+ //r =~ s/\s+\z//r } calls() ], [ 'mirror-assemble t0-db-root --leg local:lab/enc/t0-t0-db-root --leg iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db', 'vm-start t0-db' ], 'start --vm: only that VM');
+is_deeply([ map { s/^\S+ //r =~ s/\s+\z//r } calls() ], [ 'mirror-assemble t0-db-root --leg local:lab/enc/vm/t0-t0-db-root --leg iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db', 'vm-start t0-db' ], 'start --vm: only that VM');
 is(rec()->{vms}{'t0-db'}{state}, 'running', 'registry: running');
 
 ($rc, $out) = cli('status', 't0');

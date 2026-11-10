@@ -42,7 +42,9 @@ Checked before any node call; a refusal exits 3 and names the field:
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
 | unknown fields | refused |
 
-The zvol of a local leg is `<pool>/enc/<workload>-<vm>-<disk>`; the mirror is
+The zvol of a local leg is `<pool>/enc/vm/<workload>-<vm>-<disk>` (guest disks
+live under `<pool>/enc/vm`, where `leg-resolve` looks; `storage-zvol-create` makes
+that dataset when absent); the mirror is
 `<vm>-<disk>` (`/dev/md/<vm>-<disk>`). The portal of a remote leg is its own
 `portal`, else the portal of the export recorded on that host (`storage_exports`),
 else that host's registry `IP`.

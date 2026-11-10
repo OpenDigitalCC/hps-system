@@ -12,9 +12,9 @@
 #
 # The approval is the same eight-member document as for pool-destroy (same
 # canonical form, same HMAC); "pool" carries the dataset name
-# <pool>/enc/<name> and action is zvol-destroy.
+# <pool>/enc/[vm/]<name> and action is zvol-destroy.
 #
-# Usage: storage-zvol-destroy <pool>/enc/<name> --approval-file <path|-> [--secret-from-stdin]
+# Usage: storage-zvol-destroy <pool>/enc/[vm/]<name> --approval-file <path|-> [--secret-from-stdin]
 #
 # Checks the approval (HMAC, expiry, action == zvol-destroy, mac == this node's
 # hps.mac, pool == the dataset argument), then refuses when the dataset is not
@@ -46,7 +46,7 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-zvol-destroy <pool>/enc/<name> --approval-file <path|-> [--secret-from-stdin]
+Usage: storage-zvol-destroy <pool>/enc/[vm/]<name> --approval-file <path|-> [--secret-from-stdin]
 Input (stdin for "-"): {"approval":{...,"hmac":"<hex>"},"secret":"<64 hex>"}
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
@@ -81,8 +81,8 @@ parse_args() {
     esac
   done
   [[ -n "$DATASET" && -n "$APPROVAL_FILE" ]] || { usage; exit 2; }
-  if [[ ! "$DATASET" =~ ^[a-z][a-z0-9_.-]*/enc/[A-Za-z0-9_-]+$ ]]; then
-    refuse "dataset '$DATASET' is not <pool>/enc/<name>"
+  if [[ ! "$DATASET" =~ ^[a-z][a-z0-9_.-]*/enc/(vm/)?[A-Za-z0-9_-]+$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/enc/[vm/]<name>"
   fi
 }
 

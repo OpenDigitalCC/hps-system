@@ -27,10 +27,10 @@ Usage:
   hps-storage <host> up|down|trim-check|status [--dry-run] [--json] [--wait SECONDS]
   hps-storage <host> create <pool> [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> destroy <pool> [--dry-run] [--json] [--allow-any-pool-name]
-  hps-storage <host> zvol-create <pool>/enc/<name> <size> [--dry-run] [--json]
-  hps-storage <host> zvol-destroy <pool>/enc/<name> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-storage <host> zvol-create <pool>/enc/[vm/]<name> <size> [--dry-run] [--json]
+  hps-storage <host> zvol-destroy <pool>/enc/[vm/]<name> [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> zvol-list [--json]
-  hps-storage <host> export <pool>/enc/<name> --iqn <iqn> --initiator <iqn> [--portal <ip>] [--dry-run] [--json]
+  hps-storage <host> export <pool>/enc/[vm/]<name> --iqn <iqn> --initiator <iqn> [--portal <ip>] [--dry-run] [--json]
   hps-storage <host> unexport <iqn> [--dry-run] [--json]
   hps-storage <host> forget-key [--yes] [--dry-run] [--json]
 <host> is a MAC (any format) or a registry HOSTNAME. The pool is named after

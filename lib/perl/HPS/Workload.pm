@@ -276,7 +276,7 @@ sub _state_of ($rec) {
 
 #=== per-VM facts ======================================================================
 
-sub _dataset ($wl, $vm, $disk, $pool) { return "$pool/enc/$wl-$vm-$disk" }
+sub _dataset ($wl, $vm, $disk, $pool) { return "$pool/enc/vm/$wl-$vm-$disk" }
 
 # The portal of a remote leg: the leg's own, else the one the leg host exports
 # that iqn on, else the leg host's registry IP.

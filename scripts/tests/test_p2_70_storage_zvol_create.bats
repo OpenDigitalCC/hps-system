@@ -55,6 +55,48 @@ teardown() {
   [ ! -s "$SHIM_LOG" ]
 }
 
+@test "<pool>/enc/vm/<name> is accepted; the vm parent is created first when absent, logged" {
+  run --separate-stderr bash "$SCRIPT" lab/enc/vm/t0-app-root 1G
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"creating lab/enc/vm (inherits the encryption of lab/enc)"* ]]
+  grep -qxF 'zfs create lab/enc/vm' "$SHIM_LOG"
+  grep -qxF 'zfs create -V 1G -s -o volblocksize=16k -o compression=lz4 lab/enc/vm/t0-app-root' "$SHIM_LOG"
+  local k p c
+  k=$(grep -n 'keystatus' "$SHIM_LOG" | head -1 | cut -d: -f1)
+  p=$(grep -n '^zfs create lab/enc/vm$' "$SHIM_LOG" | head -1 | cut -d: -f1)
+  c=$(grep -n '^zfs create -V' "$SHIM_LOG" | head -1 | cut -d: -f1)
+  [ "$k" -lt "$p" ]
+  [ "$p" -lt "$c" ]
+}
+
+@test "an existing lab/enc/vm is not created again" {
+  echo lab/enc/vm > "$STATE/datasets"
+  run bash "$SCRIPT" lab/enc/vm/t1 1G
+  [ "$status" -eq 0 ]
+  run ! grep -qxF 'zfs create lab/enc/vm' "$SHIM_LOG"
+  grep -q '^zfs create -V' "$SHIM_LOG"
+}
+
+@test "the plain form never creates a vm parent; a locked parent blocks the vm form too" {
+  run bash "$SCRIPT" lab/enc/t0 1G
+  [ "$status" -eq 0 ]
+  run ! grep -qxF 'zfs create lab/enc/vm' "$SHIM_LOG"
+  : > "$SHIM_LOG"
+  echo unavailable > "$STATE/keystatus"
+  run bash "$SCRIPT" lab/enc/vm/t2 1G
+  [ "$status" -eq 3 ]
+  run ! grep -q '^zfs create' "$SHIM_LOG"
+}
+
+@test "vm form refusals: deeper nesting, empty name, vm itself as a zvol name is a plain name" {
+  local d
+  for d in lab/enc/vm/ lab/enc/vm/a/b lab/enc/vm//x lab/vm/t0 'lab/enc/vm/t 0'; do
+    run bash "$SCRIPT" "$d" 1G
+    [ "$status" -eq 3 ]
+  done
+  [ ! -s "$SHIM_LOG" ]
+}
+
 @test "bad sizes are refused (3) before any command" {
   local s
   for s in 1 1X 0G 00K 1g '1 G' G 1.5G 8K 1000K 99999999999999G; do

@@ -26,7 +26,7 @@ my $POOL_RE = qr/^[a-z][a-z0-9_.-]*$/;
 my $ZVOL_RE = qr{^[A-Za-z0-9][A-Za-z0-9_.:/-]*$};
 my $IQN_RE  = qr/^iqn\.[A-Za-z0-9._:-]+$/;
 my $ADDR_RE = qr/^[0-9A-Fa-f:.]+$/;
-my $DS_RE   = qr{^([a-z][a-z0-9_.-]*)/enc/([A-Za-z0-9_-]+)$};    # <pool>/enc/<name>
+my $DS_RE   = qr{^([a-z][a-z0-9_.-]*)/enc/(?:vm/)?([A-Za-z0-9_-]+)$};    # <pool>/enc/<name> or <pool>/enc/vm/<name>
 my $SIZE_RE = qr/^[1-9][0-9]*[KMGT]$/;
 my $KEY     = 'enc';    # the keysafe name of <pool>/enc's key
 
@@ -132,17 +132,17 @@ sub pool ($self, %a) {
     return $pool;
 }
 
-# The pool part of a <pool>/enc/<name> dataset, else undef.
+# The pool part of a <pool>/enc/[vm/]<name> dataset, else undef.
 sub _dataset_pool ($self, $dataset) {
     return undef unless defined $dataset && $dataset =~ $DS_RE;
     return $1;
 }
 
-# The dataset argument of the zvol ops: <pool>/enc/<name>.
+# The dataset argument of the zvol ops: <pool>/enc/<name> or <pool>/enc/vm/<name>.
 sub _dataset ($self, %a) {
     my $ds = $a{dataset};
-    _fail('usage', 'a dataset <pool>/enc/<name> is required') unless defined $ds && length $ds;
-    _fail('usage', "dataset '$ds' must be <pool>/enc/<name>") unless $ds =~ $DS_RE;
+    _fail('usage', 'a dataset <pool>/enc/[vm/]<name> is required') unless defined $ds && length $ds;
+    _fail('usage', "dataset '$ds' must be <pool>/enc/<name> or <pool>/enc/vm/<name>") unless $ds =~ $DS_RE;
     return $ds;
 }
 
@@ -535,7 +535,8 @@ C<zvol-destroy DATASET> (needs a C<zvol-destroy> approval whose C<pool> is the
 dataset; refused while the zvol is in C<storage_exports>), C<zvol-list>,
 C<export DATASET --iqn --initiator [--portal]> (portal defaults to the host's
 registry C<IP>; recorded in C<storage_exports> after the node did it) and
-C<unexport IQN> (removes the entry). A zvol is C<POOL/enc/NAME>.
+C<unexport IQN> (removes the entry). A zvol is C<POOL/enc/NAME> or, for a guest disk, C<POOL/enc/vm/NAME>
+(zvol-create makes the C<POOL/enc/vm> dataset when absent).
 
 =head1 REGISTRY KEYS (per host)
 

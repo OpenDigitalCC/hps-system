@@ -143,6 +143,27 @@ fixture_payload() {
   grep -q '^other/enc/keep' "$STATE/zvols"
 }
 
+@test "a zvol under <pool>/enc/vm is destroyed with an approval for exactly that dataset" {
+  local vds=lab/enc/vm/t0-app-root
+  echo "$vds 1073741824" >> "$STATE/zvols"
+  run --separate-stderr bash "$SCRIPT" "$vds" --approval-file - <<< "$(p2_zvol_payload "$vds")"
+  [ "$status" -eq 0 ]
+  grep -qxF "zfs destroy $vds" "$SHIM_LOG"
+  [ "$(grep -c '^zfs destroy' "$SHIM_LOG")" -eq 1 ]
+  grep -q "^$DS " "$STATE/zvols"
+}
+
+@test "an approval for the plain name does not destroy the vm one, and deeper names are refused" {
+  local vds=lab/enc/vm/t0
+  echo "$vds 1073741824" >> "$STATE/zvols"
+  run bash "$SCRIPT" "$vds" --approval-file - <<< "$(p2_zvol_payload "$DS")"
+  [ "$status" -ne 0 ]
+  nothing_destroyed
+  run bash "$SCRIPT" lab/enc/vm/a/b --approval-file - <<< "$(p2_zvol_payload "$DS")"
+  [ "$status" -eq 3 ]
+  nothing_destroyed
+}
+
 @test "a dataset that is not there: approval checked, exit 0, nothing destroyed" {
   : > "$STATE/zvols"
   destroy "$(p2_zvol_payload "$DS")"

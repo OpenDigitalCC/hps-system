@@ -11,8 +11,8 @@ use StorageFixture;
 
 my $MAC  = $StorageFixture::MAC;
 my $SUM  = 'ab' x 32;
-my $DB   = 'lab/enc/t0-t0-db-root';
-my $APP  = 'lab/enc/t0-t0-app-root';
+my $DB   = 'lab/enc/vm/t0-t0-db-root';
+my $APP  = 'lab/enc/vm/t0-t0-app-root';
 
 sub err_of { my ($code) = @_; eval { $code->(); 1 } and return undef; return $@ }
 sub script_list { my ($f) = @_; return map { "$_->{script}" } $f->{ce}->calls }

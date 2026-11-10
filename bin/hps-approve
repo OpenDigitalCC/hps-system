@@ -28,7 +28,7 @@ Usage:
       [--wipe] [--expires SECONDS] [--allow-any-pool-name] [--json]
   hps-approve pool-destroy <mac> --pool NAME [--expires SECONDS]
       [--allow-any-pool-name] [--json]
-  hps-approve zvol-destroy <mac> --dataset POOL/enc/NAME [--expires SECONDS]
+  hps-approve zvol-destroy <mac> --dataset POOL/enc/[vm/]NAME [--expires SECONDS]
       [--allow-any-pool-name] [--json]
   hps-approve workload-destroy <mac> --workload NAME [--expires SECONDS] [--json]
   hps-approve list <mac> [--json]
