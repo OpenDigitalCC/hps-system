@@ -94,13 +94,14 @@ sub main {
             else {
                 print "Dry run: $op $name; nothing is sent or changed.\nNode calls:\n"
                     . (@{ $r->{plan} } ? render_plan($r->{plan}) : "  (none)\n");
+                print "  note: $_\n" for @{ $r->{notes} // [] };
             }
             return 0;
         }
         my $r = $wl->run($op, $name, %a);
         if ($json) { print $js->encode($r) }
         elsif ($op eq 'status') { print render_status($r) }
-        else { print render_run($r) . "$op ok: workload $name\n" }
+        else { print render_run($r) . join('', map {"note: $_\n"} @{ $r->{notes} // [] }) . "$op ok: workload $name\n" }
         return $r->{ok} ? 0 : 1;
     };
     return $rc if defined $rc;

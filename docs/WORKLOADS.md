@@ -78,7 +78,7 @@ nothing). A node call that exits non-zero ends the run at once.
 :   Reverse priority: `vm-stop`, then `mirror-stop`. Records `stopped`.
 
 `destroy`
-:   Needs the approval below. Reverse priority: `vm-stop` (a VM that is not
+:   Needs the approval below. Allowed in every recorded state. From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
     defined is tolerated), `vm-undefine`, `mirror-stop`; then
     `storage-zvol-destroy` of every local leg (through `HPS::Storage`). The
     registry key and the definition file are removed last, only when every call
@@ -109,8 +109,7 @@ identity the IPS sees when the VM netboots.
 
 States. VM: `creating`, `defined`, `running`, `stopped`. Workload: `creating`
 (an unfinished create; carries `done`, the finished step keys), `created`,
-`running`, `stopped`, or `partial` when the VMs differ. `start`, `stop`
-and `destroy` refuse (3) a workload still `creating`; a workload with no record
+`running`, `stopped`, or `partial` when the VMs differ. `start` and `stop` refuse (3) a workload still `creating` (finish it with `create --resume`, or remove it with `destroy`); a workload with no record
 is not found (4).
 
 ## Approval

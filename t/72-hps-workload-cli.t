@@ -170,4 +170,30 @@ is($rc, 0, 'destroy exits 0') or diag $out;
 ok(!$f->{reg}->cluster_exists('lab', 'workload_t0'), 'registry key gone');
 ok(!-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition gone');
 
+# --- destroy of an unfinished create
+{
+    my $g = StorageFixture::setup_workload();
+    $f = $g;
+    local $ENV{HPS_CONFIG_BASE}     = $g->{base};
+    local $ENV{HPS_SYSTEM_REGISTRY} = "$g->{base}/system.db";
+    local $ENV{HPS_RESOURCES}       = $g->{base};
+    local $ENV{FAKE_NODE_EXIT}   = 3;
+    local $ENV{FAKE_NODE_STDERR} = "[image-fetch] refused: --dest is not an existing directory";
+    ($rc, $out) = cli('create', 't0');
+    is($rc, 3, 'create stops on the node refusal');
+    is(rec()->{state}, 'creating', 'creating');
+    $ENV{FAKE_NODE_EXIT} = 0;
+    ($rc, $out) = cli('start', 't0');
+    is($rc, 3, 'start on a creating workload: refused');
+    like($out, qr/finish it with create --resume, or remove it with destroy/, 'text');
+    ($rc, $out) = cli('status', 't0');
+    is($rc, 0, 'status on a creating workload works') or diag $out;
+    StorageFixture::approve($g, 'workload-destroy', pool => 't0', expires => $StorageFixture::NOW + 7200);
+    reset_shim();
+    ($rc, $out) = cli('destroy', 't0');
+    is($rc, 0, 'destroy from creating exits 0') or diag $out;
+    like($out, qr/note: skipped .*never created/, 'skipped steps are noted');
+    ok(!$g->{reg}->cluster_exists('lab', 'workload_t0'), 'record gone');
+}
+
 done_testing;

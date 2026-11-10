@@ -487,8 +487,8 @@ sub _record_macs ($self, $name, $vm, $r) {
 
 sub _need_record ($self, $name, $op) {
     my $rec = $self->record($name) // _fail('notfound', "workload '$name' has not been created (no registry record)");
-    _fail('refused', "workload '$name' is not fully created (state $rec->{state}); run create --resume or destroy")
-        if $rec->{state} eq 'creating' && $op ne 'status';
+    _fail('refused', "workload '$name' is not fully created (state $rec->{state}); finish it with create --resume, or remove it with destroy")
+        if $rec->{state} eq 'creating' && $op ne 'status' && $op ne 'destroy';
     return $rec;
 }
 
@@ -512,15 +512,31 @@ sub _destroy_approval ($self, $def) {
 # just before HPS::Storage destroys it and revoked straight after.
 sub _steps_destroy ($self, $def, %a) {
     $self->_need_record($def->{name}, 'destroy');
+    my $rec = $self->record($def->{name});
     my $f = $self->_destroy_approval($def);
+    # An unfinished create: only what it attempted exists (finished steps plus the
+    # one that was running when it stopped); the rest is skipped with a note.
+    my $partial = $rec->{state} eq 'creating';
+    my %tried = map { $_ => 1 } @{ $rec->{done} // [] }, (defined $rec->{attempting} ? $rec->{attempting} : ());
+    my @notes;
+    my $want = sub ($key, $what) {
+        return 1 if !$partial || $tried{$key};
+        push @notes, "skipped $what: never created (the create stopped before it)";
+        return 0;
+    };
     my (@s, @zvols);
     for my $vm (reverse $self->_ordered($def)) {
         my $in = $self->_vm_info($def, $vm);
-        push @s, _step($in->{mac}, 'vm-stop', [ $vm->{name} ], ok_rc => [4]),
-            _step($in->{mac}, 'vm-undefine', [ $vm->{name} ]),
-            map { _step($in->{mac}, 'mirror-stop', [ $_->{mirror} ]) } grep { $_->{mirrored} } @{ $in->{disks} };
-        push @zvols, map { [ $in->{mac}, $_->{dataset} ] } grep { defined $_->{dataset} } @{ $in->{disks} };
+        if ($want->("define:$vm->{name}", "vm-stop and vm-undefine of $vm->{name}")) {
+            push @s, _step($in->{mac}, 'vm-stop', [ $vm->{name} ], ok_rc => [4]),
+                _step($in->{mac}, 'vm-undefine', [ $vm->{name} ]);
+        }
+        push @s, map { _step($in->{mac}, 'mirror-stop', [ $_->{mirror} ]) }
+            grep { $_->{mirrored} && $want->("mirror:$_->{mirror}", "mirror-stop of $_->{mirror}") } @{ $in->{disks} };
+        push @zvols, map { [ $in->{mac}, $_->{dataset} ] }
+            grep { defined $_->{dataset} && $want->("zvol:$_->{dataset}", "zvol destroy of $_->{dataset}") } @{ $in->{disks} };
     }
+    $self->{notes} = \@notes;
     for my $z (@zvols) {
         my ($mac, $ds) = @$z;
         my $ap = $self->{approval};
@@ -596,7 +612,7 @@ sub run ($self, $op, $name, %a) {
     if ($a{dry_run}) {
         my $plan = eval { $self->plan($op, $name, %a) };
         if (my $e = $@) { $self->_log('warning', "$op $name refused: " . (ref $e ? $e->message : $e)); die $e }
-        return { dry_run => 1, op => $op, name => $name, plan => $plan };
+        return { dry_run => 1, op => $op, name => $name, plan => $plan, ($op eq 'destroy' ? (notes => $self->{notes} // []) : ()) };
     }
     my ($def, @steps) = eval { $self->_prepare($op, $name, %a) };
     if (my $e = $@) {
@@ -620,6 +636,7 @@ sub run ($self, $op, $name, %a) {
                 stdout => '', stderr => '', skipped => 1 };
             next;
         }
+        $self->_rec_update($name, sub ($rec) { $rec->{attempting} = $st->{key} }) if $op eq 'create' && $st->{key};
         my $r = $self->_run_step($st, $n, scalar(@steps), $op);
         push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => $r->{rc},
             stdout => $r->{stdout} // '', stderr => $r->{stderr} // '',
@@ -634,10 +651,10 @@ sub run ($self, $op, $name, %a) {
         $st->{after}->($r) if $st->{after} && $r->{rc} == 0;
         if ($op eq 'create' && $st->{key}) {
             $done{ $st->{key} } = 1;
-            $self->_rec_update($name, sub ($rec) { push @{ $rec->{done} }, $st->{key} });
+            $self->_rec_update($name, sub ($rec) { push @{ $rec->{done} }, $st->{key}; delete $rec->{attempting} });
         }
     }
-    my $out = { op => $op, name => $name, ok => 1, steps => \@results };
+    my $out = { op => $op, name => $name, ok => 1, steps => \@results, ($op eq 'destroy' ? (notes => $self->{notes} // []) : ()) };
     $self->_post($op, $def, $out, %a);
     $self->_log('info', "$op $name ok");
     return $out;
@@ -660,6 +677,7 @@ sub _post ($self, $op, $def, $out, %a) {
             $_->{state} = 'defined' for values %{ $r->{vms} };
             $r->{state} = 'created';
             delete $r->{done};
+            delete $r->{attempting};
         });
     }
     elsif ($op eq 'destroy') {

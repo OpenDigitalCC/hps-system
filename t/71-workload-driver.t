@@ -378,6 +378,64 @@ my $f = StorageFixture::setup_workload();
     like($e->message, qr/not a run result \(hps-run exit 4\)/, 'a reply that is not a run result is rc 1 with the reason');
 }
 
+#--- destroy of an unfinished create
+{
+    my $g = StorageFixture::setup_workload();
+    my $wl = $g->{wl}->();
+    $g->{ce}{rc}{'image-fetch'} = 3;
+    my $e = err_of(sub { $wl->run('create', 't0') });
+    is($e->kind, 'refused', 'create stops at the image-fetch refusal');
+    is(rec($g, 't0')->{state}, 'creating', 'registry: creating');
+    is_deeply(rec($g, 't0')->{done}, [ "zvol:$APP" ], 'only the first zvol is done');
+    is(rec($g, 't0')->{attempting}, "image:$MAC:debian-13-generic-amd64", 'the running step is recorded');
+    delete $g->{ce}{rc}{'image-fetch'};
+
+    $e = err_of(sub { $wl->plan('start', 't0') });
+    like($e->message, qr/not fully created \(state creating\); finish it with create --resume, or remove it with destroy/, 'start: refusal text offers only what works');
+    ok($wl->plan('status', 't0'), 'status works on a creating workload');
+
+    $e = err_of(sub { $wl->plan('destroy', 't0') });
+    like($e->message, qr/no workload-destroy approval/, 'destroy from creating still needs the approval');
+    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
+    my $plan = $wl->plan('destroy', 't0');
+    is_deeply([ map { $_->{script} } @$plan ], ['storage-zvol-destroy'], 'plan: only the zvol that exists');
+    is_deeply($plan->[0]{args}, [ $APP, '--approval-file', '-' ], '... the first one');
+    $g->{ce}{calls} = [];
+    my $r = $wl->run('destroy', 't0');
+    ok($r->{ok}, 'destroy from creating ok');
+    is_deeply([ script_list($g) ], ['storage-zvol-destroy'], 'only the zvol destroy ran');
+    is(scalar(@{ $r->{notes} }), 5, 'the rest is skipped with notes') or diag explain $r->{notes};
+    like($r->{notes}[0], qr/skipped .*never created/, 'a note says why');
+    ok(!$g->{reg}->cluster_exists('lab', 'workload_t0'), 'record removed');
+    ok(!-e $g->{reg}->workload_dir('lab') . '/t0.json', 'definition removed');
+    is($g->{ap}->get($MAC, 'zvol-destroy', $APP), undef, 'derived approval revoked');
+}
+{
+    my $g = StorageFixture::setup_workload();
+    my $wl = $g->{wl}->();
+    $g->{reg}->cluster_set('lab', 'workload_t0', { state => 'creating', created_at => 'x', by => 'tester', done => [],
+        vms => { 't0-app' => { host => 'sch-001', state => 'creating', disks => {} }, 't0-db' => { host => 'sch-001', state => 'creating', disks => {} } } });
+    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
+    is(scalar @{ $wl->plan('destroy', 't0') }, 0, 'nothing created: no node call planned');
+    my $r = $wl->run('destroy', 't0');
+    ok($r->{ok}, 'destroy ok');
+    is(nodecalls($g), 0, 'no node call');
+    is(scalar @{ $r->{notes} }, 6, 'every step skipped with a note');
+    ok(!$g->{reg}->cluster_exists('lab', 'workload_t0') && !-e $g->{reg}->workload_dir('lab') . '/t0.json', 'only the record and the definition are removed');
+}
+{
+    # a create that failed in vm-define: the VM, mirror and zvol of that VM are all tried
+    my $g = StorageFixture::setup_workload();
+    my $wl = $g->{wl}->();
+    $g->{ce}{rc}{'vm-define'} = 1;
+    err_of(sub { $wl->run('create', 't0') });
+    delete $g->{ce}{rc}{'vm-define'};
+    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
+    $g->{ce}{calls} = [];
+    $wl->run('destroy', 't0');
+    is_deeply([ script_list($g) ], [ qw(vm-stop vm-undefine mirror-stop storage-zvol-destroy) ], 'the VM whose define failed is cleaned, the untouched one is skipped');
+}
+
 #--- a compute-only node: both legs remote, compute_host given
 {
     my $g = StorageFixture::setup_workload();
