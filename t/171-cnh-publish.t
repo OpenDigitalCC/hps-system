@@ -193,4 +193,19 @@ sub tar_list {
     is($? >> 8, 2, 'cli: stray arguments are a usage error');
 }
 
+# --- a "latest" link to a file beside it is published under the link's name
+{
+    my $res = tempdir(CLEANUP => 1);
+    mkdir "$res/packages"; mkdir "$res/packages/ctrl-exec";
+    open(my $fh, '>', "$res/packages/ctrl-exec/ctrl-exec-0.14.7.tar.gz") or die $!; print {$fh} "tarball"; close $fh;
+    symlink('ctrl-exec-0.14.7.tar.gz', "$res/packages/ctrl-exec/ctrl-exec-latest.tar.gz") or die $!;
+    symlink('/etc/passwd', "$res/packages/ctrl-exec/evil.tar.gz") or die $!;
+    my $p = HPS::CnhPublish->new(resources => $res, system => $res);
+    my $e = $p->package_entry('packages/ctrl-exec/ctrl-exec-latest.tar.gz');
+    is($e->{path}, 'srv/hps-resources/packages/ctrl-exec/ctrl-exec-latest.tar.gz', 'latest link: published under the link name');
+    is($e->{size}, 7, 'latest link: the target content');
+    my $err = eval { $p->package_entry('packages/ctrl-exec/evil.tar.gz'); 1 } ? undef : $@;
+    ok(ref $err && $err->kind eq 'refused', 'a link out of the directory is refused');
+}
+
 done_testing;

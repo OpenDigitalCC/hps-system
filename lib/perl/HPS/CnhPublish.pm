@@ -135,7 +135,16 @@ sub package_entry ($self, $rel) {
         unless _check_rel($rel) && $rel =~ m{^packages/[^/]};
     _fail('refused', "package $rel is under packages/cnh/ (this tool's own output)") if $rel =~ m{^packages/cnh/};
     my $f = "$self->{resources}/$rel";
-    _fail('refused', "package $rel is a symlink") if -l $f;
+    # A "latest" link (ctrl-exec-latest.tar.gz -> ctrl-exec-0.14.7.tar.gz) is
+    # published under the link's name with the target's content: the inner
+    # IPS reads the link name. Only a link to a plain file name in the same
+    # directory is accepted (lab 2026-11-11: the default package was refused).
+    if (-l $f) {
+        my $t   = readlink($f);
+        my $dir = $f =~ s{/[^/]+\z}{}r;
+        _fail('refused', "package $rel is a symlink to something other than a file beside it")
+            unless defined $t && $t =~ m{^[A-Za-z0-9_][A-Za-z0-9_.+-]*\z} && !-l "$dir/$t" && -f "$dir/$t";
+    }
     _fail('notfound', "package $rel not found under $self->{resources}") unless -f $f;
     return _entry("srv/hps-resources/$rel", $rel, $f);
 }
