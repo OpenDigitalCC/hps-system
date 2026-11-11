@@ -38,17 +38,21 @@ inherent to the problem rather than defects:
    per-node script allowlist (the single `hps-node` entry point). This is the
    authenticated channel; it replaces the former MAC-trust `osvc_cmd` join
    path. Enrolment is bound to provisioning state (`docs/adr/0002`).
-4. **Keysafe secret store and approvals (`HPS::Keysafe`, `HPS::Approval`).**
+4. **Keysafe secret store (`HPS::Keysafe`).**
    Keys are 32 random bytes from `/dev/urandom`, one file per host and name
    under `clusters/<cluster>/keysafe/` (directory 0700, files 0600, root only),
    never in the registry JSON, an image or a log. A directory or file that is
    group/world accessible, a symlink or owned by another uid is refused, never
-   repaired silently. Destructive storage actions need a human approval
-   (`hps-approve`): HMAC-SHA256 over host, pool, disks, wipe flag and expiry
-   (default one hour) with a per-cluster secret, compared in constant time,
-   stored in the registry. Keys and the secret reach a node only over ctrl-exec
-   mTLS `input=fields`. The former Bash keysafe and its unauthenticated
-   `keysafe_request_token` route are retired.
+   repaired silently. Keys reach a node only over ctrl-exec mTLS as the
+   run's input (`input = raw`). Authorisation of destructive actions (pool
+   create and destroy, zvol and workload destroy, host forget) is ctrl-exec's
+   alone: its per-agent script allowlists and the operator API's auth hook
+   decide who runs what (`docs/adr/0007`, owner ruling 2026-11-11). HPS keeps
+   the refusals that protect data on their own merits: it wipes a disk that
+   carries a signature only with an explicit `--wipe`, and refuses to destroy
+   an exported or in-use zvol or a guest that is not shut off, or to forget a
+   host that still holds a pool or a workload. The former Bash keysafe and its
+   unauthenticated `keysafe_request_token` route are retired.
 
 ## Node identity at boot
 

@@ -12,6 +12,39 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Authorisation is ctrl-exec's: signed approvals removed (2026-11-11)
+
+- removed: HPS's own signed-approval layer (owner ruling 2026-11-11: "the
+  approval isnt required in the lab. for any real use, ctrl-exec will control
+  who does what"). ctrl-exec's script allowlists and the operator API's auth
+  hook now decide who runs what (ADR 0007).
+- removed: `bin/hps-approve` and `HPS::Approval`; the cluster `approval`
+  secret (`keysafe/approval.hmac`); the approval checks of `hps-storage`
+  create, destroy and zvol-destroy, `hps-workload destroy` and `hps-onboard
+  forget`; the registry key `approval_<action>_<pool>` and `approved_by` in
+  `workload_<name>_destroyed`.
+- removed: the node-side HMAC verification (`--approval-file -`) of
+  `storage-pool-create`, `storage-pool-destroy`, `storage-zvol-destroy` and
+  `mirror-create`, and `mirror-assemble --declaration-file -`. The last four
+  are no longer `input = raw`; `openssl` left the storage profile.
+- changed: what the approval carried is now an argument. `hps-storage <host>
+  create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>]... [--wipe]`
+  (2 to 4 disks, validated as before); `storage-pool-create ... [--wipe]`
+  reads only `{"key_hex"}`; `mirror-create ... [--wipe]`; `mirror-assemble ...
+  [--peer-gone]` for a degraded assembly. A pool still goes on an assigned host
+  only; every disk, in-use and pool-name refusal stays.
+- new: pools, zvols, workloads and host forgets run through an inner IPS's
+  operator API (`hps-op ... hps-storage ...`; `docs/OPERATOR.md`).
+- docs: ADR 0007; ADR 0005 and 0006 amended; `docs/SECURITY.md`,
+  `docs/WORKLOADS.md`, `docs/VM-LIFECYCLE.md`, `docs/NAMING.md`,
+  `docs/REGISTRY-KEYS.md`.
+- tests: `t/31-approval.t`, `t/32-hps-approve.t`, `t/50-zvol-approval.t`,
+  `t/61-approval-peer-gone.t`, `t/74-approval-workload-destroy.t` and the
+  `t/fixtures/approval-*` files removed; the storage, workload, forget and
+  node-script tests now prove each operation runs with no approval, the
+  `--disk`/`--wipe`/`--peer-gone` arguments are validated, and the
+  data-protecting refusals still fire.
+
 ## prune-agents keeps the IPS's own agent (2026-11-11)
 
 - fix: `hps-onboard prune-agents` removed every agent with no registry host,

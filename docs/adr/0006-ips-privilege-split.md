@@ -62,8 +62,10 @@ Anything else, and any argument outside its pattern, is refused twice: by the
 submitter, and again by the runner (the queue is writable by the web user, so the
 runner trusts nothing in a file). The commands come from a fixed table and are
 executed as an argument list, never through a shell. `storage-create` and
-`storage-destroy` are not in the list: they need a human approval and run from
-`hps-storage` on the command line.
+`storage-destroy` are not in the list: they run from `hps-storage`, on the IPS
+command line or through the operator API (`ips-admin`), where ctrl-exec decides
+who may run them (ADR 0007; until 2026-11-11 they also needed a signed HPS
+approval).
 
 `pairing-approve ... --replace` asks for replace; the runner probes the
 dispatcher's usage text and drops it for a dispatcher that lacks it.

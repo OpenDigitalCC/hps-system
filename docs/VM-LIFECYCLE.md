@@ -21,7 +21,7 @@ For a new guest the IPS calls:
 5. `vm-start`.
 
 Taking it away: `vm-stop`, then `vm-undefine`. Data (zvols, mirrors, images) is
-removed by the IPS's `hps-workload destroy` with an approval, never by these
+removed by the IPS's `hps-workload destroy`, never by these
 scripts. `vm-status`, `vm-console-log` and `vm-confinement-report` are read-only
 and can run at any time.
 

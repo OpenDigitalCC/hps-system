@@ -168,6 +168,8 @@ Where to read more:
   window.
 - `docs/adr/0003-ctrl-exec-agent-packaging.md` – agent delivery; the
   2026-11-09 amendment covers NixOS nodes and the executor.
+- `docs/adr/0007-authorisation-is-ctrl-exec.md` – who may run a destructive
+  action is ctrl-exec's decision; HPS's signed approvals are removed.
 - `CHANGELOG.md` – the phase 1 span, and `.nonfunctional-report.md` for the
   state of the trial against the eight audit dimensions.
 

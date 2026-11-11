@@ -195,6 +195,35 @@ hps-op --cred FILE --input hps-cluster-config-apply < s1.conf
 A credential file readable by group or others, a plain `http://` URL, or a
 credential without a certificate (and no `--ca`) is refused.
 
+## Storage and workloads through the operator API
+
+`hps-storage` and `hps-workload` are `ips-admin` tools, so an operator on an
+inner IPS creates and destroys pools, zvols and workloads through that IPS's
+operator API, with no step on the IPS itself. HPS asks for no approval of its
+own (ADR 0007, owner ruling 2026-11-11): the operator credential and the auth
+hook are the authorisation, and every run is logged (`OPERATOR run ...`, then
+the `ips-admin` start and end lines). For example:
+
+```
+hps-op --cred FILE hps-storage sch-001 status
+hps-op --cred FILE hps-storage sch-001 create s1 --disk ata-SSD_A --disk ata-SSD_B --dry-run
+hps-op --cred FILE hps-storage sch-001 create s1 --disk ata-SSD_A --disk ata-SSD_B --disk ata-SSD_C
+hps-op --cred FILE hps-storage sch-001 destroy s1
+hps-op --cred FILE hps-workload destroy t0 --dry-run
+hps-op --cred FILE hps-onboard forget 525400000009
+```
+
+Give each disk as its bare `/dev/disk/by-id` name (`ata-...`, `nvme-...`,
+`wwn-...`): `ips-admin-exec` passes no `/` outside an IPv4 CIDR, so the
+`/dev/disk/by-id/` prefix is refused there (`hps-storage` accepts both forms
+from a root shell). `create` takes 2 to 4 disks and makes one mirror of them all.
+A disk that carries a pool label or a filesystem or partition signature is
+refused unless `--wipe` is given, which wipes exactly the named disks; a
+mounted disk, a disk with a holder or a member of an imported pool is refused
+even with `--wipe`. Run `--dry-run` first: it prints the node calls and
+changes nothing. A long `create` returns its output within the IPS agent's read
+timeout (`ips_admin_read_timeout`, default 900 s).
+
 ## Optional: forward the IPS's syslog
 
 `ips-syslog-forward <ipv4> <prefix>` (`bin/hps-syslog-forward`) forwards

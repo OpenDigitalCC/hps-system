@@ -75,11 +75,11 @@ kernel command line (a label for log naming), `hps.domain=` (the domain).
 
 ## Forgetting a host
 
-`hps-onboard forget <mac> [--dry-run]` (approval `hps-approve host-forget <mac>`)
+`hps-onboard forget <mac> [--dry-run]`
 refuses a host with storage exports, a pool or a workload instance recorded.
 Otherwise it removes, in this order, and prints each step: the ctrl-exec agent
-registration (`ctrl-exec-dispatcher unpair <fqdn>`), the registry host (its
-approvals go with it), then regenerates the DHCP and DNS files and reloads
+registration (`ctrl-exec-dispatcher unpair <fqdn>`), the registry host, then
+regenerates the DHCP and DNS files and reloads
 dnsmasq (`update_dns_dhcp_files`; IPS-10 owns that generation). A failure at the
 agent step leaves the host in the registry, so the command can be run again.
 ctrl-exec 0.14.5 has no dispatcher-side certificate revocation: `unpair`

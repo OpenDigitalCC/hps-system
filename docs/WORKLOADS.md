@@ -80,20 +80,21 @@ nothing). A node call that exits non-zero ends the run at once.
 :   Reverse priority: `vm-stop`, then `mirror-stop`. Records `stopped`.
 
 `destroy`
-:   Needs the approval below. Allowed in every recorded state. From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
+:   Allowed in every recorded state (who may run it is ctrl-exec's decision, ADR 0007). From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
     defined is tolerated), `vm-undefine`, `mirror-stop`; then
     `storage-zvol-destroy` of every local leg (through `HPS::Storage`). The
     registry record `workload_<name>` is removed last, only when every call
     succeeded, and replaced by `workload_<name>_destroyed` (`at`, `by`,
-    `approved_by`, `forgotten`) for audit; the next `create` removes that
-    audit record. The workload approval is then spent (revoked).
+    `forgotten`) for audit; the next `create` removes that audit record. The
+    refusals of `HPS::Storage` and of the node scripts hold: an exported zvol,
+    a guest that is not shut off, a zvol in use.
     **The definition `workloads/<name>.json` is kept**: destroy removes the
     instance, not the operator's intent, so `create` runs again from the same
     file.
 
 `destroy --forget`
 :   As `destroy`, and the definition file is removed too (the audit record
-    says `forgotten`). Same approval, same exit codes; `--forget` is refused
+    says `forgotten`). Same exit codes; `--forget` is refused
     (usage, 2) on every other operation.
 
 `status`
@@ -116,7 +117,7 @@ Cluster key `workload_<name>`:
 ```
 
 After `destroy`, cluster key `workload_<name>_destroyed` is
-`{"at": "...", "by": "operator", "approved_by": "...", "forgotten": false}`; the next `create` removes it.
+`{"at": "...", "by": "operator", "forgotten": false}`; the next `create` removes it.
 All registry keys, with their types: `docs/REGISTRY-KEYS.md`.
 
 A `boot: network` VM has `"disks": {}` and `"macs": ["$MAC", ...]`, the MACs
@@ -128,27 +129,17 @@ States. VM: `creating`, `defined`, `running`, `stopped`. Workload: `creating`
 `running`, `stopped`, or `partial` when the VMs differ. `start` and `stop` refuse (3) a workload still `creating` (finish it with `create --resume`, or remove it with `destroy`); a workload with no record
 is not found (4).
 
-## Approval
+## Authorisation
 
-`destroy` needs a human approval, bound to the workload name and to the compute
-host of the first VM:
-
-```
-hps-approve workload-destroy $MAC --workload <name> [--expires SECONDS]
-```
-
-Action `workload-destroy` (`HPS::Approval`): `pool` is the workload name, no
-disks, wipe 0, default expiry one hour. One approval is enough for the whole
-workload: after verifying it, the driver issues a `zvol-destroy` approval for
-each local-leg zvol (same host, same `issued_by`, valid ten minutes at most and
-never past the workload approval), `HPS::Storage` consumes it, and the driver
-revokes it straight after, also when the destroy fails. A missing, expired,
-tampered or foreign approval is a refusal before any node call.
+Authorisation is ctrl-exec's alone (ADR 0007, owner ruling 2026-11-11): who may
+run `hps-workload` is decided there. An operator reaches it through the
+`ips-admin` allowlist and the operator API's auth hook (`docs/OPERATOR.md`), or
+runs it as root on the IPS.
 
 ## Exit codes and logging
 
 `0` ok, `1` failed (a node call failed), `2` usage, `3` refused (definition,
-approval, node refusal, existing workload), `4` not found (definition, record, VM).
+policy, node refusal, existing workload), `4` not found (definition, record, VM).
 Every node call, its exit status and every refusal is logged to stderr and, via
 `logger -t hps -p local0.<level>`, to syslog (`HPS_WORKLOAD_NO_SYSLOG=1` turns
 syslog off). No log line carries a key, secret or signature.
