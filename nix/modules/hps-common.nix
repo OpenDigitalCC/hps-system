@@ -66,23 +66,11 @@
     # Netboot image build speed (owner 2026-11-11). The store squashfs is
     # zstd-compressed once, at level 6 (level 19, the NixOS default, is much
     # slower to build for a few per cent of size; decompression speed is the
-    # same). The netboot initrd around it is plain cpio: NixOS would compress
-    # it again (zstd -10, single-threaded) although almost all of it is the
-    # already-compressed squashfs. The stage-1 initrd at its front stays
-    # compressed on its own; the kernel unpacks concatenated archives
-    # compressed differently.
+    # same). The outer netboot initrd stays as NixOS builds it (compressed
+    # again): an uncompressed outer cpio (compressor "cat") left the DL360
+    # silent after iPXE in chain P run 29 (2026-11-11); reverted until that is
+    # understood.
     netboot.squashfsCompression = "zstd -Xcompression-level 6";
-    system.build.netbootRamdisk = lib.mkForce (pkgs.makeInitrdNG {
-      compressor = "cat";
-      prepend = [ "${config.system.build.initialRamdisk}/initrd" ];
-      contents = [
-        {
-          source = config.system.build.squashfsStore;
-          target = "/nix-store.squashfs";
-        }
-      ];
-    });
-
     # Empty: no name is baked into the image. hps-node-init sets the kernel
     # hostname (static and transient) to the FQDN <label>.<cluster dns domain>
     # from the registry (docs/NAMING.md); nothing else may change it, and
