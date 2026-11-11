@@ -116,7 +116,10 @@ sub check_host {
     return [ HPS::Monitor::host_lines($host, $parsed, time - $t0) ];
 }
 
+# run_once([\%memo], @hosts): with a memo (the loop), unreachable hosts are
+# throttled (HPS::Monitor::throttle); a one-off run logs everything.
 sub run_once {
+    my $memo = ref $_[0] eq 'HASH' ? shift : undef;
     my (@hosts) = @_;
     my $t0 = time;
     my $reg = registry();
@@ -158,7 +161,8 @@ sub run_once {
             $lines = $d if ref $d eq 'ARRAY';
             close $fh;
         }
-        emit(@$_) for @$lines;
+        my @emit = $memo ? HPS::Monitor::throttle($memo, $hosts[$idx], $lines, time) : @$lines;
+        emit(@$_) for @emit;
     }
     emit('info', sprintf('hps-monitor: tick hosts=%d duration=%.1f', scalar @hosts, time - $t0));
     return;
@@ -190,6 +194,7 @@ sub loop {
     $QUIET = 1;
     $SIG{TERM} = $SIG{INT} = sub { $stop = 1 };
     my ($n, $last_warn, $was_disabled) = (0, '', 0);
+    my %memo;
     emit('info', 'hps-monitor: started');
     while (!$stop) {
         my ($iv, $warn) = current_interval();
@@ -203,7 +208,7 @@ sub loop {
         } else {
             if ($was_disabled) { emit('info', "hps-monitor: enabled interval=${iv}s"); $was_disabled = 0 }
             my $t0 = time;
-            eval { run_once(); 1 } or emit('err', 'hps-monitor: run failed: ' . ($@ =~ s/\s+/ /gr));
+            eval { run_once(\%memo); 1 } or emit('err', 'hps-monitor: run failed: ' . ($@ =~ s/\s+/ /gr));
             my $el     = time - $t0;
             my $missed = HPS::Monitor::missed_ticks($el, $iv);
             emit('warning', sprintf('hps-monitor: tick skipped missed=%d run=%.1fs interval=%ds', $missed, $el, $iv)) if $missed;

@@ -313,3 +313,18 @@ bridge vlan add dev vnet2 vid 120 pvid untagged" ]
   [ "$status" -eq 1 ]
   [[ "$output" == *"no tap device"* ]]
 }
+
+@test "vm-start reads the hps:nic metadata in libvirt's double-quoted form (lab 2026-11-11)" {
+  run fabric_vm
+  [ "$status" -eq 0 ]
+  running_xml
+  # libvirt re-serialises custom metadata with double quotes
+  sed -i "/<hps:nic /{s/'/\"/g}" "$STATE/xml.n1"
+  grep -q '<hps:nic index="0" pvid="110"' "$STATE/xml.n1"
+  : > "$SHIM_LOG"
+  run bash "$S/vm-start" n1
+  [ "$status" -eq 0 ]
+  [ "$(bridge_cmds | grep -c 'vlan add')" -eq 4 ]
+  bridge_cmds | grep -qx 'bridge vlan add dev vnet1 vid 110 pvid untagged'
+  bridge_cmds | grep -qx 'bridge vlan add dev vnet2 vid 120 pvid untagged'
+}

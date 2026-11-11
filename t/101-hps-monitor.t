@@ -166,4 +166,21 @@ like(slurp("$base/log"), qr/warning hps-monitor: tick skipped missed=1 run=11\.\
 ($rc, $out) = monitor('frobnicate');
 is($rc, 2, 'unknown command is a usage error');
 
+# --- throttle: an unreachable host is logged once, then every 600 s; recovery is logged
+{
+    my %memo;
+    my $n = sub { my @r = HPS::Monitor::throttle(@_); scalar @r };
+    my $u = [ [ 'err', 'hps-monitor: host=n1.lab.hps state=UNREACHABLE no route' ] ];
+    my $ok = [ [ 'info', 'hps-monitor: host=n1.lab.hps check=mem state=OK MEM OK' ], [ 'info', 'hps-monitor: host=n1.lab.hps checks=1 worst=OK duration=0.1' ] ];
+    is($n->(\%memo, 'n1.lab.hps', $u, 1000), 1, 'first unreachable: logged');
+    is($n->(\%memo, 'n1.lab.hps', $u, 1030), 0, 'unreachable again 30 s later: not logged');
+    is($n->(\%memo, 'n1.lab.hps', $u, 1599), 0, 'still within 600 s: not logged');
+    is($n->(\%memo, 'n1.lab.hps', $u, 1600), 1, 'at 600 s: logged again');
+    my @r = HPS::Monitor::throttle(\%memo, 'n1.lab.hps', $ok, 1660);
+    is(scalar @r, 3, 'back: a recovery line before the check lines');
+    is($r[0][1], 'hps-monitor: host=n1.lab.hps state=REACHABLE after 660s unreachable', 'recovery line names the time since it became unreachable');
+    is($n->(\%memo, 'n1.lab.hps', $ok, 1690), 2, 'reachable again: lines unchanged');
+    is($n->(\%memo, 'n2.lab.hps', $ok, 1690), 2, 'a host never unreachable: unchanged');
+}
+
 done_testing;

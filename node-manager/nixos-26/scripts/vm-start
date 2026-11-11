@@ -88,8 +88,11 @@ wait_running() {
 # metadata, from the domain XML on stdin.
 nic_vlans() {
   awk -v q="'" '
+    # Either quote style: libvirt re-serialises custom metadata (hps:nic) with
+    # double quotes, its own elements with single (lab 2026-11-11: "no tap
+    # device found for a NIC with VLANs").
     function attr(line, name,    r) {
-      if (match(line, name "=" q "[^" q "]*" q)) {
+      if (match(line, name "=" q "[^" q "]*" q) || match(line, name "=\"[^\"]*\"")) {
         r = substr(line, RSTART + length(name) + 2, RLENGTH - length(name) - 3)
         return r
       }

@@ -40,9 +40,8 @@ The IPS sends the script name and `--all` and nothing else.
 | `disk_root` | `check_disk -w 20% -c 10% -p /` | every node |
 | `load` | `check_load -r -w 1.5,1.2,1 -c 3,2.5,2` | every node |
 | `mem` | `check_mem -w 10 -c 5` | every node |
-| `procs` | `check_procs -w 400 -c 800` | every node |
+| `procs` | `check_procs -k -w 1000 -c 2000` (user-space processes; kernel threads left out) | every node |
 | `swap` | `check_swap -w 30% -c 10%` | only a node with swap configured |
-| `disk` | `check_disk -w 15% -c 5% -X tmpfs -X devtmpfs -X overlay -X squashfs -X nsfs -X efivarfs -X vfat` | storage nodes (role SCH) |
 | `zpool` | `check_zpool` (pool health; DEGRADED is WARNING, FAULTED and worse CRITICAL; capacity as perfdata) | storage nodes |
 
 A netbooted node runs from RAM: `/` is a tmpfs and the store is a squashfs.

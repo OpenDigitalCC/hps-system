@@ -51,11 +51,15 @@ let
     "disk_root = check_disk -w 20% -c 10% -p /"
     "load = check_load -r -w 1.5,1.2,1 -c 3,2.5,2"
     "mem = check_mem -w 10 -c 5"
-    "procs = check_procs -w 400 -c 800"
+    # -k: user-space processes only; a 48-thread host has hundreds of kernel
+    # threads (lab DL360: 747 processes in all, WARNING at the old 400)
+    "procs = check_procs -k -w 1000 -c 2000"
   ]
   ++ lib.optional hasSwap "swap = check_swap -w 30% -c 10%"
   ++ lib.optionals isStorage [
-    "disk = check_disk -w 15% -c 5% -X tmpfs -X devtmpfs -X overlay -X squashfs -X nsfs -X efivarfs -X vfat"
+    # no general disk check: a RAM-booted node has no disk filesystem mounted
+    # for it ("No disks were found", UNKNOWN on the lab DL360); pool capacity
+    # and health are check_zpool's
     "zpool = check_zpool"
   ]) + "\n";
 in

@@ -110,6 +110,27 @@ sub host_lines ($host, $parsed, $duration) {
     return @out;
 }
 
+# throttle($memo, $host, $lines, $now, $every): the lines of one host's result
+# that the loop logs. An unreachable host (a node powered off or booting) is
+# logged when it becomes unreachable and then once every $every seconds (600
+# by default), not on every tick; the first result after that logs
+# "state=REACHABLE after <n>s" before its check lines. $memo is the loop's
+# hash, kept across ticks. Other results pass through unchanged.
+sub throttle ($memo, $host, $lines, $now, $every = 600) {
+    my $unreach = @$lines == 1 && $lines->[0][1] =~ /\shost=\S+ state=UNREACHABLE /;
+    my $m = $memo->{$host};
+    if ($unreach) {
+        if ($m && $m->{since} && $now - $m->{logged} < $every) { return () }
+        $memo->{$host} = { since => ($m && $m->{since}) ? $m->{since} : $now, logged => $now };
+        return @$lines;
+    }
+    if ($m && $m->{since}) {
+        delete $memo->{$host};
+        return ([ 'info', sprintf('hps-monitor: host=%s state=REACHABLE after %ds unreachable', $host, $now - $m->{since}) ], @$lines);
+    }
+    return @$lines;
+}
+
 # targets($agents, $registry): the paired nodes to check: agent names known to
 # the dispatcher that are also hosts of the registry (by FQDN). The IPS and
 # anything else that is not a registered host is never a target.

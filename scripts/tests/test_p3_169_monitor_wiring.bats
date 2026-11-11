@@ -67,10 +67,10 @@ teardown() {
   grep -qF '"disk_root = check_disk -w 20% -c 10% -p /"' "$MOD"
   grep -qF '"load = check_load -r -w 1.5,1.2,1 -c 3,2.5,2"' "$MOD"
   grep -qF '"mem = check_mem -w 10 -c 5"' "$MOD"
-  grep -qF '"procs = check_procs -w 400 -c 800"' "$MOD"
+  grep -qF '"procs = check_procs -k -w 1000 -c 2000"' "$MOD"
   grep -qF 'lib.optional hasSwap "swap = check_swap -w 30% -c 10%"' "$MOD"
   grep -qF 'hasSwap = config.swapDevices != [ ] || config.zramSwap.enable;' "$MOD"
-  grep -qF '"disk = check_disk -w 15% -c 5% -X tmpfs -X devtmpfs -X overlay -X squashfs -X nsfs -X efivarfs -X vfat"' "$MOD"
+  run ! grep -q '"disk = check_disk' "$MOD"
   grep -qF '"zpool = check_zpool"' "$MOD"
   grep -qF 'isStorage = lib.hasInfix "SCH" config.hps.roles;' "$MOD"
 }
