@@ -394,9 +394,10 @@ PDU_TEMPLATE='pdu-ctl --host {addr} --outlet {outlet} {action}'
     [ -x "$d" ]
     shellcheck -S warning -x "$d"
     run grep -vE '^[[:space:]]*#' "$d"
-    [[ ! "$output" =~ (python|perl|ruby|wget|ssh) ]]
+    [[ ! "$output" =~ (python|perl|ruby|wget) ]]  # ssh: the console action (IPS-08 ruling 2026-11-11)
   done
   shellcheck -S warning -x "$ROOT/lib/bmc/redfish-common.sh"
+  shellcheck -S warning -x "$ROOT/lib/bmc/console-common.sh"
 }
 
 @test "hpe-ilo pxe-once with pxe_uefi_target overrides to that UEFI boot device" {

@@ -5,8 +5,8 @@
 set -euo pipefail
 action="${1:-}"
 case "$action" in
-  status | on | off | force-off | reset | pxe-once | identify) ;;
-  *) printf 'manual: usage: manual status|on|off|force-off|reset|pxe-once|identify\n' >&2; exit 1 ;;
+  status | on | off | force-off | reset | pxe-once | identify | console) ;;
+  *) printf 'manual: usage: manual status|on|off|force-off|reset|pxe-once|identify|console\n' >&2; exit 1 ;;
 esac
 printf 'manual: no out-of-band control for %s; operator: perform "%s" at the device by hand\n' "${BMC_HOST:-this host}" "$action" >&2
 if [[ "$action" == status ]]; then

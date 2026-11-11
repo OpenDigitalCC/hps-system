@@ -5,7 +5,7 @@
 # The template is split on spaces (no shell); {addr}, {outlet} and {action}
 # are replaced in each word; {action} is on, off or status. The credential is
 # passed to the command on its stdin (user, password), never on argv. status
-# prints on or off. pxe-once and identify exit 5 (the node relies on
+# prints on or off. pxe-once, identify and console exit 5 (the node relies on
 # network-first boot order). Options: cmd, outlet, cycle_delay (seconds
 # between off and on for reset, default 5). See docs/BMC.md.
 set -euo pipefail
@@ -52,11 +52,11 @@ act_status() {
 main() {
   local action="${1:-}"
   case "$action" in
-    status | on | off | force-off | reset | pxe-once | identify) ;;
-    *) die 1 "usage: external status|on|off|force-off|reset|pxe-once|identify" ;;
+    status | on | off | force-off | reset | pxe-once | identify | console) ;;
+    *) die 1 "usage: external status|on|off|force-off|reset|pxe-once|identify|console" ;;
   esac
   case "$action" in
-    pxe-once | identify) die 5 "$action is not supported by a power device" ;;
+    pxe-once | identify | console) die 5 "$action is not supported by a power device" ;;
   esac
   cred="$(cat || true)"
   case "$action" in

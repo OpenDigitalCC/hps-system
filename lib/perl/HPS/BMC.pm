@@ -20,7 +20,8 @@ use File::Spec;
 use IPC::Open3 qw(open3);
 use IO::Select;
 use Symbol qw(gensym);
-use POSIX qw(strftime);
+use POSIX qw(strftime dup2);
+use Fcntl qw(F_GETFD F_SETFD);
 use HPS::Registry;
 use HPS::Keysafe;
 
@@ -440,6 +441,79 @@ sub _record ($self, $mac, $res) {
     $last->{power} = $res->{status}{power} if $res->{status};
     eval { $self->{registry}->host_set($mac, 'bmc_last', $last) };
     return;
+}
+
+# console($host, seconds => N): attach the host's serial console through its
+# driver. Interactive: the driver inherits stdin (keystrokes in) and stdout
+# (console out); the credential goes in on file descriptor 3, never argv and
+# never stdin. N is an integer 1..3600 (default 600); the driver ends the
+# session after N seconds or when the far end closes. No retry. Logs action,
+# host, driver, exit and seconds, never content. Returns {rc, ...}.
+sub console ($self, $host, %o) {
+    my $secs = $o{seconds} // 600;
+    _fail('usage', '--seconds must be an integer from 1 to 3600')
+        unless $secs =~ /^[0-9]{1,4}$/ && $secs >= 1 && $secs <= 3600;
+    $secs += 0;
+    my $r = $self->resolve($host);
+    my $res = { host => $host, mac => $r->{mac}, action => 'console', driver => $r->{driver}, seconds => $secs };
+    unless (defined $r->{driver} && length $r->{driver}) {
+        print STDERR "No BMC driver is recorded for $r->{mac} (hps-bmc set)\n";
+        $self->_log('warn', "action=console host=$r->{mac} driver=- exit=5 seconds=$secs");
+        $res->{rc} = 5;
+        return $res;
+    }
+    unless ($self->driver_exists($r->{driver})) {
+        print STDERR "Driver $r->{driver} is not installed\n";
+        $self->_log('error', "action=console host=$r->{mac} driver=$r->{driver} exit=1 seconds=$secs");
+        $res->{rc} = 1;
+        return $res;
+    }
+    my $cred = $self->{keysafe}->get_secret($r->{cred});
+    my $kh = $self->_known_hosts($r->{mac});
+    my %env = $self->_driver_env($r);
+    $env{BMC_CONSOLE_SECONDS} = $secs;
+    $env{BMC_KNOWN_HOSTS}     = $kh;
+    my $path = $self->driver_path($r->{driver});
+    pipe(my $rd, my $wr) or _fail('failed', "pipe: $!");
+    STDOUT->flush;
+    STDERR->flush;
+    my $pid = fork();
+    _fail('failed', "fork: $!") unless defined $pid;
+    if (!$pid) {
+        close $wr;
+        if (fileno($rd) == 3) {
+            fcntl($rd, F_SETFD, (fcntl($rd, F_GETFD, 0) // 0) & ~1);
+        }
+        else {
+            dup2(fileno($rd), 3) or exit 126;
+        }
+        %ENV = %env;
+        exec { $path } $path, 'console';
+        exit 127;
+    }
+    close $rd;
+    {
+        local $SIG{PIPE} = 'IGNORE';
+        syswrite($wr, $cred) if defined $cred && length $cred;
+    }
+    close $wr;
+    local @SIG{qw(INT TERM HUP)} = map { my $s = $_; sub { kill $s, $pid } } qw(INT TERM HUP);
+    my $w;
+    do { $w = waitpid($pid, 0) } while ($w == -1 && $!{EINTR});
+    my $rc = $? & 127 ? 1 : $? >> 8;
+    $res->{rc} = $rc;
+    $self->_log($rc == 0 ? 'info' : 'warn', "action=console host=$r->{mac} driver=$r->{driver} exit=$rc seconds=$secs");
+    $self->_record($r->{mac}, $res);
+    return $res;
+}
+
+# The per-BMC known_hosts file (ssh console drivers): <cluster>/bmc/known_hosts-<mac>.
+sub _known_hosts ($self, $mac) {
+    my $dir = $self->{registry}->cluster_dir($self->_cluster) . '/bmc';
+    unless (-d $dir) {
+        mkdir $dir, 0700 or -d $dir or _fail('failed', "Cannot create $dir: $!");
+    }
+    return "$dir/known_hosts-$mac";
 }
 
 # list(): [{mac, hostname, driver, source, addr, last}] for hosts with a driver.

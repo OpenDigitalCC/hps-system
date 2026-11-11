@@ -20,6 +20,7 @@ never get an interface there).
 
 ```
 hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json]
+hps-bmc console <host> [--seconds N]
 hps-bmc set <host> --driver NAME|auto [--addr A] [--option k=v]...
 hps-bmc credential <host|device:NAME> [--user U]
 hps-bmc device set <name> [--addr A] [--option k=v]... | list | delete <name>
@@ -45,6 +46,7 @@ Exit codes of the actions (the contract IPS-04 and the lab chains rely on):
 action), `reset` is a hard restart, `pxe-once` makes the next boot come from the
 network once and then powers the host on (or restarts it when it is on),
 `identify` lights the chassis LED.
+`console` (see "Console" below) attaches to the serial console.
 
 ## Driver contract
 
@@ -54,6 +56,8 @@ A driver is one executable `lib/bmc/drivers/<name>` (bash; core tools only:
 - Target: environment `BMC_ADDR` (address, with a port if needed), `BMC_HOST`
   (the host's MAC), `BMC_DRIVER`, and one `BMC_OPT_<name>` per option.
 - Credential: stdin, two lines (user, password). Never argv, never logged. The
+  `console` action is the exception: stdin carries keystrokes, so the credential
+  arrives on file descriptor 3 (same two lines). The
   controller starts the driver with a clean environment (plus `PATH`).
 - stdout: only `status` prints (the JSON above). Messages go to stderr.
 - Exit codes as in the table above. A driver that cannot do an action exits 5.
@@ -67,7 +71,7 @@ the credential to the PDU command's stdin. The IPMI user name does appear in the
 
 | Driver | Device | Notes |
 |---|---|---|
-| `hpe-ilo` | HPE iLO 4 and later | Redfish, proven in the lab (`lab/ilo.sh`): system `/redfish/v1/Systems/1/`, every path with a trailing slash, the one-time boot override sends UEFI mode (`BMC_OPT_boot_mode=bios` sends Legacy) |
+| `hpe-ilo` | HPE iLO 4 and later | Redfish, console by ssh VSP, proven in the lab (`lab/ilo.sh`): system `/redfish/v1/Systems/1/`, every path with a trailing slash, the one-time boot override sends UEFI mode (`BMC_OPT_boot_mode=bios` sends Legacy) |
 | `redfish-generic` | any DMTF Redfish BMC | system and manager discovered from the collections; `ResetType` taken from `@Redfish.AllowableValues` (candidates in order: on `On ForceOn`; off `GracefulShutdown`; force-off `ForceOff`; reset `ForceRestart PowerCycle GracefulRestart`); the boot mode is sent only when the system has that property; `Pxe` must be an allowed override target |
 | `dell-idrac` | Dell iDRAC | Redfish with the iDRAC paths (`System.Embedded.1`, `iDRAC.Embedded.1`); the boot override sends no mode. Written to the contract and unproven until a Dell is in the lab |
 | `ipmi` | IPMI-only devices | `ipmitool -I lanplus` (`BMC_OPT_interface` overrides); `off` is `chassis power soft`; `pxe-once` is `chassis bootdev pxe options=efiboot` then power on or reset |
@@ -95,6 +99,53 @@ or `status`. The command prints `on` or `off` for `status`, reads the
 credential on stdin, and exits 0, or 3/4/5/1 as the contract says. `reset`
 cycles the outlet (`off`, `BMC_OPT_cycle_delay` seconds, default 5, `on`).
 A device still used by a host cannot be deleted.
+
+## Console
+
+`hps-bmc console <host> [--seconds N]` attaches to the machine's serial console.
+N is an integer from 1 to 3600 (default 600; anything else is a usage error,
+exit 2). Stdin is passed through as keystrokes (a newline becomes Enter, CR),
+console output goes to stdout, and the session ends after N seconds or when the
+far end closes, then detaches cleanly (the driver's leave sequence). It is not
+retried. Exit codes are the contract's: 0 ok, 3 refused (credential or a
+changed host key), 4 unreachable, 5 no console on this device, 1 failed, 2
+usage. Every use is logged like the other actions
+(`action=console host=... driver=... exit=... seconds=...`), never content.
+
+The controller starts the driver as `<driver> console` with the credential on
+file descriptor 3, the time limit in `BMC_CONSOLE_SECONDS` and the per-BMC
+known_hosts path in `BMC_KNOWN_HOSTS`. The password reaches the tool only
+through its environment (`SSHPASS`, `IPMI_PASSWORD`), never argv, output or log.
+
+| Driver | Console |
+|---|---|
+| `hpe-ilo` | iLO Virtual Serial Port over ssh (below) |
+| `ipmi` | `ipmitool -I lanplus -H <addr> -U <user> -E sol activate`, bounded by `timeout`, then `sol deactivate` (also after the timeout) |
+| `redfish-generic` | exit 5, unless the host option `console=ssh-vsp` is set: then the `hpe-ilo` method |
+| `dell-idrac`, `external`, `manual` | exit 5 with a one-line reason |
+
+The ssh VSP method (`lib/bmc/console-common.sh`, shared by `hpe-ilo` and
+`redfish-generic`) runs
+
+```
+timeout -k 5 <N+15> script -q -f -e -c '<ssh command>' /dev/null
+ssh command: sshpass -e ssh -tt -E <errfile> \
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=<cluster>/bmc/known_hosts-<mac> \
+  -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa \
+  -o PubkeyAcceptedAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1 \
+  -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 <user>@<BMC_ADDR>
+```
+
+The ssh options are what iLO 4 needs. `script` gives sshpass a pty (sshpass
+segfaults when its stdin is a pipe). The driver feeds the session `vsp` after
+a settle (option `console_settle`, default 4 seconds, for the CLP banner), then
+the caller's keystrokes, then at the limit `ESC (` (leaves the VSP) and `exit`.
+The VSP drops over-long input lines: send short lines.
+
+The host key is pinned per BMC in `<cluster>/bmc/known_hosts-<mac12>` (mode
+0700 directory): accepted on first use, refused (exit 3) if it later changes.
+Console needs `openssh-client`, `sshpass` and `script` (util-linux) in the IPS
+image for the ssh method and `ipmitool` for `ipmi`.
 
 ## Selection by the audit
 
@@ -172,14 +223,18 @@ Host: `bmc_driver`, `bmc_driver_source`, `bmc_addr`, `bmc_options`,
 2. Make it executable. `hps-bmc set` finds it by name.
 3. To have the audit choose it, add a rule to `lib/bmc/drivers.map` before the
    catch-all, and a case to `t/97-bmc.t`.
-4. Test it with PATH shims for `curl` or `ipmitool` as in
+4. A driver without a console exits 5 for `console`; one with a console reads
+   the credential from fd 3 and honours `BMC_CONSOLE_SECONDS` (see "Console").
+5. Test it with PATH shims for `curl` or `ipmitool` as in
    `scripts/tests/test_p3_97_bmc_drivers.bats`: canned answers, an argv record,
-   and an assertion that the credential is in no argv.
+   and an assertion that the credential is in no argv. The console shims are in
+   `scripts/tests/test_p3_163_bmc_console.bats`.
 
 ## Not proven live
 
 Everything here is tested against shims, not hardware. In particular the
 `hpe-ilo` driver has not yet run against the real iLO through `hps-bmc` (the lab
 chains still use `lab/ilo.sh`); `dell-idrac`, `ipmi` and `external` have never
-met a real device; the audit's `ipmitool` and DMI collection has not run on the
+met a real device; the `console` action has not run against the real iLO (the lab console tools still
+read `lab/secrets/ilo`); the audit's `ipmitool` and DMI collection has not run on the
 DL360, and the audit image build is not checked here.

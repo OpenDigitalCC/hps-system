@@ -14,13 +14,21 @@
 #   RF_TRAILING_SLASH   1: every path ends in / (iLO 4 redirects otherwise)
 #   RF_PXE_MODE         send | omit | auto: BootSourceOverrideMode in pxe-once
 #   RF_PXE_MODE_VALUE   value sent (default UEFI; option boot_mode=bios sends Legacy)
+#   RF_CONSOLE         console method (ssh-vsp); unset: exit 5
+#   RF_CONSOLE_OPTION  1: the host option console=<method> chooses it (redfish-generic)
 set -euo pipefail
+
+rf_here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# shellcheck source=console-common.sh
+. "$rf_here/console-common.sh"
 
 : "${RF_SYSTEM_DEFAULT:=}"
 : "${RF_MANAGER_DEFAULT:=}"
 : "${RF_TRAILING_SLASH:=0}"
 : "${RF_PXE_MODE:=auto}"
 : "${RF_PXE_MODE_VALUE:=UEFI}"
+: "${RF_CONSOLE:=}"
+: "${RF_CONSOLE_OPTION:=0}"
 
 RF_USER=""
 RF_PASS=""
@@ -304,11 +312,25 @@ act_identify() {
   rf_check "identify"
 }
 
+# rf_console: the serial console, by the driver's method.
+rf_console() {
+  local method="$RF_CONSOLE"
+  if [[ -z "$method" && "$RF_CONSOLE_OPTION" == 1 ]]; then
+    method="${BMC_OPT_console:-}"
+  fi
+  case "$method" in
+    ssh-vsp) console_ssh_vsp ;;
+    "") die 5 "no serial console method for this device (host option console=ssh-vsp selects the iLO method)" ;;
+    *) die 5 "unknown console method '$method'" ;;
+  esac
+}
+
 rf_main() {
   local action="${1:-}"
   case "$action" in
+    console) rf_console; return ;;
     status | on | off | force-off | reset | pxe-once | identify) ;;
-    *) die 1 "usage: <driver> status|on|off|force-off|reset|pxe-once|identify" ;;
+    *) die 1 "usage: <driver> status|on|off|force-off|reset|pxe-once|identify|console" ;;
   esac
   read_credential
   case "$action" in

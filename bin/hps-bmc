@@ -21,6 +21,9 @@ sub usage {
 Usage:
   hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json]
   hps-bmc status <host> --json      {"power":"on|off|unknown","model","serial","bmc_firmware"}
+  hps-bmc console <host> [--seconds N]
+      serial console: stdin keystrokes in, console output out; ends after N seconds
+      (1..3600, default 600) or when the far end closes, then detaches cleanly
   hps-bmc set <host> --driver NAME|auto [--addr A] [--option k=v]...
   hps-bmc credential <host|device:NAME> [--user U]
       stdin: the user line then the password line (with --user: the password only)
@@ -58,6 +61,16 @@ sub cmd_action {
     }
     elsif ($action ne 'status' && length $r->{stdout}) { print $r->{stdout} }
     return $r->{rc};
+}
+
+sub cmd_console {
+    my ($bmc, @args) = @_;
+    my $secs = 600;
+    GetOptionsFromArray(\@args, 'seconds=s' => \$secs) or return usage();
+    return usage('console needs one host') unless @args == 1;
+    return usage('--seconds must be an integer from 1 to 3600')
+        unless $secs =~ /^[0-9]{1,4}$/ && $secs >= 1 && $secs <= 3600;
+    return $bmc->console($args[0], seconds => $secs)->{rc};
 }
 
 sub cmd_set {
@@ -144,6 +157,7 @@ sub main {
     return usage() if $cmd =~ /^(?:-h|--help|help)$/;
     my $bmc = HPS::BMC->new;
     return cmd_action($bmc, $cmd, @args) if $ACTION{$cmd};
+    return cmd_console($bmc, @args)  if $cmd eq 'console';
     return cmd_set($bmc, @args)        if $cmd eq 'set';
     return cmd_credential($bmc, @args) if $cmd eq 'credential';
     return cmd_device($bmc, @args)     if $cmd eq 'device';

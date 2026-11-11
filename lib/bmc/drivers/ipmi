@@ -4,6 +4,10 @@
 # argv. The user name is on argv (ipmitool offers no other way). Options:
 # interface (default lanplus), identify_seconds (default 15). See docs/BMC.md.
 #
+# Console: `sol activate` bounded by timeout(1), then `sol deactivate`; the
+# credential arrives on fd 3 (stdin carries the keystrokes), the limit in
+# BMC_CONSOLE_SECONDS.
+#
 # Contract: <driver> <action>; BMC_ADDR; credential on stdin (user, password).
 set -euo pipefail
 
@@ -48,6 +52,42 @@ field() {
   awk -F' *: *' -v k="$1" '$1 ~ "^" k "$" { print $2; exit }' <<< "$2"
 }
 
+# act_console: the SOL session. Output on stdout, keystrokes from stdin. The
+# session is bounded by timeout(1) and always deactivated afterwards.
+act_console() {
+  local secs="${BMC_CONSOLE_SECONDS:-}" err tpid rc=0 iface="${BMC_OPT_interface:-lanplus}"
+  { IFS= read -r user <&3 || true; } 2> /dev/null
+  { IFS= read -r pass <&3 || true; } 2> /dev/null
+  [[ -n "$user" && -n "$pass" ]] || die 3 "no credential supplied on fd 3"
+  [[ -n "${BMC_ADDR:-}" ]] || die 1 "BMC_ADDR is not set"
+  [[ "$secs" =~ ^[0-9]+$ ]] || die 1 "BMC_CONSOLE_SECONDS is not set"
+  err="/tmp/hps-ipmi-console-$$.err"
+  : > "$err"
+  # shellcheck disable=SC2064  # err is fixed now
+  trap "rm -f '$err'" EXIT
+  exec 4<&0
+  IPMI_PASSWORD="$pass" timeout -k 5 "$secs" ipmitool -I "$iface" -H "$BMC_ADDR" -U "$user" -E sol activate 2> "$err" <&4 &
+  tpid=$!
+  trap 'kill "$tpid" 2>/dev/null || true' TERM INT HUP
+  while true; do
+    rc=0
+    wait "$tpid" || rc=$?
+    kill -0 "$tpid" 2> /dev/null || break
+  done
+  IPMI_PASSWORD="$pass" ipmitool -I "$iface" -H "$BMC_ADDR" -U "$user" -E sol deactivate > /dev/null 2>&1 || true
+  case $rc in
+    0 | 124 | 137) return 0 ;;
+  esac
+  head -c 400 "$err" >&2 || true
+  if grep -qiE 'unauthorized|invalid user|insufficient privilege|password invalid|authentication' "$err"; then
+    die 3 "BMC $BMC_ADDR refused the credential"
+  fi
+  if grep -qiE 'unable to establish|timed? ?out|refused|unreachable|no route|get auth capabilities' "$err"; then
+    die 4 "BMC $BMC_ADDR unreachable"
+  fi
+  die 1 "sol activate failed (exit $rc)"
+}
+
 act_status() {
   local chassis mc fru power fw model serial
   chassis="$(ipmi_run chassis power status)"
@@ -74,9 +114,13 @@ current_power() {
 main() {
   local action="${1:-}"
   case "$action" in
-    status | on | off | force-off | reset | pxe-once | identify) ;;
-    *) die 1 "usage: ipmi status|on|off|force-off|reset|pxe-once|identify" ;;
+    status | on | off | force-off | reset | pxe-once | identify | console) ;;
+    *) die 1 "usage: ipmi status|on|off|force-off|reset|pxe-once|identify|console" ;;
   esac
+  if [[ "$action" == console ]]; then
+    act_console
+    return
+  fi
   read_credential
   case "$action" in
     status) act_status ;;

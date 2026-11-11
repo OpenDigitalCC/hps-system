@@ -5,6 +5,7 @@
 # by power on or restart. iLO 4 (v2.76, lab 2026-11-10) has no
 # BootSourceOverrideMode and refuses it (HTTP 400, Base.0.10.PropertyUnknown):
 # the mode is sent only when the system lists it (later iLO generations).
+# The serial console is the iLO Virtual Serial Port over ssh (console-common.sh).
 # See docs/BMC.md.
 set -euo pipefail
 export RF_NAME=hpe-ilo
@@ -12,6 +13,7 @@ export RF_SYSTEM_DEFAULT=/redfish/v1/Systems/1/
 export RF_MANAGER_DEFAULT=/redfish/v1/Managers/1/
 export RF_TRAILING_SLASH=1
 export RF_PXE_MODE=auto
+export RF_CONSOLE=ssh-vsp
 here="$(dirname "$(readlink -f "$0")")"
 # shellcheck source=../redfish-common.sh
 . "$here/../redfish-common.sh"
