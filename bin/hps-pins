@@ -19,6 +19,7 @@ Usage:
   hps-pins verify (<pin> | --all) [--json]
   hps-pins prune [--keep-previous N] [--dry-run]
   hps-pins delete <pin>
+  hps-pins latest <pin>
 list: pin, date, size, profiles, hosts pinned to it, latest marker.
 verify: sha256 and size of every bzImage and initrd, and of each firmware
   layer a boot.json names (nixos/firmware/), against boot.json and
@@ -30,7 +31,9 @@ prune: removes pins nothing references (not the latest, not a host's
   (default 1) of those; then every firmware layer under nixos/firmware/ that
   no remaining pin names (one written in the last hour is kept). delete: the
   same protection, one named pin, then the same layer clean-up.
-Exit: 0 ok, 1 failed, 2 usage, 3 refused (verify: a FAIL; delete or prune: a
+latest: point nixos/latest at a pin on disk that verifies (an IPS with no
+  builder, such as a cluster's inner IPS, gets its latest this way).
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (verify or latest: a FAIL; delete or prune: a
 protected pin or no latest), 4 not found.
 USAGE
     return 2;
@@ -101,6 +104,13 @@ sub dispatch {
         my $r = $p->delete($argv->[0]);
         print "deleted $argv->[0]\n";
         print "deleted $_->{file} ($_->{why})\n" for @{ $r->{layers_removed} // [] };
+        return 0;
+    }
+    if ($cmd eq 'latest') {
+        return usage('latest needs one pin') unless @$argv == 1;
+        my $r = $p->set_latest($argv->[0]);
+        print "latest $r->{pin} (was " . ($r->{previous} // 'none') . ")\n";
+        print "the IPS picks its iPXE binaries from the latest pin at start: restart it to serve this pin's\n";
         return 0;
     }
     return usage("unknown command '$cmd'");

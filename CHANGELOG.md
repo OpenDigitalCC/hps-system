@@ -12,6 +12,17 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## An IPS with no builder gets a latest pin (2026-11-11)
+
+- new: `hps-pins latest <pin>` points `nixos/latest` at a pin on disk that
+  verifies. It refuses a pin that does not verify and leaves latest unchanged,
+  and writes through a temporary file and a rename. A cluster's inner IPS gets
+  its pins from `cnh-ips-bootstrap` but has no builder to write latest. With
+  no latest and no cluster default it has no pin to audit or boot from. Seen
+  in the scale test: s1's six nodes were held with no audit.
+- docs: `docs/CONTAINER-HOST.md` bring-up step 9.
+- tests: `t/94-pins.t`.
+
 ## The IPS no longer installs OpenSVC (2026-11-11)
 
 - removed: `ensure_opensvc_installed` and `ips_install_opensvc`, the IPS-side

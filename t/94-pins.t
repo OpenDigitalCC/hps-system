@@ -245,4 +245,47 @@ sub err_of { my ($c) = @_; eval { $c->(); 1 } and return; my $e = $@; return ref
     ok(scalar(my @l = $p->list), 'list still works');
 }
 
+# --- set_latest: an IPS with no builder (an inner IPS) gets its latest
+{
+    my $saved = $res;
+    $res = tempdir(CLEANUP => 1);
+    make_pin('pin-l1', '2026-11-11T10:00:00Z');
+    make_pin('pin-l2', '2026-11-11T11:00:00Z');
+    my $p = mk();
+    is($p->latest, undef, 'no latest to begin with');
+    my $r = $p->set_latest('pin-l1');
+    is($r->{pin}, 'pin-l1', 'set_latest returns the pin');
+    is($r->{previous}, undef, 'and no previous');
+    is(slurp("$res/nixos/latest"), "pin-l1\n", 'latest file names the pin');
+    is($p->latest, 'pin-l1', 'latest reads it back');
+    $r = $p->set_latest('pin-l2');
+    is($r->{previous}, 'pin-l1', 'previous is reported');
+    ok(!-e "$res/nixos/latest.tmp.$$", 'no temporary file left');
+    my $e = err_of(sub { $p->set_latest('pin-nope') });
+    is($e && $e->kind, 'notfound', 'an absent pin is not found');
+    $e = err_of(sub { $p->set_latest('../etc') });
+    is($e && $e->kind, 'usage', 'a bad pin name is a usage error');
+    spit("$res/nixos/pin-l1/audit/initrd", 'tampered');
+    $e = err_of(sub { $p->set_latest('pin-l1') });
+    is($e && $e->kind, 'refused', 'a pin that does not verify is refused');
+    like($e && $e->message, qr{audit/initrd}, 'naming the failing file');
+    is($p->latest, 'pin-l2', 'latest unchanged after a refusal');
+    $res = $saved;
+}
+
+# --- hps-pins latest (CLI)
+{
+    my $cli_res = tempdir(CLEANUP => 1);
+    my $saved = $res;
+    $res = $cli_res;
+    make_pin('pin-c1', '2026-11-11T12:00:00Z');
+    $res = $saved;
+    my $out = `HPS_PINS_NO_SYSLOG=1 HPS_RESOURCES=$cli_res HPS_CONFIG_BASE=$base perl $Bin/../bin/hps-pins latest pin-c1 2>&1`;
+    my $rc = $? >> 8;
+    is($rc, 0, 'hps-pins latest exits 0');
+    like($out, qr/^latest pin-c1 \(was none\)/m, 'and reports the change');
+    $out = `HPS_PINS_NO_SYSLOG=1 HPS_RESOURCES=$cli_res HPS_CONFIG_BASE=$base perl $Bin/../bin/hps-pins latest 2>&1`;
+    is($? >> 8, 2, 'latest with no pin is a usage error');
+}
+
 done_testing;

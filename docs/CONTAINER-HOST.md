@@ -217,6 +217,10 @@ address, `$PIN` a pin built with `node-cnh`:
    operator's credential file is the run's output; save it mode 0600 for
    `hps-op --cred` (`docs/OPERATOR.md`). Every later step goes through that
    cluster's own operator API.
+9. `hps-op --cred <file> hps-pins latest <pin>`: the inner IPS has no builder,
+   so no pin is latest until the operator names one of the pins the manifest
+   delivered. Until then no host can be audited or booted. Then restart the
+   IPS (`cnh-ips-stop`, `cnh-ips-run`) so it serves that pin's iPXE binaries.
 
 From then on the inner IPS is its own cluster's; the outer HPS keeps only its
 CNH node (power, the node scripts above).

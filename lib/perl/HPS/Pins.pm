@@ -474,6 +474,31 @@ sub _remove ($self, $pin, $why) {
     return 1;
 }
 
+# set_latest($pin): point <nixos>/latest at a pin already on disk, when it
+# verifies. An IPS with no builder (a cluster's inner IPS, given its pins by
+# cnh-ips-bootstrap) has no other way to get a latest, and with none it has no
+# pin to audit or boot from. The operator chooses the pin, at every level.
+# Written to a temporary file and renamed, so a reader never sees a partial
+# name. Returns {pin, previous}.
+sub set_latest ($self, $pin) {
+    _fail('usage', "pin '" . ($pin // '') . "' must match ^[a-z0-9][a-z0-9.-]+\$") unless defined $pin && $pin =~ $PIN_RE;
+    _fail('notfound', "Pin $pin does not exist under " . $self->nixos_dir) unless -d $self->nixos_dir . "/$pin";
+    my $v = $self->verify_pin($pin);
+    unless ($v->{ok}) {
+        my $f = $v->{failures}[0];
+        _fail('refused', "Pin $pin does not verify ($f->{file}: $f->{reason}); latest unchanged");
+    }
+    my $previous = $self->latest;
+    my $file = $self->nixos_dir . '/latest';
+    my $tmp  = "$file.tmp.$$";
+    open(my $fh, '>', $tmp) or _fail('failed', "$tmp: $!");
+    print {$fh} "$pin\n";
+    close($fh) or _fail('failed', "$tmp: $!");
+    rename($tmp, $file) or do { unlink $tmp; _fail('failed', "rename to $file: $!") };
+    $self->_log('info', "latest pin set to $pin (was " . ($previous // 'none') . ')');
+    return { pin => $pin, previous => $previous };
+}
+
 # delete($pin): refused (refused) for any protected pin; notfound if absent.
 sub delete ($self, $pin) {
     _fail('usage', "pin '" . ($pin // '') . "' must match ^[a-z0-9][a-z0-9.-]+\$") unless defined $pin && $pin =~ $PIN_RE;
