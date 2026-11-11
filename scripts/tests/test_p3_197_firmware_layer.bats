@@ -296,7 +296,7 @@ two_initrd_manifest() {
     "$1" "$2" > "$dir/boot.json"
 }
 
-@test "boot lines: a two-initrd boot.json gives the image initrd, then the layer" {
+@test "boot lines: a two-initrd boot.json gives the layer first, then the image initrd (uncompressed first)" {
   boot_setup
   name="$(layer_name 1)"
   mkdir -p "$TEST_DIR/res/nixos/firmware"
@@ -306,8 +306,8 @@ two_initrd_manifest() {
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 4 ]
   [[ "${lines[0]}" == "kernel http://10.0.0.1/nixos/p1/audit/bzImage initrd=initrd console=ttyS1 init=/nix/store/abc-system/init initrd=$name hps.ips=10.0.0.1 "* ]]
-  [ "${lines[1]}" = "initrd http://10.0.0.1/nixos/p1/audit/initrd" ]
-  [ "${lines[2]}" = "initrd http://10.0.0.1/nixos/firmware/$name" ]
+  [ "${lines[1]}" = "initrd http://10.0.0.1/nixos/firmware/$name" ]
+  [ "${lines[2]}" = "initrd http://10.0.0.1/nixos/p1/audit/initrd" ]
   [ "${lines[3]}" = "boot" ]
 }
 
@@ -360,7 +360,7 @@ two_initrd_manifest() {
   run ipxe_boot_audit "$MAC"
   [ "$status" -eq 0 ]
   [[ "$output" == *$'imgfree\nkernel http://10.0.0.1/nixos/p1/audit/bzImage '* ]]
-  [[ "$output" == *$'\ninitrd http://10.0.0.1/nixos/p1/audit/initrd\ninitrd http://10.0.0.1/nixos/firmware/'"$name"$'\nboot'* ]]
+  [[ "$output" == *$'\ninitrd http://10.0.0.1/nixos/firmware/'"$name"$'\ninitrd http://10.0.0.1/nixos/p1/audit/initrd\nboot'* ]]
 }
 
 #--- pins ---------------------------------------------------------------------

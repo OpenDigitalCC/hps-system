@@ -187,11 +187,16 @@ nixos_boot_lines() {
     esac
   fi
   printf 'kernel %s/bzImage %s\n' "$base" "$args"
-  printf 'initrd %s/initrd\n' "$base"
-  # After the image's own initrd: the kernel unpacks them in this order.
+  # Extra (uncompressed) initrds BEFORE the image's own compressed one: the
+  # kernel unpacks them in this order, and an uncompressed archive after a
+  # compressed one relies on the decompressor reporting where its data ended
+  # (chain P run 29, 2026-11-11: an uncompressed cpio after the compressed
+  # stage 1 left the DL360 silent). Uncompressed first is the early-microcode
+  # layout.
   while IFS= read -r rel; do
     [[ -n "$rel" ]] && printf 'initrd http://%s/nixos/%s\n' "$ips" "$rel"
   done <<< "$extra"
+  printf 'initrd %s/initrd\n' "$base"
   printf 'boot\n'
 }
 
