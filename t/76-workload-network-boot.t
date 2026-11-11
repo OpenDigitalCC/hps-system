@@ -109,7 +109,7 @@ sub fixture {
     # start / status / stop / destroy: no mirrors, no zvols
     $f->{ce}{calls} = [];
     $wl->run('start', 'n0');
-    is_deeply([ $f->{ce}->scripts ], ['vm-start'], 'start: vm-start only');
+    is_deeply([ $f->{ce}->scripts ], [ 'vm-status', 'vm-start' ], 'start: vm-status, then vm-start only (defined: no re-define)');
     is(($f->{reg}->cluster_get_json('lab', 'workload_n0'))->{state}, 'running', 'registry: running');
     $f->{ce}{calls} = [];
     $wl->run('status', 'n0');

@@ -12,6 +12,25 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Workload start after a compute host reboot (2026-11-11)
+
+- fix: `hps-workload start` brings a workload back after its compute host
+  rebooted. The node runs from RAM, so libvirt's VM definitions were gone and
+  `start` failed (`vm-start exited 4: ... is not defined`) with no way out
+  (`create --resume` had nothing to resume). `start` now runs `vm-status`
+  before each `vm-start`; a VM that is not defined is re-defined with
+  `vm-define`, built by create's own argument builder from the definition and
+  the record, with the recorded MACs (`--mac` per NIC), the same disks and
+  legs, NIC VLAN settings and SMBIOS, and no zvol create or image write. A
+  definition edited since create refuses the re-define (3) and names the
+  difference. The re-define is a plan step, listed in `--dry-run`.
+- new: the workload record keeps each VM's `vm-define` arguments (`define`)
+  from create, and the MACs of a `boot: disk` VM (`macs`, read with
+  `vm-status`), so later re-defines keep the VM's identity.
+- tests: `t/201-workload-start-redefine.t`; start call lists in
+  `t/71-workload-driver.t`, `t/72-hps-workload-cli.t`,
+  `t/76-workload-network-boot.t` include the `vm-status` step.
+
 ## Host addresses on storage and transit VLANs (2026-11-11)
 
 - new: NixOS nodes get an address on each storage network and, for TCH hosts,

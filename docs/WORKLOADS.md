@@ -73,8 +73,29 @@ nothing). A node call that exits non-zero ends the run at once.
     (`mirror-create` calls `leg-resolve`).
 
 `start`
-:   VMs in priority order (1 first): `mirror-assemble`, then `vm-start`. Records
-    `running`, `last_owner` (the compute host) and `started_at`.
+:   VMs in priority order (1 first): `mirror-assemble` (mirrored disks only; a
+    VM on local legs only has none), `vm-status` (read-only), then `vm-start`.
+    Records `running`, `last_owner` (the compute host) and `started_at`.
+    A node runs from RAM, so after its reboot libvirt no longer has the VM's
+    definition while the zvols and legs are still there. When `vm-status`
+    exits 4 (not defined), `start` re-defines the VM before `vm-start`:
+    `vm-define` with exactly the arguments `create` used (the same builder:
+    disks, nets with their `--nic-model`, `--vlan-pvid`, `--vlan-tagged`,
+    `--disk-bus`, `--smbios`, `--image`) and the recorded MACs, one `--mac`
+    after each `--net`. No zvol create, image fetch, mirror create or image
+    write. A VM with no recorded MACs (a `boot: disk` VM whose MACs were never
+    read) gets new ones from libvirt; a second `vm-status` reads them back into
+    the record. A defined VM is started as before, and its `vm-status` MACs are
+    recorded when the record has none, so a later re-define keeps them.
+    The re-define is refused (3), and nothing is defined or started, when the
+    definition no longer matches the record: another compute host, other disk
+    names, devices or leg specs, a MAC count that is not the NIC count, or
+    (records whose `create` stored them, `define`) other `vm-define`
+    arguments; the message names the difference. Put the definition back, or
+    destroy and create the workload. The re-define and the second `vm-status`
+    are plan steps marked `only if vm-status reports <vm> not defined`: they
+    appear in `--dry-run` (with `refused then: <why>` when a re-define would
+    be refused) and are shown `(skipped, not needed)` when the VM was defined.
 
 `stop`
 :   Reverse priority: `vm-stop`, then `mirror-stop`. Records `stopped`.
@@ -122,7 +143,10 @@ All registry keys, with their types: `docs/REGISTRY-KEYS.md`.
 
 A `boot: network` VM has `"disks": {}` and `"macs": ["$MAC", ...]`, the MACs
 `vm-define` reported (`VM $VM defined mac=$MAC`, one per NIC), which are the
-identity the IPS sees when the VM netboots.
+identity the IPS sees when the VM netboots. A `boot: disk` VM gets `macs` from
+`vm-status` at its first `start` (or its first re-define). Every VM created
+since the re-define landed also has `"define": [...]`, the `vm-define`
+arguments `create` used, against which a re-define checks the definition.
 
 States. VM: `creating`, `defined`, `running`, `stopped`. Workload: `creating`
 (an unfinished create; carries `done`, the finished step keys), `created`,

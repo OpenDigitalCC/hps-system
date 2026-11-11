@@ -440,10 +440,11 @@ sub _attached ($self, $mac) {
     return ref $n eq 'ARRAY' ? [@$n] : [];
 }
 
-# The vm-define arguments of NIC $i: --net <bridge> then its per-NIC options.
-sub _net_args ($self, $layout, $vm, $i) {
+# The vm-define arguments of NIC $i: --net <bridge>, its --mac when given (a
+# re-define keeps the recorded MAC), then its per-NIC options.
+sub _net_args ($self, $layout, $vm, $i, $mac = undef) {
     my $nic = $vm->{nics} ? $vm->{nics}[$i] : {};
-    return ('--net', $layout->{ $vm->{nets}[$i] }{bridge},
+    return ('--net', $layout->{ $vm->{nets}[$i] }{bridge}, (defined $mac ? ('--mac', $mac) : ()),
         (defined $nic->{model} ? ('--nic-model', $nic->{model}) : ()),
         (defined $nic->{pvid} ? ('--vlan-pvid', $nic->{pvid}) : ()),
         ($nic->{tagged} && @{ $nic->{tagged} } ? ('--vlan-tagged', join(',', @{ $nic->{tagged} })) : ()));
@@ -455,6 +456,18 @@ sub _hardware_args ($vm) {
     my $sm = $hw->{smbios};
     return ((defined $hw->{disk_bus} ? ('--disk-bus', $hw->{disk_bus}) : ()),
         ($sm ? ('--smbios', join(',', map { "$_=$sm->{$_}" } grep { defined $sm->{$_} } qw(vendor product serial))) : ()));
+}
+
+# The vm-define arguments of a VM: create's, and a re-define's (start after the
+# compute host lost its libvirt definitions), from the one builder. $macs: the
+# recorded MAC per NIC, in nets order (a re-define), else none (libvirt makes them).
+sub _define_args ($self, $layout, $vm, $in, $macs = undef) {
+    my $net_boot = $vm->{boot} eq 'network';
+    return [ $vm->{name}, '--memory', $vm->{memory_mib}, '--vcpus', $vm->{vcpus},
+        ($net_boot ? ('--boot', 'network') : ()),
+        (map { ('--disk', $_->{device}) } @{ $in->{disks} }),
+        (map { $self->_net_args($layout, $vm, $_, $macs ? $macs->[$_] : undef) } 0 .. $#{ $vm->{nets} }),
+        ($net_boot ? () : ('--image', "$in->{image_dir}/$vm->{image}.qcow2")), _hardware_args($vm) ];
 }
 
 sub _steps_create ($self, $def, %a) {
@@ -505,19 +518,64 @@ sub _steps_create ($self, $def, %a) {
                 undo => sub { defined $prev ? $reg->host_set($mac, 'nets', $prev) : $reg->host_unset($mac, 'nets') });
         }
         my ($wl, $vmname) = ($name, $vm->{name});
-        push @s, _step($mac, 'vm-define', [ $vm->{name}, '--memory', $vm->{memory_mib}, '--vcpus', $vm->{vcpus},
-            ($net_boot ? ('--boot', 'network') : ()),
-            (map { ('--disk', $_->{device}) } @{ $in->{disks} }),
-            (map { $self->_net_args($layout, $vm, $_) } 0 .. $#{ $vm->{nets} }),
-            ($net_boot ? () : ('--image', $path)), _hardware_args($vm) ],
-            key => "define:$vm->{name}",
-            ($net_boot ? (after => sub ($r) { $self->_record_macs($wl, $vmname, $r) }) : ()));
+        my $args = $self->_define_args($layout, $vm, $in);
+        push @s, _step($mac, 'vm-define', $args, key => "define:$vm->{name}",
+            after => sub ($r) {
+                # Kept: a re-define (start) checks the definition against them.
+                $self->_rec_update($wl, sub ($rec) { $rec->{vms}{$vmname}{define} = [ map {"$_"} @$args ] });
+                $self->_record_macs($wl, $vmname, $r) if $net_boot;
+            });
     }
     return @s;
 }
 
+# Why the recorded VM cannot be re-defined from this definition (the definition
+# was edited since create, or the record lacks the VM), else undef. Compared:
+# compute host, disk names, devices and leg specs, the MAC count, and, for
+# records whose create stored them, the whole vm-define argument list.
+sub _redefine_mismatch ($self, $rv, $vm, $in, $args) {
+    return 'the workload record has no entry for it' unless ref $rv eq 'HASH';
+    return "the record has compute host '" . ($rv->{host} // '') . "', the definition '$vm->{compute}'"
+        if ($rv->{host} // '') ne $vm->{compute};
+    my %rd = %{ $rv->{disks} // {} };
+    my $have = join(',', sort keys %rd);
+    my $want = join(',', sort map { $_->{name} } @{ $in->{disks} });
+    return "the record has disks [$have], the definition [$want]" if $have ne $want;
+    for my $d (@{ $in->{disks} }) {
+        my $r = $rd{ $d->{name} };
+        return "disk '$d->{name}': the record has device " . ($r->{md} // '-') . ", the definition $d->{device}"
+            if ($r->{md} // '') ne $d->{device};
+        my ($rl, $dl) = (join(' ', @{ $r->{legs} // [] }), join(' ', @{ $d->{specs} }));
+        return "disk '$d->{name}': the record has legs $rl, the definition $dl" if $rl ne $dl;
+    }
+    my $macs = $rv->{macs};
+    return 'the record has ' . scalar(@$macs) . ' MAC(s), the definition ' . scalar(@{ $vm->{nets} }) . ' NIC(s)'
+        if ref $macs eq 'ARRAY' && @$macs && @$macs != @{ $vm->{nets} };
+    if (ref $rv->{define} eq 'ARRAY') {
+        my ($was, $now) = (join(' ', @{ $rv->{define} }), join(' ', @$args));
+        return "its vm-define arguments differ from the ones create used (create: $was; now: $now)" if $was ne $now;
+    }
+    return undef;
+}
+
+# The MACs of a VM from vm-status's NIC lines (NIC <vm> <index> <tap> <bridge> <mac> ...), in index order.
+sub _status_macs ($stdout, $vm) {
+    my %m = ($stdout // '') =~ /^NIC \Q$vm\E ([0-9]+) \S+ \S+ ([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b/mg;
+    return map { $m{$_} } sort { $a <=> $b } keys %m;
+}
+
+# start: per VM, mirror-assemble (mirrored disks only), then vm-status
+# (read-only). A VM its compute host does not have defined (vm-status exit 4:
+# the node runs from RAM and lost libvirt's definitions in a reboot; the zvols
+# and legs are still there) is re-defined with vm-define from the definition
+# and the record: create's arguments (_define_args), the recorded MACs (--mac
+# per NIC), no zvol create and no image write. Then vm-start. A definition that
+# no longer matches the record refuses the re-define, and only then. A defined
+# VM is started as before; when the record has no MACs for it (a disk-boot VM),
+# vm-status's are recorded so a later re-define keeps them.
 sub _steps_start ($self, $def, %a) {
     my $rec = $self->_need_record($def->{name}, 'start');
+    my $layout = $self->layout;
     my @s;
     for my $vm ($self->_ordered($def, %a)) {
         my $in = $self->_vm_info($def, $vm);
@@ -525,6 +583,29 @@ sub _steps_start ($self, $def, %a) {
             push @s, _step($in->{mac}, 'mirror-assemble', [ $d->{mirror}, map { ('--leg', $_) } @{ $d->{specs} } ]);
         }
         my ($n, $host) = ($def->{name}, $vm->{compute});
+        my $vname = $vm->{name};
+        my $rv = $rec->{vms}{$vname};
+        my $macs = ref $rv eq 'HASH' && ref $rv->{macs} eq 'ARRAY' && @{ $rv->{macs} } ? [ @{ $rv->{macs} } ] : undef;
+        my $why = $self->_redefine_mismatch($rv, $vm, $in, $self->_define_args($layout, $vm, $in));
+        my $missing = 0;
+        my $keep_macs = sub ($r) {
+            my @m = _status_macs($r->{stdout}, $vname);
+            $self->_rec_update($n, sub ($x) { $x->{vms}{$vname}{macs} = [@m] }) if @m && $r->{rc} == 0;
+        };
+        push @s, _step($in->{mac}, 'vm-status', [$vname], ok_rc => [4], seen => sub ($r) {
+            $missing = $r->{rc} == 4 ? 1 : 0;
+            $keep_macs->($r) unless $missing || $macs;
+        });
+        my $only = "only if vm-status reports $vname not defined (its compute host rebooted)";
+        push @s, _step($in->{mac}, 'vm-define', $self->_define_args($layout, $vm, $in, $macs),
+            when => sub { $missing },
+            only => $only . ($macs ? '; with the recorded MACs' : '; no MACs recorded: libvirt makes new ones')
+                . (defined $why ? "; refused then: $why" : ''),
+            (defined $why ? (refuse => "start: VM $vname is not defined on its compute host and cannot be re-defined: $why. "
+                . 'Put back the definition it was created with, or destroy and create the workload') : ()),
+            before => sub { $self->_log('notice', "start $n: VM $vname is not defined on $host; re-defining it from the definition and the record") });
+        push @s, _step($in->{mac}, 'vm-status', [$vname], when => sub { $missing }, seen => $keep_macs,
+            only => "$only, and no MACs were recorded: records the new ones") unless $macs;
         push @s, _step($in->{mac}, 'vm-start', [ $vm->{name} ], after => sub {
             $self->_rec_update($n, sub ($r) {
                 @{ $r->{vms}{ $vm->{name} } }{qw(state last_owner started_at)} = ('running', $host, $self->_stamp);
@@ -636,7 +717,8 @@ sub plan ($self, $op, $name, %a) {
     return [ map {
         $n++;
         my $s = $_->{show} // $_;
-        { n => $n, host => $_->{host}, script => $s->{script}, args => [ @{ $s->{args} } ], input => $s->{input} }
+        { n => $n, host => $_->{host}, script => $s->{script}, args => [ @{ $s->{args} } ], input => $s->{input},
+          (defined $_->{only} ? (only => $_->{only}) : ()) }
     } @steps ];
 }
 
@@ -697,6 +779,17 @@ sub run ($self, $op, $name, %a) {
                 stdout => '', stderr => '', skipped => 1 };
             next;
         }
+        # A conditional step (when): skipped when not needed; refused when needed
+        # but impossible (refuse).
+        if ($st->{when} && !$st->{when}->()) {
+            push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => 0,
+                stdout => '', stderr => '', skipped => 1, not_needed => 1 };
+            next;
+        }
+        if (defined $st->{refuse}) {
+            $self->_log('err', $st->{refuse});
+            _fail('refused', $st->{refuse});
+        }
         $self->_rec_update($name, sub ($rec) { $rec->{attempting} = $st->{key} }) if $op eq 'create' && $st->{key};
         my $r = $self->_run_step($st, $n, scalar(@steps), $op);
         push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => $r->{rc},
@@ -709,6 +802,7 @@ sub run ($self, $op, $name, %a) {
             $self->_log('err', "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}");
             _fail($kind, "$op: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
         }
+        $st->{seen}->($r) if $st->{seen};    # every accepted exit (ok_rc included)
         $st->{after}->($r) if $st->{after} && $r->{rc} == 0;
         if ($op eq 'create' && $st->{key}) {
             $done{ $st->{key} } = 1;

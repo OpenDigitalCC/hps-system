@@ -42,6 +42,7 @@ sub render_plan {
     for my $s (@$plan) {
         $out .= "  $s->{n}. [$s->{host}] $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . "\n";
         $out .= "     input: $s->{input}\n" if defined $s->{input};
+        $out .= "     $s->{only}\n" if defined $s->{only};
     }
     return $out;
 }
@@ -51,7 +52,8 @@ sub render_run {
     my $out = '';
     for my $s (@{ $r->{steps} }) {
         if ($s->{skipped}) {
-            $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . " (skipped, done earlier)\n";
+            $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} })
+                . ($s->{not_needed} ? " (skipped, not needed)\n" : " (skipped, done earlier)\n");
             next;
         }
         $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . " (exit $s->{rc})\n";

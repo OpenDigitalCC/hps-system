@@ -139,7 +139,7 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `held_reboot_after_audit` | `bool` | hps-cluster-config; read by the iPXE menu | Whether the audit image reboots after the IPS accepts its audit (true, the default) or stays up for inspection over ctrl-exec (false); passed to the image as hps.audit_reboot=0. |
 | `nixos_default_pin` | `pin` | operator (hps-cluster-config or the API); read by the iPXE menu | The pin a NixOS node boots when it has no pin of its own. |
 | `power_devices` | `json` | HPS::BMC (hps-bmc device set) | Object of power devices (PDU, smart plug) keyed by name: addr and options (cmd template). Hosts using the external driver refer to one as outlet=<name>:<n>. Credentials are in the keysafe, never here. |
-| `workload_<name>` | `json` | HPS::Workload (create, start, stop; removed by destroy) | Instance record of a workload: state, VMs, disks, macs, created_at, by. |
+| `workload_<name>` | `json` | HPS::Workload (create, start, stop; removed by destroy) | Instance record of a workload: state, VMs, disks, macs, define (the vm-define arguments of create), created_at, by. |
 | `workload_<name>_destroyed` | `json` | HPS::Workload destroy (removed by the next create) | Audit record of a destroyed workload: at (when), by (who). The definition file workloads/<name>.json is kept. |
 
 ## Free-form writers

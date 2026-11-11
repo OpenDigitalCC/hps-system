@@ -98,8 +98,9 @@ my $f = StorageFixture::setup_workload();
     $f->{ce}{calls} = [];
     my $r = $wl->run('start', 't0');
     my @c = map { [ $_->{script}, $_->{args}[0] ] } $f->{ce}->calls;
-    is_deeply(\@c, [ [ 'mirror-assemble', 't0-db-root' ], [ 'vm-start', 't0-db' ], [ 'mirror-assemble', 't0-app-root' ], [ 'vm-start', 't0-app' ] ],
-        'start: priority order (1 first), mirror assembled before each vm-start');
+    is_deeply(\@c, [ [ 'mirror-assemble', 't0-db-root' ], [ 'vm-status', 't0-db' ], [ 'vm-start', 't0-db' ],
+        [ 'mirror-assemble', 't0-app-root' ], [ 'vm-status', 't0-app' ], [ 'vm-start', 't0-app' ] ],
+        'start: priority order (1 first), mirror assembled and the VM checked before each vm-start; no re-define of a defined VM');
     my ($ma) = $f->{ce}->calls;
     is_deeply($ma->{args}, [ 't0-db-root', '--leg', "local:$DB", '--leg', 'iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db' ], 'mirror-assemble legs');
     my $rec = rec($f, 't0');
@@ -141,9 +142,9 @@ my $f = StorageFixture::setup_workload();
     $f->{ce}{rc}{'vm-start'} = 1;
     $e = err_of(sub { $wl->run('start', 't0') });
     is($e->kind, 'failed', 'node failure: failed');
-    like($e->message, qr/step 2\/4 vm-start exited 1: boom from vm-start/, 'failure names step, script and node stderr');
+    like($e->message, qr/step 5\/10 vm-start exited 1: boom from vm-start/, 'failure names step, script and node stderr');
     is(rec($f, 't0')->{state}, 'stopped', 'failed start leaves the state');
-    is(scalar(() = $f->{ce}->calls), 2, 'nothing runs after the failing call');
+    is(scalar(() = $f->{ce}->calls), 3, 'nothing runs after the failing call');
     $f->{ce}{rc}{'vm-start'} = 3;
     $e = err_of(sub { $wl->run('start', 't0') });
     is($e->kind, 'refused', 'node refusal (3): refused');
