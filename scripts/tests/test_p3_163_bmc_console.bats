@@ -338,3 +338,11 @@ no_password_anywhere() {
   run --separate-stderr "$HPSBMC" help
   [[ "$stderr" == *"hps-bmc console <host> [--seconds N]"* ]]
 }
+
+@test "hpe-ilo console: the iLO's 'Client Disconnect' after our exit is a normal end (lab 2026-11-11)" {
+  con_host hpe-ilo
+  FAKE_SSH_RC=255 FAKE_SSH_ERR='Received disconnect from 192.0.2.1 port 22:11:  Client Disconnect' run --separate-stderr "$HPSBMC" console sch-001 --seconds 1 < /dev/null
+  [ "$status" -eq 0 ]
+  FAKE_SSH_RC=255 FAKE_SSH_ERR='ssh: connect to host 192.0.2.1 port 22: Connection refused' run --separate-stderr "$HPSBMC" console sch-001 --seconds 1 < /dev/null
+  [ "$status" -eq 4 ]
+}

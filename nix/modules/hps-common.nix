@@ -198,7 +198,9 @@
 
     # Stops are the reverse of starts: a unit that is After= X stops BEFORE X.
     # This unit is after libvirt, the iSCSI initiator, the network, the resolver
-    # and the log forwarder, so on any poweroff or reboot its ExecStop runs while
+    # and the log forwarder (NixOS names rsyslog's unit syslog.service; ordering
+    # on rsyslog.service alone never applied, lab 2026-11-11: the export lines
+    # never reached the IPS), so on any poweroff or reboot its ExecStop runs while
     # all of them are still up: guests stop, md mirrors stop, iSCSI targets and
     # sessions go, ZFS pools are exported, and only then the network and the
     # log forwarding stop. Every step is bounded by a timeout inside the script
@@ -216,7 +218,7 @@
       after = [
         "libvirtd.service" "iscsid.service" "iscsid.socket" "ctrl-exec-agent.service"
         "network-online.target" "systemd-networkd.service" "systemd-resolved.service"
-        "rsyslog.service" "local-fs.target"
+        "syslog.service" "rsyslog.service" "local-fs.target"
       ];
       path = with pkgs; [ bash coreutils ];
       serviceConfig = {

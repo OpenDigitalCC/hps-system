@@ -209,3 +209,8 @@ EOT
 @test "10: no HPS module lists polkit or dbus packages" {
   run ! grep -rniE 'polkit|dbus\.packages' "$ROOT/nix/modules" --include=*.nix
 }
+
+@test "the shutdown storage unit stops before syslog.service, the NixOS rsyslog unit (lab 2026-11-11)" {
+  grep -A6 'systemd.services.hps-shutdown-storage' "$ROOT/nix/modules/hps-common.nix" > /dev/null
+  grep -qE '"syslog\.service" "rsyslog\.service" "local-fs\.target"' "$ROOT/nix/modules/hps-common.nix"
+}

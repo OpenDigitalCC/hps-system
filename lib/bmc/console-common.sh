@@ -109,6 +109,11 @@ console_ssh_vsp() {
   done
   kill "$feed_pid" 2> /dev/null || true
   wait "$feed_pid" 2> /dev/null || true
+  # Our leave sequence ends in `exit`; iLO 4 answers "Received disconnect ...
+  # Client Disconnect" and ssh exits 255 (lab 2026-11-11): a normal end.
+  if ((rc == 255)) && grep -qi 'Client Disconnect' "$errf" 2> /dev/null; then
+    rc=0
+  fi
   case "$rc" in
     0 | 124 | 137) exit 0 ;;
   esac
