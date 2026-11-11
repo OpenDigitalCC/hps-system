@@ -53,6 +53,12 @@ in
     dockerSocket.enable = false;
   };
   virtualisation.containers.containersConf.settings.network.network_backend = "netavark";
+
+  # The cluster IPS's operator API (ctrl-exec API, TLS + bearer token,
+  # CTRL_EXEC_OPERATOR_API_PORT), reached from outside on the CNH's own address
+  # once cnh-ips-operator-init has set operator_api_listen. hps-ips-launch only
+  # opens the IPS's provisioning interface.
+  networking.firewall.allowedTCPPorts = [ 7445 ];
   virtualisation.containers.storage.settings.storage = {
     driver = "overlay";
     graphroot = "/var/lib/containers/storage";

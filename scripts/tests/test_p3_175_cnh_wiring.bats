@@ -191,3 +191,7 @@ nix_code() {
 @test "hps-cnh-mount is not ordered before podman.socket (an ordering cycle with basic.target, lab 2026-11-11)" {
   run ! grep -qE 'before = \[[^]]*"podman\.socket"' "$BATS_TEST_DIRNAME/../../nix/modules/profiles/container-host.nix"
 }
+
+@test "the CNH firewall opens the IPS operator API port (7445) for the outside operator" {
+  grep -qE 'networking\.firewall\.allowedTCPPorts = \[[^]]*\b7445\b' "$BATS_TEST_DIRNAME/../../nix/modules/profiles/container-host.nix"
+}
