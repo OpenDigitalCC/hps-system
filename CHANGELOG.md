@@ -47,6 +47,24 @@ capabilities and removals are called out explicitly.
 - tests: `test_p3_170_multi_disk.bats`, `t/77-workload-multi-disk.t`. Needed by
   the scale test (storage VMs with 3 data disks, `lab/scale`).
 
+## CS-3.11: the container host role (2026-11-11)
+
+- new: role `CNH`, host profile `CONTAINER_HOST`, image profile `node-cnh`
+  (`nix/modules/profiles/container-host.nix`, built by `nix/build.sh` by
+  default): the node base, om3, root podman with netavark; no libvirt, no LIO,
+  no pool. Not yet evaluated by `nix flake check`.
+- new: node scripts on the CNH image only: `cnh-disk-prepare` (ext4 `hps-cnh`
+  on a blank device only, mounted at `/var/lib/containers` and
+  `/var/lib/hps-ips`), `cnh-image-load` (archive from this node's IPS only,
+  verified, `podman load`), `cnh-ips-bootstrap` (IPS state by manifest, every
+  file verified, resumable), `cnh-ips-cluster-bootstrap`, `cnh-ips-run`,
+  `cnh-ips-stop`; boot units `hps-cnh-mount` (never formats) and `hps-ips` (the
+  IPS container, host networking, the lab IPS shape).
+- new: IPS tool `hps-cnh-publish` (`HPS::CnhPublish`): the hps-system tarball and
+  the `hps-cnh-manifest/1` manifest under `hps-resources/packages/cnh/`.
+- `hps-onboard`, the NixOS OS seed and `hps.roles` take `CNH`.
+  `docs/CONTAINER-HOST.md`.
+
 ## Resource monitoring of the paired nodes (2026-11-11)
 
 - new: `nagios-check` node script (ctrl-exec-plugins v0.3.11, new flake input

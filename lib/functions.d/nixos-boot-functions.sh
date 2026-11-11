@@ -257,6 +257,7 @@ EOF
 nixos_image_profile() {
   case "${1:-}" in
     CONVERGED) echo node-converged ;;
+    CONTAINER_HOST) echo node-cnh ;;
     DEFAULT)   echo node-base ;;
     *)         return 1 ;;
   esac
@@ -269,7 +270,7 @@ ipxe_boot_nixos() {
   local host_profile image
   host_profile="$(host_registry "$mac" get HOST_PROFILE 2>/dev/null)" || host_profile=""
   image="$(nixos_image_profile "$host_profile")" || {
-    cgi_auto_fail "No NixOS image profile for host profile '${host_profile}' (known: CONVERGED, DEFAULT)"
+    cgi_auto_fail "No NixOS image profile for host profile '${host_profile}' (known: CONVERGED, CONTAINER_HOST, DEFAULT)"
     return 1
   }
   hps_log info "[$mac] NixOS network boot: host profile ${host_profile} -> image ${image}"

@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+#
+# cnh-ips-run - run a cluster's IPS container on this container host.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-ips-run <image> <provisioning-interface> [<address>/<prefix>]
+#
+#   <image>      a podman image reference already loaded (cnh-image-load),
+#                for example localhost/hps-container:latest
+#   <provisioning-interface>
+#                the interface on the cluster's provisioning network that the
+#                IPS serves (DHCP, TFTP, HTTP, DNS, syslog, ctrl-exec). Never
+#                this node's own boot NIC (the one carrying hps.mac=): that
+#                network belongs to the IPS that provisions this node. A VLAN
+#                sub-interface of the boot NIC is allowed.
+#   <address>/<prefix>
+#                the IPS address on that interface (an IPv4 CIDR such as
+#                a.b.c.d/24). Without it the interface's current IPv4 address
+#                is used; an interface with none is refused.
+#
+# Nothing is started directly: the settings are written to
+# /var/lib/hps-ips/ips.env (on the CNH disk) and hps-ips.service is restarted.
+# That unit (static in the image, Restart=always) runs /etc/hps/hps-ips-launch,
+# which puts the address on the interface, accepts the interface in the NixOS
+# firewall, and runs, in the foreground:
+#
+#   podman run --name hps-ips --privileged --cgroupns=host --network=host
+#     --hostname=ips --log-driver=journald
+#     -v /var/lib/hps-ips/srv:/srv
+#     -v /var/lib/hps-ips/hps-system:/srv/hps-system
+#     -v /sys/fs/cgroup:/sys/fs/cgroup:rw  <image>
+#
+# the shape of the lab IPS (lab/ips/compose.yml) with host networking. Because
+# ips.env is on the disk, the IPS starts again after a reboot once
+# hps-cnh-mount has mounted the disk. cnh-ips-stop stops it and keeps it off.
+#
+# Refused (exit 3): the CNH disk not mounted, the IPS state not bootstrapped
+# (cnh-ips-bootstrap), the image not loaded, an unknown interface, the boot
+# NIC, a malformed address.
+#
+# Last line: IPS running image=<image> iface=<interface> address=<cidr>
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed (or the unit did not
+# become active within HPS_IPS_WAIT seconds).
+#
+# Overrides for tests: HPS_CMDLINE (file), HPS_CNH_ROOT (prefix of
+# /var/lib/hps-ips), HPS_SYS_NET (/sys/class/net), HPS_PROC_VLAN
+# (/proc/net/vlan), HPS_IPS_WAIT, HPS_IPS_STEP.
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_CNH_ROOT:=}"
+: "${HPS_SYS_NET:=/sys/class/net}"
+: "${HPS_PROC_VLAN:=/proc/net/vlan}"
+: "${HPS_IPS_WAIT:=30}"
+: "${HPS_IPS_STEP:=1}"
+
+IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
+UNIT=hps-ips.service
+IMAGE=""
+IFACE=""
+ADDRESS=""
+
+log() {
+  printf '[cnh-ips-run] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-ips-run <image> <provisioning-interface> [<address>/<prefix>]
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# normalise_mac <text>: aa:bb:cc:dd:ee:ff or fail.
+normalise_mac() {
+  local raw="${1//:/}"
+  raw="${raw,,}"
+  [[ "$raw" =~ ^[0-9a-f]{12}$ ]] || return 1
+  printf '%s:%s:%s:%s:%s:%s\n' "${raw:0:2}" "${raw:2:2}" "${raw:4:2}" \
+    "${raw:6:2}" "${raw:8:2}" "${raw:10:2}"
+}
+
+valid_cidr() {
+  local ip=${1%/*} prefix=${1#*/} o
+  [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$ ]] || return 1
+  [[ $prefix -ge 1 && $prefix -le 32 ]] || return 1
+  for o in ${ip//./ }; do
+    [[ $((10#$o)) -le 255 ]] || return 1
+  done
+  return 0
+}
+
+check_image() {
+  [[ "$IMAGE" =~ ^[a-z0-9][a-z0-9._/:@-]{0,254}$ && "$IMAGE" != *..* ]] \
+    || refuse "image '$IMAGE' is not a plain image reference"
+}
+
+check_iface() {
+  local boot_mac mac
+  [[ "$IFACE" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$ ]] || refuse "interface name '$IFACE' is not valid"
+  [[ -d "$HPS_SYS_NET/$IFACE" ]] || refuse "no interface $IFACE on this node"
+  boot_mac=$(normalise_mac "$(cmdline_value hps.mac || true)" || true)
+  mac=$(normalise_mac "$(cat "$HPS_SYS_NET/$IFACE/address" 2> /dev/null || true)" || true)
+  if [[ -n "$boot_mac" && "$mac" == "$boot_mac" && ! -e "$HPS_PROC_VLAN/$IFACE" ]]; then
+    refuse "$IFACE carries the boot MAC $boot_mac: it is this node's own provisioning network, served by the IPS that provisions this node"
+  fi
+}
+
+check_address() {
+  local ips
+  if [[ -z "$ADDRESS" ]]; then
+    ADDRESS=$(run ip -j -4 addr show dev "$IFACE" | jq -r '[.[].addr_info[]? | select(.family == "inet")][0] | if . then "\(.local)/\(.prefixlen)" else empty end')
+    [[ -n "$ADDRESS" ]] || refuse "$IFACE has no IPv4 address and none was given"
+    log "using the address $ADDRESS already on $IFACE"
+  fi
+  valid_cidr "$ADDRESS" || refuse "address '$ADDRESS' is not an IPv4 address/prefix"
+  ips=$(cmdline_value hps.ips || true)
+  [[ "${ADDRESS%/*}" != "$ips" ]] || refuse "address ${ADDRESS%/*} is this node's own IPS (hps.ips)"
+}
+
+check_state() {
+  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+    || refuse "$IPSDIR is not mounted (the CNH disk): run cnh-disk-prepare first"
+  [[ -d "$IPSDIR/srv" && -f "$IPSDIR/hps-system/scripts/run-hps.sh" ]] \
+    || refuse "$IPSDIR holds no IPS state (srv/ and hps-system/): run cnh-ips-bootstrap first"
+}
+
+check_image_loaded() {
+  run systemd-run --quiet --wait --pipe --collect -- podman image exists "$IMAGE" \
+    || refuse "image $IMAGE is not loaded in podman: load it with cnh-image-load"
+}
+
+write_env() {
+  local tmp="$IPSDIR/ips.env.tmp"
+  log "writing $IPSDIR/ips.env"
+  {
+    printf '# hps-ips settings, written by cnh-ips-run; read by /etc/hps/hps-ips-launch\n'
+    printf 'IMAGE=%s\n' "$IMAGE"
+    printf 'IFACE=%s\n' "$IFACE"
+    printf 'ADDRESS=%s\n' "$ADDRESS"
+  } > "$tmp"
+  run mv -f -- "$tmp" "$IPSDIR/ips.env"
+  rm -f -- "$IPSDIR/ips.env.stopped"
+}
+
+wait_active() {
+  local waited=0
+  while ! run systemctl is-active --quiet "$UNIT"; do
+    if awk -v w="$waited" -v m="$HPS_IPS_WAIT" 'BEGIN { exit !(w >= m) }'; then
+      log "$UNIT did not become active within ${HPS_IPS_WAIT}s"
+      run systemctl status --no-pager --lines=20 "$UNIT" >&2 || true
+      exit 1
+    fi
+    sleep "$HPS_IPS_STEP"
+    waited=$(awk -v w="$waited" -v s="$HPS_IPS_STEP" 'BEGIN { print w + s }')
+  done
+}
+
+main() {
+  if [[ $# -lt 2 || $# -gt 3 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  IMAGE=$1
+  IFACE=$2
+  ADDRESS=${3:-}
+  check_image
+  check_iface
+  check_address
+  check_state
+  check_image_loaded
+  write_env
+  run systemctl restart "$UNIT"
+  wait_active
+  printf 'IPS running image=%s iface=%s address=%s\n' "$IMAGE" "$IFACE" "$ADDRESS"
+}
+
+main "$@"

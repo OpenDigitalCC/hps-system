@@ -31,7 +31,7 @@ Usage:
       without --all: the held hosts. With --all: every host, with its state and
       whether its last init succeeded (FAILED marks a failed init).
   hps-onboard show <mac> [--json]
-  hps-onboard assign <mac> --type SCH,TCH,DRH --profile NAME \
+  hps-onboard assign <mac> --type SCH,TCH,DRH,CNH --profile NAME \
       --os arch:name:version --pin PIN [--storage "note"]
   hps-onboard repin <mac> (--pin PIN | --to-latest)
   hps-onboard reaudit <mac>

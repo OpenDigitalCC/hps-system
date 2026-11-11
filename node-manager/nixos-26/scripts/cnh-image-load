@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+#
+# cnh-image-load - load a container image archive from the IPS into podman.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-image-load <url> <sha256>
+#
+#   <url>     http://<host>[:port]/<path> of an OCI or docker archive (the
+#             output of `podman save` / `docker save`). <host> must be this
+#             node's IPS, the hps.ips= address on the kernel command line; any
+#             other host, any other scheme and any redirect are refused.
+#   <sha256>  64 lowercase hex digits; the archive is verified before podman
+#             sees it.
+#
+# The archive is kept on the CNH disk as
+# /var/lib/containers/hps-cnh-images/<sha256>.tar (downloaded to .part,
+# verified, renamed); one already there with the right hash is not fetched
+# again. The disk must be mounted (cnh-disk-prepare): loading into the RAM
+# root is refused. `podman load` runs through systemd-run, as a transient unit
+# of the system manager, so podman has root's full capabilities rather than
+# the executor profile's set (layers may carry file capabilities and device
+# nodes).
+#
+# Last line: IMAGE <name> <sha256>   (one line per name podman reports)
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
+#
+# Overrides for tests: HPS_CMDLINE (file), HPS_CNH_ROOT (prefix of
+# /var/lib/containers).
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_CNH_ROOT:=}"
+
+CONTAINERS="$HPS_CNH_ROOT/var/lib/containers"
+CACHE="$CONTAINERS/hps-cnh-images"
+URL=""
+SUM=""
+
+log() {
+  printf '[cnh-image-load] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-image-load <url> <sha256>
+  <url>: http://<this node's IPS>[:port]/<path>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+check_args() {
+  local ips host
+  [[ "$SUM" =~ ^[0-9a-f]{64}$ ]] || refuse "sha256 is not 64 lowercase hex digits"
+  [[ "$URL" == http://* ]] || refuse "the URL must be http:// (got a different scheme)"
+  [[ "$URL" =~ ^http://([A-Za-z0-9.-]+)(:[0-9]{1,5})?/[A-Za-z0-9/_.-]+$ && "$URL" != *..* ]] || refuse "the URL is not http://<host>[:port]/<path> with a plain path"
+  host=${BASH_REMATCH[1]}
+  ips=$(cmdline_value hps.ips || true)
+  [[ -n "$ips" ]] || refuse "no hps.ips= on the kernel command line: the IPS address is unknown"
+  [[ "$host" == "$ips" ]] || refuse "the URL host '$host' is not this node's IPS ($ips)"
+  run findmnt -n -o SOURCE --mountpoint "$CONTAINERS" > /dev/null 2>&1 \
+    || refuse "$CONTAINERS is not mounted (the CNH disk): run cnh-disk-prepare first; images are not loaded into RAM"
+}
+
+file_sum() {
+  local out
+  out=$(run sha256sum -- "$1")
+  printf '%s\n' "${out%% *}"
+}
+
+fetch() {
+  local final="$1" part="$1.part" got
+  if [[ -f "$final" ]]; then
+    got=$(file_sum "$final")
+    if [[ "$got" == "$SUM" ]]; then
+      log "$final is already present with the right hash; not fetched again"
+      return 0
+    fi
+    log "$final has a different hash ($got); fetching a verified copy"
+  fi
+  rm -f -- "$part"
+  if ! run curl --fail --silent --show-error --proto =http --max-redirs 0 --output "$part" "$URL"; then
+    rm -f -- "$part"
+    log "fetching $URL failed"
+    exit 1
+  fi
+  got=$(file_sum "$part")
+  if [[ "$got" != "$SUM" ]]; then
+    rm -f -- "$part"
+    refuse "sha256 mismatch: got $got, wanted $SUM"
+  fi
+  run mv -f -- "$part" "$final"
+}
+
+main() {
+  local final out line name n=0
+  if [[ $# -ne 2 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  URL=$1
+  SUM=$2
+  check_args
+  run mkdir -p -- "$CACHE"
+  final="$CACHE/$SUM.tar"
+  fetch "$final"
+  if ! out=$(run systemd-run --quiet --wait --pipe --collect -- podman load --input "$final"); then
+    printf "%s\n" "$out" >&2
+    log "podman load of $final failed"
+    exit 1
+  fi
+  printf '%s\n' "$out" >&2
+  while IFS= read -r line; do
+    case "$line" in
+      "Loaded image: "* | "Loaded image(s): "*)
+        name=${line#*: }
+        name=${name//,/ }
+        for name in $name; do
+          printf 'IMAGE %s %s\n' "$name" "$SUM"
+          n=$((n + 1))
+        done
+        ;;
+    esac
+  done <<< "$out"
+  if [[ $n -eq 0 ]]; then
+    log "podman load reported no image name"
+    exit 1
+  fi
+}
+
+main "$@"

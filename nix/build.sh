@@ -3,7 +3,7 @@
 # build.sh - build the HPS netboot artefact sets and publish them for the IPS.
 #
 # Runs INSIDE the builder container (lab/builder/compose.yml). For each profile
-# (audit, node-base, node-converged by default):
+# (audit, node-base, node-converged, node-cnh by default):
 #   nix build <src>#<profile>          -> bzImage, initrd, boot.json (store)
 # then computes the pin  nixos-<ver>-<yyyymmdd>-<nixpkgs short rev>-<content7>  and writes
 #   <out>/<pin>/<profile>/{bzImage,initrd,boot.json}
@@ -32,7 +32,7 @@ SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SRC=$(cd "$SELF_DIR/.." && pwd)
 OUT=""
 CACHE=""
-PROFILES="audit node-base node-converged"
+PROFILES="audit node-base node-converged node-cnh"
 IPXE_FILES="snponly.efi ipxe.efi undionly.kpxe"
 IPXE_VERSION=""
 NO_CACHE=0

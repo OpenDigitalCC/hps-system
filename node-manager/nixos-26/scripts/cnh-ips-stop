@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#
+# cnh-ips-stop - stop the IPS container on this container host and keep it off.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-ips-stop     (no arguments)
+#
+# Stops hps-ips.service (its ExecStop runs `podman stop` with a 30 s grace and
+# its ExecStopPost takes the firewall rule away) and renames
+# /var/lib/hps-ips/ips.env to ips.env.stopped, so the unit's condition fails and
+# the IPS does not start again after a reboot. The IPS state (srv/, hps-system/)
+# and the loaded image are kept; cnh-ips-run starts it again. Idempotent: an
+# IPS that is not configured or already stopped is not an error.
+#
+# Last line: IPS stopped
+# Exit: 0 ok, 2 usage, 1 a command failed.
+#
+# Overrides for tests: HPS_CNH_ROOT (prefix of /var/lib/hps-ips).
+
+set -euo pipefail
+
+: "${HPS_CNH_ROOT:=}"
+
+IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
+UNIT=hps-ips.service
+
+log() {
+  printf '[cnh-ips-stop] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+main() {
+  if [[ $# -ne 0 ]]; then
+    printf 'Usage: cnh-ips-stop     (no arguments)\n' >&2
+    exit 2
+  fi
+  run systemctl stop "$UNIT"
+  if [[ -f "$IPSDIR/ips.env" ]]; then
+    run mv -f -- "$IPSDIR/ips.env" "$IPSDIR/ips.env.stopped"
+  else
+    log "no $IPSDIR/ips.env: the IPS was not configured to run"
+  fi
+  printf 'IPS stopped\n'
+}
+
+main "$@"

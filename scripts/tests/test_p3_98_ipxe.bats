@@ -167,7 +167,7 @@ build_pin() {
 
 @test "build.sh records the iPXE version in every profile's boot.json" {
   build_pin
-  for p in audit node-base node-converged; do
+  for p in audit node-base node-converged node-cnh; do
     [ "$(jq -r '.ipxe.version' "$OUT/$PIN/$p/boot.json")" = "2.0.0" ]
   done
 }
@@ -214,7 +214,7 @@ SHIM
   [ "$status" -eq 0 ]
   run "$PINS" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"audit,node-base,node-converged"* ]]
+  [[ "$output" == *"audit,node-base,node-cnh,node-converged"* ]]
   [[ "$output" != *"ipxe"* ]]
 }
 

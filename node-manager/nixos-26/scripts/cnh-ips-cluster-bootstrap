@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+#
+# cnh-ips-cluster-bootstrap - create and activate the cluster of the IPS that
+# this container host will run, before its first start.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-ips-cluster-bootstrap <image> <cluster-bootstrap.sh options...>
+#
+#   <image>    the loaded IPS image (cnh-image-load), as for cnh-ips-run
+#   options    passed to scripts/cluster-bootstrap.sh of the bootstrapped
+#              hps-system tree: --name, --dhcp-iface, --network, --ips-ip,
+#              --dhcp-range, --static-range, --reserve, --dns-domain,
+#              --description, --storage-network, --network-add (repeatable),
+#              --time-upstream (each with one value) and --force. Any other
+#              option, or a value with characters outside
+#              [A-Za-z0-9 ._:,/=@+-], is refused.
+#
+# The IPS refuses to start without an active cluster. This is the CNH form of
+# lab/ips/bootstrap-lab.sh: the image runs once with its entrypoint replaced by
+# cluster-bootstrap.sh, with the same mounts as hps-ips.service
+# (/var/lib/hps-ips/srv at /srv, /var/lib/hps-ips/hps-system at
+# /srv/hps-system) and host networking, through systemd-run (podman with
+# root's full capabilities). The cluster's registry, keys and CA are made here,
+# on the CNH, and nowhere else. Re-running with --force rewrites the same keys
+# (cluster-bootstrap.sh keeps hosts and generated secrets).
+#
+# Refused (exit 3): the IPS running (stop it with cnh-ips-stop first), the CNH
+# disk not mounted, no bootstrapped hps-system tree, the image not loaded, an
+# option or value outside the lists above.
+#
+# Last line: CLUSTER-BOOTSTRAP done image=<image>
+# Exit: 0 ok, 2 usage, 3 refused, 1 cluster-bootstrap.sh or podman failed.
+#
+# Overrides for tests: HPS_CNH_ROOT (prefix of /var/lib/hps-ips).
+
+set -euo pipefail
+
+: "${HPS_CNH_ROOT:=}"
+
+IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
+UNIT=hps-ips.service
+IMAGE=""
+ARGS=()
+
+log() {
+  printf '[cnh-ips-cluster-bootstrap] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-ips-cluster-bootstrap <image> <cluster-bootstrap.sh options...>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+parse_args() {
+  local opt val
+  [[ $# -ge 2 && "$1" != -* ]] || {
+    usage
+    exit 2
+  }
+  IMAGE=$1
+  shift
+  [[ "$IMAGE" =~ ^[a-z0-9][a-z0-9._/:@-]{0,254}$ && "$IMAGE" != *..* ]] || refuse "image '$IMAGE' is not a plain image reference"
+  while [[ $# -gt 0 ]]; do
+    opt=$1
+    case "$opt" in
+      --force)
+        ARGS+=("$opt")
+        shift
+        continue
+        ;;
+      --name | --dhcp-iface | --network | --ips-ip | --dhcp-range | --static-range | \
+        --reserve | --dns-domain | --description | --storage-network | --network-add | \
+        --time-upstream) ;;
+      *) refuse "option '$opt' is not one cluster-bootstrap.sh takes here" ;;
+    esac
+    [[ $# -ge 2 ]] || refuse "$opt needs a value"
+    val=$2
+    [[ "$val" =~ ^[A-Za-z0-9\ ._:,/=@+-]{0,200}$ ]] || refuse "the value of $opt has characters outside [A-Za-z0-9 ._:,/=@+-]"
+    [[ "$opt" == --time-upstream || -n "$val" ]] || refuse "$opt needs a value"
+    ARGS+=("$opt" "$val")
+    shift 2
+  done
+}
+
+check_state() {
+  if run systemctl is-active --quiet "$UNIT"; then
+    refuse "$UNIT is running: stop it first (cnh-ips-stop), then cnh-ips-run after this"
+  fi
+  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+    || refuse "$IPSDIR is not mounted (the CNH disk): run cnh-disk-prepare first"
+  [[ -d "$IPSDIR/srv" && -f "$IPSDIR/hps-system/scripts/cluster-bootstrap.sh" ]] \
+    || refuse "$IPSDIR holds no IPS state (srv/ and hps-system/): run cnh-ips-bootstrap first"
+  run systemd-run --quiet --wait --pipe --collect -- podman image exists "$IMAGE" \
+    || refuse "image $IMAGE is not loaded in podman: load it with cnh-image-load"
+}
+
+main() {
+  parse_args "$@"
+  check_state
+  run mkdir -p -- "$IPSDIR/srv/hps-system"
+  if ! run systemd-run --quiet --wait --pipe --collect -- \
+    podman run --rm --name hps-ips-cluster-bootstrap --replace \
+    --privileged --cgroupns=host --network=host --hostname=ips \
+    --entrypoint bash \
+    --volume "$IPSDIR/srv:/srv" \
+    --volume "$IPSDIR/hps-system:/srv/hps-system" \
+    --volume /sys/fs/cgroup:/sys/fs/cgroup:rw \
+    "$IMAGE" /srv/hps-system/scripts/cluster-bootstrap.sh "${ARGS[@]}"; then
+    log "cluster-bootstrap.sh in $IMAGE failed"
+    exit 1
+  fi
+  printf 'CLUSTER-BOOTSTRAP done image=%s\n' "$IMAGE"
+}
+
+main "$@"

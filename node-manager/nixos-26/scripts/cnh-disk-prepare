@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#
+# cnh-disk-prepare - give a container host (CNH) its persistent disk.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-disk-prepare <device>
+#
+#   <device>  /dev/vd<x>, /dev/sd<x> (whole disks), /dev/md/<name> or
+#             /dev/disk/by-id/<id>; anything else is refused.
+#
+# The device is probed with `blkid -p` (filesystems, RAID members, partition
+# tables, ZFS labels):
+#
+#   no signature at all   an ext4 filesystem labelled hps-cnh is made on it
+#                         (the only mkfs in HPS's container-host path)
+#   ext4 labelled hps-cnh already prepared: mounted, never formatted again
+#   anything else         refused (exit 3), nothing is written
+#
+# Then the filesystem is mounted at /var/lib/containers (podman's storage) and
+# its directory hps-ips is bind-mounted at /var/lib/hps-ips (the IPS state that
+# cnh-ips-bootstrap fills and cnh-ips-run serves). After a reboot the boot unit
+# hps-cnh-mount mounts the same disk by its label; it never formats.
+#
+# Idempotent: run again on a prepared and mounted disk, it changes nothing.
+# A mount point that already holds files, or another device, is refused (the
+# state there would be hidden or mixed).
+#
+# Last line: CNH-DISK <device> formatted=<yes|no> containers=<dir> ips=<dir>
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
+#
+# Overrides for tests: HPS_DEV (device root, regular files allowed when it is
+# not /dev), HPS_CNH_ROOT (prefix of the two mount points).
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+: "${HPS_CNH_ROOT:=}"
+
+LABEL=hps-cnh
+DEV=""
+CONTAINERS="$HPS_CNH_ROOT/var/lib/containers"
+IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
+SIG_TYPE=""
+SIG_LABEL=""
+SIG_OTHER=""
+
+log() {
+  printf '[cnh-disk-prepare] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-disk-prepare <device>
+  <device>: /dev/vd<x>, /dev/sd<x>, /dev/md/<name> or /dev/disk/by-id/<id>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+check_device() {
+  local rest
+  [[ "$DEV" != *..* && "$DEV" != *//* ]] || refuse "device '$DEV' contains '..' or '//'"
+  [[ "$DEV" == "$HPS_DEV"/* ]] || refuse "device '$DEV' is not under $HPS_DEV"
+  rest=${DEV#"$HPS_DEV"/}
+  if [[ "$rest" =~ ^(vd|sd)[a-z]{1,3}$ ]]; then
+    :
+  elif [[ "$rest" =~ ^md/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]]; then
+    :
+  elif [[ "$rest" =~ ^disk/by-id/[A-Za-z0-9_][A-Za-z0-9_.:+@-]{0,127}$ ]]; then
+    :
+  else
+    refuse "device '$DEV' is not /dev/vd<x>, /dev/sd<x>, /dev/md/<name> or /dev/disk/by-id/<id>"
+  fi
+  if [[ -b "$DEV" ]]; then
+    return 0
+  fi
+  if [[ "$HPS_DEV" != /dev && -f "$DEV" ]]; then
+    return 0
+  fi
+  refuse "device '$DEV' does not exist or is not a block device"
+}
+
+# probe: fill SIG_TYPE, SIG_LABEL and SIG_OTHER (PTTYPE / other keys that mean
+# "something is here"). Returns 0 when a signature was found, 1 when the device
+# is blank. blkid -p exits 2 for "nothing found" and 8 for an ambivalent result
+# (several signatures), which counts as found.
+probe() {
+  local out rc line
+  SIG_TYPE=""
+  SIG_LABEL=""
+  SIG_OTHER=""
+  set +e
+  out=$(run blkid -p -o export -- "$DEV")
+  rc=$?
+  set -e
+  case "$rc" in
+    0) ;;
+    2) return 1 ;;
+    8)
+      SIG_OTHER="ambivalent (several signatures)"
+      return 0
+      ;;
+    *)
+      log "blkid -p exited $rc on $DEV"
+      exit 1
+      ;;
+  esac
+  while IFS= read -r line; do
+    case "$line" in
+      TYPE=*) SIG_TYPE=${line#TYPE=} ;;
+      LABEL=*) SIG_LABEL=${line#LABEL=} ;;
+      PTTYPE=*) SIG_OTHER="${SIG_OTHER:+$SIG_OTHER }partition table ${line#PTTYPE=}" ;;
+    esac
+  done <<< "$out"
+  if [[ -z "$SIG_TYPE" && -z "$SIG_OTHER" ]]; then
+    SIG_OTHER="an unnamed signature"
+  fi
+  return 0
+}
+
+is_prepared() {
+  [[ "$SIG_TYPE" == ext4 && "$SIG_LABEL" == "$LABEL" && -z "$SIG_OTHER" ]]
+}
+
+# mounted_source <dir>: the device mounted exactly at <dir>, or nothing.
+mounted_source() {
+  local src
+  src=$(run findmnt -n -o SOURCE --mountpoint "$1" || true)
+  printf '%s' "$src"
+}
+
+dir_has_files() {
+  [[ -d "$1" ]] || return 1
+  [[ -n "$(ls -A -- "$1")" ]]
+}
+
+same_device() {
+  local a b
+  a=$(readlink -f -- "$1")
+  b=$(readlink -f -- "$2")
+  [[ "$a" == "$b" ]]
+}
+
+mount_containers() {
+  local src
+  src=$(mounted_source "$CONTAINERS")
+  if [[ -n "$src" ]]; then
+    same_device "$src" "$DEV" || refuse "$CONTAINERS is already mounted from $src, not $DEV"
+    log "$CONTAINERS is already mounted from $DEV"
+    return 0
+  fi
+  if dir_has_files "$CONTAINERS"; then
+    refuse "$CONTAINERS already holds files (container storage in RAM): they would be hidden by the mount; reboot the CNH, then run this before any container is loaded"
+  fi
+  run mkdir -p -- "$CONTAINERS"
+  run mount -t ext4 -o noatime -- "$DEV" "$CONTAINERS"
+}
+
+mount_ips_state() {
+  local src
+  run mkdir -p -- "$CONTAINERS/hps-ips"
+  run chmod 0700 -- "$CONTAINERS/hps-ips"
+  src=$(mounted_source "$IPSDIR")
+  if [[ -n "$src" ]]; then
+    log "$IPSDIR is already mounted ($src)"
+    return 0
+  fi
+  if dir_has_files "$IPSDIR"; then
+    refuse "$IPSDIR already holds files: they would be hidden by the bind mount"
+  fi
+  run mkdir -p -- "$IPSDIR"
+  run mount --bind -- "$CONTAINERS/hps-ips" "$IPSDIR"
+}
+
+main() {
+  local formatted=no
+  if [[ $# -ne 1 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  DEV=$1
+  check_device
+  if probe; then
+    if is_prepared; then
+      log "$DEV already carries an ext4 filesystem labelled $LABEL: not formatting"
+    else
+      refuse "$DEV carries a signature (type '${SIG_TYPE:-none}', label '${SIG_LABEL:-none}'${SIG_OTHER:+, $SIG_OTHER}); only a blank device or one labelled $LABEL is used"
+    fi
+  else
+    log "$DEV carries no signature: making an ext4 filesystem labelled $LABEL"
+    run mkfs.ext4 -q -L "$LABEL" -m 0 -- "$DEV" < /dev/null
+    formatted=yes
+    probe || {
+      log "no filesystem found on $DEV after mkfs"
+      exit 1
+    }
+    is_prepared || {
+      log "$DEV after mkfs: type '$SIG_TYPE' label '$SIG_LABEL', expected ext4 $LABEL"
+      exit 1
+    }
+  fi
+  mount_containers
+  mount_ips_state
+  printf 'CNH-DISK %s formatted=%s containers=%s ips=%s\n' "$DEV" "$formatted" "$CONTAINERS" "$IPSDIR"
+}
+
+main "$@"

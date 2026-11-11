@@ -86,14 +86,14 @@ pin_for() {
   done | sha256sum | cut -c1-7)
   printf 'nixos-26.05-%s-0123456-%s\n' "${2:-20261109}" "$suffix"
 }
-ALL_PROFILES="audit node-base node-converged"
+ALL_PROFILES="audit node-base node-converged node-cnh"
 
 @test "publishes <pin>/<profile>/{bzImage,initrd,boot.json} for every profile and writes latest" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   pin="$(pin_for "$ALL_PROFILES")"
   [ "$(cat "$OUT/latest")" = "$pin" ]
-  for p in audit node-base node-converged; do
+  for p in audit node-base node-converged node-cnh; do
     [ -f "$OUT/$pin/$p/bzImage" ]
     [ -f "$OUT/$pin/$p/initrd" ]
     [ -f "$OUT/$pin/$p/boot.json" ]
@@ -134,7 +134,7 @@ ALL_PROFILES="audit node-base node-converged"
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109 --no-cache
   [ "$status" -eq 0 ]
   run grep -c -- '--option substituters .*--rebuild' "$NIX_LOG"
-  [ "$output" -eq 4 ]
+  [ "$output" -eq 5 ]
 }
 
 @test "without --no-cache the build uses the configured substituters" {
@@ -148,7 +148,7 @@ ALL_PROFILES="audit node-base node-converged"
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   run grep -c "copy --to file://$CACHE /nix/store/aaaa-nixos-system-" "$NIX_LOG"
-  [ "$output" -eq 3 ]
+  [ "$output" -eq 4 ]
   grep -q "copy --to file://$CACHE /nix/store/aaaa-nixos-system-audit$" "$NIX_LOG"
 }
 
@@ -156,11 +156,11 @@ ALL_PROFILES="audit node-base node-converged"
   CTRL_EXEC_FLAKE="path:/ctrl-exec" run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   run grep -c -- '--override-input ctrl-exec path:/ctrl-exec' "$NIX_LOG"
-  # metadata + 3 profile builds + ipxe; nix copy takes no flake flags
-  [ "$output" -eq 5 ]
+  # metadata + 4 profile builds + ipxe; nix copy takes no flake flags
+  [ "$output" -eq 6 ]
   # the flag sits after the subcommand, where nix accepts it
   run grep -c -E -- '(flake metadata|build) --no-write-lock-file --override-input' "$NIX_LOG"
-  [ "$output" -eq 5 ]
+  [ "$output" -eq 6 ]
 }
 
 @test "without a flake.lock the lock file is not written; with one it is left alone" {
@@ -213,7 +213,7 @@ ALL_PROFILES="audit node-base node-converged"
 @test "every published kernel and initrd store path is verified first" {
   run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
-  for p in audit node-base node-converged; do
+  for p in audit node-base node-converged node-cnh; do
     grep -q "nix-store --verify-path $FAKE_STORE/hps-netboot-$p" "$NIX_LOG"
   done
 }

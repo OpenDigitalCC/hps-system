@@ -57,6 +57,8 @@
         audit = [ ./nix/modules/hps-audit.nix ];
         node-base = [ ./nix/modules/hps-node.nix ];
         node-converged = [ ./nix/modules/profiles/converged.nix ];
+        # CS-3.11: the container host (role CNH), metal and guest alike.
+        node-cnh = [ ./nix/modules/profiles/container-host.nix ];
       };
 
       # The platform is set once, in hps-common.nix (nixpkgs.hostPlatform).

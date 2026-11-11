@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+#
+# cnh-ips-bootstrap - fill a container host's IPS state from the outer IPS.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-ips-bootstrap <outer-ips-url-base> <manifest-sha256>
+#
+#   <outer-ips-url-base>  http://<host>[:port] of the IPS that provisions this
+#                         node; <host> must be the hps.ips= address on the
+#                         kernel command line. No path, no other scheme.
+#   <manifest-sha256>     the sha256 hps-cnh-publish printed (64 hex digits)
+#
+# The manifest is <base>/packages/cnh/manifest-<sha256>.json, written by
+# bin/hps-cnh-publish on the outer IPS (docs/CONTAINER-HOST.md has the format):
+#
+#   {"schema": "hps-cnh-manifest/1", "created_at": "...", "source": {...},
+#    "files": [{"path": "<dest under /var/lib/hps-ips>", "url": "<path under
+#               the base>", "sha256": "<hex>", "size": <bytes>}, ...]}
+#
+# Every file is fetched over plain http (no redirect) into /var/lib/hps-ips/
+# <path>.part, resumed with a range request when a .part is already there, and
+# renamed only after its sha256 matches. A file already present with the
+# right hash is not fetched. A file present with a DIFFERENT hash is replaced,
+# and the replacement is logged with both hashes; it is never overwritten
+# silently. A failed or mismatching file leaves its .part removed (mismatch)
+# or kept (transfer error, resumed next run) and the run exits 1 after trying
+# the rest; run it again to resume.
+#
+# Paths are limited to hps-system.tar.gz and srv/hps-resources/{nixos,packages}/
+# ...; urls to a plain relative path. Anything else refuses the whole manifest
+# before the first download.
+#
+# Then:
+#   - hps-system.tar.gz is unpacked into /var/lib/hps-ips/hps-system when its
+#     hash differs from the one last unpacked (hps-system/.hps-cnh-tarball-sha256);
+#     the previous tree is kept as hps-system.prev. A running IPS keeps the old
+#     tree until it is restarted (cnh-ips-run).
+#   - the srv/ skeleton the IPS expects (lab/ips/setup.sh) is created:
+#     hps-config, hps-resources/{packages/ctrl-exec,nixos,nix-cache,distros,
+#     images}, hps-log, ctrl-exec/{conf,state}.
+#
+# Last line: BOOTSTRAP <sha256> files=<n> fetched=<n> present=<n> replaced=<n>
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed or a file did not verify.
+#
+# Overrides for tests: HPS_CMDLINE (file), HPS_CNH_ROOT (prefix of
+# /var/lib/hps-ips).
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_CNH_ROOT:=}"
+
+IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
+BASE=""
+SUM=""
+MANIFEST=""
+N_FILES=0
+N_FETCHED=0
+N_PRESENT=0
+N_REPLACED=0
+N_FAILED=0
+ENTRIES=()
+
+log() {
+  printf '[cnh-ips-bootstrap] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-ips-bootstrap <outer-ips-url-base> <manifest-sha256>
+  <outer-ips-url-base>: http://<this node's IPS>[:port]
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+check_args() {
+  local ips host
+  [[ "$SUM" =~ ^[0-9a-f]{64}$ ]] || refuse "manifest sha256 is not 64 lowercase hex digits"
+  BASE=${BASE%/}
+  [[ "$BASE" =~ ^http://([A-Za-z0-9.-]+)(:[0-9]{1,5})?$ ]] || refuse "the base must be http://<host>[:port] with no path"
+  host=${BASH_REMATCH[1]}
+  ips=$(cmdline_value hps.ips || true)
+  [[ -n "$ips" ]] || refuse "no hps.ips= on the kernel command line: the IPS address is unknown"
+  [[ "$host" == "$ips" ]] || refuse "the base host '$host' is not this node's IPS ($ips)"
+  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+    || refuse "$IPSDIR is not mounted (the CNH disk): run cnh-disk-prepare first"
+}
+
+file_sum() {
+  local out
+  out=$(run sha256sum -- "$1")
+  printf '%s\n' "${out%% *}"
+}
+
+file_size() {
+  stat -c %s -- "$1"
+}
+
+# get <url> <part>: fetch, resuming an existing .part.
+get() {
+  if [[ -s "$2" ]]; then
+    run curl --fail --silent --show-error --proto =http --max-redirs 0 --continue-at - --output "$2" "$1"
+  else
+    run curl --fail --silent --show-error --proto =http --max-redirs 0 --output "$2" "$1"
+  fi
+}
+
+fetch_manifest() {
+  local dir="$IPSDIR/bootstrap" got
+  MANIFEST="$dir/manifest-$SUM.json"
+  run mkdir -p -- "$dir"
+  if [[ -f "$MANIFEST" && "$(file_sum "$MANIFEST")" == "$SUM" ]]; then
+    log "manifest $SUM already here"
+    return 0
+  fi
+  rm -f -- "$MANIFEST.part"
+  run curl --fail --silent --show-error --proto =http --max-redirs 0 --output "$MANIFEST.part" "$BASE/packages/cnh/manifest-$SUM.json"
+  got=$(file_sum "$MANIFEST.part")
+  if [[ "$got" != "$SUM" ]]; then
+    rm -f -- "$MANIFEST.part"
+    refuse "manifest sha256 mismatch: got $got, wanted $SUM"
+  fi
+  run mv -f -- "$MANIFEST.part" "$MANIFEST"
+}
+
+valid_path() {
+  local p=$1 seg
+  [[ "$p" == hps-system.tar.gz ]] && return 0
+  [[ "$p" =~ ^srv/hps-resources/(nixos|packages)/[A-Za-z0-9_.+/-]+$ ]] || return 1
+  [[ "$p" != */ && "$p" != *//* ]] || return 1
+  for seg in ${p//\// }; do
+    [[ "$seg" != . && "$seg" != .. ]] || return 1
+    [[ "$seg" != *.part ]] || return 1
+  done
+  return 0
+}
+
+valid_url() {
+  local u=$1 seg
+  [[ "$u" =~ ^[A-Za-z0-9_][A-Za-z0-9_.+/-]*$ && "$u" != */ && "$u" != *//* ]] || return 1
+  for seg in ${u//\// }; do
+    [[ "$seg" != . && "$seg" != .. ]] || return 1
+  done
+  return 0
+}
+
+# read_manifest: check every entry before anything is fetched; fill ENTRIES
+# with "path<TAB>url<TAB>sha256<TAB>size" lines.
+read_manifest() {
+  local rows path url sha size
+  local -A seen=()
+  run jq -e '.schema == "hps-cnh-manifest/1" and (.files | type == "array") and (.files | length > 0)' "$MANIFEST" > /dev/null \
+    || refuse "manifest is not hps-cnh-manifest/1 with a non-empty files list"
+  run jq -e 'all(.files[]; (.path | type == "string") and (.url | type == "string") and (.sha256 | type == "string") and (.size | type == "number"))' "$MANIFEST" > /dev/null \
+    || refuse "a manifest entry lacks path, url, sha256 or size"
+  rows=$(run jq -r '.files[] | [.path, .url, .sha256, (.size | tostring)] | @tsv' "$MANIFEST")
+  while IFS=$'\t' read -r path url sha size; do
+    valid_path "$path" || refuse "manifest path '$path' is outside hps-system.tar.gz and srv/hps-resources/{nixos,packages}/"
+    valid_url "$url" || refuse "manifest url '$url' is not a plain relative path"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "manifest sha256 of '$path' is not 64 hex digits"
+    [[ "$size" =~ ^[0-9]+$ ]] || refuse "manifest size of '$path' is not a whole number"
+    [[ -z "${seen[$path]:-}" ]] || refuse "manifest lists '$path' twice"
+    seen[$path]=1
+    ENTRIES+=("$path"$'\t'"$url"$'\t'"$sha"$'\t'"$size")
+  done <<< "$rows"
+  N_FILES=${#ENTRIES[@]}
+  grep -q $'^hps-system.tar.gz\t' <(printf '%s\n' "${ENTRIES[@]}") || refuse "manifest has no hps-system.tar.gz"
+  log "manifest $SUM: $N_FILES files"
+}
+
+# fetch_entry <path> <url> <sha256> <size>
+fetch_entry() {
+  local path=$1 url=$2 want=$3 size=$4 dest part got replacing=0
+  dest="$IPSDIR/$path"
+  part="$dest.part"
+  if [[ -f "$dest" ]]; then
+    got=$(file_sum "$dest")
+    if [[ "$got" == "$want" ]]; then
+      N_PRESENT=$((N_PRESENT + 1))
+      return 0
+    fi
+    log "replacing $path: on disk sha256 $got, manifest sha256 $want"
+    replacing=1
+  fi
+  run mkdir -p -- "${dest%/*}"
+  if [[ -f "$part" && "$(file_size "$part")" -gt "$size" ]]; then
+    log "$path.part is larger than the manifest size; starting again"
+    rm -f -- "$part"
+  fi
+  if [[ ! -f "$part" || "$(file_size "$part")" -lt "$size" ]]; then
+    if ! get "$BASE/$url" "$part"; then
+      log "FAILED $path: transfer error (the .part is kept; run again to resume)"
+      N_FAILED=$((N_FAILED + 1))
+      return 0
+    fi
+  fi
+  got=$(file_sum "$part")
+  if [[ "$got" != "$want" ]]; then
+    rm -f -- "$part"
+    log "FAILED $path: sha256 mismatch, got $got, wanted $want (removed)"
+    N_FAILED=$((N_FAILED + 1))
+    return 0
+  fi
+  run mv -f -- "$part" "$dest"
+  N_FETCHED=$((N_FETCHED + 1))
+  [[ $replacing -eq 1 ]] && N_REPLACED=$((N_REPLACED + 1))
+  return 0
+}
+
+unpack_system() {
+  local tarball="$IPSDIR/hps-system.tar.gz" want marker="$IPSDIR/hps-system/.hps-cnh-tarball-sha256" new="$IPSDIR/hps-system.new"
+  want=$(file_sum "$tarball")
+  if [[ -f "$marker" && "$(cat "$marker")" == "$want" ]]; then
+    log "hps-system already unpacked from $want"
+    return 0
+  fi
+  run rm -rf -- "$new"
+  run mkdir -p -- "$new"
+  run tar -xzf "$tarball" -C "$new" --no-same-owner
+  [[ -f "$new/scripts/run-hps.sh" ]] || {
+    log "hps-system.tar.gz holds no scripts/run-hps.sh: not an hps-system tree"
+    run rm -rf -- "$new"
+    exit 1
+  }
+  printf '%s\n' "$want" > "$new/.hps-cnh-tarball-sha256"
+  if [[ -d "$IPSDIR/hps-system" ]]; then
+    log "keeping the previous hps-system tree as hps-system.prev (a running IPS uses it until restarted)"
+    run rm -rf -- "$IPSDIR/hps-system.prev"
+    run mv -- "$IPSDIR/hps-system" "$IPSDIR/hps-system.prev"
+  fi
+  run mv -- "$new" "$IPSDIR/hps-system"
+}
+
+make_skeleton() {
+  local d
+  for d in hps-config hps-resources/packages/ctrl-exec hps-resources/nixos \
+    hps-resources/nix-cache hps-resources/distros hps-resources/images \
+    hps-log ctrl-exec/conf ctrl-exec/state hps-system; do
+    [[ -d "$IPSDIR/srv/$d" ]] || run mkdir -p -- "$IPSDIR/srv/$d"
+  done
+}
+
+main() {
+  local e path url sha size
+  if [[ $# -ne 2 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  BASE=$1
+  SUM=$2
+  check_args
+  fetch_manifest
+  read_manifest
+  for e in "${ENTRIES[@]}"; do
+    IFS=$'\t' read -r path url sha size <<< "$e"
+    fetch_entry "$path" "$url" "$sha" "$size"
+  done
+  if [[ $N_FAILED -gt 0 ]]; then
+    log "$N_FAILED of $N_FILES files did not verify; nothing unpacked; run again to resume"
+    exit 1
+  fi
+  unpack_system
+  make_skeleton
+  printf '%s\n' "$SUM" > "$IPSDIR/bootstrap/applied"
+  printf 'BOOTSTRAP %s files=%d fetched=%d present=%d replaced=%d\n' "$SUM" "$N_FILES" "$N_FETCHED" "$N_PRESENT" "$N_REPLACED"
+}
+
+main "$@"

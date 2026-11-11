@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+# hps-cnh-publish: publish the hps-system tarball and the bootstrap manifest a
+# container host fetches to run a cluster IPS (cnh-ips-bootstrap). IPS tool.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use HPS::CnhPublish;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-cnh-publish: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-cnh-publish --pin PIN [--pin PIN ...] [--package packages/REL ...]
+                  [--resources DIR] [--system DIR]
+Writes into <resources>/packages/cnh/ (served as http://<ips>/packages/cnh/):
+  hps-system-<sha16>.tar.gz   the hps-system tree (default /srv/hps-system)
+  manifest-<sha256>.json      the files a CNH copies into /var/lib/hps-ips:
+                              the tarball, every file of each PIN (verified
+                              first) and each --package (default
+                              packages/ctrl-exec/ctrl-exec-latest.tar.gz)
+  latest                      the newest manifest's sha256
+Prints the manifest sha256 last:  MANIFEST <sha256> <url path> files=<n>
+On the CNH:  cnh-ips-bootstrap http://<this ips> <sha256>
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (a pin does not verify, a symlink),
+4 not found.
+USAGE
+    return 2;
+}
+
+sub main {
+    my @argv = @_;
+    my (@pins, @packages, $resources, $system, $help);
+    GetOptionsFromArray(\@argv, 'pin=s' => \@pins, 'package=s' => \@packages,
+        'resources=s' => \$resources, 'system=s' => \$system, 'help|h' => \$help) or return usage();
+    if ($help) { usage(); return 0 }
+    return usage('unexpected arguments: ' . join(' ', @argv)) if @argv;
+    return usage('at least one --pin is required') unless @pins;
+    my $r = eval {
+        HPS::CnhPublish->new(resources => $resources, system => $system)
+            ->publish(pins => \@pins, packages => \@packages);
+    };
+    if ($r) {
+        print "manifest: $r->{manifest}\n";
+        print "MANIFEST $r->{sha256} $r->{url} files=$r->{files}\n";
+        return 0;
+    }
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::CnhPublish::Error')) {
+        print STDERR 'hps-cnh-publish: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    if (ref $err && $err->can('message')) {
+        print STDERR 'hps-cnh-publish: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-cnh-publish: $err";
+    return 1;
+}
+
+exit main(@ARGV);

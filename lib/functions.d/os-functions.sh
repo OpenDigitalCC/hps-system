@@ -258,7 +258,7 @@ os_seed_nixos() {
     hps_log debug "os_seed_nixos: ${os_id} already present"
     return 0
   fi
-  for pair in hps_types=SCH,TCH,DRH arch=x86_64 name=nixos version=26.05 status=prod boot=manifest; do
+  for pair in hps_types=SCH,TCH,DRH,CNH arch=x86_64 name=nixos version=26.05 status=prod boot=manifest; do
     key="${pair%%=*}"
     value="${pair#*=}"
     os_config_set "$os_id" "$key" "$value" || {
