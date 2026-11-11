@@ -88,7 +88,10 @@ write_target() {
     return 0
   fi
   log "forwarding syslog to ${ips}:${HPS_LOG_PORT} (tcp)"
-  printf '*.* action(type="omfwd" target="%s" port="%s" protocol="tcp" action.resumeRetryCount="-1" queue.type="LinkedList" queue.size="10000")\n' \
+  # queue.timeoutShutdown: at poweroff rsyslog drains the queue for up to 10 s
+  # (the default discards it; lab 2026-11-11, the shutdown unit's pool-export
+  # lines never reached the IPS although the network was still up).
+  printf '*.* action(type="omfwd" target="%s" port="%s" protocol="tcp" action.resumeRetryCount="-1" queue.type="LinkedList" queue.size="10000" queue.timeoutShutdown="10000")\n' \
     "$ips" "$HPS_LOG_PORT" >> "$out"
 }
 

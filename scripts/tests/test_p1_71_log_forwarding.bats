@@ -58,6 +58,13 @@ teardown() {
   grep -q '^\*\.\* action(type="omfwd"' "$HPS_RUN_DIR/rsyslog-target.conf"
 }
 
+@test "the forward queue drains at shutdown (queue.timeoutShutdown)" {
+  echo "console=ttyS0 hps.ips=10.0.0.1 hps.mac=aa:bb:cc:dd:ee:01" > "$HPS_CMDLINE"
+  run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q 'queue.timeoutShutdown="10000"' "$HPS_RUN_DIR/rsyslog-target.conf"
+}
+
 @test "without hps.ips the default gateway is used" {
   echo "console=ttyS0" > "$HPS_CMDLINE"
   cat > "$SHIM/ip" <<'EOT'
