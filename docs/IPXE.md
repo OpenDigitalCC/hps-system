@@ -45,6 +45,34 @@ The DHCP chain is unchanged: dnsmasq hands `snponly.efi` (UEFI) or
 `undionly.kpxe` (BIOS) to a non-iPXE client, and iPXE then fetches
 `boot_manager.sh?cmd=init`.
 
+## Audit admission (IPS-16)
+
+An audit image is large (about 1.5 GB with full firmware), so the IPS serves
+only so many at once and a burst of new nodes does not compete with workloads.
+The limit applies only to a held host that needs an audit (no audit stored, or
+`hps-onboard reaudit`). An assigned host is never limited: its role image is
+served at once.
+
+- `audit_max_concurrent` (cluster key, default 2, 0 = no limit) and
+  `audit_timeout_seconds` (default 900; 30..86400).
+- A host is auditing from the moment the IPS serves it the audit image (host
+  key `audit_started_at`) until its audit is stored (the key is deleted), or
+  until `audit_timeout_seconds` has passed. A timed-out audit frees its slot.
+- A held host that needs an audit is admitted when fewer than
+  `audit_max_concurrent` other hosts are auditing and no earlier-seen host is
+  waiting for the slot. "Earlier" is the host key `initialised_at`, then the
+  MAC: first seen, first audited. A waiting host that stopped asking (no boot
+  request within 3 x `hold_retry_seconds` + 30 s) does not hold a slot back.
+  A host already auditing that asks again (a reboot of the audit image) is
+  served again without taking a second slot; its timeout still counts from the
+  first serve.
+- Otherwise the host gets the hold script (as in IPS-14), which prints
+  `HPS: <mac> is held; waiting for an audit slot (<n> running, retry in <s> s)`
+  and asks again every `hold_retry_seconds`. Waiting costs about 3% of a core.
+- The decision is taken under a lock (`/tmp/hps-audit-admission.lock`, or
+  `$HPS_AUDIT_LOCK`) so two requests cannot take the last slot. Each admission
+  is logged at info (`audit admitted: ...`); a wait is logged at debug.
+
 ## Out of scope: Secure Boot
 
 The binaries are unsigned; the lab boots with Secure Boot off. Supporting it

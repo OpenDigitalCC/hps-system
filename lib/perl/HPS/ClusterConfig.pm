@@ -146,6 +146,11 @@ my @CATALOGUE = (
     # Held nodes (IPS-14): read by the iPXE hold script and the audit boot, not asked by the menu.
     _q(key => 'hold_retry_seconds', group => 'onboarding', menu => 0,
         prompt => 'Seconds a held node with its audit stored waits at iPXE between requests (5-3600)', rule => 'int:5..3600', default => '30'),
+    # Audit admission (IPS-16): read by the iPXE menu when a held host needs an audit.
+    _q(key => 'audit_max_concurrent', group => 'onboarding', menu => 0,
+        prompt => 'Audit boots the IPS serves at once (0-1000; 0 = no limit)', rule => 'int:0..1000', default => '2'),
+    _q(key => 'audit_timeout_seconds', group => 'onboarding', menu => 0,
+        prompt => 'Seconds after serving the audit image that an unfinished audit frees its slot (30-86400)', rule => 'int:30..86400', default => '900'),
     # Resource monitor (docs/MONITORING.md): hps-monitor loop, run under supervisor.
     _q(key => 'monitor_interval_seconds', group => 'monitoring', menu => 0,
         prompt => 'Seconds between resource checks of the paired nodes (10-86400; 0 disables)', rule => 'int0:10..86400', default => '60'),

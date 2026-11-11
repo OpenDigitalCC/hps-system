@@ -1183,6 +1183,8 @@ host_audit_intake() {
   host_registry "$mac" set audit_at "$(make_timestamp)"
   # a new audit clears the stale mark set by hps-onboard reaudit (IPS-14)
   host_registry "$mac" delete audit_stale > /dev/null 2>&1 || true
+  # and frees the audit slot the IPS counted for this host (IPS-16)
+  host_registry "$mac" delete audit_started_at > /dev/null 2>&1 || true
   host_registry "$mac" set macs "$macs_json" || hps_log warn "[$mac] node_audit: could not store the MAC list"
   host_bmc_select "$mac"
   hps_log info "[$mac] node_audit stored: ${size} bytes ${detail} (hba_mode_enabled per controller)"

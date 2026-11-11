@@ -12,6 +12,20 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Audits start only when there is room for them (2026-11-11)
+
+- new (IPS-16): cluster keys `audit_max_concurrent` (default 2, 0 = no limit)
+  and `audit_timeout_seconds` (default 900) cap the audit images the IPS
+  serves at once. A held host that needs an audit is admitted when fewer than
+  the limit are auditing and no earlier-seen waiting host is ahead of it;
+  otherwise it gets the hold script saying `waiting for an audit slot (<n>
+  running, retry in <s> s)` and asks again every `hold_retry_seconds`. A host
+  counts as auditing from the moment it is served the audit image (host key
+  `audit_started_at`) until its audit is stored or the timeout passes.
+  Assigned hosts are never limited: a role boot is served at once. Admissions
+  are logged at info. Load-aware admission (step 4 of the filing) is not done.
+- tests: `test_p3_179_audit_admission.bats`; rules in `docs/IPXE.md`.
+
 ## A ZFS hostid per node (2026-11-11)
 
 - changed: every node had the image-wide ZFS hostid `48505331`, so with

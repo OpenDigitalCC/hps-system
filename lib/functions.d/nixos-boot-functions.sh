@@ -248,27 +248,140 @@ ipxe_held_needs_audit() {
   [[ "$stale" == "true" ]]
 }
 
-# ipxe_boot_held <mac>
-# A HELD host without a (fresh) audit boots the audit image. One with its
-# audit stored waits at iPXE: a script that prints the hold message, sleeps,
-# then chains back to the boot URL the DHCP boot option points at
-# (boot_manager.sh?cmd=init). The next request after hps-onboard assign finds
-# the host assigned and boots its role; no power action is involved. If the
-# IPS is down the chain fails, iPXE shows its error and the script retries.
-# Nothing secret is in the script.
-ipxe_boot_held() {
-  local mac="${1:-${mac:-}}"
-  local n
-  if ipxe_held_needs_audit "$mac"; then
-    ipxe_boot_audit "$mac"
-    return
+# ipxe_int_cluster_key <key> <min> <max> <default>
+# A cluster key that must be a decimal integer in MIN..MAX; absent gives the
+# default, an invalid value is logged (warn) and gives the default.
+ipxe_int_cluster_key() {
+  local key="$1" min="$2" max="$3" def="$4" cluster val=""
+  cluster="$(hps_get_config active_cluster 2>/dev/null)" || cluster=""
+  if [[ -n "$cluster" ]]; then
+    val="$(cluster_registry "$cluster" get "$key" 2>/dev/null)" || val=""
   fi
+  if [[ -z "$val" ]]; then
+    echo "$def"
+    return 0
+  fi
+  if [[ "$val" =~ ^[0-9]{1,6}$ ]] && (( 10#$val >= min && 10#$val <= max )); then
+    echo $(( 10#$val ))
+    return 0
+  fi
+  hps_log warn "cluster key ${key}='${val}' is not an integer ${min}..${max}; using ${def}"
+  echo "$def"
+}
+
+# ipxe_audit_max_concurrent
+# Cluster key audit_max_concurrent (IPS-16): how many audit boots the IPS serves
+# at once. An integer 0..1000, default 2; 0 means no limit.
+ipxe_audit_max_concurrent() {
+  ipxe_int_cluster_key audit_max_concurrent 0 1000 2
+}
+
+# ipxe_audit_timeout_seconds
+# Cluster key audit_timeout_seconds (IPS-16): how long after the IPS served the
+# audit image a host counts as auditing when no audit has been stored. An
+# integer 30..86400, default 900.
+ipxe_audit_timeout_seconds() {
+  ipxe_int_cluster_key audit_timeout_seconds 30 86400 900
+}
+
+# ipxe_host_auditing <mac> <now> <timeout>
+# True (0) when the host is auditing now: the IPS served it the audit image
+# (host key audit_started_at, epoch) less than <timeout> seconds ago and no
+# fresh audit is stored since (host_audit_intake deletes the key).
+ipxe_host_auditing() {
+  local mac="$1" now="$2" timeout="$3" started=""
+  started="$(host_registry "$mac" get audit_started_at 2>/dev/null)" || return 1
+  [[ "$started" =~ ^[0-9]+$ ]] || return 1
+  ipxe_held_needs_audit "$mac" || return 1
+  (( now - 10#$started < timeout ))
+}
+
+# ipxe_first_seen <mac>
+# Epoch of the host's registry creation (host key initialised_at); a host
+# without a usable one sorts last.
+ipxe_first_seen() {
+  local v="" e=""
+  v="$(host_registry "$1" get initialised_at 2>/dev/null)" || v=""
+  e="$(date -d "$v" +%s 2>/dev/null)" || e=""
+  [[ "$e" =~ ^[0-9]+$ ]] || e=9999999999
+  echo "$e"
+}
+
+# ipxe_audit_admit <mac>
+# IPS-16 audit admission. Decides, under a lock so concurrent requests cannot
+# both take the last slot, whether the held host that needs an audit gets the
+# audit image now. Prints "admit" or "wait <running>" and returns 0 / 1.
+#
+#   running  hosts (other than this one) that are auditing: audit_started_at
+#            set, younger than audit_timeout_seconds, no audit stored since.
+#   ahead    other held hosts waiting for an audit that were first seen
+#            earlier (initialised_at, then MAC) and are still asking (their
+#            last_boot_at is within 3 x hold_retry_seconds + 30 s); a host
+#            that went away does not keep a slot back.
+#   admit    the host is already auditing (a repeat request, e.g. after a
+#            reboot of the audit image: audit_started_at is kept, so the
+#            timeout counts from the first serve); or the limit is 0; or
+#            limit - running > ahead (first seen, first audited).
+# Admission sets audit_started_at and logs at info.
+ipxe_audit_admit() {
+  local mac="$1"
+  local lock="${HPS_AUDIT_LOCK:-/tmp/hps-audit-admission.lock}"
+  (
+    local limit now timeout retry window h running=0 ahead=0 me_seen h_seen last
+    limit="$(ipxe_audit_max_concurrent)"
+    timeout="$(ipxe_audit_timeout_seconds)"
+    retry="$(ipxe_hold_retry_seconds)"
+    window=$(( 3 * retry + 30 ))
+    now="$(date +%s)"
+    exec 9> "$lock" || { echo "admit"; exit 0; }
+    flock -w 10 9 || { hps_log warn "[$mac] audit admission lock busy; admitting"; echo "admit"; exit 0; }
+
+    if ipxe_host_auditing "$mac" "$now" "$timeout"; then
+      hps_log info "[$mac] audit image re-served (its audit is already running)"
+      echo "admit"
+      exit 0
+    fi
+    me_seen="$(ipxe_first_seen "$mac")"
+    while IFS= read -r h; do
+      [[ -n "$h" && "$h" != "$mac" ]] || continue
+      if ipxe_host_auditing "$h" "$now" "$timeout"; then
+        running=$(( running + 1 ))
+        continue
+      fi
+      [[ "$(host_registry "$h" get STATE 2>/dev/null)" == HELD ]] || continue
+      ipxe_held_needs_audit "$h" || continue
+      last="$(host_registry "$h" get last_boot_at 2>/dev/null)" || last=""
+      [[ "$last" =~ ^[0-9]+$ ]] || continue
+      (( now - 10#$last <= window )) || continue
+      h_seen="$(ipxe_first_seen "$h")"
+      if (( h_seen < me_seen )) || { (( h_seen == me_seen )) && [[ "$h" < "$mac" ]]; }; then
+        ahead=$(( ahead + 1 ))
+      fi
+    done < <(list_cluster_hosts 2>/dev/null)
+
+    if (( limit == 0 )) || (( limit - running > ahead )); then
+      host_registry "$mac" set audit_started_at "$now" > /dev/null 2>&1 || true
+      hps_log info "[$mac] audit admitted: ${running} other(s) running, limit ${limit} (0 = none), ${ahead} waiting ahead"
+      echo "admit"
+      exit 0
+    fi
+    echo "wait ${running}"
+    exit 1
+  )
+}
+
+# ipxe_hold_script <mac> <message>
+# The hold script (IPS-14): print "HPS: <mac> is held; <message>", sleep, chain
+# back to the boot URL; the chain failing retries. <message> may contain
+# @RETRY@, replaced by the retry interval. Nothing secret is in the script.
+ipxe_hold_script() {
+  local mac="$1" msg="$2" n
   n="$(ipxe_hold_retry_seconds)"
-  hps_log debug "[$mac] held with audit stored: hold script, retry in ${n}s"
+  msg="${msg//@RETRY@/${n}}"
   cgi_header_plain
   cat <<EOF
 #!ipxe
-echo HPS: ${mac} is held; waiting for a role (retry in ${n} s)
+echo HPS: ${mac} is held; ${msg}
 sleep ${n}
 :retry
 chain --replace ${CGI_URL}?cmd=init || goto failed
@@ -278,6 +391,36 @@ echo HPS: the IPS did not answer; retry in ${n} s
 sleep ${n}
 goto retry
 EOF
+}
+
+# ipxe_boot_held <mac>
+# A HELD host without a (fresh) audit boots the audit image when the audit
+# admission (IPS-16, ipxe_audit_admit) has a slot for it; otherwise it gets the
+# hold script with the reason. One with its audit stored waits at iPXE: a
+# script that prints the hold message, sleeps, then chains back to the boot
+# URL the DHCP boot option points at (boot_manager.sh?cmd=init). The next
+# request after hps-onboard assign finds the host assigned and boots its role
+# (assigned hosts never come here, so audits never delay a role boot); no power
+# action is involved. If the IPS is down the chain fails, iPXE shows its error
+# and the script retries.
+ipxe_boot_held() {
+  local mac="${1:-${mac:-}}"
+  local verdict running
+  if ipxe_held_needs_audit "$mac"; then
+    if verdict="$(ipxe_audit_admit "$mac")"; then
+      if ! ipxe_boot_audit "$mac"; then
+        host_registry "$mac" delete audit_started_at > /dev/null 2>&1 || true
+        return 1
+      fi
+      return 0
+    fi
+    running="${verdict#wait }"
+    hps_log debug "[$mac] held, no audit slot free (${running} running): hold script"
+    ipxe_hold_script "$mac" "waiting for an audit slot (${running} running, retry in @RETRY@ s)"
+    return 0
+  fi
+  hps_log debug "[$mac] held with audit stored: hold script, retry in $(ipxe_hold_retry_seconds)s"
+  ipxe_hold_script "$mac" "waiting for a role (retry in @RETRY@ s)"
 }
 
 # nixos_image_profile <host profile>

@@ -147,7 +147,9 @@ The usual sequence, with placeholders:
 4. The rebooted node waits at iPXE, asking the IPS again every
    `hold_retry_seconds` (default 30; cluster key). Nothing needs power control
    from here. `hps-onboard reaudit $MAC` makes the next retry run the audit image
-   again; setting the cluster key `held_reboot_after_audit` to `false` keeps the
+   again (at most `audit_max_concurrent` audits run at once, default 2; the rest
+   wait in the hold loop with "waiting for an audit slot", docs/IPXE.md); setting
+   the cluster key `held_reboot_after_audit` to `false` keeps the
    audit image up after the audit, so a held node can be inspected over ctrl-exec.
 5. Assign it: `hps-onboard assign $MAC --type $TYPE --profile $PROFILE --os $OS`.
    The node's next retry boots its role image with no power action; it pairs

@@ -164,6 +164,8 @@ keys may be empty.
 | `osvc_packages_url` | opensvc | Packages URL | `text` | (empty) | no |
 | `osvc_hb_type` | opensvc | Heartbeat type (multicast/unicast) | `enum:multicast,unicast` | `unicast` | no |
 | `hold_retry_seconds` | onboarding | Seconds a held node with its audit stored waits at iPXE between requests (5-3600) | `int:5..3600` | `30` | no |
+| `audit_max_concurrent` | onboarding | Audit boots the IPS serves at once (0-1000; 0 = no limit) | `int:0..1000` | `2` | no |
+| `audit_timeout_seconds` | onboarding | Seconds after serving the audit image that an unfinished audit frees its slot (30-86400) | `int:30..86400` | `900` | no |
 | `monitor_interval_seconds` | monitoring | Seconds between resource checks of the paired nodes (10-86400; 0 disables) | `int0:10..86400` | `60` | no |
 | `held_reboot_after_audit` | onboarding | Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection) | `bool` | `true` | no |
 | `operator_api_listen` | operator | Address of this IPS where the ctrl-exec API listens with TLS for remote operators (empty: no remote operator; `docs/OPERATOR.md`) | `ip` | (empty) | no |
