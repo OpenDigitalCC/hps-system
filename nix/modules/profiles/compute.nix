@@ -20,7 +20,7 @@
 #    initiatorname.iscsi points at that runtime file.
 #  - mdadm, with the udev auto-assembly and the degraded "last resort" timer
 #    OFF. HPS assembles every mirror explicitly (mirror-assemble) and a degraded
-#    assembly needs an IPS declaration that the missing leg's owner is gone, so
+#    assembly needs an explicit --peer-gone (the missing leg's owner is gone), so
 #    the kernel/udev must never start a half mirror on its own. No monitor mail.
 #  - bridges for the workload networks are NOT declared here: the layout lives in
 #    the registry and net-bridge-ensure builds them at boot (hps-node-init).

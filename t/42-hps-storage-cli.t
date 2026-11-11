@@ -56,6 +56,11 @@ is($rc, 2, '--allow-any-pool-name only for create/destroy');
 is($rc, 2, '--yes only for forget-key');
 ($rc, $out) = cli($mac, 'up', '--bogus');
 is($rc, 2, 'unknown option: usage');
+($rc, $out) = cli($mac, 'up', '--disk', 'ata-SSD1');
+is($rc, 2, '--disk only for create');
+($rc, $out) = cli($mac, 'destroy', 'lab', '--wipe');
+is($rc, 2, '--wipe only for create');
+like($out, qr/--disk and --wipe are only for create/, 'says so');
 is(ncalls(), 0, 'usage errors call nothing');
 
 # --- not found
@@ -83,43 +88,48 @@ is($j->{dry_run}, 1, 'json dry_run');
 is_deeply([ map { $_->{script} } @{ $j->{plan} } ], [ 'storage-pool-import', 'dataset-unlock' ], 'json plan');
 
 # --- the pool-name ruling
-StorageFixture::approve($f, 'pool-create', pool => 'zp03', expires => time + 3600);
-($rc, $out) = cli($mac, 'create', 'zp03');
+my @D = ('--disk', 'ata-SSD1', '--disk', 'ata-SSD2');
+($rc, $out) = cli($mac, 'create', 'zp03', @D);
 is($rc, 3, 'create zp03: refused (3)');
 like($out, qr/not the active cluster name 'lab'/, 'says why');
 is(ncalls(), 0, 'nothing called');
-($rc, $out) = cli($mac, 'create', 'zp03', '--allow-any-pool-name', '--dry-run');
+($rc, $out) = cli($mac, 'create', 'zp03', @D, '--allow-any-pool-name', '--dry-run');
 is($rc, 0, '--allow-any-pool-name lets it through (dry run)');
 ($rc, $out) = cli($mac, 'destroy', 'zp03');
 is($rc, 3, 'destroy zp03: refused by the ruling');
 
-# --- create without approval, then with
+# --- create: the disks are arguments, validated; no approval anywhere
 ($rc, $out) = cli($mac, 'create', 'lab', '--dry-run');
-is($rc, 3, 'create without an approval: refused (3)');
-like($out, qr/no pool-create approval/, 'says so');
-StorageFixture::approve($f, 'pool-create', expires => time + 3600);
-($rc, $out) = cli($mac, 'create', 'lab', '--dry-run');
-is($rc, 0, 'create --dry-run with approval: 0');
-like($out, qr{/dev/disk/by-id/ata-SSD1\n\s+/dev/disk/by-id/ata-SSD2}, 'the approved by-id disks are printed');
-like($out, qr/storage-pool-create lab --disk ata-SSD1 --disk ata-SSD2 --approval-file -/, 'create call shown');
+is($rc, 2, 'create without --disk: usage (2)');
+like($out, qr/two to four --disk/, 'says how many');
+($rc, $out) = cli($mac, 'create', 'lab', '--disk', 'ata-SSD1', '--dry-run');
+is($rc, 2, 'create with one --disk: usage (2)');
+($rc, $out) = cli($mac, 'create', 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD1', '--dry-run');
+is($rc, 2, 'the same disk twice: usage (2)');
+like($out, qr/disk listed twice/, 'says so');
+($rc, $out) = cli($mac, 'create', 'lab', '--disk', 'ata-SSD1', '--disk', '/dev/sdb', '--dry-run');
+is($rc, 2, 'a /dev/sdX disk: usage (2)');
+like($out, qr/not a \/dev\/disk\/by-id name/, 'says so');
+is(ncalls(), 0, 'nothing called');
+($rc, $out) = cli($mac, 'create', 'lab', @D, '--dry-run');
+is($rc, 0, 'create --dry-run with two --disk and no approval: 0');
+like($out, qr/storage-pool-create lab --disk ata-SSD1 --disk ata-SSD2\n/, 'create call shown, no --approval-file');
+like($out, qr/input: \{"key_hex":"<redacted/, 'the only input is the redacted key');
 unlike($out, qr/[0-9a-f]{64}/, 'no 64-hex');
+unlike($out, qr/approv/i, 'no approval is mentioned');
 is(ncalls(), 0, 'dry run called nothing');
+($rc, $out) = cli($mac, 'create', 'lab', '--disk', '/dev/disk/by-id/ata-SSD1', '--disk', 'ata-SSD2', '--disk', 'ata-SSD3', '--wipe', '--dry-run');
+is($rc, 0, 'three disks and --wipe: 0');
+like($out, qr/storage-pool-create lab --disk ata-SSD1 --disk ata-SSD2 --disk ata-SSD3 --wipe\n/, 'three-way mirror with --wipe shown');
 
 reset_shim();
-($rc, $out) = cli($mac, 'create', 'lab');
-is($rc, 0, 'create runs: 0');
-my $disks_at = index($out, '/dev/disk/by-id/ata-SSD1');
-my $run_at   = index($out, '== 1. storage-pool-create');
-ok($disks_at >= 0 && $run_at > $disks_at, 'by-id disks are printed before the first call result');
+($rc, $out) = cli($mac, 'create', 'lab', @D);
+is($rc, 0, 'create runs with no approval: 0');
 my @c = calls();
-like($c[0], qr/^--input --json $mac storage-pool-create lab --disk ata-SSD1 --disk ata-SSD2 --approval-file -$/, 'hps-run called with --input --json and the MAC');
+like($c[0], qr/^--input --json $mac storage-pool-create lab --disk ata-SSD1 --disk ata-SSD2$/, 'hps-run called with --input --json and the MAC');
 my @in = stdins();
 is(scalar(@in), 2, 'two calls carried input (create, unlock)');
-my ($create_in) = grep { /"approval"/ } @in;
-my $doc = decode_json($create_in);
-is_deeply([ sort keys %$doc ], [ 'approval', 'key_hex', 'secret' ], 'create stdin document');
-my ($unlock_in) = grep { !/"approval"/ } @in;
-like($unlock_in, qr/^\{"key_hex":"[0-9a-f]{64}"\}$/, 'unlock stdin document');
+like($_, qr/^\{"key_hex":"[0-9a-f]{64}"\}$/, 'stdin document is the key only') for @in;
 like($out, qr/node says hi/, 'node stdout shown');
 is($f->{reg}->host_get($mac, 'storage_state'), 'up', 'registry says up');
 
@@ -181,9 +191,9 @@ like($out, qr/Deleted the 'enc' key/, 'says so');
 ok(!$f->{ks}->has_key($mac, 'enc'), 'key gone');
 
 # --- destroy
-StorageFixture::approve($f, 'pool-destroy', expires => time + 3600);
 reset_shim();
 ($rc, $out) = cli($mac, 'destroy', 'lab');
-is($rc, 0, 'destroy with approval: 0');
+is($rc, 0, 'destroy with no approval: 0');
+like(join('', calls()), qr/^--json $mac storage-pool-destroy lab$/m, 'destroy sent without input');
 ok(!$f->{reg}->host_exists($mac, 'storage_state'), 'storage_state cleared');
 done_testing;

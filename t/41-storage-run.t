@@ -12,6 +12,7 @@ my $mac = $StorageFixture::MAC;
 
 sub err_of { my $c = shift; eval { $c->(); 1 } and return; return $@ }
 sub slurp { open(my $fh, '<:raw', $_[0]) or die "$_[0]: $!"; local $/; my $t = <$fh>; close $fh; return $t }
+my @D2 = (disks => [ 'ata-SSD1', 'ata-SSD2' ]);
 sub fresh { my %o = @_; my $f = StorageFixture::setup(%o); $f->{st} = $f->{mk}->(); return $f }
 sub with_exports {
     my $f = shift;
@@ -70,38 +71,41 @@ sub registry_text {
 {
     my $f = fresh();
     with_exports($f);
-    is(err_of(sub { $f->{st}->run('create', pool => 'lab') })->kind, 'refused', 'create without approval refused');
-    is(scalar($f->{ce}->calls), 0, 'nothing sent without approval');
-    ok(!$f->{ks}->has_key($mac, 'enc'), 'no key generated without approval');
-    my $doc = StorageFixture::approve($f, 'pool-create');
-    $f->{st}->run('create', pool => 'lab');
+    is(err_of(sub { $f->{st}->run('create', pool => 'lab') })->kind, 'usage', 'create without disks is a usage error');
+    is(scalar($f->{ce}->calls), 0, 'nothing sent without disks');
+    ok(!$f->{ks}->has_key($mac, 'enc'), 'no key generated without disks');
+    ok(!grep({ /^approval_/ } $f->{reg}->host_list($mac)), 'no approval in the registry');
+    $f->{st}->run('create', pool => 'lab', @D2);
     my @c = $f->{ce}->calls;
     is_deeply([ map { $_->{script} } @c ], [ 'storage-pool-create', 'storage-pool-import', 'dataset-unlock', 'iscsi-export' ], 'create then up');
     is(scalar(grep { $_->{script} eq 'storage-pool-create' } @c), 1, 'create sent exactly once');
-    is_deeply($c[0]{args}, [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2', '--approval-file', '-' ], 'create arguments');
+    is_deeply($c[0]{args}, [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2' ], 'create arguments: the disks, no approval');
     my $key_hex = unpack('H*', $f->{ks}->get_or_create_key($mac, 'enc'));
-    my $sec_hex = unpack('H*', $f->{ks}->cluster_secret('approval'));
     my $in = decode_json($c[0]{input});
-    is_deeply([ sort keys %$in ], [ 'approval', 'key_hex', 'secret' ], 'create input members');
+    is_deeply([ sort keys %$in ], ['key_hex'], 'create input: the key only');
     is($in->{key_hex}, $key_hex, 'key_hex is the keysafe enc key');
-    is($in->{secret}, $sec_hex, 'secret is the cluster approval secret');
-    is(JSON::PP->new->canonical->encode($in->{approval}), $doc, 'the approval travels as stored (signature intact)');
-    is(scalar(grep { defined $_->{input} && index($_->{input}, $sec_hex) >= 0 } @c), 1, 'the secret is sent exactly once');
     is(scalar(grep { defined $_->{input} && index($_->{input}, $key_hex) >= 0 } @c), 2, 'the key goes to create and to the unlock only');
     is($c[2]{input}, "{\"key_hex\":\"$key_hex\"}", 'unlock after create uses the same key');
     is($f->{reg}->host_get($mac, 'storage_pool'), 'lab', 'storage_pool recorded');
     ok($f->{reg}->host_exists($mac, 'storage_created_at'), 'storage_created_at recorded');
     is($f->{reg}->host_get($mac, 'storage_state'), 'up', 'state up after create');
     my $reg_text = registry_text($f->{base});
-    ok(index($reg_text, $key_hex) < 0 && index($reg_text, $sec_hex) < 0, 'neither key nor secret in any registry file');
-    ok(!grep({ index($_, $key_hex) >= 0 || index($_, $sec_hex) >= 0 } @{ $f->{log} }), 'neither in any log line');
+    ok(index($reg_text, $key_hex) < 0, 'the key is in no registry file');
+    ok(!grep({ index($_, $key_hex) >= 0 } @{ $f->{log} }), 'nor in any log line');
+    ok(!-e "$f->{base}/clusters/lab/keysafe/approval.hmac", 'no approval secret is created');
+}
+
+# --- create --wipe: the flag reaches the node
+{
+    my $f = fresh();
+    $f->{st}->run('create', pool => 'lab', disks => [ 'ata-SSD1', 'ata-SSD2', 'ata-SSD3' ], wipe => 1);
+    is_deeply(($f->{ce}->calls)[0]{args}, [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2', '--disk', 'ata-SSD3', '--wipe' ], 'three disks and --wipe sent');
 }
 
 # --- create: a failing create stops everything and records nothing but the failure
 {
     my $f = fresh(ce => { rc => { 'storage-pool-create' => 3 } });
-    StorageFixture::approve($f, 'pool-create');
-    my $e = err_of(sub { $f->{st}->run('create', pool => 'lab') });
+    my $e = err_of(sub { $f->{st}->run('create', pool => 'lab', @D2) });
     is($e->kind, 'refused', 'node exit 3 is a refusal');
     like($e->message, qr/storage-pool-create exited 3: boom from storage-pool-create/, 'message names step, rc and the node stderr');
     is(scalar($f->{ce}->calls), 1, 'no call after the failure');
@@ -159,16 +163,11 @@ sub registry_text {
     $f->{ks}->get_or_create_key($mac, 'enc');
     $f->{reg}->host_set($mac, $_->[0], $_->[1]) for [ storage_state => 'up' ], [ storage_pool => 'lab' ], [ storage_up_at => 'x' ];
     with_exports($f);
-    is(err_of(sub { $f->{st}->run('destroy', pool => 'lab') })->kind, 'refused', 'destroy without approval refused');
-    is(scalar($f->{ce}->calls), 0, 'nothing sent');
-    my $doc = StorageFixture::approve($f, 'pool-destroy');
     $f->{st}->run('destroy', pool => 'lab');
     my @c = $f->{ce}->calls;
     is_deeply([ map { $_->{script} } @c ], ['storage-pool-destroy'], 'one destroy call');
-    is_deeply($c[0]{args}, [ 'lab', '--approval-file', '-' ], 'arguments');
-    my $in = decode_json($c[0]{input});
-    is_deeply([ sort keys %$in ], [ 'approval', 'secret' ], 'input is approval + secret, no key');
-    is(JSON::PP->new->canonical->encode($in->{approval}), $doc, 'approval as stored');
+    is_deeply($c[0]{args}, ['lab'], 'arguments: the pool only (no approval)');
+    is($c[0]{input}, undef, 'no input');
     ok(!$f->{reg}->host_exists($mac, $_), "$_ cleared") for qw(storage_state storage_up_at storage_pool storage_exports);
     ok($f->{ks}->has_key($mac, 'enc'), 'the key is NOT deleted');
 }
@@ -189,10 +188,8 @@ sub registry_text {
 {
     my $f = fresh();
     with_exports($f);
-    StorageFixture::approve($f, 'pool-create');
-    StorageFixture::approve($f, 'pool-destroy');
     for my $op (qw(create destroy)) {
-        my $r = $f->{st}->run($op, pool => 'lab', dry_run => 1);
+        my $r = $f->{st}->run($op, pool => 'lab', dry_run => 1, ($op eq 'create' ? @D2 : ()));
         ok($r->{dry_run} && @{ $r->{plan} }, "dry-run $op returns the plan");
     }
     ok(!$f->{ks}->has_key($mac, 'enc'), 'dry-run create generated no key');

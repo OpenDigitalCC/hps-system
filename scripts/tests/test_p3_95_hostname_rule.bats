@@ -251,10 +251,10 @@ EOT
   run -2 bash "$ROOT/scripts/hps-forget-hook.sh"
 }
 
-@test "hps-onboard forget and prune-agents are wired to the hook and to host-forget approval" {
+@test "hps-onboard forget and prune-agents are wired to the hook, with no approval" {
   grep -q 'hps-forget-hook.sh' "$ROOT/bin/hps-onboard"
   grep -q "'forget'" "$ROOT/bin/hps-onboard"
-  grep -q "host-forget" "$ROOT/bin/hps-approve"
+  run ! grep -qi 'approv' "$ROOT/bin/hps-onboard" "$ROOT/lib/perl/HPS/Onboard.pm"
   [ -x "$ROOT/scripts/hps-forget-hook.sh" ]
 }
 

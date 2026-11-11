@@ -9,9 +9,9 @@ use JSON::PP;
 use HPS::Keysafe;
 use HPS::Workload;
 
-# 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, approval, node refusal), 4 not found
+# 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, node refusal), 4 not found
 my %EXIT = (
-    usage => 2, refused => 3, perms => 3, tampered => 3, expired => 3,
+    usage => 2, refused => 3, perms => 3,
     malformed => 3, notfound => 4, failed => 1,
 );
 
@@ -29,8 +29,7 @@ Usage:
 create refuses a workload that already exists unless --resume (continue an
 unfinished create). destroy removes the instance (VMs, zvols, mirrors, record) and
 keeps workloads/<name>.json, so a later create works; destroy --forget also removes
-the definition. Both need an unexpired approval: on the compute host of the first
-VM, hps-approve workload-destroy <mac> --workload <name>.
+the definition.
 --dry-run prints the node calls and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE

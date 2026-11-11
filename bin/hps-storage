@@ -6,16 +6,15 @@ use FindBin qw($RealBin);
 use lib "$RealBin/../lib/perl";
 use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
-use POSIX qw(strftime);
 use HPS::Registry;
 use HPS::Keysafe;
 use HPS::Storage;
 
-# 0 ok, 1 failed, 2 usage, 3 refused (policy, approval, node refusal), 4 not found
+# 0 ok, 1 failed, 2 usage, 3 refused (policy, node refusal), 4 not found
 # operations that take arguments, and how many
 my %ZVOL_OPS = ('zvol-create' => 2, 'zvol-destroy' => 1, 'zvol-list' => 0, 'export' => 1, 'unexport' => 1);
 my %EXIT = (
-    usage => 2, refused => 3, perms => 3, tampered => 3, expired => 3,
+    usage => 2, refused => 3, perms => 3,
     malformed => 3, notfound => 4, failed => 1,
 );
 
@@ -25,7 +24,8 @@ sub usage {
     print STDERR <<'USAGE';
 Usage:
   hps-storage <host> up|down|trim-check|status [--dry-run] [--json] [--wait SECONDS]
-  hps-storage <host> create <pool> [--dry-run] [--json] [--allow-any-pool-name]
+  hps-storage <host> create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>]... [--wipe]
+      [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> destroy <pool> [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> zvol-create <pool>/enc/[vm/]<name> <size> [--dry-run] [--json]
   hps-storage <host> zvol-destroy <pool>/enc/[vm/]<name> [--dry-run] [--json] [--allow-any-pool-name]
@@ -35,26 +35,15 @@ Usage:
   hps-storage <host> forget-key [--yes] [--dry-run] [--json]
 <host> is a MAC (any format) or a registry HOSTNAME. The pool is named after
 the active cluster; any other name needs --allow-any-pool-name.
-create and destroy need an unexpired approval (hps-approve pool-create|pool-destroy);
-zvol-destroy needs hps-approve zvol-destroy <mac> --dataset <dataset>. A size is
+create makes one mirror of 2 to 4 disks (by-id names, with or without
+/dev/disk/by-id/) on an assigned host; a disk that carries a pool label or a
+signature is refused unless --wipe, which wipes exactly the named disks. A size is
 like 1G (K, M, G, T). export records the target in the host's storage_exports
 (portal defaults to the host's registry IP); up exports every recorded target again.
 --dry-run prints the node calls and redacted inputs and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
     return 2;
-}
-
-sub utc { return strftime('%Y-%m-%d %H:%M:%S UTC', gmtime($_[0])) }
-
-sub render_approval {
-    my ($a) = @_;
-    my $out = "Approval $a->{action} for pool $a->{pool} on host $a->{mac}\n";
-    $out .= "  Disks:\n" . join('', map {"    /dev/disk/by-id/$_\n"} map { s{^/dev/disk/by-id/}{}r } @{ $a->{disks} })
-        if @{ $a->{disks} };
-    $out .= "  Wipe:    " . ($a->{wipe} ? 'yes' : 'no') . "\n";
-    $out .= "  Expires: " . utc($a->{expires}) . "\n  By:      $a->{issued_by}\n";
-    return $out;
 }
 
 sub render_plan {
@@ -79,10 +68,11 @@ sub render_run {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $any, $yes, $wait, $iqn, $initiator, $portal);
+    my ($json, $dry, $any, $yes, $wait, $iqn, $initiator, $portal, @disks, $wipe);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'allow-any-pool-name' => \$any,
         'yes' => \$yes, 'wait=i' => \$wait, 'iqn=s' => \$iqn, 'initiator=s' => \$initiator, 'portal=s' => \$portal,
+        'disk=s' => \@disks, 'wipe' => \$wipe,
     ) or return usage();
     my $host = shift @argv // return usage('host required');
     my $op   = shift @argv // return usage('operation required');
@@ -109,6 +99,11 @@ sub main {
     }
     return usage("$op takes no further arguments") if @argv;
     return usage('--allow-any-pool-name is only for create, destroy and zvol-destroy') if $any && !$needs_pool && $op ne 'zvol-destroy';
+    return usage('--disk and --wipe are only for create') if $op ne 'create' && (@disks || $wipe);
+    if ($op eq 'create') {
+        $opt{disks} = [@disks];
+        $opt{wipe} = $wipe ? 1 : 0;
+    }
     return usage('--yes is only for forget-key') if $yes && $op ne 'forget-key';
     return usage('--wait must be 0 or more seconds') if defined $wait && $wait < 0;
 
@@ -122,21 +117,17 @@ sub main {
             return 0;
         }
         my $plan = $st->plan($op, %opt);
-        my $appr = $st->approval_info;
         if ($dry) {
             if ($json) {
-                print $js->encode({ dry_run => 1, op => $op, mac => $st->mac, pool => $st->pool, approval => $appr, plan => $plan });
+                print $js->encode({ dry_run => 1, op => $op, mac => $st->mac, pool => $st->pool, plan => $plan });
             }
             else {
                 print "Dry run: $op on host " . $st->mac . ", pool " . $st->pool . "; nothing is sent or changed.\n";
-                print render_approval($appr) if $appr;
                 print "Node calls:\n" . (@$plan ? render_plan($plan) : "  (none)\n");
             }
             return 0;
         }
-        print render_approval($appr) if $appr && !$json;
         my $r = $st->run($op, %opt);
-        $r->{approval} = $appr if $appr;
         print $json ? $js->encode($r) : render_run($r);
         return 0;
     };

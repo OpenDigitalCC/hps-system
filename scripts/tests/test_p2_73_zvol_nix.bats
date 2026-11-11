@@ -20,10 +20,9 @@ setup() {
   done
 }
 
-@test "only storage-zvol-destroy reads request input (input = raw); create, list and status declare none" {
-  grep -q '^      storage-zvol-destroy\.options\.input = "raw";' "$CTRL"
+@test "no zvol script reads request input: destroy, create, list and status declare none (ADR 0007)" {
   local s
-  for s in storage-zvol-create storage-zvol-list storage-status; do
+  for s in storage-zvol-destroy storage-zvol-create storage-zvol-list storage-status; do
     run ! grep -q "^      $s\.options\.input" "$CTRL"
   done
 }

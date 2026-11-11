@@ -5,7 +5,7 @@ package HPS::Storage;
 # records what happened in the host registry.
 #
 # plan($op) returns the calls as a list of hashes with the input document
-# REDACTED (no key, no secret, no approval signature). run($op) sends the real
+# REDACTED (no key). run($op) sends the real
 # documents through a runner object (see HPS::Storage::Runner::HpsRun).
 #
 # Key material is read from HPS::Keysafe only inside the closure that builds
@@ -20,7 +20,6 @@ use JSON::PP;
 use POSIX qw(strftime);
 use HPS::Registry;
 use HPS::Keysafe;
-use HPS::Approval;
 
 my $POOL_RE = qr/^[a-z][a-z0-9_.-]*$/;
 my $ZVOL_RE = qr{^[A-Za-z0-9][A-Za-z0-9_.:/-]*$};
@@ -31,6 +30,8 @@ my $LIO_IQN_RE = qr/^iqn\.[0-9]{4}-[0-1][0-9]\..*\..*/;
 my $ADDR_RE = qr/^[0-9A-Fa-f:.]+$/;
 my $DS_RE   = qr{^([a-z][a-z0-9_.-]*)/enc/(?:vm/)?([A-Za-z0-9_-]+)$};    # <pool>/enc/<name> or <pool>/enc/vm/<name>
 my $SIZE_RE = qr/^[1-9][0-9]*[KMGT]$/;
+# A pool disk: a /dev/disk/by-id name, with or without that directory.
+my $DISK_RE = qr{^(?:/dev/disk/by-id/)?[A-Za-z0-9][A-Za-z0-9_.:+-]*$};
 my $KEY     = 'enc';    # the keysafe name of <pool>/enc's key
 
 my %OPS = (
@@ -45,14 +46,13 @@ sub _fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
 sub ops { return sort keys %OPS }
 
 # new(host => MAC|HOSTNAME, pool => NAME, allow_any_pool_name => 0|1,
-#     registry => $reg, keysafe => $ks, approval => $ap, runner => $obj,
+#     registry => $reg, keysafe => $ks, runner => $obj,
 #     logger => sub ($level, $msg), now => sub, sleep => sub ($s), wait => SECONDS)
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
     my $ks  = $opt{keysafe}  // HPS::Keysafe->new(registry => $reg);
     my $self = bless {
         registry => $reg, keysafe => $ks,
-        approval => $opt{approval} // HPS::Approval->new(registry => $reg, keysafe => $ks),
         runner   => $opt{runner} // HPS::Storage::Runner::HpsRun->new,
         logger   => $opt{logger} // \&_default_logger,
         now      => $opt{now} // sub { time },
@@ -66,7 +66,6 @@ sub new ($class, %opt) {
 }
 
 sub mac ($self)  { return $self->{mac} }
-sub approval_info ($self) { return $self->{approval_info} }
 
 # A MAC in any format, else a registry HOSTNAME (whole value or first label).
 sub _resolve_host ($self, $host) {
@@ -179,22 +178,33 @@ sub exports ($self) {
     return @out;
 }
 
-#--- approvals ---------------------------------------------------------------------
+#--- create arguments ------------------------------------------------------------
 
-# Verified approval fields and the cluster secret (hex) for an action.
-sub _approval ($self, $action, $pool) {
-    my $mac = $self->{mac};
-    my $json = $self->{approval}->get($mac, $action, $pool)
-        // _fail('refused', $action eq 'zvol-destroy'
-            ? "no $action approval for dataset '$pool' on host $mac (a human runs: hps-approve $action $mac --dataset $pool)"
-            : "no $action approval for pool '$pool' on host $mac (a human runs: hps-approve $action $mac --pool $pool ...)");
-    my $secret = $self->{keysafe}->cluster_secret('approval');
-    my $f = $self->{approval}->verify($json, $secret);   # dies: expired, tampered, malformed
-    _fail('refused', "the approval is for another host") unless $f->{mac} eq $mac;
-    _fail('refused', "the approval is for pool '$f->{pool}', not '$pool'") unless $f->{pool} eq $pool;
-    _fail('refused', "the approval is for $f->{action}, not $action") unless $f->{action} eq $action;
-    $self->{approval_info} = { map { $_ => $f->{$_} } qw(action pool disks wipe expires issued_by mac) };
-    return ($f, unpack('H*', $secret));
+# The disks of a new pool, by-id names without the directory: two to four
+# (one mirror of them all; a three-way mirror survives two disk losses), each
+# a by-id name, none twice. The node checks them again.
+sub _create_disks ($self, $disks) {
+    $disks //= [];
+    _fail('usage', 'disks must be a list') unless ref $disks eq 'ARRAY';
+    _fail('usage', 'create needs two to four --disk BY-ID (the pool is one mirror of them all)')
+        unless @$disks >= 2 && @$disks <= 4;
+    my (%seen, @out);
+    for my $d (@$disks) {
+        _fail('usage', "disk '" . ($d // '') . "' is not a /dev/disk/by-id name")
+            unless defined $d && !ref $d && $d =~ $DISK_RE;
+        (my $name = $d) =~ s{^/dev/disk/by-id/}{};
+        _fail('usage', "disk listed twice: $name") if $seen{$name}++;
+        push @out, $name;
+    }
+    return \@out;
+}
+
+# A pool goes on an assigned host only (not one still unassigned or HELD).
+sub _check_assigned ($self) {
+    my $state = $self->_get('STATE');
+    _fail('refused', "host $self->{mac} is not assigned (STATE is '" . ($state // '') . "'); run hps-onboard assign first")
+        if !defined $state || $state eq '' || $state eq 'HELD';
+    return;
 }
 
 #--- the steps -----------------------------------------------------------------------
@@ -235,14 +245,14 @@ sub _steps_down ($self, %a) {
 sub _steps_create ($self, %a) {
     my $pool = $self->pool(%a);
     $self->_check_cluster_name($pool);
-    my ($f, $secret_hex) = $self->_approval('pool-create', $pool);
-    my %desc_approval = (%$f, hmac => '<redacted>');
-    my @disks = @{ $f->{disks} };
+    $self->_check_assigned;
+    my $disks = $self->_create_disks($a{disks});
+    my $wipe = $a{wipe} // 0;
+    _fail('usage', 'wipe must be 0 or 1') unless !ref $wipe && $wipe =~ /^[01]\z/;
     return (
-        _step('storage-pool-create', [ $pool, (map { ('--disk', $_) } @disks), '--approval-file', '-' ],
-            input_desc => { approval => \%desc_approval, secret => '<redacted: 64 hex, cluster approval secret>',
-                            key_hex => '<redacted: 64 hex, generated by the keysafe if absent>' },
-            input => sub { _json({ approval => $f, secret => $secret_hex, key_hex => $self->_key_hex }) },
+        _step('storage-pool-create', [ $pool, (map { ('--disk', $_) } @$disks), ($wipe ? ('--wipe') : ()) ],
+            input_desc => { key_hex => '<redacted: 64 hex, generated by the keysafe if absent>' },
+            input => sub { _json({ key_hex => $self->_key_hex }) },
             after => sub {
                 $self->_set('storage_pool', $pool);
                 $self->_set('storage_created_at', $self->_stamp);
@@ -254,13 +264,7 @@ sub _steps_create ($self, %a) {
 sub _steps_destroy ($self, %a) {
     my $pool = $self->pool(%a);
     $self->_check_cluster_name($pool);
-    my ($f, $secret_hex) = $self->_approval('pool-destroy', $pool);
-    my %desc_approval = (%$f, hmac => '<redacted>');
-    return (
-        _step('storage-pool-destroy', [ $pool, '--approval-file', '-' ],
-            input_desc => { approval => \%desc_approval, secret => '<redacted: 64 hex, cluster approval secret>' },
-            input => sub { _json({ approval => $f, secret => $secret_hex }) }),
-    );
+    return _step('storage-pool-destroy', [$pool]);
 }
 
 sub _steps_trim ($self, %a) { return _step('storage-trim-check', [ $self->pool(%a) ]) }
@@ -285,11 +289,7 @@ sub _steps_zvol_destroy ($self, %a) {
     for my $e (grep { $_->{zvol} eq $ds } $self->exports) {
         _fail('refused', "zvol '$ds' is exported (iqn $e->{iqn}); run unexport first");
     }
-    my ($f, $secret_hex) = $self->_approval('zvol-destroy', $ds);
-    my %desc_approval = (%$f, hmac => '<redacted>');
-    return _step('storage-zvol-destroy', [ $ds, '--approval-file', '-' ],
-        input_desc => { approval => \%desc_approval, secret => '<redacted: 64 hex, cluster approval secret>' },
-        input => sub { _json({ approval => $f, secret => $secret_hex }) });
+    return _step('storage-zvol-destroy', [$ds]);
 }
 
 sub _steps_zvol_list ($self, %a) { return _step('storage-zvol-list', [ $self->pool(%a) ]) }
@@ -366,7 +366,6 @@ sub _record_trim ($self, $results) {
 
 sub _steps ($self, $op, %a) {
     my $m = $OPS{ $op // '' } // _fail('usage', 'unknown operation; one of: ' . join(', ', ops()));
-    $self->{approval_info} = undef;
     return $self->$m(%a);
 }
 
@@ -559,14 +558,13 @@ C<up>: C<storage-pool-import POOL>, C<dataset-unlock POOL/enc> (existing key
 only; no key means "pool not created by HPS"), C<iscsi-export> for each entry
 of the host's C<storage_exports>; sets C<storage_state=up>.
 C<down>: C<iscsi-unexport> for each export; C<storage_state=down>; the pool is
-never exported. C<create>: needs an unexpired, valid C<pool-create> approval;
-one C<storage-pool-create> call carrying approval, secret and key, then C<up>.
-C<destroy>: needs a C<pool-destroy> approval; one C<storage-pool-destroy>
+never exported. C<create> (disks => [2 to 4 by-id names], wipe => 0|1; an
+assigned host only): one C<storage-pool-create POOL --disk ... [--wipe]> call
+carrying the pool key on stdin, then C<up>. C<destroy>: one C<storage-pool-destroy>
 call; clears the storage_* registry keys; the key stays in the keysafe.
 C<trim-check>, C<status> as named (C<status> is the read-only
 C<storage-status>; it imports nothing). C<zvol-create DATASET SIZE>,
-C<zvol-destroy DATASET> (needs a C<zvol-destroy> approval whose C<pool> is the
-dataset; refused while the zvol is in C<storage_exports>), C<zvol-list>,
+C<zvol-destroy DATASET> (refused while the zvol is in C<storage_exports>), C<zvol-list>,
 C<export DATASET --iqn --initiator [--portal]> (portal defaults to the host's
 registry C<IP>; recorded in C<storage_exports> after the node did it) and
 C<unexport IQN> (removes the entry). A zvol is C<POOL/enc/NAME> or, for a guest disk, C<POOL/enc/vm/NAME>

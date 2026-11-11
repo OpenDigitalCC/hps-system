@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # CS-3.2: mirror-create. Exact mdadm flags, write-mostly on the remote leg only,
-# no wipe without a mirror-create approval, idempotency.
+# no wipe without --wipe (no approval, ADR 0007), idempotency.
 
 bats_require_minimum_version 1.5.0
 load p2_30_helpers
@@ -77,24 +77,25 @@ create() {
   [ ! -s "$SHIM_LOG" ]
 }
 
-@test "a signature without approval is refused and nothing is changed" {
+@test "a signature without --wipe is refused and nothing is changed" {
   touch "$STATE/blkid.vm1-disk0"
   create
   [ "$status" -eq 3 ]
   [[ "$stderr" == *"not clean"* ]]
+  [[ "$stderr" == *"--wipe is needed"* ]]
   run ! grep -E -- '--create|wipefs|--zero-superblock' "$SHIM_LOG"
 }
 
-@test "an md superblock without approval is refused" {
+@test "an md superblock without --wipe is refused" {
   p3_sb_agreeing
   create
   [ "$status" -eq 3 ]
   run ! grep -E -- '--create|wipefs|--zero-superblock' "$SHIM_LOG"
 }
 
-@test "a signature with a valid wipe approval: announced, wiped, then created" {
+@test "a signature with --wipe and no approval: announced, only that device wiped, then created" {
   touch "$STATE/blkid.vm1-disk0"
-  run --separate-stderr bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" --approval-file - <<< "$(p3_declaration mirror-create vm1-disk0 4102444800 aabbccddeeff "$P3_LEGS_JSON" 1)"
+  create --wipe
   [ "$status" -eq 0 ]
   [[ "$stderr" == *"WILL WIPE: $P3_LOC_SPEC"* ]]
   grep -qxF "wipefs -a $LOCDEV" "$SHIM_LOG"
@@ -102,34 +103,15 @@ create() {
   grep -q '^mdadm --create' "$SHIM_LOG"
 }
 
-@test "approvals that are wrong are refused: wipe=0, other action, mirror, node, legs, expiry, HMAC" {
-  touch "$STATE/blkid.vm1-disk0"
-  local bad=(
-    "$(p3_declaration mirror-create vm1-disk0 4102444800 aabbccddeeff "$P3_LEGS_JSON" 0)"
-    "$(p3_declaration peer-gone vm1-disk0 4102444800 aabbccddeeff "$P3_LEGS_JSON" 1)"
-    "$(p3_declaration mirror-create vm2-disk0 4102444800 aabbccddeeff "$P3_LEGS_JSON" 1)"
-    "$(p3_declaration mirror-create vm1-disk0 4102444800 112233445566 "$P3_LEGS_JSON" 1)"
-    "$(p3_declaration mirror-create vm1-disk0 4102444800 aabbccddeeff '["local:lab/enc/vm/vm1-disk0","local:lab/enc/vm/other"]' 1)"
-    "$(p3_declaration mirror-create vm1-disk0 1000000000 aabbccddeeff "$P3_LEGS_JSON" 1)"
-    "$(p3_declaration mirror-create vm1-disk0 4102444800 aabbccddeeff "$P3_LEGS_JSON" 1 | jq -c '.approval.hmac = ("0" * 64)')"
-    "nonsense"
-    ""
-  )
-  local doc
-  for doc in "${bad[@]}"; do
-    run bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" --approval-file - <<< "$doc"
-    [ "$status" -eq 3 ]
-  done
-  run ! grep -E -- '--create|wipefs|--zero-superblock' "$SHIM_LOG"
-}
-
-@test "the Perl-issued fixture document verifies in the Bash verifier" {
-  touch "$STATE/blkid.vm1-disk0"
-  local doc
-  doc=$(jq -n -c --slurpfile a "$FIX/approval-mirror-create.json" --rawfile h "$FIX/approval-mirror-create.hmac" --rawfile s "$FIX/approval-canonical.secret.hex" \
-    '{approval:($a[0] + {hmac:($h | rtrimstr("\n"))}),secret:($s | rtrimstr("\n"))}')
-  run bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" --approval-file - <<< "$doc"
+@test "--wipe on clean devices wipes nothing; the old --approval-file is a usage error" {
+  create --wipe
   [ "$status" -eq 0 ]
+  run ! grep -E -- 'wipefs|--zero-superblock' "$SHIM_LOG"
+  [[ "$stderr" != *"WILL WIPE"* ]]
+  : > "$SHIM_LOG"
+  rm -f "$STATE"/detail.*
+  create --approval-file -
+  [ "$status" -eq 2 ]
 }
 
 @test "idempotent: the array exists with these legs -> exit 0, no second create" {

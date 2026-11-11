@@ -36,7 +36,7 @@ my $hex = unpack('H*', $ks->cluster_secret('opensvc-cluster', 16));
 is(slurp("$base/stdin"), "$hex\n", 'stdin is the keysafe opensvc-cluster secret as hex');
 like($hex, qr/^[0-9a-f]{32}$/, 'the secret is 16 random bytes: 32 characters, a valid AES key size for om3');
 unlike($out, qr/\Q$hex\E/, 'the secret is not printed');
-isnt($hex, unpack('H*', $ks->cluster_secret('approval')), 'it is not the approval secret');
+isnt($hex, unpack('H*', $ks->cluster_secret('example')), 'it is not the secret of another purpose');
 
 ($rc, $out) = hps_osvc('deliver', 'node01');
 is(slurp("$base/stdin"), "$hex\n1700000000 W0RFRkFVTFRdCg==\n", 'a second delivery sends the same secret and the captured CA');
@@ -63,6 +63,6 @@ is($rc, 2, 'a host with shell characters is refused');
 is(length($ks->cluster_secret('lenprobe', 16)), 16, 'keysafe: a 16-byte secret is created at 16 bytes');
 is($ks->cluster_secret('lenprobe', 16), $ks->cluster_secret('lenprobe', 16), 'keysafe: and read back the same');
 ok(!eval { $ks->cluster_secret('lenprobe', 32); 1 }, 'keysafe: a file of another length is refused, not truncated');
-is(length($ks->cluster_secret('approval')), 32, 'keysafe: the default length stays 32');
+is(length($ks->cluster_secret('example')), 32, 'keysafe: the default length stays 32');
 
 done_testing;

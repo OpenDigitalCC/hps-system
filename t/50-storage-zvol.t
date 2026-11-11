@@ -5,7 +5,6 @@ use strict;
 use warnings;
 use Test::More;
 use JSON::PP;
-use File::Find;
 use FindBin qw($Bin);
 use lib "$Bin/../lib/perl", "$Bin/lib";
 use StorageFixture;
@@ -20,19 +19,6 @@ sub fresh { my %o = @_; my $f = StorageFixture::setup(%o); $f->{st} = $f->{mk}->
 sub nexp { my @e = exports(@_); return scalar @e }
 sub scripts { return map { $_->{script} } @{ $_[0] } }
 sub exports { my $f = shift; return $f->{reg}->host_exists($mac, 'storage_exports') ? @{ $f->{reg}->host_get_json($mac, 'storage_exports') } : () }
-sub approve_zvol {
-    my ($f, %x) = @_;
-    return $f->{ap}->issue({ action => 'zvol-destroy', mac => $mac, pool => $DS, issued_by => 'tester', %x });
-}
-sub registry_text {
-    my $base = shift;
-    my $all = '';
-    find({ no_chdir => 1, wanted => sub {
-        return unless -f $_ && $_ !~ m{/keysafe/};
-        open(my $fh, '<:raw', $_) or die; local $/; $all .= <$fh>;
-    } }, $base);
-    return $all;
-}
 
 # --- ops are listed
 for my $op (qw(zvol-create zvol-destroy zvol-list export unexport status trim-check)) {
@@ -141,49 +127,30 @@ for my $op (qw(zvol-create zvol-destroy zvol-list export unexport status trim-ch
     is(nexp($f), 0, 'a failed export is not recorded');
 }
 
-# --- zvol-destroy
+# --- zvol-destroy: no approval; one call, no input
 {
     my $f = fresh();
-    is(err_of(sub { $f->{st}->run('zvol-destroy', dataset => $DS) })->kind, 'refused', 'no approval: refused');
-    like(err_of(sub { $f->{st}->run('zvol-destroy', dataset => $DS) })->message, qr/hps-approve zvol-destroy \Q$mac\E --dataset \Q$DS\E/, 'says what a human runs');
-    is(scalar($f->{ce}->calls), 0, 'nothing sent');
-    StorageFixture::approve($f, 'pool-destroy');
-    is(err_of(sub { $f->{st}->run('zvol-destroy', dataset => $DS) })->kind, 'refused', 'a pool-destroy approval is not a zvol approval');
-
-    my $doc = approve_zvol($f);
     my $plan = $f->{st}->plan('zvol-destroy', dataset => $DS);
-    is_deeply([ scripts($plan) ], ['storage-zvol-destroy'], 'plan: one call');
-    like($plan->[0]{input}, qr/"hmac":"<redacted>"/, 'plan input is redacted');
-    unlike(JSON::PP->new->encode($plan), qr/[0-9a-f]{64}/, 'no 64-hex in the plan');
+    is_deeply([ scripts($plan) ], ['storage-zvol-destroy'], 'plan without any approval: one call');
+    is($plan->[0]{input}, undef, 'no input');
     $f->{st}->run('zvol-destroy', dataset => $DS);
     my @c = $f->{ce}->calls;
-    is_deeply($c[0]{args}, [ $DS, '--approval-file', '-' ], 'arguments');
-    my $in = decode_json($c[0]{input});
-    is_deeply([ sort keys %$in ], [ 'approval', 'secret' ], 'input is approval + secret');
-    is(JSON::PP->new->canonical->encode($in->{approval}), $doc, 'approval as stored');
-    is($in->{approval}{pool}, $DS, 'pool member carries the dataset');
-    is_deeply([ sort keys %{ $in->{approval} } ], [qw(action disks expires hmac issued_by mac pool wipe)], 'eight members');
-    unlike(registry_text($f->{base}), qr/\Q$in->{secret}\E/, 'the secret is in no registry file');
-    ok(!grep({ index($_, $in->{secret}) >= 0 } @{ $f->{log} }), 'the secret is in no log line');
+    is_deeply($c[0]{args}, [$DS], 'arguments: the dataset only');
+    is($c[0]{input}, undef, 'nothing on stdin');
+    ok(!grep({ /^approval_/ } $f->{reg}->host_list($mac)), 'no approval in the registry');
 }
 
-# --- zvol-destroy: wrong dataset, exported, expired, the cluster ruling
+# --- zvol-destroy: exported, the cluster ruling, a bad dataset (refusals that stay)
 {
     my $f = fresh();
-    approve_zvol($f, pool => 'lab/enc/other');
-    is(err_of(sub { $f->{st}->run('zvol-destroy', dataset => $DS) })->kind, 'refused', 'an approval for another dataset does not apply');
-    approve_zvol($f);
     $f->{reg}->host_set($mac, 'storage_exports', [ { zvol => $DS, iqn => $IQN, initiator => $INI, portal => '192.0.2.10' } ]);
     my $e = err_of(sub { $f->{st}->run('zvol-destroy', dataset => $DS) });
-    is($e->kind, 'refused', 'an exported zvol is refused on the IPS too');
+    is($e->kind, 'refused', 'an exported zvol is refused on the IPS');
     like($e->message, qr/unexport/, 'says to unexport first');
     is(scalar($f->{ce}->calls), 0, 'nothing sent');
-    $f->{reg}->host_unset($mac, 'storage_exports');
-    $StorageFixture::NOW += 4000;
-    is(err_of(sub { $f->{st}->run('zvol-destroy', dataset => $DS) })->kind, 'expired', 'an expired approval is refused');
+    is(err_of(sub { $f->{st}->run('zvol-destroy', dataset => 'lab/t0') })->kind, 'usage', 'a dataset outside <pool>/enc is refused');
 
     my $g = fresh();
-    $g->{ap}->issue({ action => 'zvol-destroy', mac => $mac, pool => 'zp03/enc/x', issued_by => 'tester' });
     is(err_of(sub { $g->{st}->run('zvol-destroy', dataset => 'zp03/enc/x') })->kind, 'refused', 'a pool not named after the cluster is refused');
     my $any = $g->{mk}->(allow_any_pool_name => 1);
     $any->run('zvol-destroy', dataset => 'zp03/enc/x');
@@ -193,7 +160,6 @@ for my $op (qw(zvol-create zvol-destroy zvol-list export unexport status trim-ch
 # --- dry runs change nothing
 {
     my $f = fresh();
-    approve_zvol($f);
     $f->{reg}->host_set($mac, 'IP', '192.0.2.10');
     $f->{st}->run('zvol-create', dataset => $DS, size => '1G', dry_run => 1);
     $f->{st}->run('zvol-destroy', dataset => $DS, dry_run => 1);

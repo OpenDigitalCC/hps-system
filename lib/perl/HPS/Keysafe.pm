@@ -22,7 +22,7 @@ use IO::Handle;
 use HPS::Registry;
 
 package HPS::Keysafe::Error {
-    # kind: usage, refused, notfound, failed, perms, malformed, tampered, expired
+    # kind: usage, refused, notfound, failed, perms, malformed
     sub new ($class, $kind, $message) { return bless { kind => $kind, message => $message }, $class }
     sub kind ($self)    { return $self->{kind} }
     sub message ($self) { return $self->{message} }
@@ -220,7 +220,7 @@ sub list ($self, $mac) {
     return @names;
 }
 
-# The per-cluster secret for a purpose (e.g. 'approval'); created on first use.
+# The per-cluster secret for a purpose (e.g. 'opensvc-cluster'); created on first use.
 # $bytes is the length (default 32); a purpose whose consumer needs another
 # length (OpenSVC: 16) passes it every time, and a file of another length is refused.
 sub cluster_secret ($self, $purpose, $bytes = $KEY_BYTES) {

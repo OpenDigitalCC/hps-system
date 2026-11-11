@@ -62,7 +62,6 @@ in
       storage-pool-create.options.input = "raw";
       storage-pool-destroy.source = mkScript "storage-pool-destroy" (scriptsDir + "/storage-pool-destroy");
       storage-pool-destroy.options.profile = "node";
-      storage-pool-destroy.options.input = "raw";
       dataset-unlock.source = mkScript "dataset-unlock" (scriptsDir + "/dataset-unlock");
       dataset-unlock.options.profile = "node";
       dataset-unlock.options.input = "raw";
@@ -78,7 +77,6 @@ in
       storage-zvol-create.options.profile = "node";
       storage-zvol-destroy.source = mkScript "storage-zvol-destroy" (scriptsDir + "/storage-zvol-destroy");
       storage-zvol-destroy.options.profile = "node";
-      storage-zvol-destroy.options.input = "raw";
       storage-zvol-list.source = mkScript "storage-zvol-list" (scriptsDir + "/storage-zvol-list");
       storage-zvol-list.options.profile = "node";
       storage-status.source = mkScript "storage-status" (scriptsDir + "/storage-status");
@@ -95,10 +93,8 @@ in
       leg-resolve.options.profile = "node";
       mirror-create.source = mkScript "mirror-create" (scriptsDir + "/mirror-create");
       mirror-create.options.profile = "node";
-      mirror-create.options.input = "raw";
       mirror-assemble.source = mkScript "mirror-assemble" (scriptsDir + "/mirror-assemble");
       mirror-assemble.options.profile = "node";
-      mirror-assemble.options.input = "raw";
       mirror-status.source = mkScript "mirror-status" (scriptsDir + "/mirror-status");
       mirror-status.options.profile = "node";
       mirror-rejoin.source = mkScript "mirror-rejoin" (scriptsDir + "/mirror-rejoin");

@@ -12,7 +12,6 @@ p2_setup_dirs() {
   : > "$SHIM_LOG"
   export PATH="$TEST_DIR/bin:$PATH"
   S="${BATS_TEST_DIRNAME}/../../node-manager/nixos-26/scripts"
-  FIX="${BATS_TEST_DIRNAME}/../../t/fixtures"
   export HPS_CMDLINE="$TEST_DIR/cmdline"
   echo "BOOT_IMAGE=bzImage hps.ips=10.99.1.1 hps.mac=aa:bb:cc:dd:ee:ff hps.profile=converged" > "$HPS_CMDLINE"
   cd "$WORK"
@@ -192,34 +191,13 @@ SHIM
   chmod +x "$TEST_DIR/bin/targetcli"
 }
 
-# --- approval documents -------------------------------------------------------
+# --- the key document of storage-pool-create -----------------------------------
 
-P2_SECRET=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 P2_KEY=a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
 P2_DISK_A=ata-DISK-A
 P2_DISK_B=ata-DISK-B
 
-# p2_approval <action> <pool> <wipe> <expires> <mac> <disks-json>: canonical JSON.
-p2_approval() {
-  jq -S -c -n --arg a "$1" --arg p "$2" --argjson w "$3" --argjson e "$4" --arg m "$5" --argjson d "$6" \
-    '{action:$a,pool:$p,wipe:$w,expires:$e,mac:$m,disks:$d,issued_by:"test-operator"}'
-}
-
-# p2_payload <approval-json> [key_hex]: the stdin document, correctly signed.
-p2_payload() {
-  local canon mac
-  canon=$(printf '%s' "$1" | jq -S -c .)
-  mac=$(printf '%s' "$canon" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$P2_SECRET" -r | awk '{print $1}')
-  jq -n -c --argjson a "$canon" --arg h "$mac" --arg s "$P2_SECRET" --arg k "${2:-$P2_KEY}" \
-    '{approval:($a + {hmac:$h}),secret:$s,key_hex:$k}'
-}
-
-p2_create_payload() {
-  # <wipe> [expires] [mac] [pool]
-  p2_payload "$(p2_approval pool-create "${4:-lab}" "$1" "${2:-4102444800}" "${3:-aabbccddeeff}" '["ata-DISK-A","ata-DISK-B"]')"
-}
-
-p2_destroy_payload() {
-  # <pool> [disks-json] [action]
-  p2_payload "$(p2_approval "${3:-pool-destroy}" "$1" 0 4102444800 aabbccddeeff "${2:-[]}")"
+# p2_key_payload [key_hex]: the stdin document of storage-pool-create.
+p2_key_payload() {
+  jq -n -c --arg k "${1:-$P2_KEY}" '{key_hex:$k}'
 }

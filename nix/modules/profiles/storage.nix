@@ -5,7 +5,7 @@
 # LIO SCSI target (services.target restores /etc/target/saveconfig.json at boot;
 # iscsi-export writes it with targetcli-fb saveconfig), targetcli, mdadm,
 # smartmontools, util-linux (lsblk, blkid, wipefs), xxd (raw key conversion) and
-# jq/openssl (approval verification) on the scripts' path.
+# jq (the key document, the mirror sidecars) on the scripts' path.
 #
 # No pool is imported by NixOS: boot.zfs.extraPools stays empty because HPS
 # imports the pool with the allowlisted storage-pool-import script (never -f),
@@ -33,7 +33,6 @@
     util-linux
     unixtools.xxd
     jq
-    openssl
     config.boot.zfs.package
   ];
 }

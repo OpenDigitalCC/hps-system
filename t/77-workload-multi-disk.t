@@ -92,7 +92,6 @@ my $layout = StorageFixture::layout();
     is_deeply([ script_list($f) ], [ ('storage-zvol-create') x 2 ], 'nothing runs after the failure');
     delete $f->{ce}{rc}{'storage-zvol-create'};
     $f->{ce}{calls} = [];
-    StorageFixture::approve($f, 'workload-destroy', pool => 't0');
     my $r = $wl->run('destroy', 't0');
     ok($r->{ok}, 'destroy of the unfinished create ok');
     is_deeply([ script_list($f) ], [ ('storage-zvol-destroy') x 2 ], 'the first and the failed zvol are destroyed, the third is skipped');

@@ -54,7 +54,7 @@ is_deeply([ $reg->mac_conflicts($B, $A) ], [ [ $A, $A ] ], 'another host key is 
 is_deeply([ $reg->mac_conflicts($B, '525400bb0001') ], [], 'a free MAC is no conflict');
 
 # --- show lists the MACs and takes any of them ---------------------------------------------
-my $ob = HPS::Onboard->new(registry => $reg, approval => $f->{ap}, keysafe => $f->{ks});
+my $ob = HPS::Onboard->new(registry => $reg);
 $reg->host_set($A, 'boot_mac_last', '525400aa0002');
 my $s = $ob->show('52:54:00:aa:00:03');
 is($s->{mac}, $A, 'show by a second MAC finds the host');
@@ -83,8 +83,7 @@ open(my $h, '>', $hook) or die;
 print {$h} "#!/usr/bin/env bash\nexit 0\n";
 close $h;
 chmod 0755, $hook;
-my $ob2 = HPS::Onboard->new(registry => $reg, approval => $f->{ap}, keysafe => $f->{ks}, forget_cmd => $hook);
-StorageFixture::approve($f, 'host-forget', pool => 'host');
+my $ob2 = HPS::Onboard->new(registry => $reg, forget_cmd => $hook);
 my $r = $ob2->forget('52:54:00:aa:00:03', dry_run => 1);
 is($r->{mac}, $A, 'forget by a second MAC acts on the host');
 like(join("\n", @{ $r->{steps} }), qr/would free MACs 525400000001, 525400aa0002, 525400aa0003/, 'the dry run names the MACs it would free');

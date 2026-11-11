@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# CS-3.6: zvols under <pool>/enc/vm/<name> through HPS::Storage and HPS::Approval.
+# CS-3.6: zvols under <pool>/enc/vm/<name> through HPS::Storage.
 use strict;
 use warnings;
 use Test::More;
@@ -22,17 +22,15 @@ for my $bad ('lab/enc/vm/', 'lab/enc/vm/a/b', 'lab/vm/t0', 'lab/enc/vm//x', 'lab
 }
 is(err_of(sub { $st->run('zvol-create', dataset => 'other/enc/vm/t0', size => '1G') })->kind, 'refused', 'pool part of the vm form is checked');
 
-# approvals for the vm form
-my $doc = StorageFixture::approve($f, 'zvol-destroy', pool => $VDS);
-is($f->{ap}->get($mac, 'zvol-destroy', $VDS), $doc, 'stored under a slash-free key');
-ok($f->{reg}->host_exists($mac, 'approval_zvol-destroy_lab__enc__vm__t0-app-root'), 'key maps / to __');
+# zvol-destroy of the vm form (no approval)
 $f->{ce}{calls} = [];
 $st->run('zvol-destroy', dataset => $VDS);
 my ($c) = $f->{ce}->calls;
 is($c->{script}, 'storage-zvol-destroy', 'zvol-destroy runs for the vm form');
-is_deeply($c->{args}, [ $VDS, '--approval-file', '-' ], 'arguments');
-like($c->{input}, qr/"pool":"\Q$VDS\E"/, 'the approval carries the vm dataset');
-is(err_of(sub { StorageFixture::approve($f, 'zvol-destroy', pool => 'lab/enc/vm/a__b') })->kind, 'usage', 'no __ in a dataset');
-is(err_of(sub { StorageFixture::approve($f, 'zvol-destroy', pool => 'lab/enc/vm/a/b') })->kind, 'usage', 'no deeper nesting');
+is_deeply($c->{args}, [$VDS], 'arguments: the vm dataset only');
+is($c->{input}, undef, 'no input');
+for my $bad ('lab/enc/vm/a/b', 'lab/enc/vm/t 0') {
+    is(err_of(sub { $st->run('zvol-destroy', dataset => $bad) })->kind, 'usage', "zvol-destroy refused: $bad");
+}
 
 done_testing;

@@ -52,10 +52,11 @@ setup() {
 
 @test "the scripts that read request input declare input=raw, the others declare none" {
   local s
-  for s in storage-pool-create storage-pool-destroy dataset-unlock; do
+  for s in storage-pool-create dataset-unlock; do
     grep -q "^      $s\.options\.input = \"raw\";" "$CTRL"
   done
-  for s in storage-pool-import storage-trim-check iscsi-export iscsi-unexport iscsi-status; do
+  # storage-pool-destroy reads nothing since the approval went (ADR 0007)
+  for s in storage-pool-destroy storage-pool-import storage-trim-check iscsi-export iscsi-unexport iscsi-status; do
     run ! grep -q "^      $s\.options\.input" "$CTRL"
   done
 }

@@ -52,9 +52,3 @@ exit 0
 SHIM
   chmod +x "$TEST_DIR/bin/zfs"
 }
-
-# p2_zvol_payload <dataset> [action] [expires] [mac]: the stdin document for
-# storage-zvol-destroy, correctly signed, 'pool' carrying the dataset.
-p2_zvol_payload() {
-  p2_payload "$(p2_approval "${2:-zvol-destroy}" "$1" 0 "${3:-4102444800}" "${4:-aabbccddeeff}" '[]')"
-}

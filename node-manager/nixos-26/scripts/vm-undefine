@@ -8,7 +8,7 @@
 # Not defined: nothing to do, exit 0. Refused (3) unless the guest is shut off.
 # Then virsh undefine --nvram. It does NOT touch the guest's disks, the md
 # mirror, the zvols or the images: destroying data is the IPS's
-# `hps-workload destroy`, which needs an approval, never this script.
+# `hps-workload destroy`, never this script.
 # Last line on success: VM <vm> undefined
 # Exit: 0 done, 2 usage, 3 refused (not shut off), 1 failed.
 

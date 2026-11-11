@@ -41,12 +41,12 @@ $ks->get_or_create_key('525400aabb01', 'alpha');
 is_deeply([ $ks->list('525400aabb01') ], [ 'alpha', 'zfs-enc' ], 'list is sorted, without suffix');
 is_deeply([ $ks->list('525400aabb77') ], [], 'list of an unknown host is empty');
 
-my $s = $ks->cluster_secret('approval');
+my $s = $ks->cluster_secret('example');
 is(length $s, 32, 'cluster secret is 32 bytes');
-is(mode("$dir/approval.hmac"), '0600', 'approval.hmac is 0600');
-is($ks->cluster_secret('approval'), $s, 'secret is stable');
+is(mode("$dir/example.hmac"), '0600', 'example.hmac is 0600');
+is($ks->cluster_secret('example'), $s, 'secret is stable');
 isnt($ks->cluster_secret('other'), $s, 'purposes differ');
-ok(!(grep { $_ eq 'approval' } $ks->list('525400aabb01')), 'cluster secrets are not host keys');
+ok(!(grep { $_ eq 'example' } $ks->list('525400aabb01')), 'cluster secrets are not host keys');
 
 # delete
 ok($ks->delete_key('525400aabb01', 'alpha'), 'delete_key removes');
@@ -76,7 +76,7 @@ unlike($e->message, qr/\Q$k\E/, 'message carries no key bytes');
 is(mode("$dir/525400aabb01/zfs-enc.key"), '0640', 'still not chmod\'ed');
 
 chmod 0707, $dir;
-$e = err_of(sub { $ks->cluster_secret('approval') });
+$e = err_of(sub { $ks->cluster_secret('example') });
 is($e && $e->kind, 'perms', 'world-accessible keysafe dir is refused');
 $e = err_of(sub { $ks->list('525400aabb01') });
 is($e && $e->kind, 'perms', 'list refuses too');
@@ -106,13 +106,13 @@ make_path("$b2/clusters/lab/cluster.db", "$b2/real");
 chmod 0700, "$b2/real";
 symlink "$b2/real", "$b2/clusters/lab/keysafe";
 $r2->system_set('ACTIVE_CLUSTER', 'lab');
-$e = err_of(sub { HPS::Keysafe->new(registry => $r2)->cluster_secret('approval') });
+$e = err_of(sub { HPS::Keysafe->new(registry => $r2)->cluster_secret('example') });
 is($e && $e->kind, 'perms', 'symlinked keysafe dir refused');
 
 # no cluster directory
 my $r3 = HPS::Registry->new(config_base => tempdir(CLEANUP => 1), system_registry => "$b2/s3.db");
 $r3->system_set('ACTIVE_CLUSTER', 'ghost');
-$e = err_of(sub { HPS::Keysafe->new(registry => $r3)->cluster_secret('approval') });
+$e = err_of(sub { HPS::Keysafe->new(registry => $r3)->cluster_secret('example') });
 is($e && $e->kind, 'notfound', 'missing cluster dir is not created');
 
 done_testing;

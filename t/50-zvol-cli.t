@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# CS-2.5: the command lines. hps-approve zvol-destroy; hps-storage zvol-create,
+# CS-2.5: the command lines. hps-storage zvol-create,
 # zvol-destroy, zvol-list, export, unexport, status, with a stand-in for
 # scripts/hps-run.sh.
 use strict;
@@ -42,37 +42,8 @@ my $DS  = 'lab/enc/t0';
 my $IQN = 'iqn.2026-11.example.lab:t0';
 my $INI = 'iqn.2026-11.example.lab:ips';
 
-# --- hps-approve zvol-destroy
-my ($rc, $out, $so) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', $DS);
-is($rc, 0, 'zvol-destroy approval: 0');
-like($out, qr/Approved zvol-destroy for host $mac/, 'names action and host');
-like($out, qr{Pool:\s+lab/enc/t0}, 'shows the dataset');
-ok($f->{reg}->host_exists($mac, 'approval_zvol-destroy_lab__enc__t0'), 'stored under a slash-free key');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', $DS, '--json');
-is(decode_json($out)->{pool}, $DS, 'json carries the dataset as pool');
-is(decode_json($out)->{wipe}, 0, 'wipe 0');
-($rc, $out) = cli('hps-approve', 'list', $mac);
-like($out, qr{zvol-destroy\s+valid\s+lab/enc/t0}, 'list shows it');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac);
-is($rc, 2, 'no --dataset: usage');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac, '--pool', 'lab', '--dataset', $DS);
-is($rc, 2, '--pool with zvol-destroy: usage');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', $DS, '--wipe');
-is($rc, 2, '--wipe: usage');
-($rc, $out) = cli('hps-approve', 'pool-destroy', $mac, '--pool', 'lab', '--dataset', $DS);
-is($rc, 2, '--dataset with another action: usage');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', 'lab/t0');
-is($rc, 2, 'not <pool>/enc/<name>: usage');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', 'zp03/enc/x');
-is($rc, 3, 'a pool not named after the cluster: refused');
-like($out, qr/not the active cluster name 'lab'/, 'says why');
-($rc, $out) = cli('hps-approve', 'zvol-destroy', $mac, '--dataset', 'zp03/enc/x', '--allow-any-pool-name');
-is($rc, 0, '--allow-any-pool-name lets it through');
-($rc, $out) = cli('hps-approve', 'revoke', $mac, 'zvol-destroy', 'zp03/enc/x');
-is($rc, 0, 'revoke by dataset');
-
 # --- hps-storage usage
-($rc, $out) = cli('hps-storage', $mac, 'zvol-create');
+my ($rc, $out) = cli('hps-storage', $mac, 'zvol-create');
 is($rc, 2, 'zvol-create without arguments: usage');
 ($rc, $out) = cli('hps-storage', $mac, 'zvol-create', $DS);
 is($rc, 2, 'zvol-create without a size: usage');
@@ -97,10 +68,16 @@ ok(!calls(), 'usage errors call nothing');
 is($rc, 0, 'zvol-create --dry-run: 0');
 like($out, qr{1\. storage-zvol-create lab/enc/t0 1G}, 'the call is shown');
 ($rc, $out) = cli('hps-storage', $mac, 'zvol-destroy', $DS, '--dry-run');
-is($rc, 0, 'zvol-destroy --dry-run with approval: 0');
-like($out, qr{storage-zvol-destroy lab/enc/t0 --approval-file -}, 'the call is shown');
-like($out, qr/"hmac":"<redacted>"/, 'input redacted');
-unlike($out, qr/[0-9a-f]{64}/, 'no 64-hex');
+is($rc, 0, 'zvol-destroy --dry-run with no approval: 0');
+like($out, qr{storage-zvol-destroy lab/enc/t0\n}, 'the call is shown, no --approval-file');
+unlike($out, qr/input:/, 'no input');
+($rc, $out) = cli('hps-storage', $mac, 'zvol-destroy', 'zp03/enc/x', '--dry-run');
+is($rc, 3, 'a pool not named after the cluster: refused');
+like($out, qr/not the active cluster name 'lab'/, 'says why');
+($rc, $out) = cli('hps-storage', $mac, 'zvol-destroy', 'zp03/enc/x', '--allow-any-pool-name', '--dry-run');
+is($rc, 0, '--allow-any-pool-name lets it through');
+($rc, $out) = cli('hps-storage', $mac, 'zvol-destroy', $DS, '--wipe');
+is($rc, 2, '--wipe on zvol-destroy: usage');
 ($rc, $out) = cli('hps-storage', $mac, 'export', $DS, '--iqn', $IQN, '--initiator', $INI, '--portal', '192.0.2.10', '--dry-run');
 is($rc, 0, 'export --dry-run: 0');
 like($out, qr{iscsi-export lab/enc/t0 --iqn \Q$IQN\E --initiator \Q$INI\E --portal 192\.0\.2\.10}, 'the call is shown');
@@ -123,8 +100,8 @@ is($rc, 0, 'unexport runs');
 ok(!$f->{reg}->host_exists($mac, 'storage_exports'), 'entry removed');
 reset_shim();
 ($rc, $out) = cli('hps-storage', $mac, 'zvol-destroy', $DS);
-is($rc, 0, 'zvol-destroy runs with the approval');
-like(join('', calls()), qr{^--input --json $mac storage-zvol-destroy lab/enc/t0 --approval-file -$}m, 'sent with --input --json');
+is($rc, 0, 'zvol-destroy runs with no approval');
+like(join('', calls()), qr{^--json $mac storage-zvol-destroy lab/enc/t0$}m, 'sent with --json and no input');
 ($rc, $out) = cli('hps-storage', $mac, 'status');
 is($rc, 0, 'status runs');
 like(join('', calls()), qr{^--json \Q$mac\E storage-status lab$}m, 'status is the single storage-status call');

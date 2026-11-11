@@ -44,9 +44,8 @@ Usage:
   hps-onboard forget <mac> [--dry-run]
       Remove a host that will not come back: its ctrl-exec agent registration, its
       registry entry, and its DHCP reservation and DNS entries (files regenerated,
-      dnsmasq reloaded); each removal is printed. Needs a host-forget approval
-      (hps-approve host-forget <mac>). Refused for a host with storage exports, a
-      pool or workloads recorded. --dry-run lists what would be removed.
+      dnsmasq reloaded); each removal is printed. Refused for a host with storage
+      exports, a pool or workloads recorded. --dry-run lists what would be removed.
   hps-onboard prune-agents [--dry-run]
       Remove the ctrl-exec agent registrations that are not the FQDN agent of a
       registry host (stale-*, old short-name or hps-<mac> duplicates, agents of

@@ -22,7 +22,7 @@ my %TYPES = map { $_ => 1 } qw(SCH TCH DRH CNH);
 
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
-    return bless { registry => $reg, resources => $opt{resources}, approval => $opt{approval}, keysafe => $opt{keysafe}, forget_cmd => $opt{forget_cmd} }, $class;
+    return bless { registry => $reg, resources => $opt{resources}, forget_cmd => $opt{forget_cmd} }, $class;
 }
 
 sub registry ($self) { return $self->{registry} }
@@ -306,9 +306,8 @@ sub repin ($self, $mac, $a) {
 #--- forgetting a host -------------------------------------------------------------
 # forget($mac, dry_run => 0|1): remove a host that will not come back (each
 # nested-node run boots a VM with a new MAC, so the registry otherwise keeps
-# every one). Refuses a host with storage exports, a pool or workloads recorded,
-# and (unless dry_run) one without a valid host-forget approval (hps-approve
-# host-forget <mac>). Then, in this order, so a failure leaves the host in the
+# every one). Refuses a host with storage exports, a pool or workloads recorded.
+# Then, in this order, so a failure leaves the host in the
 # registry for a second try: the ctrl-exec agent registration is removed, the
 # registry host is removed, the DHCP/DNS files are regenerated. The IPS-side
 # steps are the program in $HPS_ONBOARD_FORGET_CMD (scripts/hps-forget-hook.sh):
@@ -388,23 +387,6 @@ sub _forget_refusals ($self, $mac) {
     return @why;
 }
 
-sub _forget_approval ($self, $mac) {
-    require HPS::Approval;
-    require HPS::Keysafe;
-    my $ks = $self->{keysafe} //= HPS::Keysafe->new(registry => $self->{registry});
-    my $ap = $self->{approval} //= HPS::Approval->new(registry => $self->{registry}, keysafe => $ks);
-    my $json = $ap->get($mac, 'host-forget', 'host')
-        // _fail('refused', "no host-forget approval for host $mac (run: hps-approve host-forget $mac)");
-    my $f = eval { $ap->verify($json, $ks->cluster_secret('approval')) };
-    unless ($f) {
-        my $e = $@;
-        _fail('refused', 'the host-forget approval is not usable: ' . (ref $e ? $e->message : $e));
-    }
-    _fail('refused', 'the approval is for another host') unless $f->{mac} eq $mac;
-    _fail('refused', "the approval is for $f->{action}, not host-forget") unless $f->{action} eq 'host-forget';
-    return $f;
-}
-
 sub forget ($self, $mac, %opt) {
     my $reg = $self->{registry};
     my $m = eval { $reg->resolve_mac($mac) };
@@ -420,16 +402,12 @@ sub forget ($self, $mac, %opt) {
     my @steps;
     my $res = { mac => $m, hostname => $hostname, fqdn => $agent, dry_run => $opt{dry_run} ? 1 : 0, steps => \@steps };
     if ($opt{dry_run}) {
-        my $ok = eval { $self->_forget_approval($m); 1 };
-        push @steps, $ok ? 'host-forget approval: present and valid' : 'host-forget approval: missing or not usable (run: hps-approve host-forget ' . $m . ')';
         push @steps, "would remove ctrl-exec agent $agent";
         push @steps, "would remove registry host $m" . (defined $hostname ? " ($hostname)" : '');
         push @steps, 'would free MACs ' . join(', ', @freed) if @freed > 1;
         push @steps, 'would regenerate DHCP and DNS files and reload dnsmasq';
         return $res;
     }
-    $self->_forget_approval($m);
-
     if (defined $self->_forget_cmd) {
         my ($rc, $out) = $self->_hook('agent', $agent);
         if ($rc == 0)    { push @steps, "removed ctrl-exec agent $agent" }

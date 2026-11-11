@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # CS-3.2: wiring and hygiene of the leg/mirror scripts: allowlist entries, the
-# input=raw scripts, no secrets or real values in the scripts, no --force.
+# absence of raw input and of approvals, no secrets or real values in the scripts, no --force.
 
 bats_require_minimum_version 1.5.0
 
@@ -17,9 +17,12 @@ SCRIPTS="leg-resolve mirror-create mirror-assemble mirror-status mirror-rejoin m
   done
 }
 
-@test "the scripts that read an approval document take raw input" {
-  grep -qF 'mirror-create.options.input = "raw";' "$ROOT/nix/modules/hps-ctrl-exec.nix"
-  grep -qF 'mirror-assemble.options.input = "raw";' "$ROOT/nix/modules/hps-ctrl-exec.nix"
+@test "no mirror script takes raw input: none reads an approval document any more (ADR 0007)" {
+  local s
+  for s in $SCRIPTS; do
+    run ! grep -qF "$s.options.input" "$ROOT/nix/modules/hps-ctrl-exec.nix"
+    run ! grep -nE -- '--approval-file|--declaration-file|hmac' "$ROOT/node-manager/nixos-26/scripts/$s"
+  done
 }
 
 @test "no script contains --force, a password, a key or an address of a real host" {

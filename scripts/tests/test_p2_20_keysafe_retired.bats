@@ -2,8 +2,8 @@
 #
 # CS-2.2: the Bash keysafe is retired in favour of HPS::Keysafe. Nothing of it
 # remains in lib/, node-manager/ or the CGI route (which answers 410 Gone); the
-# historical docs say so; and hps-approve never lets the HMAC secret reach its
-# output or the registry.
+# historical docs say so; and the signed-approval layer that used the keysafe's
+# HMAC secret is gone (ADR 0007).
 
 setup() {
   ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
@@ -79,32 +79,16 @@ make_registry() {
   export HPS_CONFIG_BASE="$b" HPS_SYSTEM_REGISTRY="$b/system.db"
 }
 
-@test "hps-approve output, errors and the registry never contain the HMAC secret" {
-  make_registry
-  run "$ROOT/bin/hps-approve" pool-create 52:54:00:aa:bb:01 --pool lab --disk ata-A --disk ata-B --wipe
-  [ "$status" -eq 0 ]
-  out1="$output"
-  run "$ROOT/bin/hps-approve" pool-create 52:54:00:aa:bb:01 --pool lab --disk ata-A --json
-  [ "$status" -eq 0 ]
-  out2="$output"
-  run "$ROOT/bin/hps-approve" list 52:54:00:aa:bb:01 --json
-  out3="$output"
-  run "$ROOT/bin/hps-approve" pool-create 52:54:00:aa:bb:01 --pool tank --disk ata-A
-  out4="$output"
-  secret_file="$HPS_CONFIG_BASE/clusters/lab/keysafe/approval.hmac"
-  [ -f "$secret_file" ]
-  [ "$(stat -c %a "$secret_file")" = "600" ]
-  [ "$(stat -c %a "$HPS_CONFIG_BASE/clusters/lab/keysafe")" = "700" ]
-  hex="$(od -An -v -tx1 "$secret_file" | tr -d ' \n')"
-  [ "${#hex}" -eq 64 ]
-  # Every output channel
-  for o in "$out1" "$out2" "$out3" "$out4"; do
-    [[ "$o" != *"$hex"* ]]
-  done
-  # Every file of the registry outside the keysafe directory
-  run grep -rIl -e "$hex" "$HPS_CONFIG_BASE" --exclude-dir=keysafe
+@test "the signed-approval layer is gone (ADR 0007): no hps-approve, no HPS::Approval, no approval secret" {
+  [ ! -e "$ROOT/bin/hps-approve" ]
+  [ ! -e "$ROOT/lib/perl/HPS/Approval.pm" ]
+  run grep -rlE 'HPS::Approval|hps-approve|cluster_secret\(.approval.\)' "$ROOT/lib" "$ROOT/bin" "$ROOT/node-manager" "$ROOT/http"
   [ "$status" -eq 1 ]
-  # The raw bytes are not in the registry either
-  run grep -rlF -f "$secret_file" "$HPS_CONFIG_BASE/system.db" "$HPS_CONFIG_BASE/clusters/lab/hosts" "$HPS_CONFIG_BASE/clusters/lab/cluster.db"
+  make_registry
+  run "$ROOT/bin/hps-storage" 52:54:00:aa:bb:01 create lab --disk ata-A --disk ata-B --wipe --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"storage-pool-create lab --disk ata-A --disk ata-B --wipe"* ]]
+  [ ! -e "$HPS_CONFIG_BASE/clusters/lab/keysafe/approval.hmac" ]
+  run grep -rl 'approval_' "$HPS_CONFIG_BASE"
   [ "$status" -eq 1 ]
 }

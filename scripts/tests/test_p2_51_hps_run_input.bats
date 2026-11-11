@@ -150,16 +150,16 @@ teardown() {
 }
 
 @test "the Perl runner through the real hps-run.sh: the node script would read the exact JSON" {
-  doc='{"approval":{"action":"pool-create","disks":["ata-A","ata-B"],"expires":1800003600,"hmac":"aa","issued_by":"op","mac":"aabbccddeeff","pool":"lab","wipe":0},"key_hex":"k","secret":"s"}'
+  doc='{"key_hex":"k"}'
   export HPS_RUN_CMD="$RUN"
   run perl -I"$ROOT/lib/perl" -MHPS::Storage -MJSON::PP -e '
     my $r = HPS::Storage::Runner::HpsRun->new->call(mac => "aabbccddeeff", script => "storage-pool-create",
-        args => ["lab", "--disk", "ata-A", "--disk", "ata-B", "--approval-file", "-"], input => $ARGV[0]);
+        args => ["lab", "--disk", "ata-A", "--disk", "ata-B", "--wipe"], input => $ARGV[0]);
     print encode_json($r), "\n";
   ' "$doc"
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_DIR/node.stdin")" = "$doc" ]
-  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script storage-pool-create --input - --json -- lab --disk ata-A --disk ata-B --approval-file -" ]
+  [ "$(tail -n 1 "$CLI_LOG")" = "--socket /run/ctrl-exec-api/api.sock run held01.lab.hps --script storage-pool-create --input - --json -- lab --disk ata-A --disk ata-B --wipe" ]
   [[ "$output" == *'"rc":0'* ]]
   [[ "$output" == *'"stdout":"unlocked\n"'* ]]
   FAKE_NODE_EXIT=3 run perl -I"$ROOT/lib/perl" -MHPS::Storage -MJSON::PP -e '

@@ -1,7 +1,7 @@
 package StorageFixture;
 # Shared setup for the HPS::Storage tests: a temp registry with cluster 'lab'
-# and host sch-001 (TYPE SCH), a keysafe, approvals at a fixed clock, and a
-# fake ctrl-exec runner that records every call and its input.
+# and host sch-001 (TYPE SCH), a keysafe, a fixed clock, and a fake ctrl-exec
+# runner that records every call and its input.
 use strict;
 use warnings;
 use File::Temp qw(tempdir);
@@ -11,7 +11,6 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib/perl";
 use HPS::Registry;
 use HPS::Keysafe;
-use HPS::Approval;
 use HPS::Storage;
 use HPS::Workload;
 
@@ -41,16 +40,15 @@ sub setup {
     $reg->host_set($MAC, 'TYPE', 'SCH');
     $reg->host_set($MAC, 'HOSTNAME', 'sch-001');
     my $ks = HPS::Keysafe->new(registry => $reg);
-    my $ap = HPS::Approval->new(registry => $reg, keysafe => $ks, now => sub { $NOW });
     my $ce = FakeCE->new(%{ $o{ce} || {} });
     my @log;
     my $mk = sub {
         my %x = @_;
-        return HPS::Storage->new(host => $MAC, registry => $reg, keysafe => $ks, approval => $ap,
+        return HPS::Storage->new(host => $MAC, registry => $reg, keysafe => $ks,
             runner => $ce, logger => sub { push @log, "$_[0] $_[1]" }, now => sub { $NOW },
             sleep => sub { $NOW += $_[0] }, %x);
     };
-    return { base => $base, reg => $reg, ks => $ks, ap => $ap, ce => $ce, log => \@log, mk => $mk };
+    return { base => $base, reg => $reg, ks => $ks, ce => $ce, log => \@log, mk => $mk };
 }
 
 # --- workloads (CS-3.6) -----------------------------------------------------------
@@ -158,17 +156,11 @@ sub setup_workload {
     write_def($f, $f->{def}) unless $o{no_def};
     $f->{wl} = sub {
         my %x = @_;
-        return HPS::Workload->new(registry => $f->{reg}, keysafe => $f->{ks}, approval => $f->{ap},
+        return HPS::Workload->new(registry => $f->{reg}, keysafe => $f->{ks},
             storage => sub { $f->{mk}->(host => $_[0]) }, runner => $f->{ce}, logger => sub { push @{ $f->{log} }, "$_[0] $_[1]" },
             now => sub { $NOW }, images_dir => $images, by => 'tester', %x);
     };
     return $f;
-}
-
-sub approve {
-    my ($f, $action, %x) = @_;
-    return $f->{ap}->issue({ action => $action, mac => $MAC, pool => 'lab',
-        disks => $action eq 'pool-create' ? [ 'ata-SSD1', 'ata-SSD2' ] : [], issued_by => 'tester', %x });
 }
 
 1;

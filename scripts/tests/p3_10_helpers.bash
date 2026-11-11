@@ -1,5 +1,5 @@
 # Helpers for the CS-3.2 leg/mirror tests (test_p3_10_* .. test_p3_19_*). Load
-# after p2_30_helpers (approval payloads, xxd shim, p2_setup_dirs).
+# after p2_30_helpers (xxd shim, p2_setup_dirs).
 # Shims log every call to $SHIM_LOG; fake machine state lives in $STATE:
 #   detail.<mirror>     the array exists; the text is what mdadm --detail prints
 #   examine.<dev name>  what mdadm --examine prints for that device (absent: rc 1)
@@ -10,7 +10,6 @@
 P3_LOC_SPEC="local:lab/enc/vm/vm1-disk0"
 P3_REM_SPEC="iscsi:10.99.1.2:iqn.2026-01.hps.example:vm1-disk0"
 P3_REM_NAME="ip-10.99.1.2:3260-iscsi-iqn.2026-01.hps.example:vm1-disk0-lun-0"
-P3_LEGS_JSON='["iscsi:10.99.1.2:iqn.2026-01.hps.example:vm1-disk0","local:lab/enc/vm/vm1-disk0"]'
 
 p3_setup() {
   p2_setup_dirs
@@ -124,11 +123,6 @@ P3_T2="Mon Nov  9 11:00:00 2026"
 p3_sb_agreeing() {
   p3_sb "$LOCDEV" "$P3_UUID" 50 "$P3_T1" 0 AA
   p3_sb "$REMDEV" "$P3_UUID" 50 "$P3_T1" 1 AA
-}
-
-# p3_declaration [action] [pool] [expires] [mac] [legs-json]: a signed document.
-p3_declaration() {
-  p2_payload "$(p2_approval "${1:-peer-gone}" "${2:-vm1-disk0}" "${6:-0}" "${3:-4102444800}" "${4:-aabbccddeeff}" "${5:-$P3_LEGS_JSON}")"
 }
 
 # Anything that changes md state or the machine.

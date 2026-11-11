@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
-# CS-2.1: storage-pool-destroy. Proves: nothing without a valid approval (HMAC,
-# expiry, action, mac, pool, disks), the announce lines, the order (devices
+# CS-2.1: storage-pool-destroy. Proves: it runs with no approval and reads no
+# input (ADR 0007), the announce lines, the order (devices
 # recorded -> export -> forced import -> destroy -> labelclear), that -f and -m
 # appear here and only here, and that a refusal after the import exports again.
 
@@ -23,8 +23,9 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
+# destroy [stdin text]: run the script for zp03 (stdin empty unless given).
 destroy() {
-  run --separate-stderr bash "$SCRIPT" zp03 --approval-file - <<< "$1"
+  run --separate-stderr bash "$SCRIPT" zp03 <<< "${1:-}"
 }
 
 nothing_destroyed() {
@@ -41,41 +42,26 @@ nothing_destroyed() {
 @test "usage errors exit 2, a bad name 3, nothing runs" {
   run bash "$SCRIPT"
   [ "$status" -eq 2 ]
-  run bash "$SCRIPT" zp03
+  run bash "$SCRIPT" zp03 other
   [ "$status" -eq 2 ]
-  run bash "$SCRIPT" 'Z;P' --approval-file -
+  run bash "$SCRIPT" zp03 --approval-file -
+  [ "$status" -eq 2 ]
+  run bash "$SCRIPT" 'Z;P'
   [ "$status" -eq 3 ]
   [ ! -s "$SHIM_LOG" ]
 }
 
-@test "bad HMAC, expired, wrong mac, wrong pool, create-action approvals all refuse and destroy nothing" {
-  local p
-  p=$(p2_destroy_payload zp03 | jq -c '.approval.hmac = ("0" * 64)')
-  destroy "$p"
-  [ "$status" -eq 3 ]
-  destroy "$(p2_payload "$(p2_approval pool-destroy zp03 0 1000000000 aabbccddeeff '[]')")"
-  [ "$status" -eq 3 ]
-  destroy "$(p2_payload "$(p2_approval pool-destroy zp03 0 4102444800 112233445566 '[]')")"
-  [ "$status" -eq 3 ]
-  destroy "$(p2_destroy_payload other)"
-  [ "$status" -eq 3 ]
-  destroy "$(p2_destroy_payload zp03 '[]' pool-create)"
-  [ "$status" -eq 3 ]
-  nothing_destroyed
-  [ ! -s "$SHIM_LOG" ]
-}
-
-@test "garbage input and no input are refused" {
-  destroy "nonsense"
-  [ "$status" -eq 3 ]
-  destroy ""
-  [ "$status" -eq 3 ]
-  [ ! -s "$SHIM_LOG" ]
+@test "runs with no approval; whatever is on stdin is not read" {
+  destroy '{"anything":"the request context ctrl-exec writes"}'
+  [ "$status" -eq 0 ]
+  grep -qxF 'zpool destroy zp03' "$SHIM_LOG"
+  [[ "$stderr" != *"approv"* ]]
+  run ! grep -nE '\$\(cat\)|\bjq\b' "$SCRIPT"
 }
 
 @test "imported pool: devices recorded, announced, exported, force-imported, destroyed, labels cleared" {
   touch "$STATE/pool-imported"
-  destroy "$(p2_destroy_payload zp03)"
+  destroy
   [ "$status" -eq 0 ]
   [[ "$stderr" == *"WILL DESTROY: pool zp03"* ]]
   [[ "$stderr" == *"WILL DESTROY: device /dev/disk/by-id/$P2_DISK_A-part1"* ]]
@@ -96,7 +82,7 @@ nothing_destroyed() {
 }
 
 @test "exported pool: imported with -f -N, no export, destroyed" {
-  destroy "$(p2_destroy_payload zp03)"
+  destroy
   [ "$status" -eq 0 ]
   run ! grep -q '^zpool export' "$SHIM_LOG"
   grep -qxF 'zpool import -f -N -d /dev/disk/by-id zp03' "$SHIM_LOG"
@@ -106,7 +92,7 @@ nothing_destroyed() {
 
 @test "-m only when the forced import alone fails (missing log), and only in destroy" {
   touch "$STATE/import-needs-m"
-  destroy "$(p2_destroy_payload zp03)"
+  destroy
   [ "$status" -eq 0 ]
   grep -qxF 'zpool import -f -N -d /dev/disk/by-id zp03' "$SHIM_LOG"
   grep -qxF 'zpool import -f -m -N -d /dev/disk/by-id zp03' "$SHIM_LOG"
@@ -115,38 +101,22 @@ nothing_destroyed() {
 
 @test "an import that fails even with -m destroys nothing (exit 1)" {
   touch "$STATE/import-fail"
-  destroy "$(p2_destroy_payload zp03)"
+  destroy
   [ "$status" -eq 1 ]
   run ! grep -E '^(zpool destroy|zpool labelclear)' "$SHIM_LOG"
 }
 
 @test "a pool that is not importable and not imported: exit 3 with the listing" {
   printf '   pool: other\n' > "$STATE/import-listing"
-  destroy "$(p2_destroy_payload zp03)"
+  destroy
   [ "$status" -eq 3 ]
   [[ "$stderr" == *"pool: other"* ]]
   nothing_destroyed
 }
 
-@test "approved disks that differ from the pool's disks refuse, and the forced import is undone" {
-  destroy "$(p2_destroy_payload zp03 '["ata-OTHER-1","ata-OTHER-2"]')"
-  [ "$status" -eq 3 ]
-  [[ "$stderr" == *"not the pool's disks"* ]]
-  run ! grep -E '^(zpool destroy|zpool labelclear)' "$SHIM_LOG"
-  [ ! -e "$STATE/pool-imported" ]
-}
-
-@test "approved disks that match the pool's disks proceed" {
-  destroy "$(p2_destroy_payload zp03 "[\"$P2_DISK_A\",\"$P2_DISK_B\"]")"
+@test "it leaves no file behind" {
+  destroy
   [ "$status" -eq 0 ]
-  grep -qxF 'zpool destroy zp03' "$SHIM_LOG"
-}
-
-@test "the approval key never appears in the log or in files" {
-  destroy "$(p2_destroy_payload zp03)"
-  [ "$status" -eq 0 ]
-  run ! grep -F "$P2_SECRET" "$SHIM_LOG"
-  [[ "$stderr" != *"$P2_SECRET"* ]]
   [ -z "$(find "$TMPDIR" "$WORK" -mindepth 1)" ]
 }
 

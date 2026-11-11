@@ -51,53 +51,66 @@ $reg->host_set($mac, 'storage_exports', [ { zvol => 'lab/enc/t0; rm', iqn => 'iq
 is(err_of(sub { $st->plan('down') })->kind, 'malformed', 'bad zvol in storage_exports refused');
 $reg->host_unset($mac, 'storage_exports');
 
-# --- create / destroy need approvals
-is(err_of(sub { $st->plan('create', pool => 'lab') })->kind, 'refused', 'create without an approval: refused');
-like(err_of(sub { $st->plan('create', pool => 'lab') })->message, qr/no pool-create approval/, 'message names the missing approval');
-is(err_of(sub { $st->plan('destroy', pool => 'lab') })->kind, 'refused', 'destroy without an approval: refused');
-StorageFixture::approve($f, 'pool-create');
-$plan = $st->plan('create', pool => 'lab');
-is_deeply([ scripts($plan) ], [ 'storage-pool-create', 'storage-pool-import', 'dataset-unlock' ], 'create = create then up');
-is_deeply($plan->[0]{args}, [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2', '--approval-file', '-' ], 'create arguments carry the approved disks');
-is_deeply($st->approval_info->{disks}, [ 'ata-SSD1', 'ata-SSD2' ], 'approval_info exposes the disks for display');
+# --- create: no approval, the disks and the wipe flag are arguments
+my %d2 = (disks => [ 'ata-SSD1', 'ata-SSD2' ]);
+$plan = $st->plan('create', pool => 'lab', %d2);
+is_deeply([ scripts($plan) ], [ 'storage-pool-create', 'storage-pool-import', 'dataset-unlock' ], 'create without any approval = create then up');
+is_deeply($plan->[0]{args}, [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2' ], 'create arguments carry the named disks, no --approval-file');
 my $in = decode_json($plan->[0]{input});
-is_deeply([ sort keys %$in ], [ 'approval', 'key_hex', 'secret' ], 'create input has the three members');
-is($in->{approval}{hmac}, '<redacted>', 'approval signature redacted');
-is($in->{approval}{pool}, 'lab', 'approval fields shown');
+is_deeply([ sort keys %$in ], ['key_hex'], 'create input is the pool key only');
+like($in->{key_hex}, qr/^<redacted/, 'the key is redacted in the plan');
+is_deeply($st->plan('create', pool => 'lab', %d2, wipe => 1)->[0]{args}, [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2', '--wipe' ], 'wipe => 1 adds --wipe');
+is_deeply($st->plan('create', pool => 'lab', disks => [ '/dev/disk/by-id/ata-SSD1', 'ata-SSD2', 'ata-SSD3' ])->[0]{args},
+    [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2', '--disk', 'ata-SSD3' ], 'three disks (three-way mirror); the by-id directory is dropped');
+is(scalar(@{ $st->plan('create', pool => 'lab', disks => [ map {"ata-SSD$_"} 1 .. 4 ])->[0]{args} }), 9, 'four disks accepted');
+
+# --- the disk and wipe arguments are validated (what the approval used to check)
+for my $case (
+    [ {}, qr/two to four --disk/, 'no disks' ],
+    [ { disks => ['ata-SSD1'] }, qr/two to four --disk/, 'one disk' ],
+    [ { disks => [ map {"ata-SSD$_"} 1 .. 5 ] }, qr/two to four --disk/, 'five disks' ],
+    [ { disks => [ 'ata-SSD1', 'ata-SSD1' ] }, qr/disk listed twice: ata-SSD1/, 'a disk twice' ],
+    [ { disks => [ 'ata-SSD1', '/dev/disk/by-id/ata-SSD1' ] }, qr/disk listed twice/, 'a disk twice, once with the directory' ],
+    [ { disks => [ 'ata-SSD1', '/dev/sdb' ] }, qr/not a \/dev\/disk\/by-id name/, 'a /dev/sdX path' ],
+    [ { disks => [ 'ata-SSD1', 'x; rm -rf /' ] }, qr/not a \/dev\/disk\/by-id name/, 'shell characters' ],
+    [ { disks => [ 'ata-SSD1', '-x' ] }, qr/not a \/dev\/disk\/by-id name/, 'a leading dash' ],
+    [ { disks => 'ata-SSD1' }, qr/disks must be a list/, 'not a list' ],
+    [ { %d2, wipe => 2 }, qr/wipe must be 0 or 1/, 'wipe 2' ],
+) {
+    my $e = err_of(sub { $st->plan('create', pool => 'lab', %{ $case->[0] }) });
+    is($e && $e->kind, 'usage', "create refused: $case->[2] (usage)");
+    like($e && $e->message, $case->[1], "... $case->[2]: message");
+}
+
+# --- an unassigned or HELD host gets no pool (a refusal that stays)
+for my $state ('', 'HELD') {
+    $reg->host_set($mac, 'STATE', $state);
+    my $e = err_of(sub { $st->plan('create', pool => 'lab', %d2) });
+    is($e && $e->kind, 'refused', "create on a host with STATE '$state' is refused");
+    like($e && $e->message, qr/not assigned.*hps-onboard assign/, '... and says what to run');
+}
+$reg->host_set($mac, 'STATE', 'NETWORK_BOOT');
 
 # --- the ruling on pool names
-StorageFixture::approve($f, 'pool-create', pool => 'zp03');
-is(err_of(sub { $st->plan('create', pool => 'zp03') })->kind, 'refused', 'non-cluster pool name refused');
-like(err_of(sub { $st->plan('create', pool => 'zp03') })->message, qr/--allow-any-pool-name/, 'message names the override');
+is(err_of(sub { $st->plan('create', pool => 'zp03', %d2) })->kind, 'refused', 'non-cluster pool name refused');
+like(err_of(sub { $st->plan('create', pool => 'zp03', %d2) })->message, qr/--allow-any-pool-name/, 'message names the override');
 my $any = $f->{mk}->(allow_any_pool_name => 1);
-is(($any->plan('create', pool => 'zp03'))->[0]{args}[0], 'zp03', 'override allows it');
-is(err_of(sub { $st->plan('create', pool => 'Bad Pool') })->kind, 'usage', 'bad pool syntax is usage');
+is(($any->plan('create', pool => 'zp03', %d2))->[0]{args}[0], 'zp03', 'override allows it');
+is(err_of(sub { $st->plan('create', pool => 'Bad Pool', %d2) })->kind, 'usage', 'bad pool syntax is usage');
+is(err_of(sub { $st->plan('destroy', pool => 'zp03') })->kind, 'refused', 'destroy: non-cluster pool name refused');
 
-# --- approval problems
-$reg->host_unset($mac, 'approval_pool-create_zp03');
-my $doc = $f->{ap}->get($mac, 'pool-create', 'lab');
-(my $bad = $doc) =~ s/ata-SSD1/ata-SSD9/;
-$reg->host_set($mac, 'approval_pool-create_lab', decode_json($bad));
-is(err_of(sub { $st->plan('create', pool => 'lab') })->kind, 'tampered', 'tampered approval refused');
-StorageFixture::approve($f, 'pool-create', expires => $StorageFixture::NOW + 1);
-$StorageFixture::NOW += 10;
-is(err_of(sub { $st->plan('create', pool => 'lab') })->kind, 'expired', 'expired approval refused');
-
-# --- destroy
-StorageFixture::approve($f, 'pool-destroy', expires => $StorageFixture::NOW + 600);
+# --- destroy: no approval, one call, no input
 $plan = $st->plan('destroy', pool => 'lab');
-is_deeply([ scripts($plan) ], ['storage-pool-destroy'], 'destroy is one call');
-is_deeply($plan->[0]{args}, [ 'lab', '--approval-file', '-' ], 'destroy arguments');
-is_deeply([ sort keys %{ decode_json($plan->[0]{input}) } ], [ 'approval', 'secret' ], 'destroy input has no key_hex');
+is_deeply([ scripts($plan) ], ['storage-pool-destroy'], 'destroy without any approval is one call');
+is_deeply($plan->[0]{args}, ['lab'], 'destroy arguments: the pool only');
+is($plan->[0]{input}, undef, 'destroy has no input');
 
 # --- redaction: no 64-hex anywhere in any plan text
-StorageFixture::approve($f, 'pool-create', expires => $StorageFixture::NOW + 600);
 my $key_hex = unpack('H*', $f->{ks}->get_or_create_key($mac, 'enc'));
-my $sec_hex = unpack('H*', $f->{ks}->cluster_secret('approval'));
 for my $op (qw(up down create destroy trim-check status)) {
-    my $p = text($st->plan($op, pool => 'lab'));
+    my $p = text($st->plan($op, pool => 'lab', ($op eq 'create' ? %d2 : ())));
     unlike($p, qr/[0-9a-f]{64}/i, "plan($op) carries no 64-hex value");
-    ok(index($p, $key_hex) < 0 && index($p, $sec_hex) < 0, "plan($op) carries neither the key nor the secret");
+    ok(index($p, $key_hex) < 0, "plan($op) does not carry the key");
 }
 ok(!grep({ /[0-9a-f]{64}/i } @{ $f->{log} }), 'nothing logged by planning carries a 64-hex value');
 done_testing;

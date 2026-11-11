@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # CS-3.2: mirror-assemble. Plain assemble (never --force), degraded assembly
-# only under a valid peer-gone declaration, divergence refused with the DIVERGED
+# only with an explicit --peer-gone (no signed declaration, ADR 0007), divergence refused with the DIVERGED
 # line and no state-changing call, idempotency.
 
 bats_require_minimum_version 1.5.0
@@ -26,8 +26,8 @@ assemble() {
   run --separate-stderr bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" "$@"
 }
 
-assemble_decl() {
-  run --separate-stderr bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" --declaration-file - <<< "$1"
+assemble_gone() {
+  run --separate-stderr bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" --peer-gone
 }
 
 @test "is executable, env shebang, set -euo pipefail, shellcheck clean" {
@@ -43,6 +43,8 @@ assemble_decl() {
   run bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC"
   [ "$status" -eq 2 ]
   run bash "$SCRIPT" vm1-disk0 --leg a --leg b --bogus
+  [ "$status" -eq 2 ]
+  run bash "$SCRIPT" vm1-disk0 --leg "$P3_LOC_SPEC" --leg "$P3_REM_SPEC" --declaration-file -
   [ "$status" -eq 2 ]
   [ ! -s "$SHIM_LOG" ]
 }
@@ -61,7 +63,7 @@ assemble_decl() {
   assemble
   rm -f "$STATE/detail.vm1-disk0"
   rm -f "$REMDEV"
-  assemble_decl "$(p3_declaration)"
+  assemble_gone
   [ "$status" -eq 0 ]
   rm -f "$STATE/detail.vm1-disk0"
   p3_make_remote
@@ -100,10 +102,10 @@ assemble_decl() {
   p3_no_state_change
 }
 
-@test "a declaration cannot override divergence (both legs present)" {
+@test "--peer-gone cannot override divergence (both legs present)" {
   p3_sb "$LOCDEV" "$P3_UUID" 60 "$P3_T2" 0 'A.'
   p3_sb "$REMDEV" "$P3_UUID" 58 "$P3_T1" 1 '.A'
-  assemble_decl "$(p3_declaration)"
+  assemble_gone
   [ "$status" -eq 3 ]
   [[ "$output" == DIVERGED* ]]
   p3_no_state_change
@@ -124,74 +126,40 @@ assemble_decl() {
   p3_no_state_change
 }
 
-@test "one leg missing, no declaration: refused, nothing assembled" {
+@test "one leg missing, no --peer-gone: refused, nothing assembled" {
   rm -f "$REMDEV"
   touch "$STATE/nolun"
   p3_sb "$LOCDEV" "$P3_UUID" 50 "$P3_T1" 0 AA
   assemble
   [ "$status" -eq 3 ]
-  [[ "$stderr" == *"peer-gone declaration"* ]]
+  [[ "$stderr" == *"--peer-gone"* ]]
   p3_no_state_change
 }
 
-@test "one leg missing, valid peer-gone declaration: mdadm --assemble --run of the present leg, no --force" {
+@test "one leg missing, --peer-gone and no approval: mdadm --assemble --run of the present leg, no --force" {
   rm -f "$REMDEV"
   touch "$STATE/nolun"
   p3_sb "$LOCDEV" "$P3_UUID" 50 "$P3_T1" 0 AA
-  assemble_decl "$(p3_declaration)"
+  assemble_gone
   [ "$status" -eq 0 ]
   grep -qxF "mdadm --assemble --run /dev/md/vm1-disk0 $LOCDEV" "$SHIM_LOG"
+  [[ "$stderr" == *"PEER GONE declared"* ]]
   run ! grep -e '--force' "$SHIM_LOG"
   [ "$(jq -r '.legs[1].dev' "$HPS_MIRROR_DIR/vm1-disk0.json")" = "" ]
 }
 
-@test "the local leg missing is assembled from the remote under a declaration" {
+@test "the local leg missing is assembled from the remote with --peer-gone" {
   rm -f "$LOCDEV"
   p3_sb "$REMDEV" "$P3_UUID" 50 "$P3_T1" 1 AA
-  assemble_decl "$(p3_declaration)"
+  assemble_gone
   [ "$status" -eq 0 ]
   grep -qxF "mdadm --assemble --run /dev/md/vm1-disk0 $REMDEV" "$SHIM_LOG"
 }
 
-@test "the Perl-issued peer-gone fixture is accepted by the Bash verifier" {
-  rm -f "$REMDEV"
-  touch "$STATE/nolun"
-  p3_sb "$LOCDEV" "$P3_UUID" 50 "$P3_T1" 0 AA
-  local doc
-  doc=$(jq -n -c --slurpfile a "$FIX/approval-peer-gone.json" --rawfile h "$FIX/approval-peer-gone.hmac" --rawfile s "$FIX/approval-canonical.secret.hex" \
-    '{approval:($a[0] + {hmac:($h | rtrimstr("\n"))}),secret:($s | rtrimstr("\n"))}')
-  assemble_decl "$doc"
-  [ "$status" -eq 0 ]
-}
-
-@test "declarations that are wrong are refused: mirror, node, legs, action, expiry, HMAC, garbage" {
-  rm -f "$REMDEV"
-  touch "$STATE/nolun"
-  p3_sb "$LOCDEV" "$P3_UUID" 50 "$P3_T1" 0 AA
-  local bad=(
-    "$(p3_declaration peer-gone vm2-disk0)"
-    "$(p3_declaration peer-gone vm1-disk0 4102444800 112233445566)"
-    "$(p3_declaration peer-gone vm1-disk0 4102444800 aabbccddeeff '["local:lab/enc/vm/vm1-disk0","iscsi:10.99.1.9:iqn.2026-01.hps.example:other"]')"
-    "$(p3_declaration mirror-create vm1-disk0)"
-    "$(p3_declaration pool-destroy vm1-disk0)"
-    "$(p3_declaration peer-gone vm1-disk0 1000000000)"
-    "$(p3_declaration | jq -c '.approval.hmac = ("0" * 64)')"
-    "$(p3_declaration | jq -c '.secret = ("1" * 64)')"
-    "nonsense"
-    ""
-  )
-  local doc
-  for doc in "${bad[@]}"; do
-    assemble_decl "$doc"
-    [ "$status" -eq 3 ]
-  done
-  p3_no_state_change
-}
-
-@test "both legs missing is refused even with a declaration" {
+@test "both legs missing is refused even with --peer-gone" {
   rm -f "$REMDEV" "$LOCDEV"
   touch "$STATE/nolun"
-  assemble_decl "$(p3_declaration)"
+  assemble_gone
   [ "$status" -eq 3 ]
   p3_no_state_change
 }

@@ -1,1 +1,0 @@
-{"action":"mirror-create","disks":["iscsi:10.99.1.2:iqn.2026-01.hps.example:vm1-disk0","local:lab/enc/vm/vm1-disk0"],"expires":4102444800,"issued_by":"operator","mac":"aabbccddeeff","pool":"vm1-disk0","wipe":1}

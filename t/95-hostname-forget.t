@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 # IPS-06: the one hostname rule (HPS::Registry fqdn helpers, the 63-character
-# cap), the host-forget approval, hps-onboard forget and prune-agents.
+# cap), hps-onboard forget (no approval) and prune-agents.
 use strict;
 use warnings;
 use Test::More;
@@ -42,17 +42,6 @@ my $q = HPS::ClusterConfig::question('network_dns_domain');
 is(HPS::ClusterConfig::validate_value($q, 'lab.hps'), undef, 'domain lab.hps valid');
 like(HPS::ClusterConfig::validate_value($q, join('.', 'a' x 30, 'b' x 30)), qr/52/, 'a domain over 52 characters is refused');
 
-#--- host-forget approval ---------------------------------------------------------
-ok((grep { $_ eq 'host-forget' } HPS::Approval::actions()), 'host-forget is an action');
-my $doc = StorageFixture::approve($f, 'host-forget', pool => 'host');
-my $v = $f->{ap}->verify($doc, $f->{ks}->cluster_secret('approval'));
-is($v->{pool}, 'host', 'pool member is the fixed word');
-for my $case ([ { disks => ['ata-X'] }, 'disks' ], [ { wipe => 1 }, 'wipe' ], [ { pool => 'other' }, 'pool word' ]) {
-    my $e = err_of(sub { StorageFixture::approve($f, 'host-forget', pool => 'host', %{ $case->[0] }) });
-    is(ref $e && $e->kind, 'usage', "refused: $case->[1]");
-}
-$f->{ap}->revoke($mac, 'host-forget', 'host');
-
 #--- forget ---------------------------------------------------------------------------
 my $tmp  = tempdir(CLEANUP => 1);
 my $log  = "$tmp/hook.log";
@@ -74,7 +63,7 @@ $ENV{HOOK_AGENTS} = "$tmp/agents";
 sub hook_calls { open(my $l, '<', $log) or return (); my @l = <$l>; chomp @l; return @l }
 sub reset_log  { unlink $log }
 
-my $ob = HPS::Onboard->new(registry => $reg, approval => $f->{ap}, keysafe => $f->{ks}, forget_cmd => $hook);
+my $ob = HPS::Onboard->new(registry => $reg, forget_cmd => $hook);
 
 my $e = err_of(sub { $ob->forget('zz') });
 is($e && $e->kind, 'usage', 'bad MAC');
@@ -108,16 +97,9 @@ is_deeply([ hook_calls() ], [], 'refused and dry-run runs call nothing');
 # dry run
 my $r = $ob->forget($mac, dry_run => 1);
 is($r->{fqdn}, 'sch-001.lab.hps', 'agent name is the FQDN');
-like(join("\n", @{ $r->{steps} }), qr/approval: missing/, 'dry run reports the missing approval');
+unlike(join("\n", @{ $r->{steps} }), qr/approv/i, 'dry run mentions no approval');
 like(join("\n", @{ $r->{steps} }), qr/would remove ctrl-exec agent sch-001\.lab\.hps/, 'dry run lists the agent');
 
-# approval needed
-$e = err_of(sub { $ob->forget($mac) });
-is($e && $e->kind, 'refused', 'no approval: refused');
-like($e->message, qr/hps-approve host-forget/, 'refusal says how to approve');
-ok($reg->host_exists($mac), 'host still there');
-StorageFixture::approve($f, 'host-forget', pool => 'host');
-like(join("\n", @{ $ob->forget($mac, dry_run => 1)->{steps} }), qr/approval: present and valid/, 'dry run sees the approval');
 
 # agent removal fails: the host stays
 {
@@ -141,7 +123,6 @@ reset_log();
 # an agent already gone is not an error
 $reg->host_set($mac, 'HOSTNAME', 'sch-001');
 $reg->host_set($mac, 'STATE', 'HELD');
-StorageFixture::approve($f, 'host-forget', pool => 'host');
 {
     local $ENV{HOOK_AGENT_RC} = 4;
     $r = $ob->forget($mac);
@@ -152,17 +133,15 @@ reset_log();
 
 # a host with no HOSTNAME: hps-<mac> agent
 my $held = '525400000009';
-StorageFixture::approve($f, 'host-forget', pool => 'host', mac => $held);
 $r = $ob->forget($held);
 is($r->{fqdn}, 'hps-525400000009.lab.hps', 'a held host registers as hps-<mac>.<domain>');
 
 # no hook: reported as not done
 $reg->host_set($mac, 'HOSTNAME', 'sch-001');
-StorageFixture::approve($f, 'host-forget', pool => 'host');
 {
     local $ENV{HPS_ONBOARD_FORGET_CMD};
     delete $ENV{HPS_ONBOARD_FORGET_CMD};
-    my $ob2 = HPS::Onboard->new(registry => $reg, approval => $f->{ap}, keysafe => $f->{ks});
+    my $ob2 = HPS::Onboard->new(registry => $reg);
     $r = $ob2->forget($mac);
     like(join("\n", @{ $r->{steps} }), qr/NOT removed: no forget hook/, 'without a hook the agent step is reported as not done');
     like(join("\n", @{ $r->{steps} }), qr/NOT regenerated/, '... and so is the DNS step');
@@ -211,7 +190,14 @@ is($rc, 2, 'prune-agents takes no arguments');
 is($rc, 0, 'hps-onboard forget --dry-run exits 0') or diag $out;
 like($out, qr/Dry run host 525400000002 \(tch-002\), agent name tch-002\.lab\.hps/, 'forget --dry-run output');
 ($rc, $out) = cli('forget', $StorageFixture::MAC2);
-is($rc, 3, 'forget without an approval exits 3');
+is($rc, 0, 'forget with no approval exits 0') or diag $out;
+ok(!$reg->host_exists($StorageFixture::MAC2), '... and the host is gone');
+$reg->host_set($StorageFixture::MAC2, 'HOSTNAME', 'tch-002');
+$reg->host_set($StorageFixture::MAC2, 'storage_pool', 'lab');
+($rc, $out) = cli('forget', $StorageFixture::MAC2);
+is($rc, 3, 'forget of a host with a pool recorded is still refused (3)');
+like($out, qr/a pool is recorded/, '... with the reason');
+ok($reg->host_exists($StorageFixture::MAC2), '... and the host stays');
 ($rc) = cli('forget');
 is($rc, 2, 'forget needs a MAC');
 ($rc) = cli('forget', '525400000077');

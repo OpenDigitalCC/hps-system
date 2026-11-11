@@ -79,7 +79,6 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `storage_trim_ok` | `bool` | HPS::Storage | 1 when the TRIM check passed, else 0. |
 | `storage<n>_vlan` | `int` | network-functions (storage address allocation) | VLAN id of storage network n on this node. |
 | `storage<n>_ip` | `ip` | network-functions | Address of the node on storage network n. |
-| `approval_<action>_<pool>` | `json` | HPS::Approval (hps-approve) | A signed human approval for one destructive action on one pool or workload; pool slashes appear as __. |
 | `<prefix>_timestamp` | `epoch` | process_host_audit (host data collection) | When the data collection named by the prefix last ran. |
 | `<prefix>_count` | `int` | process_host_audit | Number of fields that collection stored. |
 

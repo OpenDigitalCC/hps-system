@@ -118,7 +118,6 @@ sub fixture {
     $wl->run('stop', 'n0');
     is_deeply([ $f->{ce}->scripts ], ['vm-stop'], 'stop: vm-stop only');
     is(($f->{reg}->cluster_get_json('lab', 'workload_n0'))->{state}, 'stopped', 'registry: stopped');
-    StorageFixture::approve($f, 'workload-destroy', pool => 'n0');
     $f->{ce}{calls} = [];
     $wl->run('destroy', 'n0');
     is_deeply([ $f->{ce}->scripts ], [ 'vm-stop', 'vm-undefine' ], 'destroy: stop and undefine, no zvol destroy');

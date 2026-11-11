@@ -19,7 +19,6 @@ use JSON::PP;
 use POSIX qw(strftime);
 use HPS::Registry;
 use HPS::Keysafe;
-use HPS::Approval;
 use HPS::Storage;
 
 my $NAME_RE  = qr/^[a-z][a-z0-9-]{0,31}\z/;
@@ -251,26 +250,25 @@ sub validate ($def, %o) {
 
 #=== construction ====================================================================
 
-# new(registry, keysafe, approval, storage => sub ($host) -> HPS::Storage-like,
+# new(registry, keysafe, storage => sub ($host) -> HPS::Storage-like,
 #     runner => obj with call(mac, script, args, input), logger => sub ($level, $msg),
 #     now => sub, images_dir => DIR, ips_url => URL, allow_any_pool_name => 0|1, by => NAME)
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
     my $ks  = $opt{keysafe}  // HPS::Keysafe->new(registry => $reg);
-    my $ap  = $opt{approval} // HPS::Approval->new(registry => $reg, keysafe => $ks);
     my $runner = $opt{runner} // HPS::Storage::Runner::HpsRun->new;
     my $logger = $opt{logger} // \&_default_logger;
     my $now    = $opt{now} // sub { time };
     my $any    = $opt{allow_any_pool_name} ? 1 : 0;
     my $storage = $opt{storage} // sub ($host) {
-        return HPS::Storage->new(host => $host, registry => $reg, keysafe => $ks, approval => $ap,
+        return HPS::Storage->new(host => $host, registry => $reg, keysafe => $ks,
             runner => $runner, logger => sub ($l, $m) { $logger->($l, "storage: $m") }, now => $now,
             allow_any_pool_name => $any);
     };
     _fail('usage', 'storage must be a code ref returning a storage object for a host') unless ref $storage eq 'CODE';
     my $res = $ENV{HPS_RESOURCES} // (($ENV{HPS_BASE} // '/srv') . '/hps-resources');
     return bless {
-        registry => $reg, keysafe => $ks, approval => $ap, storage => $storage, runner => $runner,
+        registry => $reg, keysafe => $ks, storage => $storage, runner => $runner,
         logger => $logger, now => $now, any => $any, st_cache => {},
         images_dir => $opt{images_dir} // "$res/images", ips_url => $opt{ips_url},
         by => $opt{by} // $ENV{SUDO_USER} // $ENV{USER} // 'operator',
@@ -411,7 +409,7 @@ sub _ordered ($self, $def, %a) {
 
 #=== steps ============================================================================
 
-# A step: {host (MAC), script, args, key, ok_rc, before, after, undo (on failure), finally,
+# A step: {host (MAC), script, args, key, ok_rc, before, after, undo (on failure),
 # storage => [op, %args] (run through HPS::Storage), show => {script,args,input}}.
 sub _step ($mac, $script, $args, %x) { return { host => $mac, script => $script, args => $args, %x } }
 
@@ -583,28 +581,10 @@ sub _need_record ($self, $name, $op) {
     return $rec;
 }
 
-# The workload-destroy approval: it sits on the compute host of the first VM.
-sub _destroy_approval ($self, $def) {
-    my $name = $def->{name};
-    my $mac = $self->_mac($def->{vms}[0]{compute});
-    my $json = $self->{approval}->get($mac, 'workload-destroy', $name)
-        // _fail('refused', "no workload-destroy approval for workload '$name' on host $mac "
-            . "(a human runs: hps-approve workload-destroy $mac --workload $name)");
-    my $secret = $self->{keysafe}->cluster_secret('approval');
-    my $f = $self->{approval}->verify($json, $secret);    # dies: expired, tampered, malformed
-    _fail('refused', 'the approval is for another host') unless $f->{mac} eq $mac;
-    _fail('refused', "the approval is for workload '$f->{pool}', not '$name'") unless $f->{pool} eq $name;
-    _fail('refused', "the approval is for $f->{action}, not workload-destroy") unless $f->{action} eq 'workload-destroy';
-    return $f;
-}
-
-# The workload approval covers the zvols of its local legs: for each one a
-# zvol-destroy approval is issued (same host, same human, at most ten minutes)
-# just before HPS::Storage destroys it and revoked straight after.
+# The zvols of the local legs go through HPS::Storage (its zvol-destroy refusals hold).
 sub _steps_destroy ($self, $def, %a) {
     $self->_need_record($def->{name}, 'destroy');
     my $rec = $self->record($def->{name});
-    my $f = $self->_destroy_approval($def);
     # An unfinished create: only what it attempted exists (finished steps plus the
     # one that was running when it stopped); the rest is skipped with a note.
     my $partial = $rec->{state} eq 'creating';
@@ -630,20 +610,9 @@ sub _steps_destroy ($self, $def, %a) {
     $self->{notes} = \@notes;
     for my $z (@zvols) {
         my ($mac, $ds) = @$z;
-        my $ap = $self->{approval};
-        push @s, _step($mac, 'storage-zvol-destroy', [ $ds, '--approval-file', '-' ], key => "zvol:$ds",
-            show => { script => 'storage-zvol-destroy', args => [ $ds, '--approval-file', '-' ],
-                      input => '{"approval":"<zvol-destroy approval issued from the workload-destroy approval>","secret":"<redacted>"}' },
-            storage => [ 'zvol-destroy', dataset => $ds ],
-            before => sub {
-                my $until = $self->{now}->() + 600;
-                $until = $f->{expires} - 1 if $f->{expires} - 1 < $until;
-                $ap->issue({ action => 'zvol-destroy', mac => $mac, pool => $ds, disks => [], wipe => 0,
-                    issued_by => $f->{issued_by}, expires => $until });
-            },
-            finally => sub { eval { $ap->revoke($mac, 'zvol-destroy', $ds) } });
+        push @s, _step($mac, 'storage-zvol-destroy', [$ds], key => "zvol:$ds",
+            storage => [ 'zvol-destroy', dataset => $ds ]);
     }
-    $self->{destroy_approval} = $f;
     return @s;
 }
 
@@ -680,7 +649,6 @@ sub _run_step ($self, $st, $n, $total, $op) {
         my ($sop, %sa) = @{ $st->{storage} };
         my $res = eval { $self->_st($st->{host})->run($sop, %sa) };
         my $e = $@;
-        $st->{finally}->() if $st->{finally};
         if ($e) {
             my ($kind, $msg) = ref $e && $e->isa('HPS::Keysafe::Error') ? ($e->kind, $e->message) : ('failed', "$e");
             $self->_log('err', "$op: step $n/$total $st->{script} failed: $msg");
@@ -774,18 +742,14 @@ sub _post ($self, $op, $def, $out, %a) {
         });
     }
     elsif ($op eq 'destroy') {
-        my $f = $self->{destroy_approval};
-        my $mac = $self->_mac($def->{vms}[0]{compute});
         $self->{registry}->cluster_unset($self->_cluster, _rec_key($name));
         $self->{registry}->cluster_set($self->_cluster, _destroyed_key($name),
-            { at => $self->_stamp, by => $self->{by}, approved_by => $f->{issued_by}, forgotten => $a{forget} ? JSON::PP::true : JSON::PP::false });
+            { at => $self->_stamp, by => $self->{by}, forgotten => $a{forget} ? JSON::PP::true : JSON::PP::false });
         # The definition is the operator's intent: it stays unless --forget.
         if ($a{forget}) {
             unlink $self->definition_path($name);
             $out->{forgotten} = 1;
         }
-        eval { $self->{approval}->revoke($mac, 'workload-destroy', $name) };
-        $out->{approval} = { map { $_ => $f->{$_} } qw(action pool expires issued_by mac) } if $f;
     }
     elsif ($op eq 'status') {
         $self->_post_status($def, $out);

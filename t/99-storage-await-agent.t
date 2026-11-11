@@ -22,7 +22,7 @@ sub run_up {
     my $f = StorageFixture::setup();
     $f->{ks}->get_or_create_key($mac, 'enc');
     my $ce = PingCE->new(pings => $o{pings});
-    my $st = HPS::Storage->new(host => $mac, registry => $f->{reg}, keysafe => $f->{ks}, approval => $f->{ap},
+    my $st = HPS::Storage->new(host => $mac, registry => $f->{reg}, keysafe => $f->{ks},
         runner => $ce, logger => sub { push @{ $f->{log} }, "$_[0] $_[1]" }, now => sub { $StorageFixture::NOW },
         sleep => sub { $StorageFixture::NOW += $_[0] }, wait => $o{wait});
     $st->run('up');

@@ -157,16 +157,12 @@ is(rec()->{vms}{'t0-db'}{state}, 'stopped', 'registry: stopped');
 }
 
 # --- destroy
-($rc, $out) = cli('destroy', 't0');
-is($rc, 3, 'destroy without approval: refused (3)');
-like($out, qr/hps-approve workload-destroy/, 'tells a human what to run');
-ok(-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition still there');
-StorageFixture::approve($f, 'workload-destroy', pool => 't0', expires => $StorageFixture::NOW + 7200);
 ($rc, $out) = cli('destroy', 't0', '--dry-run');
-is($rc, 0, 'destroy --dry-run with an approval exits 0');
+is($rc, 0, 'destroy --dry-run with no approval exits 0');
+unlike($out, qr/approv/i, 'no approval is mentioned');
 ok($f->{reg}->cluster_exists('lab', 'workload_t0'), 'dry run removes nothing');
 ($rc, $out) = cli('destroy', 't0');
-is($rc, 0, 'destroy exits 0') or diag $out;
+is($rc, 0, 'destroy with no approval exits 0') or diag $out;
 ok(!$f->{reg}->cluster_exists('lab', 'workload_t0'), 'registry key gone');
 ok(-e $f->{reg}->workload_dir('lab') . '/t0.json', 'definition kept (IPS-07)');
 like($out, qr/definition workloads\/t0\.json kept; create t0 runs again from it, destroy --forget removes it/, 'destroy says the definition is kept');
@@ -178,9 +174,6 @@ like($gone->{at}, qr/UTC$/, '... and when');
 ($rc, $out) = cli('create', 't0');
 is($rc, 0, 'create after destroy works from the kept definition') or diag $out;
 ok(!$f->{reg}->cluster_exists('lab', 'workload_t0_destroyed'), 'the destroyed record is removed by the create');
-($rc, $out) = cli('destroy', 't0', '--forget', '--dry-run');
-is($rc, 3, 'destroy --forget needs the approval too (3)');
-StorageFixture::approve($f, 'workload-destroy', pool => 't0', expires => $StorageFixture::NOW + 7200);
 ($rc, $out) = cli('destroy', 't0', '--forget');
 is($rc, 0, 'destroy --forget exits 0') or diag $out;
 like($out, qr/definition workloads\/t0\.json removed \(--forget\)/, 'says the definition is removed');
@@ -212,7 +205,6 @@ is($rc, 2, '--forget on status: usage (2)');
     like($out, qr/finish it with create --resume, or remove it with destroy/, 'text');
     ($rc, $out) = cli('status', 't0');
     is($rc, 0, 'status on a creating workload works') or diag $out;
-    StorageFixture::approve($g, 'workload-destroy', pool => 't0', expires => $StorageFixture::NOW + 7200);
     reset_shim();
     ($rc, $out) = cli('destroy', 't0');
     is($rc, 0, 'destroy from creating exits 0') or diag $out;

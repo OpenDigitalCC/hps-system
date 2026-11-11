@@ -1,38 +1,24 @@
 #!/usr/bin/env bash
 #
-# storage-pool-destroy - destroy a ZFS pool. HUMAN-APPROVED ONLY.
+# storage-pool-destroy - destroy a ZFS pool.
 #
-# ctrl-exec allowlisted node script, declared input=raw: one JSON document on
-# stdin (never an argument, never a file on the node):
+# ctrl-exec allowlisted node script. Who may run it is ctrl-exec's decision
+# (the agent's script allowlist and the dispatcher's auth hook; docs/adr/0007).
 #
-#   {"approval": {"action":"pool-destroy","disks":[<by-id>,...] or [],
-#                 "expires":<epoch>,"hmac":"<64 hex>","issued_by":"<who>",
-#                 "mac":"<12 hex>","pool":"<pool>","wipe":0|1},
-#    "secret":   "<64 hex: the 32-byte approval key>"}
+# Usage: storage-pool-destroy <pool>
 #
-# Canonical approval and HMAC as in storage-pool-create (sorted keys, no
-# whitespace, exactly the seven fields). If the approval lists disks they must
-# equal the pool's member disks; an empty list approves the pool by name.
-#
-# Usage: storage-pool-destroy <pool> --approval-file <path|-> [--secret-from-stdin]
-#
-# Checks the approval (HMAC, expiry, action == pool-destroy, mac == this node's
-# hps.mac, pool == argument), then: records the pool's devices (zpool status -P),
-# prints "WILL DESTROY: ..." lines, exports the pool if it is imported, imports
-# it again with zpool import -f -N (a forced import is accepted ONLY here, under
-# an approval; if that fails it is retried with -m, a missing log device, which
-# is likewise accepted only here), zpool destroy, then zpool labelclear -f on
-# the devices it recorded. A refusal after the import exports the pool again.
+# Records the pool's devices (zpool status -P), prints "WILL DESTROY: ..."
+# lines, exports the pool if it is imported, imports it again with zpool
+# import -f -N (a forced import is accepted ONLY here, in destroy; if that
+# fails it is retried with -m, a missing log device, which is likewise
+# accepted only here), zpool destroy, then zpool labelclear -f on the devices
+# it recorded. A pool that is neither imported nor importable is refused. A
+# refusal after the import exports the pool again.
 # Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
 
 set -euo pipefail
 
-: "${HPS_CMDLINE:=/proc/cmdline}"
-
 POOL=""
-APPROVAL_FILE=""
-PAYLOAD=""
-HMAC_KEY=""
 DEVICES=()
 IMPORTED_BY_US=0
 
@@ -48,8 +34,7 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-pool-destroy <pool> --approval-file <path|-> [--secret-from-stdin]
-Input (stdin for "-"): {"approval":{...,"hmac":"<hex>"},"secret":"<64 hex>"}
+Usage: storage-pool-destroy <pool>
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
 }
@@ -73,12 +58,6 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     arg=$1
     case "$arg" in
-      --approval-file)
-        [[ $# -ge 2 ]] || { log "--approval-file needs a value"; usage; exit 2; }
-        APPROVAL_FILE=$2
-        shift 2
-        ;;
-      --secret-from-stdin) shift ;;
       -*) log "unknown option: $arg"; usage; exit 2 ;;
       *)
         if [[ -n "$POOL" ]]; then
@@ -91,92 +70,10 @@ parse_args() {
         ;;
     esac
   done
-  [[ -n "$POOL" && -n "$APPROVAL_FILE" ]] || { usage; exit 2; }
+  [[ -n "$POOL" ]] || { usage; exit 2; }
   if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
     refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
   fi
-}
-
-read_payload() {
-  log "reading the approval document from ${APPROVAL_FILE/#-/stdin}"
-  if [[ "$APPROVAL_FILE" == "-" ]]; then
-    PAYLOAD=$(cat)
-  else
-    PAYLOAD=$(cat -- "$APPROVAL_FILE")
-  fi
-  if ! printf '%s' "$PAYLOAD" | jq -e 'type == "object"' > /dev/null 2>&1; then
-    refuse "the approval input is not a JSON object"
-  fi
-}
-
-payload_field() {
-  printf '%s' "$PAYLOAD" | jq -r "$1"
-}
-
-# hmac_sha256_hex <key-hex>: HMAC-SHA256 of stdin, as hex, computed from the
-# definition so the key never appears on a command line.
-hmac_sha256_hex() {
-  local key=$1 i b ipad="" opad="" inner msg
-  msg=$(cat)
-  for ((i = 0; i < 64; i++)); do
-    if ((i < 32)); then
-      b=$((16#${key:$((i * 2)):2}))
-    else
-      b=0
-    fi
-    ipad+=$(printf '%02x' $((b ^ 0x36)))
-    opad+=$(printf '%02x' $((b ^ 0x5c)))
-  done
-  inner=$({ printf '%s' "$ipad" | xxd -r -p; printf '%s' "$msg"; } | openssl dgst -sha256 -r | awk '{print $1}')
-  { printf '%s' "$opad" | xxd -r -p; printf '%s' "$inner" | xxd -r -p; } | openssl dgst -sha256 -r | awk '{print $1}'
-}
-
-this_mac() {
-  local word
-  for word in $(cat "$HPS_CMDLINE"); do
-    if [[ "$word" == hps.mac=* ]]; then
-      printf '%s\n' "${word#hps.mac=}" | tr -d ':' | tr 'A-F' 'a-f'
-      return 0
-    fi
-  done
-  return 1
-}
-
-verify_approval() {
-  local full canon want got now exp mac thismac
-  log "+ verifying the approval (HMAC-SHA256 over the canonical JSON; key not logged)"
-  if ! printf '%s' "$PAYLOAD" | jq -e '.approval | type == "object" and (keys == ["action","disks","expires","hmac","issued_by","mac","pool","wipe"])' > /dev/null 2>&1; then
-    refuse "approval must carry exactly: action, disks, expires, issued_by, mac, pool, wipe"
-  fi
-  HMAC_KEY=$(payload_field '.secret // ""')
-  if [[ ! "$HMAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
-    refuse "approval key must be 64 hex characters"
-  fi
-  full=$(printf '%s' "$PAYLOAD" | jq -S -c '.approval')
-  want=$(printf '%s' "$full" | grep -oE '"hmac":"[0-9a-f]{64}",' | sed -e 's/^"hmac":"//' -e 's/",$//') || want=""
-  canon=$(printf '%s' "$full" | sed -E 's/"hmac":"[0-9a-f]{64}",//')
-  got=$(printf '%s' "$canon" | hmac_sha256_hex "$HMAC_KEY")
-  # cmp over both strings: no short-circuit on the first differing character.
-  if [[ -z "$want" ]] || ! cmp -s <(printf '%s' "$want") <(printf '%s' "$got"); then
-    refuse "approval HMAC does not match"
-  fi
-  now=$(date +%s)
-  exp=$(payload_field '.approval.expires')
-  if [[ ! "$exp" =~ ^[0-9]+$ ]] || ((exp <= now)); then
-    refuse "approval has expired"
-  fi
-  if [[ "$(payload_field '.approval.action')" != "pool-destroy" ]]; then
-    refuse "approval action is not pool-destroy"
-  fi
-  mac=$(payload_field '.approval.mac' | tr -d ':' | tr 'A-F' 'a-f')
-  thismac=$(this_mac) || refuse "hps.mac is not on the kernel command line"
-  if [[ "$mac" != "$thismac" ]]; then
-    refuse "approval is for a different node"
-  fi
-  if [[ "$(payload_field '.approval.pool')" != "$POOL" ]]; then
-    refuse "approval is for a different pool"
-  fi
-  log "approval verified: issued_by $(payload_field '.approval.issued_by')"
 }
 
 pool_is_imported() {
@@ -192,19 +89,6 @@ record_devices() {
   done < <(zpool status -P "$POOL" | grep -o '/dev/disk/by-id/[^ 	]*' || true)
 }
 
-# The approval's disk list, if any, must be the pool's member disks.
-check_approved_disks() {
-  local approved have
-  approved=$(payload_field '.approval.disks | sort | join(",")')
-  if [[ -z "$approved" ]]; then
-    return 0
-  fi
-  have=$(printf '%s\n' "${DEVICES[@]}" | sed -e 's|^/dev/disk/by-id/||' -e 's/-part[0-9]*$//' | LC_ALL=C sort -u | paste -sd, -)
-  if [[ "$have" != "$approved" ]]; then
-    refuse "approval names disks ($approved) that are not the pool's disks ($have)"
-  fi
-}
-
 announce() {
   local d
   log "WILL DESTROY: pool $POOL"
@@ -213,8 +97,8 @@ announce() {
   done
 }
 
-# Forced import is acceptable here only, under an approval; -m (missing log) only
-# if the forced import alone fails.
+# Forced import is acceptable here only, in destroy; -m (missing log) only if
+# the forced import alone fails.
 force_import() {
   IMPORTED_BY_US=1
   if run zpool import -f -N -d /dev/disk/by-id "$POOL"; then
@@ -242,7 +126,6 @@ require_importable() {
 import_for_destroy() {
   if pool_is_imported; then
     record_devices
-    check_approved_disks
     announce
     run zpool export "$POOL"
   else
@@ -251,7 +134,6 @@ import_for_destroy() {
   force_import
   if [[ ${#DEVICES[@]} -eq 0 ]]; then
     record_devices
-    check_approved_disks
     announce
   fi
 }
@@ -259,8 +141,6 @@ import_for_destroy() {
 main() {
   local d
   parse_args "$@"
-  read_payload
-  verify_approval
   trap export_back EXIT
   import_for_destroy
   run zpool destroy "$POOL"

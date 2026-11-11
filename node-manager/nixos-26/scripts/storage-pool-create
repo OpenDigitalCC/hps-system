@@ -1,39 +1,30 @@
 #!/usr/bin/env bash
 #
-# storage-pool-create - create a mirrored, encrypted-parent ZFS pool. HUMAN-
-# APPROVED ONLY: refuses without a valid signed approval.
+# storage-pool-create - create a mirrored, encrypted-parent ZFS pool.
 #
 # ctrl-exec allowlisted node script, declared input=raw (nix/modules/
-# hps-ctrl-exec.nix): the whole request input arrives on stdin as ONE JSON
-# document, never in an argument and never in a file on the node:
+# hps-ctrl-exec.nix): the pool key arrives on stdin as ONE JSON document,
+# never in an argument and never in a file on the node:
 #
-#   {"approval": {"action":"pool-create","disks":["<by-id>","<by-id>"],
-#                 "expires":<epoch>,"hmac":"<64 hex>","issued_by":"<who>",
-#                 "mac":"<12 hex>","pool":"<pool>","wipe":0|1},
-#    "secret":   "<64 hex: the 32-byte approval key>",
-#    "key_hex":  "<64 hex: the 32-byte raw key for <pool>/enc>"}
+#   {"key_hex": "<64 hex: the 32-byte raw key for <pool>/enc>"}
 #
-# Canonical approval = JSON with sorted keys and no whitespace (what `jq -S -c`
-# prints); the hmac member is stripped (sed) and HMAC-SHA256 is taken over the
-# remaining seven-member bytes, computed here without the key reaching a
-# command line.
+# Who may run it is ctrl-exec's decision (the agent's script allowlist and the
+# dispatcher's auth hook; docs/adr/0007).
 #
-# Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>]...
+# Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>]... [--wipe]
 # A mirror of every disk given (2 to 4: a three-way mirror survives two disk
 # losses; owner 2026-11-11, scale test storage nodes).
-#            --approval-file <path|-> [--secret-from-stdin]
 #
-#   --approval-file -   the JSON document above is on stdin (the ctrl-exec use)
-#   --approval-file P   the same document read from file P (manual console use)
-#   --secret-from-stdin accepted; the key material is always in the document
+#   --wipe   a disk that carries a pool label or a filesystem/partition
+#            signature is wiped (only the disks named); without it such a
+#            disk is refused
 #
-# Checks, in order, all before any disk is touched: approval HMAC, expiry,
-# action == pool-create, mac == this node's hps.mac (kernel command line), pool
-# and sorted disk list equal the arguments; then per disk: exists under
-# /dev/disk/by-id, whole disk, unmounted with no holders, not a member of an
-# imported pool, and no pool label or filesystem/partition signature unless the
-# approval says wipe=1 - in which case "WILL WIPE: <by-id>" is printed and
-# exactly those devices get zpool labelclear -f and wipefs -a.
+# Checks, all before any disk is touched: the pool name, 2 to 4 distinct by-id
+# names, the key; then per disk: exists under /dev/disk/by-id, whole disk,
+# unmounted with no holders, not a member of an imported pool, and no pool
+# label or filesystem/partition signature unless --wipe - in which case
+# "WILL WIPE: <by-id>" is printed and exactly those devices get zpool
+# labelclear -f and wipefs -a.
 # Then zpool create, and zfs create of <pool>/enc (aes-256-gcm raw key) with the
 # key piped to stdin; the key stays loaded for this session. Idempotent: the
 # same pool on the same disks with <pool>/enc present exits 0 after status.
@@ -42,13 +33,9 @@
 
 set -euo pipefail
 
-: "${HPS_CMDLINE:=/proc/cmdline}"
-
 POOL=""
 DISKS=()
-APPROVAL_FILE=""
 PAYLOAD=""
-HMAC_KEY=""
 ENC_KEY=""
 WIPE=0
 POOL_EXISTS=0
@@ -67,9 +54,9 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id> ...] --approval-file <path|-> [--secret-from-stdin]
+Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id> ...] [--wipe]
   2 to 4 disks; the pool is one mirror of them all.
-Input (stdin for "-"): {"approval":{...,"hmac":"<hex>"},"secret":"<64 hex>","key_hex":"<64 hex>"}
+Input (stdin): {"key_hex":"<64 hex>"}
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
 }
@@ -99,12 +86,10 @@ parse_args() {
         DISKS+=("$d")
         shift 2
         ;;
-      --approval-file)
-        [[ $# -ge 2 ]] || { log "--approval-file needs a value"; usage; exit 2; }
-        APPROVAL_FILE=$2
-        shift 2
+      --wipe)
+        WIPE=1
+        shift
         ;;
-      --secret-from-stdin) shift ;;
       -*) log "unknown option: $arg"; usage; exit 2 ;;
       *)
         if [[ -n "$POOL" ]]; then
@@ -117,7 +102,7 @@ parse_args() {
         ;;
     esac
   done
-  [[ -n "$POOL" && -n "$APPROVAL_FILE" ]] || { usage; exit 2; }
+  [[ -n "$POOL" ]] || { usage; exit 2; }
   [[ ${#DISKS[@]} -ge 2 && ${#DISKS[@]} -le 4 ]] || { log "two to four --disk arguments are required"; usage; exit 2; }
   if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
     refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
@@ -131,98 +116,19 @@ sorted_disks() {
   printf '%s\n' "${DISKS[@]}" | LC_ALL=C sort | paste -sd, -
 }
 
-read_payload() {
-  log "reading the approval document from ${APPROVAL_FILE/#-/stdin}"
-  if [[ "$APPROVAL_FILE" == "-" ]]; then
-    PAYLOAD=$(cat)
-  else
-    PAYLOAD=$(cat -- "$APPROVAL_FILE")
-  fi
+# read_key: the pool key from the stdin document {"key_hex":"<64 hex>"}.
+read_key() {
+  log "reading the pool key document from stdin (key not logged)"
+  PAYLOAD=$(cat)
   if ! printf '%s' "$PAYLOAD" | jq -e 'type == "object"' > /dev/null 2>&1; then
-    refuse "the approval input is not a JSON object"
+    refuse "the input is not a JSON object"
   fi
-}
-
-payload_field() {
-  printf '%s' "$PAYLOAD" | jq -r "$1"
-}
-
-# hmac_sha256_hex <key-hex>: HMAC-SHA256 of stdin, as hex. Computed from the
-# definition (H((K^opad)||H((K^ipad)||m))) so the key never appears on a
-# command line; K is 32 bytes, zero-padded to the 64-byte block.
-hmac_sha256_hex() {
-  local key=$1 i b ipad="" opad="" inner msg
-  msg=$(cat)
-  for ((i = 0; i < 64; i++)); do
-    if ((i < 32)); then
-      b=$((16#${key:$((i * 2)):2}))
-    else
-      b=0
-    fi
-    ipad+=$(printf '%02x' $((b ^ 0x36)))
-    opad+=$(printf '%02x' $((b ^ 0x5c)))
-  done
-  inner=$({ printf '%s' "$ipad" | xxd -r -p; printf '%s' "$msg"; } | openssl dgst -sha256 -r | awk '{print $1}')
-  { printf '%s' "$opad" | xxd -r -p; printf '%s' "$inner" | xxd -r -p; } | openssl dgst -sha256 -r | awk '{print $1}'
-}
-
-this_mac() {
-  local word
-  for word in $(cat "$HPS_CMDLINE"); do
-    if [[ "$word" == hps.mac=* ]]; then
-      printf '%s\n' "${word#hps.mac=}" | tr -d ':' | tr 'A-F' 'a-f'
-      return 0
-    fi
-  done
-  return 1
-}
-
-verify_approval() {
-  local full canon want got now exp mac thismac
-  log "+ verifying the approval (HMAC-SHA256 over the canonical JSON; key not logged)"
-  if ! printf '%s' "$PAYLOAD" | jq -e '.approval | type == "object" and (keys == ["action","disks","expires","hmac","issued_by","mac","pool","wipe"])' > /dev/null 2>&1; then
-    refuse "approval must carry exactly: action, disks, expires, issued_by, mac, pool, wipe"
-  fi
-  HMAC_KEY=$(payload_field '.secret // ""')
-  if [[ ! "$HMAC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
-    refuse "approval key must be 64 hex characters"
-  fi
-  full=$(printf '%s' "$PAYLOAD" | jq -S -c '.approval')
-  want=$(printf '%s' "$full" | grep -oE '"hmac":"[0-9a-f]{64}",' | sed -e 's/^"hmac":"//' -e 's/",$//') || want=""
-  canon=$(printf '%s' "$full" | sed -E 's/"hmac":"[0-9a-f]{64}",//')
-  got=$(printf '%s' "$canon" | hmac_sha256_hex "$HMAC_KEY")
-  # cmp over both strings: no short-circuit on the first differing character.
-  if [[ -z "$want" ]] || ! cmp -s <(printf '%s' "$want") <(printf '%s' "$got"); then
-    refuse "approval HMAC does not match"
-  fi
-  now=$(date +%s)
-  exp=$(payload_field '.approval.expires')
-  if [[ ! "$exp" =~ ^[0-9]+$ ]] || ((exp <= now)); then
-    refuse "approval has expired"
-  fi
-  if [[ "$(payload_field '.approval.action')" != "pool-create" ]]; then
-    refuse "approval action is not pool-create"
-  fi
-  mac=$(payload_field '.approval.mac' | tr -d ':' | tr 'A-F' 'a-f')
-  thismac=$(this_mac) || refuse "hps.mac is not on the kernel command line"
-  if [[ "$mac" != "$thismac" ]]; then
-    refuse "approval is for a different node"
-  fi
-  if [[ "$(payload_field '.approval.pool')" != "$POOL" ]]; then
-    refuse "approval is for a different pool"
-  fi
-  if [[ "$(payload_field '.approval.disks | sort | join(",")')" != "$(sorted_disks)" ]]; then
-    refuse "approval names different disks"
-  fi
-  WIPE=$(payload_field '.approval.wipe')
-  if [[ "$WIPE" != "0" && "$WIPE" != "1" ]]; then
-    refuse "approval wipe must be 0 or 1"
-  fi
-  ENC_KEY=$(payload_field '.key_hex // ""')
+  ENC_KEY=$(printf '%s' "$PAYLOAD" | jq -r '.key_hex // ""')
+  PAYLOAD=""
   if [[ ! "$ENC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
     refuse "key_hex must be 64 hex characters"
   fi
-  log "approval verified: issued_by $(payload_field '.approval.issued_by'), wipe=$WIPE"
+  log "disks: $(sorted_disks); wipe=$WIPE"
 }
 
 pool_is_imported() {
@@ -245,7 +151,7 @@ check_existing_pool() {
     refuse "pool '$POOL' already exists on different disks ($have)"
   fi
   POOL_EXISTS=1
-  log "pool '$POOL' already exists on the approved disks"
+  log "pool '$POOL' already exists on the named disks"
 }
 
 in_active_pool() {
@@ -293,7 +199,7 @@ check_disks() {
     check_disk "$d"
   done
   if [[ $DISK_DIRTY -eq 1 && "$WIPE" != "1" ]]; then
-    refuse "a disk carries a pool label or signature and the approval does not allow wipe"
+    refuse "a disk carries a pool label or signature; --wipe is needed to wipe it"
   fi
 }
 
@@ -333,8 +239,7 @@ create_enc() {
 
 main() {
   parse_args "$@"
-  read_payload
-  verify_approval
+  read_key
   check_existing_pool
   if [[ $POOL_EXISTS -eq 0 ]]; then
     check_disks

@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 # CS-3.6: HPS::Workload driver on a fake runner: plans, order of node calls,
-# registry state after each operation, refusals, --resume, destroy approvals.
+# registry state after each operation, refusals, --resume, destroy (no approval).
 use strict;
 use warnings;
 use Test::More;
@@ -177,30 +177,13 @@ my $f = StorageFixture::setup_workload();
 {
     my $wl = $f->{wl}->();
     $f->{ce}{calls} = [];
-    my $e = err_of(sub { $wl->plan('destroy', 't0') });
-    is($e->kind, 'refused', 'destroy without an approval is refused');
-    like($e->message, qr/no workload-destroy approval for workload 't0' on host \Q$MAC\E .*hps-approve workload-destroy/, 'the refusal says what a human runs');
-    is(nodecalls($f), 0, 'refused destroy sends nothing');
-    $e = err_of(sub { $wl->run('destroy', 't0') });
-    is($e->kind, 'refused', 'run is refused as well');
-    ok((grep { /refused/ } @{ $f->{log} }), 'the refusal is logged');
-
-    # an approval for another workload, another host action: not accepted
-    StorageFixture::approve($f, 'workload-destroy', pool => 'other');
-    $e = err_of(sub { $wl->plan('destroy', 't0') });
-    like($e->message, qr/no workload-destroy approval for workload 't0'/, 'an approval for another workload does not count');
-    StorageFixture::approve($f, 'pool-destroy');
-    $e = err_of(sub { $wl->plan('destroy', 't0') });
-    like($e->message, qr/no workload-destroy approval/, 'a pool-destroy approval does not count');
-
-    my $doc = StorageFixture::approve($f, 'workload-destroy', pool => 't0');
     my $plan = $wl->plan('destroy', 't0');
     is_deeply([ map { $_->{script} } @$plan ],
         [ qw(vm-stop vm-undefine mirror-stop vm-stop vm-undefine mirror-stop storage-zvol-destroy storage-zvol-destroy) ],
         'destroy plan: per VM (reverse priority) stop, undefine, mirror-stop; then the zvols');
     is_deeply([ map { $_->{args}[0] } @$plan[ 0 .. 2 ] ], [ 't0-app', 't0-app', 't0-app-root' ], 'last-started VM goes first');
-    like($plan->[-1]{input}, qr/redacted/, 'the zvol destroy input is redacted in the plan');
-    unlike(join('', map { $_->{input} // '' } @$plan), qr/[0-9a-f]{64}/, 'no signature in the plan');
+    is_deeply($plan->[-1]{args}, [$DB], 'the zvol destroy takes the dataset only');
+    is(scalar(grep { defined $_->{input} } @$plan), 0, 'no step of the destroy plan carries input');
     is(nodecalls($f), 0, 'plan sends nothing');
     ok($f->{reg}->cluster_exists('lab', 'workload_t0'), 'plan removes nothing');
 
@@ -211,32 +194,42 @@ my $f = StorageFixture::setup_workload();
         'destroy node calls');
     my @zv = grep { $_->{script} eq 'storage-zvol-destroy' } $f->{ce}->calls;
     is_deeply([ map { $_->{args}[0] } @zv ], [ $APP, $DB ], 'both zvols destroyed');
-    ok(defined $zv[0]{input} && length $zv[0]{input}, 'the zvol destroy carries its approval document');
+    ok(!defined $zv[0]{input}, 'the zvol destroy carries no input');
     ok(!$f->{reg}->cluster_exists('lab', 'workload_t0'), 'registry key removed');
     ok(-e $f->{reg}->workload_dir('lab') . '/t0.json', 'the definition file is kept (IPS-07)');
-    is($f->{ap}->get($MAC, 'workload-destroy', 't0'), undef, 'the workload approval is spent');
-    is($f->{ap}->get($MAC, 'zvol-destroy', $APP), undef, 'the derived zvol approvals are revoked');
-    is($f->{ap}->get($MAC, 'zvol-destroy', $DB), undef, '... all of them');
-    is(scalar(grep { /approval|zvol-destroy/ && /[0-9a-f]{64}/ } @{ $f->{log} }), 0, 'no secret or signature in the log');
+    ok(!grep({ /^approval_/ } $f->{reg}->host_list($MAC)), 'no approval in the registry');
+    my $d = $f->{reg}->cluster_get_json('lab', 'workload_t0_destroyed');
+    is_deeply([ sort keys %$d ], [qw(at by forgotten)], 'the destroyed record: at, by, forgotten (no approved_by)');
 
-    $e = err_of(sub { $wl->plan('status', 't0') });
+    my $e = err_of(sub { $wl->plan('status', 't0') });
     is($e->kind, 'notfound', 'no record any more: notfound');
 }
 
-#--- a failing destroy keeps the record and the definition; derived approvals are revoked
+#--- a failing destroy keeps the record and the definition
 {
     my $g = StorageFixture::setup_workload();
     my $wl = $g->{wl}->();
     $wl->run('create', 't0');
-    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
     $g->{ce}{rc}{'storage-zvol-destroy'} = 1;
     $g->{ce}{calls} = [];
     my $e = err_of(sub { $wl->run('destroy', 't0') });
     ok($e, 'destroy fails when the zvol destroy fails');
     ok($g->{reg}->cluster_exists('lab', 'workload_t0'), 'record kept');
     ok(-e $g->{reg}->workload_dir('lab') . '/t0.json', 'definition kept');
-    is($g->{ap}->get($MAC, 'zvol-destroy', $APP), undef, 'the derived zvol approval is revoked after the failure');
-    ok($g->{ap}->get($MAC, 'workload-destroy', 't0'), 'the workload approval stays for a retry');
+}
+
+#--- an exported zvol stops the destroy (HPS::Storage refuses it; a refusal that stays)
+{
+    my $g = StorageFixture::setup_workload();
+    my $wl = $g->{wl}->();
+    $wl->run('create', 't0');
+    $g->{reg}->host_set($MAC, 'storage_exports', [ { zvol => $APP, iqn => 'iqn.2026-11.example.lab:x', initiator => 'iqn.2026-11.example.lab:y', portal => '192.0.2.10' } ]);
+    $g->{ce}{calls} = [];
+    my $e = err_of(sub { $wl->run('destroy', 't0') });
+    is($e && $e->kind, 'refused', 'destroy of a workload whose zvol is exported is refused');
+    like($e && $e->message, qr/exported.*unexport/, '... with the reason');
+    ok(!grep({ $_ eq 'storage-zvol-destroy' } script_list($g)), 'the exported zvol is not destroyed');
+    ok($g->{reg}->cluster_exists('lab', 'workload_t0'), 'record kept');
 }
 
 #--- refusals before any node call
@@ -394,12 +387,9 @@ my $f = StorageFixture::setup_workload();
     like($e->message, qr/not fully created \(state creating\); finish it with create --resume, or remove it with destroy/, 'start: refusal text offers only what works');
     ok($wl->plan('status', 't0'), 'status works on a creating workload');
 
-    $e = err_of(sub { $wl->plan('destroy', 't0') });
-    like($e->message, qr/no workload-destroy approval/, 'destroy from creating still needs the approval');
-    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
     my $plan = $wl->plan('destroy', 't0');
     is_deeply([ map { $_->{script} } @$plan ], ['storage-zvol-destroy'], 'plan: only the zvol that exists');
-    is_deeply($plan->[0]{args}, [ $APP, '--approval-file', '-' ], '... the first one');
+    is_deeply($plan->[0]{args}, [$APP], '... the first one');
     $g->{ce}{calls} = [];
     my $r = $wl->run('destroy', 't0');
     ok($r->{ok}, 'destroy from creating ok');
@@ -408,14 +398,12 @@ my $f = StorageFixture::setup_workload();
     like($r->{notes}[0], qr/skipped .*never created/, 'a note says why');
     ok(!$g->{reg}->cluster_exists('lab', 'workload_t0'), 'record removed');
     ok(-e $g->{reg}->workload_dir('lab') . '/t0.json', 'definition kept');
-    is($g->{ap}->get($MAC, 'zvol-destroy', $APP), undef, 'derived approval revoked');
 }
 {
     my $g = StorageFixture::setup_workload();
     my $wl = $g->{wl}->();
     $g->{reg}->cluster_set('lab', 'workload_t0', { state => 'creating', created_at => 'x', by => 'tester', done => [],
         vms => { 't0-app' => { host => 'sch-001', state => 'creating', disks => {} }, 't0-db' => { host => 'sch-001', state => 'creating', disks => {} } } });
-    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
     is(scalar @{ $wl->plan('destroy', 't0') }, 0, 'nothing created: no node call planned');
     my $r = $wl->run('destroy', 't0');
     ok($r->{ok}, 'destroy ok');
@@ -430,7 +418,6 @@ my $f = StorageFixture::setup_workload();
     $g->{ce}{rc}{'vm-define'} = 1;
     err_of(sub { $wl->run('create', 't0') });
     delete $g->{ce}{rc}{'vm-define'};
-    StorageFixture::approve($g, 'workload-destroy', pool => 't0');
     $g->{ce}{calls} = [];
     $wl->run('destroy', 't0');
     is_deeply([ script_list($g) ], [ qw(vm-stop vm-undefine mirror-stop storage-zvol-destroy) ], 'the VM whose define failed is cleaned, the untouched one is skipped');
