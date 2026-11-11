@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+#
+# net-vlan-address - give this host an address on a tagged VLAN.
+#
+# ctrl-exec allowlisted node script (scale test phase 2). Usage:
+#
+#   net-vlan-address <parent-iface|boot> <vlan> <ip>/<prefix> [--mtu N]
+#
+# The IPS calls it once per storage or transit network (hps-node net-up, also
+# queued after every pairing), so it runs again after every boot: nodes run
+# from RAM and /run/systemd/network starts empty.
+#
+#   parent   an interface name, or "boot": the physical NIC carrying the MAC in
+#            hps.mac= on the kernel command line, the NIC hps-net configured
+#   vlan     1-4094; the sub-interface is <parent>.<vlan> (at most 15 characters)
+#   ip       an IPv4 host address with its prefix (8-30), never the subnet's
+#            network or broadcast address
+#   --mtu    576-9216; the sub-interface gets it and the parent is raised to it
+#            when lower (which also raises the parent's own untagged traffic)
+#
+# One mechanism, so systemd-networkd does not fight it: the address and MTU are
+# networkd's, from $HPS_NETWORK_DIR/05-hps-vlan-<sub>.network (Match Name=<sub>).
+# The 05- name sorts before hps-net's 10-hps-boot.network, which matches by
+# MAC and would otherwise take the VLAN link (a VLAN carries its parent's MAC)
+# and run DHCP on it. The file is written and networkd reloaded BEFORE the link
+# is made with `ip link add`, so networkd meets the link with its own file. A
+# .netdev is not used: networkd creates a VLAN only through VLAN= in the
+# parent's .network, which is hps-net's, and reconfiguring the boot NIC would
+# cut the ctrl-exec call this script runs under.
+#
+# Idempotent: an existing <sub> must be VLAN <vlan> on <parent>; the file is
+# rewritten only when its content changes (then networkd reconfigures <sub>);
+# any other IPv4 address on <sub> (an earlier run's) is removed once the wanted
+# one is there. Refused: a parent that is missing or itself a VLAN, a <sub>
+# that is a bridge member (its address would belong on the bridge, see
+# net-bridge-ensure), the address already on another interface.
+#
+# Exit: 0 done, 1 a command failed (or networkd did not apply the address in
+#       time), 2 usage, 3 refused. Nothing is changed before every check passed.
+# The last line on stdout is a one-line summary.
+#
+# Overrides for tests: HPS_CMDLINE (file), HPS_NETWORK_DIR, HPS_NET_WAIT
+# (seconds to wait for networkd, default 15), HPS_NET_STEP (poll step, 0.5).
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_NETWORK_DIR:=/run/systemd/network}"
+: "${HPS_NET_WAIT:=15}"
+: "${HPS_NET_STEP:=0.5}"
+
+PARENT_ARG=""
+PARENT=""
+VLAN=""
+ADDR=""
+PREFIX=""
+MTU=""
+SUB=""
+
+log() {
+  printf '[net-vlan-address] %s\n' "$*" >&2
+}
+
+usage() {
+  log "$*"
+  log "usage: net-vlan-address <parent-iface|boot> <vlan> <ip>/<prefix> [--mtu N]"
+  exit 2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+fail() {
+  log "failed: $*"
+  exit 1
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# normalise_mac <text>: aa:bb:cc:dd:ee:ff or fail.
+normalise_mac() {
+  local raw="${1//:/}"
+  raw="${raw,,}"
+  [[ "$raw" =~ ^[0-9a-f]{12}$ ]] || return 1
+  printf '%s:%s:%s:%s:%s:%s\n' "${raw:0:2}" "${raw:2:2}" "${raw:4:2}" \
+    "${raw:6:2}" "${raw:8:2}" "${raw:10:2}"
+}
+
+ip_to_int() {
+  local a b c d
+  IFS=. read -r a b c d <<< "$1"
+  printf '%s\n' $(( (a << 24) + (b << 16) + (c << 8) + d ))
+}
+
+parse_args() {
+  [[ $# -ge 3 ]] || usage "needs <parent-iface|boot> <vlan> <ip>/<prefix>"
+  PARENT_ARG="$1"
+  VLAN="$2"
+  local cidr="$3" o1 o2 o3 o4 n host mask
+  shift 3
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --mtu)
+        [[ $# -ge 2 ]] || usage "--mtu needs a value"
+        [[ -z "$MTU" ]] || usage "--mtu given twice"
+        MTU="$2"
+        shift 2
+        ;;
+      *) usage "unknown argument '$1'" ;;
+    esac
+  done
+  [[ "$PARENT_ARG" == boot || "$PARENT_ARG" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]] \
+    || usage "parent '$PARENT_ARG' is not boot or an interface name"
+  if [[ ! "$VLAN" =~ ^[1-9][0-9]{0,3}$ ]] || (( VLAN > 4094 )); then
+    usage "vlan '$VLAN' is not 1-4094"
+  fi
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] \
+    || usage "address '$cidr' is not <ip>/<prefix>"
+  o1=${BASH_REMATCH[1]} o2=${BASH_REMATCH[2]} o3=${BASH_REMATCH[3]} o4=${BASH_REMATCH[4]}
+  PREFIX=$((10#${BASH_REMATCH[5]}))
+  for n in "$o1" "$o2" "$o3" "$o4"; do
+    (( 10#$n <= 255 )) || usage "address '$cidr' has an octet over 255"
+  done
+  ADDR="$((10#$o1)).$((10#$o2)).$((10#$o3)).$((10#$o4))"
+  (( PREFIX >= 8 && PREFIX <= 30 )) || usage "prefix /$PREFIX is not 8-30"
+  if [[ -n "$MTU" ]]; then
+    if [[ ! "$MTU" =~ ^[1-9][0-9]{2,3}$ ]] || (( MTU < 576 || MTU > 9216 )); then
+      usage "mtu '$MTU' is not 576-9216"
+    fi
+  fi
+  host=$(ip_to_int "$ADDR")
+  mask=$(( (0xFFFFFFFF << (32 - PREFIX)) & 0xFFFFFFFF ))
+  (( (host & ~mask & 0xFFFFFFFF) != 0 )) || refuse "$ADDR/$PREFIX is the network address of its subnet"
+  (( (host & ~mask & 0xFFFFFFFF) != (~mask & 0xFFFFFFFF) )) || refuse "$ADDR/$PREFIX is the broadcast address of its subnet"
+}
+
+# link_json <name>: the link as JSON, failing when it does not exist.
+link_json() {
+  ip -j -d link show dev "$1" 2> /dev/null
+}
+
+link_field() {
+  link_json "$1" | jq -r "$2"
+}
+
+# The boot NIC: the physical link (no link kind: not the hps-net bridge, not a
+# VLAN) carrying the hps.mac MAC.
+resolve_parent() {
+  local raw mac kind
+  if [[ "$PARENT_ARG" == boot ]]; then
+    raw=$(cmdline_value hps.mac || true)
+    mac=$(normalise_mac "$raw" || true)
+    [[ -n "$mac" ]] || refuse "hps.mac absent or malformed on the command line (${raw:-<none>}): cannot tell which NIC is the boot NIC"
+    PARENT=$(run ip -j -d link show | jq -r --arg m "$mac" \
+      '[.[] | select((.address // "" | ascii_downcase) == $m and ((.linkinfo.info_kind // "") == ""))][0].ifname // empty')
+    [[ -n "$PARENT" ]] || refuse "no physical interface carries the boot MAC $mac"
+    log "boot NIC: $PARENT ($mac)"
+  else
+    PARENT="$PARENT_ARG"
+    link_json "$PARENT" > /dev/null || refuse "interface $PARENT does not exist"
+  fi
+  kind=$(link_field "$PARENT" '.[0].linkinfo.info_kind // ""')
+  [[ "$kind" != vlan ]] || refuse "parent $PARENT is itself a VLAN"
+  SUB="${PARENT}.${VLAN}"
+  (( ${#SUB} <= 15 )) || refuse "$SUB is longer than the 15 characters of an interface name"
+}
+
+# check_sub: an existing <sub> must be ours to address. Prints "new" or "exists".
+check_sub() {
+  local kind id parent master
+  if ! link_json "$SUB" > /dev/null; then
+    printf 'new\n'
+    return 0
+  fi
+  kind=$(link_field "$SUB" '.[0].linkinfo.info_kind // ""')
+  id=$(link_field "$SUB" '.[0].linkinfo.info_data.id // ""')
+  parent=$(link_field "$SUB" '.[0].link // ""')
+  [[ "$kind" == vlan && "$id" == "$VLAN" && "$parent" == "$PARENT" ]] \
+    || refuse "interface $SUB exists but is not vlan $VLAN on $PARENT"
+  master=$(link_field "$SUB" '.[0].master // ""')
+  [[ -z "$master" ]] || refuse "$SUB is a member of bridge $master (a layout network); its address would belong on the bridge"
+  printf 'exists\n'
+}
+
+# check_address_free: the address is on no interface but <sub>.
+check_address_free() {
+  local other
+  other=$(run ip -j -4 addr show | jq -r --arg a "$ADDR" --arg s "$SUB" \
+    '[.[] | select(.ifname != $s) | select(any(.addr_info[]?; .local == $a)) | .ifname][0] // empty')
+  [[ -z "$other" ]] || refuse "$ADDR is already on interface $other"
+}
+
+network_body() {
+  printf '[Match]\nName=%s\n\n[Link]\n' "$SUB"
+  if [[ -n "$MTU" ]]; then
+    printf 'MTUBytes=%s\n' "$MTU"
+  fi
+  printf 'RequiredForOnline=no\n\n[Network]\nAddress=%s/%s\nDHCP=no\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n' "$ADDR" "$PREFIX"
+}
+
+# write_network: prints "changed" or "same".
+write_network() {
+  local file="$HPS_NETWORK_DIR/05-hps-vlan-${SUB}.network" body current=""
+  body=$(network_body)
+  if [[ -f "$file" ]]; then
+    current=$(cat "$file")
+  fi
+  if [[ "$current" == "$body" ]]; then
+    printf 'same\n'
+    return 0
+  fi
+  log "+ write $file"
+  printf '%s\n' "$body" > "$file"
+  printf 'changed\n'
+}
+
+raise_parent_mtu() {
+  local have
+  [[ -n "$MTU" ]] || return 0
+  have=$(link_field "$PARENT" '.[0].mtu // 0')
+  if (( have < MTU )); then
+    log "raising $PARENT MTU from $have to $MTU for $SUB (untagged traffic on $PARENT may now use $MTU)"
+    run ip link set dev "$PARENT" mtu "$MTU"
+  fi
+}
+
+# applied: the wanted address (and MTU) are on <sub>.
+applied() {
+  local has mtu
+  has=$(ip -j -4 addr show dev "$SUB" 2> /dev/null | jq -r --arg a "$ADDR" --argjson p "$PREFIX" \
+    '[.[].addr_info[]? | select(.local == $a and .prefixlen == $p)] | length' 2> /dev/null || echo 0)
+  [[ "$has" =~ ^[1-9] ]] || return 1
+  if [[ -n "$MTU" ]]; then
+    mtu=$(link_field "$SUB" '.[0].mtu // 0')
+    [[ "$mtu" == "$MTU" ]] || return 1
+  fi
+  return 0
+}
+
+wait_applied() {
+  local start=$SECONDS
+  while ! applied; do
+    if (( SECONDS - start >= HPS_NET_WAIT )); then
+      fail "networkd did not put $ADDR/$PREFIX${MTU:+ mtu $MTU} on $SUB within ${HPS_NET_WAIT}s (networkctl status $SUB)"
+    fi
+    sleep "$HPS_NET_STEP"
+  done
+}
+
+# remove_stale: any other IPv4 address on <sub> is an earlier run's.
+remove_stale() {
+  local stale
+  while IFS= read -r stale; do
+    [[ -n "$stale" ]] || continue
+    log "removing stale address $stale from $SUB"
+    run ip addr del "$stale" dev "$SUB"
+  done < <(ip -j -4 addr show dev "$SUB" | jq -r --arg a "$ADDR/$PREFIX" \
+    '.[].addr_info[]? | (.local + "/" + (.prefixlen | tostring)) | select(. != $a)')
+}
+
+main() {
+  local state file_state what
+  parse_args "$@"
+  command -v networkctl > /dev/null 2>&1 || fail "networkctl not found (systemd-networkd manages node addresses)"
+  resolve_parent
+  state=$(check_sub)
+  check_address_free
+  run mkdir -p "$HPS_NETWORK_DIR"
+  raise_parent_mtu
+  file_state=$(write_network)
+  if [[ "$file_state" == changed || "$state" == new ]]; then
+    run networkctl reload || fail "networkctl reload exited $?"
+  fi
+  if [[ "$state" == new ]]; then
+    run ip link add link "$PARENT" name "$SUB" type vlan id "$VLAN" || fail "could not create $SUB"
+    what=created
+  elif [[ "$file_state" == changed ]]; then
+    run networkctl reconfigure "$SUB" || fail "networkctl reconfigure $SUB exited $?"
+    what=updated
+  elif ! applied; then
+    log "$SUB lacks $ADDR/$PREFIX${MTU:+ or mtu $MTU} although its file is current; reconfiguring"
+    run networkctl reconfigure "$SUB" || fail "networkctl reconfigure $SUB exited $?"
+    what=reapplied
+  else
+    what=unchanged
+  fi
+  wait_applied
+  remove_stale
+  printf 'net-vlan-address: %s (vlan %s on %s) %s/%s mtu %s: %s\n' \
+    "$SUB" "$VLAN" "$PARENT" "$ADDR" "$PREFIX" "${MTU:-unchanged}" "$what"
+}
+
+main "$@"

@@ -39,6 +39,7 @@ my %KINDS = (
     'storage-down'         => [ \&_args_mac,     900 ],
     'storage-trim-check'   => [ \&_args_mac,     900 ],
     'storage-status'       => [ \&_args_mac,     900 ],
+    'net-up'               => [ \&_args_mac,     600 ],
     'workload-create'      => [ \&_args_wl_create,  3600 ],
     'workload-start'       => [ \&_args_wl_vm,      1800 ],
     'workload-stop'        => [ \&_args_wl_vm,      1800 ],
@@ -118,7 +119,7 @@ sub timeout_for ($kind) { return $KINDS{$kind} ? $KINDS{$kind}[1] : 60 }
 
 # command($kind, \@args, %env): the argv for the kind (never a shell string).
 # env: dispatcher (CLI name/path), storage (hps-storage path), workload (hps-workload path),
-# pins (hps-pins path).
+# pins (hps-pins path), node (hps-node path).
 sub command ($kind, $args, %env) {
     my $ced = $env{dispatcher} // 'ctrl-exec-dispatcher';
     my @a   = @$args;
@@ -127,6 +128,7 @@ sub command ($kind, $args, %env) {
     return ($ced, 'list-requests')                                     if $kind eq 'pairing-list';
     return ($ced, 'approve', @a)                                       if $kind eq 'pairing-approve';
     return ($env{pins} // 'hps-pins', 'prune', @a) if $kind eq 'pins-prune';
+    return ($env{node} // 'hps-node', 'net-up', $a[0], '--wait', 120) if $kind eq 'net-up';
     my $st = $env{storage} // 'hps-storage';
     return ($st, $a[0], 'up', '--wait', 120)                           if $kind eq 'storage-up';
     return ($st, $a[0], 'down')                                        if $kind eq 'storage-down';

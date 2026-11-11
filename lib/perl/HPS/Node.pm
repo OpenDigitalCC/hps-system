@@ -5,7 +5,8 @@ package HPS::Node;
 # stops guests and mirrors and exports the pools), then it waits for the BMC to
 # report Off (hps-bmc, IPS-08) and forces power off only after force_after
 # seconds, logged as a fault. With no BMC driver it stops after the node script
-# and says the power state is not confirmed.
+# and says the power state is not confirmed. net_up() gives a NixOS host its
+# addresses on the storage and transit VLANs (net-vlan-address per network).
 #
 # Every collaborator is injectable (storage, runner, bmc, logger, now, sleep) so
 # the sequence is testable without a node, a BMC or a clock.
@@ -18,6 +19,7 @@ use POSIX qw(strftime);
 use JSON::PP;
 use HPS::Registry;
 use HPS::Storage;
+use HPS::ClusterConfig ();
 
 our $DEFAULT_FORCE_AFTER = 120;
 
@@ -143,6 +145,140 @@ sub power_off ($self, %a) {
     return { result => 'forced', message => "not off after $force_after s: forced off through the BMC (fault)" };
 }
 
+#=== net-up: host addresses on the storage and transit VLANs ====================
+
+our $TRANSIT_MTU = 9000;    # the transit VLAN is jumbo (plans/networking.md)
+
+sub _cluster_val ($self, $c, $key) {
+    my $reg = $self->{registry};
+    return $reg->cluster_exists($c, $key) ? $reg->cluster_get($c, $key) : undef;
+}
+
+sub _host_val ($self, $key) {
+    my $reg = $self->{registry};
+    return $reg->host_exists($self->{mac}, $key) ? $reg->host_get($self->{mac}, $key) : undef;
+}
+
+# net_plan(): the networks this host gets an address on, from the registry and
+# the address rule (HPS::ClusterConfig::vlan_host_address). Storage networks
+# (each network_storage_vlan<N>_subnet) for TYPE SCH or TCH; layout networks of
+# purpose transit for TYPE TCH. Returns {mac, ip, prefix, networks => [{name,
+# vlan, subnet, address, prefix, mtu, script, args} or {name, ..., refused =>
+# reason}]}. Dies (HPS::Keysafe::Error refused) when the host as a whole cannot
+# take part: not a NixOS host, or no provisioning address.
+sub net_plan ($self) {
+    my $reg  = $self->{registry};
+    my $host = $self->{host};
+    my $c    = $reg->active_cluster;
+    my $os   = $self->_host_val('os_id') // '';
+    my (undef, $os_name) = split /:/, $os;
+    _net_fail('refused', "$host: os_id '$os' is not a NixOS system; net-up drives NixOS nodes only")
+        unless defined $os_name && $os_name eq 'nixos';
+    my %type = map { $_ => 1 } split /,/, ($self->_host_val('TYPE') // '');
+    my $ip = $self->_host_val('IP');
+    _net_fail('refused', "$host: no provisioning address (host key IP)") unless defined $ip && length $ip;
+    my $prefix = HPS::ClusterConfig::prefix_of_netmask($self->_host_val('NETMASK'));
+    if (!defined $prefix) {
+        my $cidr = $self->_cluster_val($c, 'network_cidr') // '';
+        ($prefix) = $cidr =~ m{/([0-9]{1,2})\z};
+    }
+    _net_fail('refused', "$host: no provisioning prefix (host key NETMASK or cluster key network_cidr)") unless defined $prefix;
+    my @nets;
+    my %vlans;
+    if ($type{SCH} || $type{TCH}) {
+        my $mtu = $self->_cluster_val($c, 'network_storage_mtu') // 1500;
+        my @vl  = sort { $a <=> $b } map { /^network_storage_vlan([0-9]+)_subnet\z/ ? $1 : () } $reg->cluster_list($c);
+        for my $v (@vl) {
+            push @nets, { name => "storage-vlan$v", purpose => 'storage', vlan => $v, mtu => $mtu,
+                subnet  => $self->_cluster_val($c, "network_storage_vlan${v}_subnet"),
+                gateway => $self->_cluster_val($c, "network_storage_vlan${v}_gateway") };
+        }
+    }
+    if ($type{TCH}) {
+        my $layout = $reg->cluster_exists($c, 'network_layout') ? eval { $reg->cluster_get_json($c, 'network_layout') } : undef;
+        $layout = {} unless ref $layout eq 'HASH';
+        for my $name (sort keys %$layout) {
+            my $n = $layout->{$name};
+            next unless ref $n eq 'HASH' && ($n->{purpose} // '') eq 'transit';
+            push @nets, { name => $name, purpose => 'transit', vlan => $n->{vlan}, mtu => $TRANSIT_MTU, subnet => $n->{cidr} };
+        }
+    }
+    for my $n (@nets) {
+        my $v = $n->{vlan};
+        if (!defined $v || ref $v || $v !~ /^[1-9][0-9]{0,3}\z/ || $v > 4094) {
+            $n->{refused} = 'no VLAN (1-4094): an untagged network needs a NIC of its own';
+            next;
+        }
+        if ($vlans{$v}) {
+            $n->{refused} = "VLAN $v is also network $vlans{$v}";
+            next;
+        }
+        $vlans{$v} = $n->{name};
+        my ($addr, $why) = HPS::ClusterConfig::vlan_host_address($ip, $prefix, $n->{subnet}, gateway => $n->{gateway});
+        if (!defined $addr) { $n->{refused} = $why; next }
+        my ($tp) = $n->{subnet} =~ m{/([0-9]+)\z};
+        $n->{address} = $addr;
+        $n->{prefix}  = $tp + 0;
+        $n->{script}  = 'net-vlan-address';
+        $n->{args}    = [ 'boot', "$v", "$addr/$tp", '--mtu', "$n->{mtu}" ];
+    }
+    return { mac => $self->{mac}, ip => $ip, prefix => $prefix + 0, networks => \@nets };
+}
+
+sub _net_fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
+
+# net_up(dry_run => 0|1, wait => SECONDS): apply net_plan() through the runner,
+# one net-vlan-address call per network. With wait, the node's agent is pinged
+# first (bounded by wait), as after pairing. Returns the plan with result
+# (ok | refused | failed) and per network rc/stderr; result is the worst of the
+# networks (failed over refused over ok). A refused network is not called.
+sub net_up ($self, %a) {
+    my $plan = $self->net_plan;
+    my $host = $self->{host};
+    $plan->{dry_run} = 1 if $a{dry_run};
+    my @nets = @{ $plan->{networks} };
+    my $result = 'ok';
+    for my $n (grep { $_->{refused} } @nets) {
+        $self->_log('warning', "net-up $host: $n->{name} refused: $n->{refused}");
+        $result = 'refused';
+    }
+    if ($a{dry_run} || !grep { !$_->{refused} } @nets) {
+        $plan->{result} = $result;
+        return $plan;
+    }
+    $self->_await_agent($a{wait} // 0);
+    for my $n (grep { !$_->{refused} } @nets) {
+        $self->_log('info', "net-up $host: $n->{name}: net-vlan-address " . join(' ', @{ $n->{args} }));
+        my $r = $self->{runner}->call(mac => $self->{mac}, script => $n->{script}, args => [ @{ $n->{args} } ], input => undef);
+        $n->{rc} = $r->{rc};
+        my $last = (grep { length } split /\n/, ($r->{stderr} // ''))[-1] // '';
+        my $sum  = (grep { length } split /\n/, ($r->{stdout} // ''))[-1] // '';
+        if ($r->{rc} == 0) {
+            $n->{summary} = $sum;
+            $self->_log('info', "net-up $host: $n->{name}: $sum");
+            next;
+        }
+        $n->{error} = $last;
+        $self->_log('error', "net-up $host: $n->{name}: net-vlan-address exited $r->{rc}" . (length $last ? ": $last" : ''));
+        $result = $r->{rc} == 3 && $result ne 'failed' ? 'refused' : 'failed';
+    }
+    $plan->{result} = $result;
+    return $plan;
+}
+
+# Ping the agent until it answers or wait seconds pass (calls go ahead anyway).
+sub _await_agent ($self, $wait) {
+    return 1 unless $wait > 0 && $self->{runner}->can('ping');
+    my $deadline = $self->{now}->() + $wait;
+    while (1) {
+        return 1 if $self->{runner}->ping($self->{mac});
+        last if $self->{now}->() >= $deadline;
+        $self->{sleep}->(2);
+    }
+    $self->_log('info', "agent of $self->{mac} did not answer a ping within ${wait}s; calling anyway");
+    return 0;
+}
+
 #=== the BMC command ===========================================================
 
 package HPS::Node::Bmc;
@@ -193,7 +329,7 @@ __END__
 
 =head1 NAME
 
-HPS::Node - IPS-side node power control (power-off)
+HPS::Node - IPS-side node power control (power-off) and host VLAN addresses (net-up)
 
 =head1 SEQUENCE
 
@@ -207,6 +343,12 @@ path: stop after the node script and report.
 The node's own C<hps-shutdown-storage.service> stops guests and mirrors and
 exports the pools on every poweroff, so the pools are exported whether or not
 the IPS asked.
+
+C<net_up>: C<net_plan> lists the storage networks (C<network_storage_vlanN_subnet>;
+TYPE SCH or TCH) and the layout networks of purpose transit (TYPE TCH) with
+the host's address on each (C<HPS::ClusterConfig::vlan_host_address>), then
+one C<net-vlan-address boot VLAN ADDR/PREFIX --mtu MTU> call per network.
+NixOS hosts only. Nothing is recorded: the addresses follow from C<IP>.
 
 =head1 REGISTRY KEYS (per host)
 

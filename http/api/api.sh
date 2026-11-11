@@ -260,6 +260,37 @@ api_storage_after_pair() {
 }
 
 #===============================================================================
+# Scale test phase 2 hook: a paired NixOS node gets its VLAN addresses back
+#===============================================================================
+# Nodes run from RAM and pair on every boot, so after pairing a NixOS host
+# whose TYPE contains SCH or TCH gets a `net-up <mac>` job (hps-node net-up:
+# net-vlan-address per storage and transit network). It is queued before the
+# storage hook's storage-up, and the runner takes jobs oldest first, so the
+# storage addresses are there before the pool's exports. Anything else is a
+# no-op with a log line.
+api_net_after_pair() {
+  local mac="$1" type os id
+  type=$(host_registry "$mac" get TYPE 2>/dev/null) || type=""
+  if [[ ",$type," != *,SCH,* && ",$type," != *,TCH,* ]]; then
+    hps_log info "$API_LOG_PREFIX net hook: $mac is not an SCH or TCH host; nothing to do"
+    return 0
+  fi
+  os=$(host_registry "$mac" get os_id 2>/dev/null) || os=""
+  if [[ "$os" != *:nixos:* ]]; then
+    hps_log info "$API_LOG_PREFIX net hook: $mac is not a NixOS host (os_id '${os}'); nothing to do"
+    return 0
+  fi
+  mac="${mac//[:.-]/}"
+  mac="${mac,,}"
+  if id=$(hps_job_submit net-up "$mac"); then
+    hps_log info "$API_LOG_PREFIX net hook: queued net-up for $mac as job $id"
+  else
+    hps_log error "$API_LOG_PREFIX net hook: could not queue net-up for $mac"
+  fi
+  return 0
+}
+
+#===============================================================================
 # Registry Action Handler
 #===============================================================================
 handle_registry_action() {
@@ -587,6 +618,7 @@ handle_system_action() {
         return
       fi
       if ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID" "$CLIENT_IP"; then
+        api_net_after_pair "$REQUEST_MAC"
         api_storage_after_pair "$REQUEST_MAC"
         api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
       else

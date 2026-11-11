@@ -152,6 +152,9 @@ in
       # CS-3.12a: node-to-node iSCSI proof (open-iscsi comes with the compute profile).
       iscsi-login-test.source = mkScript "iscsi-login-test" (scriptsDir + "/iscsi-login-test");
       iscsi-login-test.options.profile = "node";
+      # Scale test phase 2: a host address on a storage or transit VLAN (hps-node net-up).
+      net-vlan-address.source = mkScript "net-vlan-address" (scriptsDir + "/net-vlan-address");
+      net-vlan-address.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

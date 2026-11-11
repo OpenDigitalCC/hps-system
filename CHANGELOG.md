@@ -12,6 +12,30 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Host addresses on storage and transit VLANs (2026-11-11)
+
+- new: NixOS nodes get an address on each storage network and, for TCH hosts,
+  on the transit network (scale test phase 2: until now only the boot NIC had
+  one, so an SCH could not export iSCSI on its storage VLANs and TCHs could not
+  reach each other on transit). Address rule, no new state: the host part of
+  the provisioning address inside the target subnet, modulo its size
+  (`HPS::ClusterConfig::vlan_host_address`); network, broadcast and gateway
+  refused. s1: sch-001 10.11.0.153 gets 10.113.0.153 (storage A, VLAN 113),
+  10.113.1.153 (storage B, VLAN 114) and, as a TCH, 10.11.2.153 (transit,
+  VLAN 112).
+- new: node script `net-vlan-address <parent-iface|boot> <vlan> <ip>/<prefix>
+  [--mtu N]`, allowlisted on every node image (`hps-ctrl-exec.nix`). It makes
+  `<nic>.<vlan>` and gives it the address and MTU through a systemd-networkd
+  `.network` file (`05-hps-vlan-<link>.network`, ahead of hps-net's MAC
+  match), raises the parent's MTU when lower, and is idempotent.
+- new: `hps-node net-up <host> [--dry-run] [--json] [--wait SECONDS]`, one
+  `net-vlan-address` call per network; also open to operators through the
+  `hps-node` ips-admin script. New job kind `net-up <mac>`, queued by the API
+  after every pairing of a NixOS SCH or TCH host, before `storage-up`, so a
+  rebooted node gets its addresses back on its own.
+- tests: `t/198-vlan-host-address.t`, `t/199-net-up.t`, `t/45-jobs.t`,
+  `test_p3_198_net_vlan_address.bats`, `test_p3_199_net_up_hook.bats`.
+
 ## Storage networks on any VLAN (2026-11-11)
 
 - change: `network_storage_base_vlan` takes 2 to 4094 (was 31 to 99), in

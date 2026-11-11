@@ -1,15 +1,17 @@
 #!/usr/bin/env perl
-# hps-node: node power control from the IPS (HPS::Node).
+# hps-node: node power control and host VLAN addresses from the IPS (HPS::Node).
 use strict;
 use warnings;
 use FindBin qw($RealBin);
 use lib "$RealBin/../lib/perl";
 use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP ();
 use HPS::Node;
 use HPS::Keysafe;
 
 # 0 off (or no BMC: requested), 1 failed, 2 usage, 3 refused, 4 not found, 6 forced off (fault)
 my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+my %NET_EXIT = (ok => 0, refused => 3, failed => 1);
 
 sub usage {
     my ($msg) = @_;
@@ -17,6 +19,7 @@ sub usage {
     print STDERR <<'USAGE';
 Usage:
   hps-node power-off <host> [--force-after SECONDS]
+  hps-node net-up <host> [--dry-run] [--json] [--wait SECONDS]
 <host> is a MAC (any format) or a registry HOSTNAME. power-off runs
 hps-storage <host> down, then the node script node-poweroff (the node stops
 guests and mirrors and exports its pools), then waits for the BMC to report
@@ -26,15 +29,78 @@ or exit 5) it stops after the node script and says the power state is not
 confirmed. HPS_BMC_CMD names the BMC command (default hps-bmc).
 Exit: 0 off or requested without a BMC, 1 failed, 2 usage, 4 not found,
 6 forced off through the BMC.
+
+net-up gives a NixOS host its addresses on the cluster's storage networks
+(network_storage_vlan<N>_subnet; TYPE SCH or TCH) and on the layout networks
+of purpose transit (TYPE TCH): one node call
+  net-vlan-address boot <vlan> <address>/<prefix> --mtu <mtu>
+per network. The address keeps the host part of the host's provisioning
+address (host key IP) inside the network's subnet (10.11.0.153/24 gives
+10.113.0.153 on 10.113.0.0/24); a network where that lands on the network,
+broadcast or gateway address is refused and not called. Storage MTU is
+network_storage_mtu (default 1500), transit 9000. --dry-run prints the node
+calls and calls nothing; --wait pings the agent first (after pairing).
+Exit: 0 every network done (or none for this host), 1 a node call failed,
+2 usage, 3 refused (not NixOS, no address, or a network refused), 4 not found.
 USAGE
     return 2;
 }
 
+sub fail_from {
+    my ($err) = @_;
+    if (ref $err && $err->isa('HPS::Keysafe::Error')) {
+        print STDERR 'hps-node: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    $err =~ s/\s+\z//;
+    print STDERR "hps-node: $err\n";
+    return 1;
+}
+
+sub net_up {
+    my (@argv) = @_;
+    my ($dry, $json, $wait);
+    GetOptionsFromArray(\@argv, 'dry-run' => \$dry, 'json' => \$json, 'wait=i' => \$wait) or return usage();
+    my $host = shift @argv // return usage('host required');
+    return usage('net-up takes one host') if @argv;
+    return usage('--wait must be 0 to 900 seconds') if defined $wait && ($wait < 0 || $wait > 900);
+    my $res = eval {
+        my $n = HPS::Node->new(host => $host);
+        $n->net_up(dry_run => $dry ? 1 : 0, wait => $wait // 0);
+    };
+    return fail_from($@) unless $res;
+    if ($json) {
+        print JSON::PP->new->canonical->pretty->encode($res);
+        return $NET_EXIT{ $res->{result} } // 1;
+    }
+    my @nets = @{ $res->{networks} };
+    for my $n (@nets) {
+        my $what = $n->{name} . (defined $n->{vlan} && !ref $n->{vlan} ? " (vlan $n->{vlan})" : '');
+        if ($n->{refused}) { print "$what: refused: $n->{refused}\n"; next }
+        my $call = join ' ', $n->{script}, @{ $n->{args} };
+        if ($dry)                  { print "$what: $call\n" }
+        elsif (!defined $n->{rc})  { print "$what: not called\n" }
+        elsif ($n->{rc} == 0)      { print "$what: $n->{summary}\n" }
+        else                       { print "$what: $call exited $n->{rc}" . (length($n->{error} // '') ? ": $n->{error}" : '') . "\n" }
+    }
+    my $done = grep { !$_->{refused} } @nets;
+    my $prefix = $dry ? 'dry run: ' : '';
+    print "${host}: ${prefix}no storage or transit network for this host\n" unless @nets;
+    print "${host}: ${prefix}$res->{result}, " . scalar(@nets) . " network(s), $done to call, address rule from $res->{ip}/$res->{prefix}\n" if @nets;
+    return $NET_EXIT{ $res->{result} } // 1;
+}
+
 sub main {
     my @argv = @_;
+    my $op = $argv[0];
+    return usage('operation required') unless defined $op;
+    if ($op eq 'net-up') {
+        shift @argv;
+        return net_up(@argv);
+    }
     my $force_after;
     GetOptionsFromArray(\@argv, 'force-after=i' => \$force_after) or return usage();
-    my $op   = shift @argv // return usage('operation required');
+    $op      = shift @argv // return usage('operation required');
     return usage("unknown operation '$op'") unless $op eq 'power-off';
     my $host = shift @argv // return usage('host required');
     return usage('power-off takes one host') if @argv;
@@ -43,16 +109,7 @@ sub main {
         my $n = HPS::Node->new(host => $host);
         $n->power_off(defined $force_after ? (force_after => $force_after) : ());
     };
-    unless ($res) {
-        my $err = $@;
-        if (ref $err && $err->isa('HPS::Keysafe::Error')) {
-            print STDERR 'hps-node: ' . $err->message . "\n";
-            return $EXIT{ $err->kind } // 1;
-        }
-        $err =~ s/\s+\z//;
-        print STDERR "hps-node: $err\n";
-        return 1;
-    }
+    return fail_from($@) unless $res;
     print "$host: $res->{message}\n";
     return $HPS::Node::CODE{ $res->{result} } // 1;
 }

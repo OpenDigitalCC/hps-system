@@ -384,6 +384,46 @@ sub derive_storage ($count, $base_vlan, $subnet_base, $prefix, $dns_domain) {
     return (\%out, undef);
 }
 
+#--- host addresses on storage and transit networks ---------------------------------------
+
+# vlan_host_address($ip, $prefix, $target_cidr, gateway => IP): a host's address
+# on a storage or transit network, with no new state: the host part of its
+# provisioning address $ip/$prefix, modulo the size of the target subnet, inside
+# that subnet. For a /24 into a /24 the last octet is kept (10.11.0.153/24 into
+# 10.113.0.0/24 gives 10.113.0.153). Returns ($address, undef), or (undef, $why)
+# when an input is malformed or the result is the target's network or broadcast
+# address or the given gateway.
+sub vlan_host_address ($ip, $prefix, $target, %o) {
+    return (undef, "provisioning address '" . ($ip // '') . "' is not an IPv4 address")
+        unless defined $ip && _valid_ip($ip);
+    return (undef, "provisioning prefix '" . ($prefix // '') . "' is not 1-32")
+        unless defined $prefix && $prefix =~ /^[0-9]{1,2}\z/ && $prefix >= 1 && $prefix <= 32;
+    my ($tip, $tp) = defined $target ? $target =~ m{^([0-9.]+)/([0-9]{1,2})\z} : ();
+    return (undef, "target subnet '" . ($target // '') . "' is not IPv4/prefix")
+        unless defined $tip && _valid_ip($tip);
+    return (undef, "target subnet $target: prefix must be 8 to 30") unless $tp >= 8 && $tp <= 30;
+    my $host  = _ip_to_int($ip) & ~_ip_to_int(_netmask($prefix)) & 0xFFFFFFFF;
+    my $size  = 2**(32 - $tp);
+    my $net   = _ip_to_int($tip) & _ip_to_int(_netmask($tp));
+    my $off   = $host % $size;
+    my $addr  = _int_to_ip($net + $off);
+    my $short = _int_to_ip($net) . "/$tp";
+    return (undef, "$ip/$prefix maps to $addr, the network address of $short") if $off == 0;
+    return (undef, "$ip/$prefix maps to $addr, the broadcast address of $short") if $off == $size - 1;
+    return (undef, "$ip/$prefix maps to $addr, the gateway of $short")
+        if defined $o{gateway} && length $o{gateway} && $addr eq $o{gateway};
+    return ($addr, undef);
+}
+
+# prefix_of_netmask('255.255.255.0') -> 24; undef when not a contiguous mask.
+sub prefix_of_netmask ($mask) {
+    return undef unless defined $mask && _valid_ip($mask);
+    my $n = _ip_to_int($mask);
+    my $p = 0;
+    $p++ while $p < 32 && ($n & (0x80000000 >> $p));
+    return _netmask($p) eq $mask ? $p : undef;
+}
+
 #--- the object ----------------------------------------------------------------------------
 
 sub _default_logger ($level, $msg) {

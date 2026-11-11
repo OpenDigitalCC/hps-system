@@ -184,9 +184,9 @@ id. keysafe (`clusters/<cluster>/keysafe/`) is the exception: root-only
 The web user holds no dispatcher and no keysafe access. The CGI asks for a
 privileged action by writing a job file into `clusters/<cluster>/jobs/new/`;
 `bin/hps-jobs`, a root process under supervisor, runs it from a fixed table of
-thirteen kinds (`%KINDS` in `lib/perl/HPS/Jobs.pm`): `pairing-window-open`,
+fourteen kinds (`%KINDS` in `lib/perl/HPS/Jobs.pm`): `pairing-window-open`,
 `pairing-window-close`, `pairing-list`, `pairing-approve`; `storage-up`,
-`storage-down`, `storage-trim-check`, `storage-status`; `workload-create`,
+`storage-down`, `storage-trim-check`, `storage-status`; `net-up`; `workload-create`,
 `workload-start`, `workload-stop`, `workload-status`; and
 `pins-prune`. `hps-jobs` validates the arguments again. Anything that can
 write that queue (group `hps`) can request those actions, so group membership is

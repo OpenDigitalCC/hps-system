@@ -123,6 +123,43 @@ In the text file format the JSON goes on one line
 after `network_layout =`; in a JSON file it may be an object. It is stored,
 compared and exported as canonical one-line JSON.
 
+### Host addresses on storage and transit networks
+
+A NixOS host gets an address on each storage network
+(`network_storage_vlan<N>_subnet`, VLAN `<N>`) when its `TYPE` contains `SCH`
+or `TCH`, and on each layout network of `purpose` `transit` (tagged, `vlan`
+set) when it contains `TCH`. No state is added: the address keeps the host
+part of the host's provisioning address (host key `IP`, prefix from `NETMASK`
+or `network_cidr`) inside the target subnet, modulo the subnet's size. For a
+/24 the last octet is kept. A network where that lands on the subnet's network
+or broadcast address or on its gateway (`network_storage_vlan<N>_gateway`) is
+refused and logged; the other networks still go ahead. MTU:
+`network_storage_mtu` (default 1500) for storage, 9000 for transit.
+
+Scale test s1, sch-001 at 10.11.0.153/24, storage base VLAN 113, subnet base
+10.113, transit VLAN 112 on 10.11.2.0/24:
+
+| network | VLAN | address |
+| --- | --- | --- |
+| storage A | 113 | 10.113.0.153/24 |
+| storage B | 114 | 10.113.1.153/24 |
+| transit (TCH only) | 112 | 10.11.2.153/24 |
+
+`hps-node net-up <host> [--dry-run] [--json] [--wait SECONDS]` computes them
+(`HPS::ClusterConfig::vlan_host_address`) and calls the node script
+`net-vlan-address boot <vlan> <address>/<prefix> --mtu <mtu>` once per
+network; `--dry-run` prints those calls. After every pairing (nodes run from
+RAM and pair on each boot) the API queues a `net-up <mac>` job for such a host,
+ahead of the storage hook's `storage-up`, so a rebooted node gets its addresses
+back with no operator step.
+
+`net-vlan-address` makes `<bootnic>.<vlan>` (the boot NIC is the physical
+NIC carrying `hps.mac`) and gives it the address and MTU through
+`/run/systemd/network/05-hps-vlan-<link>.network`, raising the boot NIC's
+MTU when lower. It refuses a VLAN link that is a bridge member: a storage
+network also attached through the layout (host key `nets`) has its bridge
+from `net-bridge-ensure`, and an address there would belong on the bridge.
+
 ## Catalogue
 
 Produced by `hps-cluster-config questions --json` (rows in menu order). The
