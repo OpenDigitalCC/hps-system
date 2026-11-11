@@ -145,7 +145,7 @@ keys may be empty.
 | `network_static_end` | dhcp | Static address range end (inside the DHCP network) | `ip` | - | no |
 | `network_reserved` | dhcp | Reserved addresses (IPv4, comma or space separated; may be empty) | `iplist` | (empty) | no |
 | `network_storage_count` | storage-networks | Number of storage networks to configure (1-10) | `int:0..10` | `2` | no |
-| `network_storage_base_vlan` | storage-networks | Storage network base VLAN ID (31-99) | `int:31..99` | `31` | no |
+| `network_storage_base_vlan` | storage-networks | Storage network base VLAN ID (2-4094) | `int:2..4094` | `31` | no |
 | `network_storage_subnet_base` | storage-networks | Storage subnet base | `subnet_base` | from `network_storage_base_vlan` | no |
 | `network_storage_subnet_cidr` | storage-networks | Storage subnet CIDR mask (16-28) | `int:16..28` | `24` | no |
 | `network_storage_mtu` | storage-networks | Enable jumbo frames (9000 MTU) on storage networks? | `enum:1500,9000` | `1500` | no |

@@ -412,10 +412,10 @@ cluster_storage_init_network() {
   
   # Get base VLAN ID
   storage_base_vlan=$(cli_prompt \
-    "Storage network base VLAN ID (31-99)" \
+    "Storage network base VLAN ID (2-4094)" \
     "31" \
-    "^(3[1-9]|[4-9][0-9])$" \
-    "VLAN ID must be between 31 and 99")
+    "^([2-9]|[1-9][0-9]{1,2}|[1-3][0-9]{3}|40[0-8][0-9]|409[0-4])$" \
+    "VLAN ID must be between 2 and 4094")
   
   # Get subnet base
   storage_subnet_base=$(cli_prompt \

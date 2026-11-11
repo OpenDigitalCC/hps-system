@@ -104,19 +104,19 @@ num_storage_networks=$(cli_prompt "Number of storage networks to configure (1-10
 
 # Base VLAN ID
 cli_note "Storage VLANs will start from this base ID (e.g., 31, 32, 33...)"
-storage_base_vlan=$(cli_prompt "Storage network base VLAN ID (31-99)" "$default_vlan" "^[3-9][0-9]$" \
-  "Invalid VLAN ID: must be between 31 and 99")
+storage_base_vlan=$(cli_prompt "Storage network base VLAN ID (2-4094)" "$default_vlan" "^([2-9]|[1-9][0-9]{1,2}|[1-3][0-9]{3}|40[0-8][0-9]|409[0-4])$" \
+  "Invalid VLAN ID: must be between 2 and 4094")
 
 # Additional validation for VLAN range
-if [[ "$storage_base_vlan" -lt 31 ]]; then
-  hps_log "error" "Base VLAN must be 31 or higher"
+if [[ "$storage_base_vlan" -lt 2 ]]; then
+  hps_log "error" "Base VLAN must be 2 or higher"
   return 1
 fi
 
-# Calculate max VLAN to ensure we don't exceed 99
+# Calculate max VLAN to ensure we don't exceed 4094
 max_vlan=$((storage_base_vlan + num_storage_networks - 1))
-if [[ $max_vlan -gt 99 ]]; then
-  hps_log "error" "VLAN range would exceed 99 (max would be $max_vlan)"
+if [[ $max_vlan -gt 4094 ]]; then
+  hps_log "error" "VLAN range would exceed 4094 (max would be $max_vlan)"
   return 1
 fi
 

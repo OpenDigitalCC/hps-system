@@ -44,7 +44,11 @@ good('network_storage_count', '0', 'zero networks');
 good('network_storage_count', '10', 'ten');
 bad('network_storage_count', '11', 'eleven');
 good('network_storage_base_vlan', '99', 'vlan 99');
-bad('network_storage_base_vlan', '30', 'vlan 30');
+good('network_storage_base_vlan', '113', 'vlan 113 (scale test storage A)');
+good('network_storage_base_vlan', '2', 'vlan 2');
+good('network_storage_base_vlan', '4094', 'vlan 4094');
+bad('network_storage_base_vlan', '1', 'vlan 1 (the default VLAN)');
+bad('network_storage_base_vlan', '4095', 'vlan 4095');
 good('network_storage_subnet_base', '10.31', 'X.Y');
 bad('network_storage_subnet_base', '10.31.0', 'X.Y.Z');
 bad('network_storage_subnet_base', '10.256', 'octet 256');
@@ -103,8 +107,14 @@ for my $s ([ 3, 31, '10.31', 24 ], [ 2, 40, '10.40', 16 ], [ 4, 31, '10.31', 26 
     is($e, undef, "storage derive count=$s->[0] /$s->[3]: no error");
     is_deeply($derived, shell_050(@$s, 'lab.example'), "storage derive count=$s->[0] /$s->[3] equals 050");
 }
-my (undef, $e) = HPS::ClusterConfig::derive_storage(3, 98, '10.98', 24, 'x');
-like($e, qr/exceed 99/, 'VLAN range past 99 is an error');
+my (undef, $e) = HPS::ClusterConfig::derive_storage(3, 4093, '10.98', 24, 'x');
+like($e, qr/exceed 4094/, 'VLAN range past 4094 is an error');
+{
+    my ($d, $e2) = HPS::ClusterConfig::derive_storage(2, 113, '10.113', 24, 'x');
+    is($e2, undef, 'VLANs 113-114 derive');
+    is($d->{network_storage_vlan113_subnet}, '10.113.0.0/24', 'storage A subnet');
+    is($d->{network_storage_vlan114_subnet}, '10.113.1.0/24', 'storage B subnet');
+}
 (undef, $e) = HPS::ClusterConfig::derive_storage(1, 31, '10.31', 20, 'x');
 like($e, qr/Unsupported CIDR/, 'a prefix the shell cannot lay out is an error');
 
@@ -133,6 +143,29 @@ is(scalar @{ $plan->{changes} }, 0, 'planning again changes nothing');
 ok((grep { $_ eq 'network_storage_vlan31_allocated' } @{ $plan->{unchanged} }), 'allocated=true is kept, not reset');
 $cc->apply($cfg);
 is($reg->cluster_get('lab', 'network_storage_vlan31_allocated'), 'true', 'apply does not reset allocated state');
+
+{
+    # A base VLAN past 255 has no 10.<vlan> default: the subnet base must be given.
+    # A fresh cluster, so no subnet base is already stored.
+    make_path("$base/clusters/hi/cluster.db");
+    my $cc2 = HPS::ClusterConfig->new(registry => $reg, cluster => 'hi', logger => sub { });
+    my $hi = sub {
+        my ($sbase) = @_;
+        return $cc2->plan([ map { { key => $_->[0], value => $_->[1], line => $_->[2] } }
+            [ network_dns_domain => 'lab.example', 1 ],
+            [ network_storage_count => 2, 2 ],
+            [ network_storage_base_vlan => 300, 3 ],
+            (defined $sbase ? ([ network_storage_subnet_base => $sbase, 4 ]) : ()),
+            [ network_storage_subnet_cidr => 24, 5 ],
+        ]);
+    };
+    my $p = $hi->(undef);
+    like(join(' ', map { $_->{message} } @{ $p->{errors} }), qr/network_storage_subnet_base must be set/, 'base VLAN 300 without a subnet base is an error');
+    $p = $hi->('10.130');
+    is(scalar @{ $p->{errors} }, 0, 'base VLAN 300 with a subnet base plans');
+    my %n = map { $_->{key} => $_->{new} } @{ $p->{changes} };
+    is($n{network_storage_vlan301_subnet}, '10.130.1.0/24', 'and derives VLAN 301');
+}
 
 $plan = $cc->plan([ { key => 'network_dhcp_ip', value => '10.99.1.2', line => 7 } ]);
 like($plan->{errors}[0]{message}, qr/expected 10\.99\.1\.1/, 'a given derived key must agree');

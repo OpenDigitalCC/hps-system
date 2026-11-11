@@ -12,6 +12,17 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Storage networks on any VLAN (2026-11-11)
+
+- change: `network_storage_base_vlan` takes 2 to 4094 (was 31 to 99), in
+  `hps-cluster-config`, the interactive menu and `050-set-storage-network.sh`.
+  31 stays the default and the conventional range. A per-cluster VLAN plan,
+  such as the scale test's storage A and B on 113 and 114, no longer has to
+  fit under 100. A base VLAN above 255 has no `10.<vlan>` default subnet base,
+  so `network_storage_subnet_base` must be given; it is an error, where it used
+  to derive nothing without a word.
+- tests: `t/81-cluster-config-validate.t`.
+
 ## workload-destroy is no longer a job kind (2026-11-11)
 
 - removed: `workload-destroy` from the root job queue (`HPS::Jobs` and

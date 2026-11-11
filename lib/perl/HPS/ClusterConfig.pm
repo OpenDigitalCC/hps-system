@@ -100,7 +100,7 @@ my @CATALOGUE = (
         prompt => 'Number of storage networks to configure (1-10)', rule => 'int:0..10', default => '2',
         derives => ['network_storage_vlanN_*']),
     _q(key => 'network_storage_base_vlan', group => 'storage-networks',
-        prompt => 'Storage network base VLAN ID (31-99)', rule => 'int:31..99', default => '31',
+        prompt => 'Storage network base VLAN ID (2-4094)', rule => 'int:2..4094', default => '31',
         derives => ['network_storage_vlanN_*']),
     _q(key => 'network_storage_subnet_base', group => 'storage-networks',
         prompt => 'Storage subnet base', rule => 'subnet_base', default_from => 'network_storage_base_vlan',
@@ -368,7 +368,7 @@ sub derive_storage ($count, $base_vlan, $subnet_base, $prefix, $dns_domain) {
     my %out;
     return (\%out, undef) if $count == 0;
     my $max = $base_vlan + $count - 1;
-    return (undef, "VLAN range would exceed 99 (max would be $max)") if $max > 99;
+    return (undef, "VLAN range would exceed 4094 (max would be $max)") if $max > 4094;
     for my $i (0 .. $count - 1) {
         my $vlan   = $base_vlan + $i;
         my $subnet = storage_subnet($subnet_base, $i, $prefix);
@@ -577,6 +577,10 @@ sub plan ($self, $entries) {
         for my $in (qw(network_storage_count network_storage_base_vlan network_storage_subnet_cidr)) {
             my $v = $eff->($in);
             $ok = 0 if !defined $v || validate_value($BY_KEY{$in}, $v);
+        }
+        if ($ok && defined $base && $base =~ /\A\d+\z/ && $base > 255 && (!defined $eff->('network_storage_subnet_base') || $eff->('network_storage_subnet_base') eq '')) {
+            $err->($at, "network_storage_subnet_base must be set: the default 10.<base VLAN> needs a base VLAN of 255 or less (got $base)");
+            $ok = 0;
         }
         $ok = 0 if !defined $sbase || validate_value($BY_KEY{network_storage_subnet_base}, $sbase);
         if ($ok && $count > 0 && (!defined $dom || $dom eq '')) {
