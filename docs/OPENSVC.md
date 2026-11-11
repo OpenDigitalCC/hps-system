@@ -70,6 +70,7 @@ All run as root under ctrl-exec profile `node`; each logs every command as
 | `osvc-object-delete <obj>` | `om <obj> delete --local --ignore-not-found`; stops and unprovisions nothing | 0, 1, 2 |
 | `osvc-freeze`, `osvc-thaw` | `om node freeze`, `om node thaw` | 0, 1, 2 |
 | `osvc-secret-set` | Cluster secret on stdin (`input = raw`), see below | 0, 1, 2, 3 |
+| `osvc-ca-export` | Prints this node's cluster CA (`<mtime> <base64>`), read-only; see The cluster CA | 0, 1, 2 |
 | `osvc-rig-probe` | Lab test only (rig test 2); remove after the rig results are recorded | 0, 1, 2, 3 |
 
 `<obj>` is `svc/<name>` or `<name>`, `^[a-z][a-z0-9-]{0,31}$`.
@@ -139,6 +140,28 @@ sends it as confidential input to `osvc-secret-set`, which stores it in RAM and
 restarts `opensvc-daemon`. Until it has arrived the unit stays down
 (`ConditionPathExists`). Run it for every node, and again on every node after a
 node is paired, because the restart is also what refreshes the node list.
+
+### The cluster CA
+
+om3 nodes authenticate each other with certificates from the cluster CA
+(`system/sec/ca`), and node tokens are signed with its key, so every node needs
+the same CA. A RAM-booted node would otherwise create its own at every boot and no
+two nodes would trust each other. The IPS keeps the one CA in the keysafe (stored
+secret `opensvc-ca`, one line `<mtime> <base64 of ca.conf>`, never logged):
+
+- The first `hps-osvc deliver` finds none, sends the secret alone, and reads the CA
+  the node daemon created through the read-only node script `osvc-ca-export`
+  (`node` profile, no input), then stores it.
+- Every later `hps-osvc deliver` sends it as a second input line to
+  `osvc-secret-set`, which writes `ca.conf` (0600, directory 0700) with the stored
+  mtime before restarting the daemon. Discovery prefers the newest copy, so the
+  mtime must be the original. When the node's CA differed, `cert.conf` is removed
+  and the daemon reissues the node certificate from the shared CA. A node that made
+  its own CA before the keysafe held one is brought into line by its next deliver.
+- `hps-osvc ca-forget` deletes the stored CA for a deliberate re-bootstrap.
+  `om cluster ca rotate` is not supported: HPS would re-seed the old CA at the next
+  boot, so a rotation needs a re-export first. A second cluster has its own keysafe
+  and so its own CA.
 
 ## Lab rig tests
 

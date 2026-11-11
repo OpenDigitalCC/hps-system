@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# osvc-ca-export - print this node's om3 cluster CA file for the IPS. Read-only.
+#
+# Usage: osvc-ca-export          (no arguments)
+# Waits up to 30 seconds (poll 1 s) for the daemon to bootstrap its CA file
+# $OSVC_ETC/namespaces/system/sec/ca.conf (non-empty), then prints exactly one line
+#
+#   <mtime epoch> <base64 -w0 of the file>
+#
+# The file holds the CA signing key (crypt-encrypted with the cluster secret), so
+# hps-osvc keeps the line in the keysafe as 'opensvc-ca' and never logs it; this
+# script's stderr only describes what it does, never the content. The mtime goes
+# with it because om3 discovery prefers the peer copy with the newest mtime.
+#
+# Overrides for tests: OSVC_ETC (default /etc/opensvc), OSVC_CA_WAIT (default 30).
+# Exit: 0 printed, 1 the file never appeared, 2 usage.
+
+set -euo pipefail
+
+: "${OSVC_ETC:=/etc/opensvc}"
+: "${OSVC_CA_WAIT:=30}"
+
+log() {
+  printf '[osvc-ca-export] %s\n' "$*" >&2
+}
+
+main() {
+  local ca waited=0 mtime
+  if [[ $# -ne 0 ]]; then
+    echo "Usage: osvc-ca-export" >&2
+    exit 2
+  fi
+  ca="$OSVC_ETC/namespaces/system/sec/ca.conf"
+  while [[ ! -s "$ca" ]]; do
+    if [[ "$waited" -ge "$OSVC_CA_WAIT" ]]; then
+      log "no cluster CA file at $ca after ${OSVC_CA_WAIT}s"
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  mtime=$(stat -c %Y "$ca")
+  log "reading $ca (content not shown)"
+  printf '%s ' "$mtime"
+  base64 -w0 "$ca"
+  printf '\n'
+}
+
+main "$@"

@@ -1,5 +1,12 @@
 #!/usr/bin/env perl
-# hps-osvc: deliver the OpenSVC cluster secret to a node over ctrl-exec.
+# hps-osvc: deliver the OpenSVC cluster secret and the cluster CA to a node over ctrl-exec.
+#
+# The CA (IPS-12): om3 nodes must share one CA, key included. The keysafe holds it
+# as the stored secret 'opensvc-ca' ("<mtime> <base64 ca.conf>"). When it is there,
+# deliver sends it as line 2 of the osvc-secret-set input. When it is not, the
+# first deliver sends the secret alone, the node daemon bootstraps a CA, and
+# deliver reads it back with the read-only node script osvc-ca-export and keeps
+# it. The CA is never printed, logged or put in an argument.
 use strict;
 use warnings;
 use FindBin qw($RealBin);
@@ -15,6 +22,7 @@ sub usage {
     print STDERR <<'USAGE';
 Usage:
   hps-osvc deliver <host> [--dry-run]
+  hps-osvc ca-forget
 <host> is a MAC (any format) or a registry HOSTNAME. deliver sends the cluster's
 OpenSVC secret (keysafe purpose 'opensvc-cluster', 16 random bytes sent as 32 hex characters, created on first use) as confidential
 input to the node script osvc-secret-set, through scripts/hps-run.sh --input.
@@ -22,7 +30,15 @@ The node stores it in RAM and (re)starts opensvc-daemon, which rewrites its
 config, including the node list, from the IPS. Run it for every node, and again
 on every node after a node is paired. The secret appears in no argument, no
 output and no log. --dry-run prints the call and sends nothing.
-Exit: 0 ok, 1 failed, 2 usage, 3 refused, 4 not found.
+The cluster CA: om3 nodes must share one. deliver also sends the CA kept in the keysafe
+(stored secret 'opensvc-ca') as a second input line. When the keysafe has none, the
+first deliver sends the secret alone, then reads the CA the node daemon created
+(node script osvc-ca-export) into the keysafe. A node that made its own CA earlier is
+brought into line by its next deliver (its node certificate is reissued). The CA is never printed or logged.
+ca-forget deletes the stored CA, for a deliberate re-bootstrap: the next deliver
+captures a new one.
+Exit: 0 ok, 1 failed (also: secret delivered but the CA could not be read), 2 usage,
+3 refused, 4 not found.
 USAGE
     return 2;
 }
@@ -31,16 +47,62 @@ sub runner { return $ENV{HPS_OSVC_RUN} // "$RealBin/../scripts/hps-run.sh" }
 
 sub deliver {
     my ($host, $dry) = @_;
-    my @cmd = (runner(), '--input', $host, 'osvc-secret-set');
+    my @cmd    = (runner(), '--input', $host, 'osvc-secret-set');
+    my @export = (runner(), $host, 'osvc-ca-export');
     if ($dry) {
         print "Dry run: would send the cluster secret (redacted) to:\n  @cmd\n";
+        print "  with the cluster CA (redacted) as a second input line when the keysafe has 'opensvc-ca', otherwise\n";
+        print "  alone, followed by reading the CA back into the keysafe with:\n  @export\n";
         return 0;
     }
-    my $hex = unpack('H*', HPS::Keysafe->new->cluster_secret('opensvc-cluster', 16));
+    my $ks  = HPS::Keysafe->new;
+    my $hex = unpack('H*', $ks->cluster_secret('opensvc-cluster', 16));
+    my $ca  = $ks->get_secret('opensvc-ca');
+    if (defined $ca) {
+        $ca =~ s/\s+\z//;
+        die "the stored cluster CA 'opensvc-ca' is not '<epoch> <base64>'; run hps-osvc ca-forget\n"
+            unless $ca =~ /^[0-9]{1,12} [A-Za-z0-9+\/]+=*\z/;
+    }
     open(my $fh, '|-', @cmd) or die "cannot run $cmd[0]: $!\n";
     print {$fh} "$hex\n";
+    print {$fh} "$ca\n" if defined $ca;
     close $fh;    # sets $? to the runner's wait status
-    return $? == 0 ? 0 : ($? >> 8) || 1;
+    my $rc = $? == 0 ? 0 : ($? >> 8) || 1;
+    return $rc if $rc || defined $ca;
+    return capture_ca($ks, $host, @export);
+}
+
+# The keysafe has no CA yet: read the one the node daemon created and keep it.
+# Only the line shaped '<epoch> <base64>' is kept; nothing of it is printed.
+sub capture_ca {
+    my ($ks, $host, @export) = @_;
+    my $line;
+    my $opened = open(my $ph, '-|', @export);
+    if ($opened) {
+        while (my $l = <$ph>) {
+            $l =~ s/\s+\z//;
+            $line = $l if $l =~ /^[0-9]+ [A-Za-z0-9+\/=]+\z/;
+        }
+        close $ph;
+    }
+    if (!$opened || $? != 0 || !defined $line) {
+        print STDERR "hps-osvc: warning: the cluster secret was delivered to $host, but its cluster CA could not be read (osvc-ca-export); deliver again once the daemon is up\n";
+        return 1;
+    }
+    $ks->put_secret('opensvc-ca', $line);
+    print "cluster CA captured from $host into the keysafe\n";
+    return 0;
+}
+
+sub ca_forget {
+    my $ks = HPS::Keysafe->new;
+    if ($ks->delete_secret('opensvc-ca')) {
+        print "deleted the stored cluster CA 'opensvc-ca'; the next deliver captures a new one\n";
+    }
+    else {
+        print "no stored cluster CA 'opensvc-ca'; nothing deleted\n";
+    }
+    return 0;
 }
 
 sub main {
@@ -48,11 +110,15 @@ sub main {
     my $dry = 0;
     @argv = grep { $_ eq '--dry-run' ? do { $dry = 1; 0 } : 1 } @argv;
     my $op   = shift @argv // return usage('operation required');
-    my $host = shift @argv // return usage('host required');
-    return usage("unknown operation '$op'") unless $op eq 'deliver';
+    return usage("unknown operation '$op'") unless $op eq 'deliver' || $op eq 'ca-forget';
+    my $host;
+    if ($op eq 'deliver') {
+        $host = shift @argv // return usage('host required');
+        return usage('host must be a MAC or a hostname') unless $host =~ /^[A-Za-z0-9][A-Za-z0-9:.-]*$/;
+    }
     return usage('too many arguments') if @argv;
-    return usage('host must be a MAC or a hostname') unless $host =~ /^[A-Za-z0-9][A-Za-z0-9:.-]*$/;
-    my $rc = eval { deliver($host, $dry) };
+    return usage('--dry-run applies to deliver only') if $dry && $op ne 'deliver';
+    my $rc = eval { $op eq 'deliver' ? deliver($host, $dry) : ca_forget() };
     return $rc if defined $rc;
     my $err = $@;
     if (ref $err && $err->isa('HPS::Keysafe::Error')) {

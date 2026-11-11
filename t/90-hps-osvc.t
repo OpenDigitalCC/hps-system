@@ -16,10 +16,11 @@ $reg->system_set('ACTIVE_CLUSTER', 'lab');
 $ENV{HPS_CONFIG_BASE}     = $base;
 $ENV{HPS_SYSTEM_REGISTRY} = "$base/system.db";
 
-# A runner shim: records its arguments and stdin, exits with $FAKE_RC.
+# A runner shim: records its arguments and stdin, exits with $FAKE_RC. Called for
+# osvc-ca-export (no --input) it prints a CA line (IPS-12; see 91-hps-osvc-ca.t).
 my $shim = "$base/hps-run.sh";
 open(my $s, '>', $shim) or die $!;
-print $s "#!/bin/sh\necho \"\$*\" > '$base/args'\ncat > '$base/stdin'\nexit \${FAKE_RC:-0}\n";
+print $s "#!/bin/sh\nif [ \"\$1\" = --input ]; then\necho \"\$*\" > '$base/args'\ncat > '$base/stdin'\nexit \${FAKE_RC:-0}\nfi\necho \"\$*\" > '$base/export-args'\necho '1700000000 W0RFRkFVTFRdCg=='\n";
 close $s;
 chmod 0755, $shim;
 $ENV{HPS_OSVC_RUN} = $shim;
@@ -38,7 +39,7 @@ unlike($out, qr/\Q$hex\E/, 'the secret is not printed');
 isnt($hex, unpack('H*', $ks->cluster_secret('approval')), 'it is not the approval secret');
 
 ($rc, $out) = hps_osvc('deliver', 'node01');
-is(slurp("$base/stdin"), "$hex\n", 'a second delivery sends the same secret');
+is(slurp("$base/stdin"), "$hex\n1700000000 W0RFRkFVTFRdCg==\n", 'a second delivery sends the same secret and the captured CA');
 
 unlink "$base/args", "$base/stdin";
 ($rc, $out) = hps_osvc('deliver', 'node01', '--dry-run');

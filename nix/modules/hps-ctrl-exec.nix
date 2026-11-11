@@ -142,6 +142,9 @@ in
       osvc-secret-set.source = mkScript "osvc-secret-set" (scriptsDir + "/osvc-secret-set");
       osvc-secret-set.options.profile = "node";
       osvc-secret-set.options.input = "raw";
+      # IPS-12: read-only; prints the node CA file (mtime + base64) for the IPS keysafe.
+      osvc-ca-export.source = mkScript "osvc-ca-export" (scriptsDir + "/osvc-ca-export");
+      osvc-ca-export.options.profile = "node";
       # Lab test only (rig test 2); remove with the script once the rig results are recorded.
       osvc-rig-probe.source = mkScript "osvc-rig-probe" (scriptsDir + "/osvc-rig-probe");
       osvc-rig-probe.options.profile = "node";

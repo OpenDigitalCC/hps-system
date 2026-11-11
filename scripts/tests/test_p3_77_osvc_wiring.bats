@@ -8,7 +8,7 @@ bats_require_minimum_version 1.5.0
 ROOT="${BATS_TEST_DIRNAME}/../.."
 SD="$ROOT/node-manager/nixos-26/scripts"
 NIX="$ROOT/nix/modules/hps-ctrl-exec.nix"
-SCRIPTS="osvc-status osvc-object-set osvc-object-start osvc-object-stop osvc-object-delete osvc-freeze osvc-thaw osvc-secret-set osvc-rig-probe"
+SCRIPTS="osvc-status osvc-object-set osvc-object-start osvc-object-stop osvc-object-delete osvc-freeze osvc-thaw osvc-secret-set osvc-ca-export osvc-rig-probe"
 
 @test "the flake pins om3 to a release tag as a non-flake input and exports pkgs.om3 through an overlay" {
   grep -qE 'url = "github:opensvc/om3/v[0-9]+\.[0-9]+\.[0-9]+-?[a-z0-9]*";' "$ROOT/flake.nix"
