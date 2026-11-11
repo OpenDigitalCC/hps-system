@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#
+# check_vms - Nagios plugin: resource use of the running libvirt guests.
+#
+# Run by nagios-check (ctrl-exec) on compute nodes. Runs
+#   virsh -c qemu:///system domstats --raw --list-running --cpu-total --balloon
+#         --vcpu --block --interface
+# twice, INTERVAL seconds apart, and reports per running guest (name lower-cased,
+# characters outside [a-z0-9_-] become "_"):
+#   <vm>_cpu_pct   cpu.time delta / interval, in %; 100 is one full vCPU, so a
+#                  guest with several vCPUs can exceed 100
+#   <vm>_vcpus     vcpu.current
+#   <vm>_rss       balloon.rss in bytes (host memory the guest process uses)
+#   <vm>_mem       balloon.current in bytes (memory given to the guest)
+#   <vm>_rd_Bps <vm>_wr_Bps   block.N.rd.bytes / wr.bytes summed over its disks
+#   <vm>_rx_Bps <vm>_tx_Bps   net.N.rx.bytes / tx.bytes summed over its NICs
+# plus vms=<n>. A usage check: always OK when virsh answers; no running guest is
+# OK. A guest present in only one sample (started or stopped meanwhile) is left
+# out.
+# Output: "VMS OK - 2 running VMs (rss 4.0 GiB) | vms=2 <vm>_cpu_pct=..% ..."
+#
+# Usage: check_vms [-i SECONDS]      (1 to 5, default 1)
+# Environment (tests): HPS_VIRSH (the virsh command, default virsh),
+#   HPS_SLEEP (default sleep).
+# Exit: 0 OK, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+VIRSH=${HPS_VIRSH:-virsh}
+SLEEP=${HPS_SLEEP:-sleep}
+interval=1
+
+unknown() {
+  echo "VMS UNKNOWN - $1"
+  exit 3
+}
+
+while getopts "i:" opt; do
+  case $opt in
+    i) interval=$OPTARG ;;
+    *) unknown "usage: check_vms [-i SECONDS]" ;;
+  esac
+done
+[[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
+
+# One line per guest: name cpu_ns vcpus rss_kib mem_kib rd wr rx tx
+sample() {
+  local raw
+  raw=$(timeout 8 "$VIRSH" -c qemu:///system domstats --raw --list-running \
+    --cpu-total --balloon --vcpu --block --interface 2>&1) || { printf "%s\n" "$raw"; return 1; }
+  printf '%s\n' "$raw" | awk '
+  function flush() {
+    if (name != "") print name, cpu + 0, vcpus + 0, rss + 0, mem + 0, rd + 0, wr + 0, rx + 0, tx + 0
+    name = ""; cpu = vcpus = rss = mem = rd = wr = rx = tx = 0
+  }
+  /^Domain: / { flush(); s = $0; sub(/^Domain: *\047?/, "", s); sub(/\047? *$/, "", s); name = s; next }
+  {
+    line = $0; sub(/^ +/, "", line)
+    split(line, kv, "=")
+    k = kv[1]; v = substr(line, length(k) + 2)
+    if (k == "cpu.time") cpu = v
+    else if (k == "vcpu.current") vcpus = v
+    else if (k == "balloon.rss") rss = v
+    else if (k == "balloon.current") mem = v
+    else if (k ~ /^block\.[0-9]+\.rd\.bytes$/) rd += v
+    else if (k ~ /^block\.[0-9]+\.wr\.bytes$/) wr += v
+    else if (k ~ /^net\.[0-9]+\.rx\.bytes$/) rx += v
+    else if (k ~ /^net\.[0-9]+\.tx\.bytes$/) tx += v
+  }
+  END { flush() }'
+}
+
+a=$(sample) || unknown "virsh domstats failed: ${a//$'\n'/ }"
+if [[ -z $a ]]; then
+  echo "VMS OK - no running VMs | vms=0"
+  exit 0
+fi
+"$SLEEP" "$interval"
+b=$(sample) || unknown "virsh domstats failed: ${b//$'\n'/ }"
+
+awk -v a="$a" -v b="$b" -v iv="$interval" '
+BEGIN {
+  na = split(a, la, "\n"); nb = split(b, lb, "\n")
+  for (k = 1; k <= nb; k++) { split(lb[k], y, " "); later[y[1]] = lb[k] }
+  perf = ""; n = 0; rss = 0
+  for (k = 1; k <= na; k++) {
+    split(la[k], x, " ")
+    if (!(x[1] in later)) continue
+    split(later[x[1]], y, " ")
+    for (i = 2; i <= 9; i++) d[i] = y[i] - x[i]
+    for (i = 2; i <= 9; i++) if (d[i] < 0) d[i] = 0
+    name = tolower(x[1]); gsub(/[^a-z0-9_-]/, "_", name)
+    n++
+    rss += y[4] * 1024
+    perf = perf sprintf(" %s_cpu_pct=%.1f%% %s_vcpus=%d %s_rss=%.0fB %s_mem=%.0fB", name, d[2] / (iv * 1e9) * 100, name, y[3], name, y[4] * 1024, name, y[5] * 1024)
+    perf = perf sprintf(" %s_rd_Bps=%.0f %s_wr_Bps=%.0f %s_rx_Bps=%.0f %s_tx_Bps=%.0f", name, d[6] / iv, name, d[7] / iv, name, d[8] / iv, name, d[9] / iv)
+  }
+  if (n == 0) { print "VMS OK - no running VMs | vms=0"; exit 0 }
+  printf "VMS OK - %d running VMs (rss %.1f GiB) | vms=%d%s\n", n, rss / 1073741824, n, perf
+}'

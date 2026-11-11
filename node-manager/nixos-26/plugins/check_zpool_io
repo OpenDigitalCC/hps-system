@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# check_zpool_io - Nagios plugin: ZFS pool I/O over one sample interval.
+#
+# Run by nagios-check (ctrl-exec) on storage nodes. Runs
+# `zpool iostat -Hp INTERVAL 2` and uses the second sample (the first is the
+# average since the pool was imported). With -H -p the columns are, tab
+# separated: name, alloc, free, read ops, write ops, read bandwidth, write
+# bandwidth; operations and bandwidth are per second, sizes in bytes. A usage
+# check: always OK when zpool answers; no pools imported is OK.
+# Output: "ZPOOL_IO OK - read 1.2 MB/s write 3.4 MB/s (1 pools) | pools=1
+#          <pool>_alloc=..B <pool>_free=..B <pool>_rd_iops=.. <pool>_wr_iops=..
+#          <pool>_rd_Bps=.. <pool>_wr_Bps=.."
+# (pool capacity as a percentage is check_zpool's.)
+#
+# Usage: check_zpool_io [-i SECONDS]      (1 to 5, default 1)
+# Environment (tests): HPS_ZPOOL (the zpool command, default zpool).
+# Exit: 0 OK, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+ZPOOL=${HPS_ZPOOL:-zpool}
+interval=1
+
+unknown() {
+  echo "ZPOOL_IO UNKNOWN - $1"
+  exit 3
+}
+
+while getopts "i:" opt; do
+  case $opt in
+    i) interval=$OPTARG ;;
+    *) unknown "usage: check_zpool_io [-i SECONDS]" ;;
+  esac
+done
+[[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
+
+rc=0
+out=$(timeout $((interval + 8)) "$ZPOOL" iostat -Hp "$interval" 2 2>&1) || rc=$?
+
+# Pool lines have seven tab-separated fields; anything else is a message.
+pools=$(printf '%s\n' "$out" | awk -F'\t' 'NF == 7')
+if [[ -z $pools ]]; then
+  if [[ $rc -ne 0 && $out != *"no pools available"* ]]; then
+    unknown "zpool iostat failed (exit $rc): ${out//$'\n'/ }"
+  fi
+  echo "ZPOOL_IO OK - no pools | pools=0"
+  exit 0
+fi
+
+lines=$(printf '%s\n' "$pools" | wc -l)
+if [[ $((lines % 2)) -ne 0 ]]; then
+  unknown "zpool iostat gave $lines pool lines for two samples"
+fi
+
+printf '%s\n' "$pools" | awk -F'\t' '
+function hr(x) { return sprintf("%.1f MB/s", x / 1e6) }
+{ row[NR] = $0 }
+END {
+  n = NR / 2
+  perf = ""; rd = 0; wr = 0
+  for (k = n + 1; k <= NR; k++) {
+    split(row[k], f, "\t")
+    name = tolower(f[1]); gsub(/[^a-z0-9_-]/, "_", name)
+    rd += f[6]; wr += f[7]
+    perf = perf sprintf(" %s_alloc=%.0fB %s_free=%.0fB %s_rd_iops=%.0f %s_wr_iops=%.0f %s_rd_Bps=%.0f %s_wr_Bps=%.0f", name, f[2], name, f[3], name, f[4], name, f[5], name, f[6], name, f[7])
+  }
+  printf "ZPOOL_IO OK - read %s write %s (%d pools) | pools=%d%s\n", hr(rd), hr(wr), n, n, perf
+}'

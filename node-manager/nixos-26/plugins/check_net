@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# check_net - Nagios plugin: network interface traffic over one sample interval.
+#
+# Run by nagios-check (ctrl-exec) on every node. Reads the counters under
+# /sys/class/net/<if>/statistics twice, INTERVAL seconds apart. Interfaces left
+# out: lo, veth*, vnet* (guest taps; check_vms reports guests) and any that are
+# not up (operstate "down", "notpresent", "lowerlayerdown"; "unknown" and "up"
+# count as up, as bridges and tunnels report "unknown"). A usage check: always
+# OK when the counters can be read.
+# Output: "NET OK - rx 1.2 Mbit/s tx 0.4 Mbit/s (2 interfaces) | <if>_rx_Bps=..
+#          <if>_tx_Bps=.. <if>_rx_pps=.. <if>_tx_pps=.. <if>_rx_errors=..c
+#          <if>_tx_errors=..c <if>_rx_dropped=..c <if>_tx_dropped=..c"
+# Rates are plain numbers per second (_Bps bytes, _pps packets); the four error
+# and drop counters are the increase over the interval, UOM c. Dots in names
+# (VLANs, eth0.20) and any other character outside [a-z0-9_-] become "_".
+#
+# Usage: check_net [-i SECONDS]      (1 to 5, default 1)
+# Environment (tests): HPS_SYS (default /sys), HPS_SLEEP (default sleep).
+# Exit: 0 OK, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+SYS=${HPS_SYS:-/sys}
+SLEEP=${HPS_SLEEP:-sleep}
+interval=1
+
+unknown() {
+  echo "NET UNKNOWN - $1"
+  exit 3
+}
+
+while getopts "i:" opt; do
+  case $opt in
+    i) interval=$OPTARG ;;
+    *) unknown "usage: check_net [-i SECONDS]" ;;
+  esac
+done
+[[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
+
+[[ -d $SYS/class/net ]] || unknown "cannot read $SYS/class/net"
+
+# Interfaces to report, one per line.
+list_ifaces() {
+  local d n state
+  for d in "$SYS"/class/net/*; do
+    [[ -d $d/statistics ]] || continue
+    n=${d##*/}
+    case $n in
+      lo | veth* | vnet*) continue ;;
+    esac
+    state=down
+    [[ -r $d/operstate ]] && read -r state < "$d/operstate"
+    case $state in
+      down | notpresent | lowerlayerdown) continue ;;
+    esac
+    echo "$n"
+  done
+}
+
+# sample: one line per interface: name rx_bytes tx_bytes rx_packets tx_packets
+# rx_errors tx_errors rx_dropped tx_dropped (a counter that cannot be read is 0).
+sample() {
+  local n s v out
+  for n in "$@"; do
+    out=$n
+    for s in rx_bytes tx_bytes rx_packets tx_packets rx_errors tx_errors rx_dropped tx_dropped; do
+      v=0
+      [[ -r $SYS/class/net/$n/statistics/$s ]] && read -r v < "$SYS/class/net/$n/statistics/$s"
+      [[ $v =~ ^[0-9]+$ ]] || v=0
+      out+=" $v"
+    done
+    echo "$out"
+  done
+}
+
+mapfile -t ifaces < <(list_ifaces)
+if [[ ${#ifaces[@]} -eq 0 ]]; then
+  echo "NET OK - no active interfaces"
+  exit 0
+fi
+
+a=$(sample "${ifaces[@]}")
+"$SLEEP" "$interval"
+b=$(sample "${ifaces[@]}")
+
+awk -v a="$a" -v b="$b" -v iv="$interval" '
+BEGIN {
+  na = split(a, la, "\n"); split(b, lb, "\n")
+  perf = ""; rx = 0; tx = 0
+  for (k = 1; k <= na; k++) {
+    split(la[k], x, " "); split(lb[k], y, " ")
+    if (x[1] != y[1]) continue
+    for (i = 2; i <= 9; i++) { d[i] = y[i] - x[i]; if (d[i] < 0) d[i] = 0 }
+    name = tolower(x[1]); gsub(/[^a-z0-9_-]/, "_", name)
+    rx += d[2] / iv; tx += d[3] / iv
+    perf = perf sprintf(" %s_rx_Bps=%.0f %s_tx_Bps=%.0f %s_rx_pps=%.0f %s_tx_pps=%.0f", name, d[2] / iv, name, d[3] / iv, name, d[4] / iv, name, d[5] / iv)
+    perf = perf sprintf(" %s_rx_errors=%dc %s_tx_errors=%dc %s_rx_dropped=%dc %s_tx_dropped=%dc", name, d[6], name, d[7], name, d[8], name, d[9])
+  }
+  printf "NET OK - rx %.1f Mbit/s tx %.1f Mbit/s (%d interfaces) |%s\n", rx * 8 / 1e6, tx * 8 / 1e6, na, perf
+}'

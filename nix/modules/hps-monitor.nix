@@ -34,9 +34,36 @@ let
     install -m 0755 ${pluginSrc}/plugins/check_mem "$out/check_mem"
     install -m 0755 ${../../node-manager/nixos-26/plugins/check_zpool} "$out/check_zpool"
     patchShebangs "$out/check_mem" "$out/check_zpool"
+    ${usagePlugins}
   '';
 
+  # The usage checks (docs/MONITORING.md): HPS's own bash plugins. Each has a
+  # "# @HPS_PATH@" line that becomes a PATH of the tools it needs (coreutils,
+  # awk), because nagios-check passes on whatever PATH the agent has; zpool and
+  # virsh are substituted as absolute store paths where they are used. The role
+  # plugins are installed only where the role is, so the closure of a node does
+  # not carry libvirt or ZFS for them.
+  pluginSrcDir = ../../node-manager/nixos-26/plugins;
+  toolPath = lib.makeBinPath [ pkgs.coreutils pkgs.gawk ];
+  usagePlugin = name: extra: ''
+    install -m 0755 ${pluginSrcDir + "/${name}"} "$out/${name}"
+    patchShebangs "$out/${name}"
+    substituteInPlace "$out/${name}" --replace-fail '# @HPS_PATH@' 'export PATH=${toolPath}:"$PATH"' ${extra}
+  '';
+  usagePlugins = lib.concatStrings (
+    [
+      (usagePlugin "check_cpu" "")
+      (usagePlugin "check_net" "")
+      (usagePlugin "check_diskio" "")
+    ]
+    ++ lib.optional isStorage (usagePlugin "check_zpool_io"
+      "--replace-fail 'HPS_ZPOOL:-zpool}' 'HPS_ZPOOL:-${config.boot.zfs.package}/bin/zpool}'")
+    ++ lib.optional isCompute (usagePlugin "check_vms"
+      "--replace-fail 'HPS_VIRSH:-virsh}' 'HPS_VIRSH:-${pkgs.libvirt}/bin/virsh}'")
+  );
+
   isStorage = lib.hasInfix "SCH" config.hps.roles;
+  isCompute = lib.hasInfix "TCH" config.hps.roles;
   hasSwap = config.swapDevices != [ ] || config.zramSwap.enable;
 
   # The set. Thresholds are the plugin's example. On a netbooted node "/" is a
@@ -54,6 +81,11 @@ let
     # -k: user-space processes only; a 48-thread host has hundreds of kernel
     # threads (lab DL360: 747 processes in all, WARNING at the old 400)
     "procs = check_procs -k -w 1000 -c 2000"
+    # usage, not alarms: trend and baseline data (one 1 s sample each, see
+    # docs/MONITORING.md); OK whenever they can read their source
+    "cpu = check_cpu"
+    "net = check_net"
+    "diskio = check_diskio"
   ]
   ++ lib.optional hasSwap "swap = check_swap -w 30% -c 10%"
   ++ lib.optionals isStorage [
@@ -61,7 +93,9 @@ let
     # for it ("No disks were found", UNKNOWN on the lab DL360); pool capacity
     # and health are check_zpool's
     "zpool = check_zpool"
-  ]) + "\n";
+    "zpool_io = check_zpool_io"
+  ]
+  ++ lib.optional isCompute "vms = check_vms") + "\n";
 in
 {
   services.ctrl-exec-agent.scripts.nagios-check = {

@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# check_diskio - Nagios plugin: block device throughput over one sample interval.
+#
+# Run by nagios-check (ctrl-exec) on every node. Reads /proc/diskstats twice,
+# INTERVAL seconds apart, for whole disks only: sd[a-z]+, vd[a-z]+, xvd[a-z]+,
+# nvme<N>n<M>. Partitions, dm-*, md*, zd* (zvols), loop* and ram* are left out.
+# A node with no such disk (a RAM-booted node) is OK, not UNKNOWN. A usage
+# check: always OK when /proc/diskstats can be read.
+# Output: "DISKIO OK - read 1.2 MB/s write 3.4 MB/s (2 disks) | disks=2
+#          <dev>_rd_Bps=.. <dev>_wr_Bps=.. <dev>_rd_iops=.. <dev>_wr_iops=..
+#          <dev>_busy=..%"
+# Bytes are sectors * 512. busy is the share of the interval the device had I/O
+# in flight (io_ticks delta / interval), at most 100.
+#
+# Usage: check_diskio [-i SECONDS]      (1 to 5, default 1)
+# Environment (tests): HPS_PROC (default /proc), HPS_SLEEP (default sleep).
+# Exit: 0 OK, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+PROC=${HPS_PROC:-/proc}
+SLEEP=${HPS_SLEEP:-sleep}
+interval=1
+
+unknown() {
+  echo "DISKIO UNKNOWN - $1"
+  exit 3
+}
+
+while getopts "i:" opt; do
+  case $opt in
+    i) interval=$OPTARG ;;
+    *) unknown "usage: check_diskio [-i SECONDS]" ;;
+  esac
+done
+[[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
+
+[[ -r $PROC/diskstats ]] || unknown "cannot read $PROC/diskstats"
+
+# One line per whole disk: name rd_ios rd_sectors wr_ios wr_sectors io_ticks_ms
+sample() {
+  awk '$3 ~ /^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|nvme[0-9]+n[0-9]+)$/ { print $3, $4, $6, $8, $10, $13 }' "$PROC/diskstats"
+}
+
+a=$(sample)
+if [[ -z $a ]]; then
+  echo "DISKIO OK - no disks | disks=0"
+  exit 0
+fi
+"$SLEEP" "$interval"
+b=$(sample)
+
+awk -v a="$a" -v b="$b" -v iv="$interval" '
+function hr(x) { return sprintf("%.1f MB/s", x / 1e6) }
+BEGIN {
+  na = split(a, la, "\n"); nb = split(b, lb, "\n")
+  for (k = 1; k <= nb; k++) { split(lb[k], y, " "); later[y[1]] = lb[k] }
+  perf = ""; n = 0; rd = 0; wr = 0
+  for (k = 1; k <= na; k++) {
+    split(la[k], x, " ")
+    if (!(x[1] in later)) continue
+    split(later[x[1]], y, " ")
+    for (i = 2; i <= 6; i++) { d[i] = y[i] - x[i]; if (d[i] < 0) d[i] = 0 }
+    n++
+    rd += d[3] * 512 / iv; wr += d[5] * 512 / iv
+    busy = d[6] / (iv * 1000) * 100; if (busy > 100) busy = 100
+    perf = perf sprintf(" %s_rd_Bps=%.0f %s_wr_Bps=%.0f %s_rd_iops=%.0f %s_wr_iops=%.0f %s_busy=%.1f%%", x[1], d[3] * 512 / iv, x[1], d[5] * 512 / iv, x[1], d[2] / iv, x[1], d[4] / iv, x[1], busy)
+  }
+  printf "DISKIO OK - read %s write %s (%d disks) | disks=%d%s\n", hr(rd), hr(wr), n, n, perf
+}'

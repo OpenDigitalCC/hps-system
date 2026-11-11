@@ -14,7 +14,8 @@ beyond the log.
   `nix/modules/hps-monitor.nix` installs it, a directory of plugins
   (`check_disk`, `check_load`, `check_swap`, `check_procs` from
   monitoring-plugins, `check_mem` from the plugin repository, and HPS's own
-  `check_zpool`) and `/etc/nagios-checks/checks.conf`.
+  `check_zpool` and usage checks `check_cpu`, `check_net`, `check_diskio`,
+  `check_zpool_io` and `check_vms`) and `/etc/nagios-checks/checks.conf`.
 - On the IPS: `bin/hps-monitor`, supervisor program `hps-monitor` running
   `hps-monitor loop`. It calls `scripts/hps-run.sh --json <fqdn> nagios-check --all`
   for each paired node and logs the result.
@@ -43,11 +44,60 @@ The IPS sends the script name and `--all` and nothing else.
 | `procs` | `check_procs -k -w 1000 -c 2000` (user-space processes; kernel threads left out) | every node |
 | `swap` | `check_swap -w 30% -c 10%` | only a node with swap configured |
 | `zpool` | `check_zpool` (pool health; DEGRADED is WARNING, FAULTED and worse CRITICAL; capacity as perfdata) | storage nodes |
+| `zpool_io` | `check_zpool_io` (pool I/O and capacity in bytes, see below) | storage nodes |
+| `cpu` | `check_cpu` (CPU time by state, see below) | every node |
+| `net` | `check_net` (traffic per interface, see below) | every node |
+| `diskio` | `check_diskio` (throughput per whole disk, see below) | every node |
+| `vms` | `check_vms` (CPU, memory, disk and network per running guest, see below) | compute nodes |
 
 A netbooted node runs from RAM: `/` is a tmpfs and the store is a squashfs.
 `disk_root` therefore measures RAM taken by files written to `/`, and `mem` the
 RAM left. `disk` covers the real filesystems, which on these nodes are the
 mounted ZFS datasets. Thresholds are the plugin's example values.
+
+## Usage checks: trend and baseline data
+
+`cpu`, `net`, `diskio`, `zpool_io` and `vms` exist to collect numbers, not to
+raise alarms (owner, 2026-11-11: data for trends as the lab scales out, and a
+baseline for when it is put under pressure). Each is OK whenever it can read its
+source, and says UNKNOWN only when it cannot (a missing `/proc/stat`, `zpool` or
+`virsh` failing). The one exception is optional: `check_cpu -w BUSY -c BUSY`
+applies thresholds to the busy percentage; `checks.conf` sets none.
+
+Each takes two samples of a counter one interval apart (`-i SECONDS`, 1 to 5,
+default 1) and reports the difference as a rate, so a value is the average over
+that one second, not over the tick; the log line is a snapshot. `check_zpool_io`
+asks `zpool iostat -Hp 1 2` and uses its second sample.
+
+Perf labels are lower-case `[a-z0-9_-]` (dots and other characters in interface,
+pool and guest names become `_`; the pool, disk, interface or guest name comes
+first). The suffix says what the number is:
+
+| Suffix or unit | Meaning |
+| --- | --- |
+| `_Bps` | bytes per second (plain number) |
+| `_pps` | packets per second |
+| `_iops` | operations per second |
+| `%` | percent of the interval (or of a vCPU, see `vms`) |
+| `B` | bytes, a level (`_alloc`, `_free`, `_rss`, `_mem`) |
+| `c` | a counter's increase over the interval (errors, drops) |
+
+| Check | Status line and perf labels |
+| --- | --- |
+| `cpu` | `CPU OK - 3.2% busy (iowait 0.1%, steal 0.0%)`; `busy` (100 - idle - iowait), `user`, `nice`, `system`, `iowait`, `irq`, `softirq`, `steal`, `idle` as % of the interval; `cpus` |
+| `net` | `NET OK - rx 1.2 Mbit/s tx 0.4 Mbit/s (3 interfaces)`; per interface `<if>_rx_Bps`, `_tx_Bps`, `_rx_pps`, `_tx_pps` and `_rx_errors`, `_tx_errors`, `_rx_dropped`, `_tx_dropped` (counter deltas, `c`). Left out: `lo`, `veth*`, `vnet*` (guest taps; see `vms`) and interfaces that are down |
+| `diskio` | `DISKIO OK - read 1.2 MB/s write 3.4 MB/s (2 disks)`; `disks`, and per whole disk (`sd*`, `vd*`, `xvd*`, `nvme<N>n<M>`; no partitions, `dm-*`, `md*`, `zd*`, `loop*`, `ram*`) `<dev>_rd_Bps`, `_wr_Bps` (sectors x 512), `_rd_iops`, `_wr_iops`, `<dev>_busy` (% of the interval with I/O in flight). A RAM node has no disk: `DISKIO OK - no disks | disks=0` |
+| `zpool_io` | `ZPOOL_IO OK - read 2.0 MB/s write 3.5 MB/s (2 pools)`; `pools`, per pool `<pool>_alloc`, `_free` (B), `_rd_iops`, `_wr_iops`, `_rd_Bps`, `_wr_Bps`. No pool: `ZPOOL_IO OK - no pools` |
+| `vms` | `VMS OK - 2 running VMs (rss 1.5 GiB)`; `vms`, per running guest `<vm>_cpu_pct` (guest CPU time / interval; 100% is one full vCPU, so it can exceed 100), `_vcpus`, `_rss` (host memory the guest process holds), `_mem` (memory given to the guest), `_rd_Bps`, `_wr_Bps` (summed over its disks), `_rx_Bps`, `_tx_Bps` (summed over its NICs). No guest: `VMS OK - no running VMs | vms=0` |
+
+Time budget: `nagios-check` runs the checks one after another within its 50 s
+budget, 10 s at most each. The five samplers add about 5 s to a node's run (the
+`cpu`, `net`, `diskio`, `zpool_io` and `vms` waits do not overlap), well inside
+the budget at the lab's 30 s interval, but a shorter `monitor_interval_seconds`
+or more samplers would not be. Each plugin finds its tools itself: the build
+puts coreutils and awk on its `PATH` and, for `zpool_io` and `vms`, the
+absolute store path of `zpool` and `virsh` (libvirt is on compute nodes with the
+compute profile).
 
 ## Log lines
 

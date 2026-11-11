@@ -12,6 +12,24 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Usage checks in node monitoring (2026-11-11)
+
+- new: five usage checks collect trend and baseline data (owner request,
+  2026-11-11), logged by `hps-monitor` like the others: `cpu` (CPU time by
+  state), `net` (traffic and error/drop counters per interface), `diskio`
+  (throughput, IOPS, busy per whole disk; "no disks" is OK on a RAM node) on
+  every node; `zpool_io` (pool I/O, allocated and free bytes) on storage nodes;
+  `vms` (CPU, memory, disk and network per running guest) on compute nodes.
+  Plugins `check_cpu`, `check_net`, `check_diskio`, `check_zpool_io`,
+  `check_vms` in `node-manager/nixos-26/plugins/`; each samples twice, one
+  second apart (`-i`, 1 to 5), and reports rates as perfdata with the label
+  suffixes `_Bps`, `_pps`, `_iops`. They are usage, not alarms: OK unless the
+  source cannot be read (`check_cpu` has optional `-w`/`-c`).
+- `hps-monitor.nix` installs them, gives each its tools and `isCompute`
+  selects the guest check like `isStorage` the pool one. `docs/MONITORING.md`
+  has the label scheme and the time budget (about 5 s more per node run).
+- tests: `test_p3_172_usage_checks.bats`.
+
 ## Several disks per workload VM (2026-11-11)
 
 - new: a workload VM may have 1 to 8 disks (`MAX_DISKS` 8 in `HPS::Workload`).
