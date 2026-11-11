@@ -6,6 +6,9 @@
 #
 # Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force]
 #
+# Writes ONE disk. For a VM with several disks the IPS passes the first (the
+# boot disk); the other disks are never touched.
+#
 # Runs   qemu-img convert -f qcow2 -O raw <image> <disk>
 # ONLY when the first 512 bytes of the disk are all zero (a fresh mirror from
 # mirror-create). A disk with anything in its first sector is refused (3): it

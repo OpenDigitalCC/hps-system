@@ -24,10 +24,10 @@ teardown() {
   [ -s "$STATE/xml.vm1" ]
 }
 
-@test "a second --disk is refused (2): one disk per guest, nothing defined" {
+@test "the same --disk twice is refused (3), nothing defined" {
   run bash "$S/vm-define" vm1 --memory 2048 --vcpus 2 --disk "$DISK" --disk "$DISK" --net br-work --image "$IMG"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"only one --disk per guest"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"is given twice"* ]]
   [ ! -e "$STATE/xml.vm1" ]
 }
 

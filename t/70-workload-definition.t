@@ -93,7 +93,8 @@ refuses(sub { $_[0]{vms}[0]{nets} = ['nowhere'] }, qr/net 'nowhere' is not in th
 
 # disks
 refuses(sub { $_[0]{vms}[0]{disks} = [] }, qr/disks must be a non-empty list/, 'no disks');
-refuses(sub { push @{ $_[0]{vms}[0]{disks} }, dclone($_[0]{vms}[0]{disks}[0]) }, qr/at most 1 disk per VM/, 'second disk');
+refuses(sub { push @{ $_[0]{vms}[0]{disks} }, dclone($_[0]{vms}[0]{disks}[0]) }, qr/disk name 'root' is used twice/, 'second disk of the same name');
+refuses(sub { my $d = $_[0]{vms}[0]{disks}; push @$d, map { my $c = dclone($d->[0]); $c->{name} = "d$_"; $c } 1 .. 8 }, qr/at most 8 disks per VM/, 'nine disks');
 refuses(sub { $_[0]{vms}[0]{disks}[0]{name} = 'Root' }, qr/name must match/, 'bad disk name');
 for my $size ('0G', '20', '20g', '20K', 'G', '-5G', '1.5G') {
     refuses(sub { $_[0]{vms}[0]{disks}[0]{size} = $size }, qr/size must match/, "size '$size'");

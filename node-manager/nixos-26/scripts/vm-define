@@ -4,7 +4,7 @@
 #
 # ctrl-exec allowlisted node script.
 #
-# Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
+# Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device> [--disk <dev>...]
 #          --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
 #          --image <base qcow2> [--serial-log <path>] [--replace]
 #          [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
@@ -13,11 +13,16 @@
 #          [--serial-log <path>] [--replace]
 #
 #   <vm>      ^[a-z0-9][a-z0-9-]{0,31}$
-#   --disk    the guest's disk: the md mirror device made by mirror-create
-#             (/dev/md/<name>); must exist, under /dev. Attached to virtio as raw.
+#   --disk    a guest disk: the md mirror device made by mirror-create
+#             (/dev/md/<name>) or a zvol; must exist, under /dev. Attached as
+#             raw. Repeatable, 1..8, each path once. The first --disk is disk 1:
+#             target vda (virtio) or sda (scsi, sata); the next ones take the
+#             next letters in the order given (vdb, vdc, ... / sdb, sdc, ...).
+#             All share the one --disk-bus. With --boot network the NIC boots
+#             first, then disk 1; without it disk 1 is the boot disk.
 #   --net     a bridge (made by net-bridge-ensure); one virtio NIC per --net.
-#   --image   the base qcow2 the disk was filled from (vm-image-write). It is
-#             only RECORDED in the domain metadata; vm-define neither reads
+#   --image   the base qcow2 the FIRST disk was filled from (vm-image-write writes
+#             one disk; the others are left empty). It is only RECORDED in the domain metadata; vm-define neither reads
 #             nor copies it, and never touches the disk.
 #   --boot    disk (default) | network. network: OVMF netboots from the first
 #             NIC (<boot dev='network'/>, then the disk if there is one); the
@@ -35,9 +40,10 @@
 #             with `bridge vlan` after the guest starts. A NIC on a bridge with
 #             vlan_filtering 1 (a fabric bridge, see net-bridge-ensure) must
 #             have a --vlan-pvid: such a port passes nothing without a VLAN.
-#   --disk-bus  virtio (default) | scsi | sata: the bus of --disk. scsi adds a
-#             virtio-scsi controller (target sda); sata uses the q35 AHCI
-#             controller (target sda); virtio is vda.
+#   --disk-bus  virtio (default) | scsi | sata: the bus of every --disk. scsi adds
+#             one virtio-scsi controller (targets sda, sdb, ...); sata uses the
+#             q35 AHCI controller, one port each (sda, sdb, ...); virtio is
+#             vda, vdb, ....
 #   --smbios  vendor=<v>,product=<p>[,serial=<s>]: the guest's SMBIOS system
 #             manufacturer, product name and serial (libvirt sysinfo smbios).
 #             Values: letters, digits, space, . _ - (first one alphanumeric).
@@ -78,7 +84,7 @@ set -euo pipefail
 VM=""
 MEMORY=""
 VCPUS=""
-DISK=""
+DISKS=()
 IMAGE=""
 SERIAL=""
 BOOT="disk"
@@ -95,6 +101,7 @@ SM_PRODUCT=""
 SM_SERIAL=""
 NIC_META=""
 TMP=""
+MAX_DISKS=8
 
 log() {
   printf '[vm-define] %s\n' "$*" >&2
@@ -114,7 +121,7 @@ run_q() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
+Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device> [--disk <dev> ... up to 8]
          --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
          --image <base qcow2> [--serial-log <path>] [--replace]
          per --net: [--mac <mac>] [--nic-model virtio|e1000e|rtl8139]
@@ -168,14 +175,7 @@ parse_args() {
         case "$1" in
           --memory) MEMORY=$2 ;;
           --vcpus) VCPUS=$2 ;;
-          --disk)
-            if [[ -n "$DISK" ]]; then
-              log "only one --disk per guest"
-              usage
-              exit 2
-            fi
-            DISK=$2
-            ;;
+          --disk) DISKS+=("$2") ;;
           --net) NETS+=("$2"); MACS+=(""); PVIDS+=(""); TAGGEDS+=(""); MODELS+=("") ;;
           --mac) set_nic_option "$1" MACS "$2" ;;
           --nic-model) set_nic_option "$1" MODELS "$2" ;;
@@ -197,7 +197,7 @@ parse_args() {
     usage
     exit 2
   fi
-  if [[ "$BOOT" != "network" && ( -z "$DISK" || -z "$IMAGE" ) ]]; then
+  if [[ "$BOOT" != "network" && ( ${#DISKS[@]} -eq 0 || -z "$IMAGE" ) ]]; then
     usage
     exit 2
   fi
@@ -261,7 +261,7 @@ check_hardware() {
     virtio | scsi | sata) ;;
     *) refuse "--disk-bus '$DISK_BUS' is not virtio, scsi or sata" ;;
   esac
-  [[ "$DISK_BUS" == virtio || -n "$DISK" ]] || refuse "--disk-bus $DISK_BUS needs a --disk"
+  [[ "$DISK_BUS" == virtio || ${#DISKS[@]} -gt 0 ]] || refuse "--disk-bus $DISK_BUS needs a --disk"
   [[ -n "$SMBIOS" ]] || return 0
   local -a parts
   IFS=',' read -r -a parts <<< "$SMBIOS"
@@ -290,11 +290,15 @@ check_args() {
   ((MEMORY >= 64)) || refuse "--memory $MEMORY is below 64 MiB"
   ((VCPUS >= 1)) || refuse "--vcpus must be at least 1"
   [[ "$BOOT" == "disk" || "$BOOT" == "network" ]] || refuse "--boot '$BOOT' is not disk or network"
-  if [[ -n "$DISK" ]]; then
-    [[ "$DISK" =~ ^[A-Za-z0-9/_.:-]+$ && "$DISK" != *..* ]] || refuse "--disk '$DISK' has characters outside [A-Za-z0-9/_.:-] or contains .."
-    [[ "$DISK" == "$HPS_DEV"/* ]] || refuse "--disk '$DISK' is not under $HPS_DEV"
-    [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
-  fi
+  ((${#DISKS[@]} <= MAX_DISKS)) || refuse "${#DISKS[@]} --disk given; at most $MAX_DISKS per guest"
+  local d seen=" "
+  for d in "${DISKS[@]}"; do
+    [[ "$d" =~ ^[A-Za-z0-9/_.:-]+$ && "$d" != *..* ]] || refuse "--disk '$d' has characters outside [A-Za-z0-9/_.:-] or contains .."
+    [[ "$d" == "$HPS_DEV"/* ]] || refuse "--disk '$d' is not under $HPS_DEV"
+    [[ -e "$d" && ! -d "$d" ]] || refuse "--disk '$d' does not exist"
+    [[ "$seen" != *" $d "* ]] || refuse "--disk '$d' is given twice"
+    seen+="$d "
+  done
   for n in "${NETS[@]}"; do
     [[ "$n" =~ ^[a-z][a-z0-9_.-]{0,14}$ ]] || refuse "--net '$n' is not a bridge name"
   done
@@ -312,30 +316,34 @@ check_args() {
 
 # render_xml <uuid-or-empty>: the domain XML on stdout, the spec hash inside.
 render_xml() {
-  local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml smbios_os="" sysinfo_xml="" ctl_xml="" dev=vda m
+  local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml smbios_os="" sysinfo_xml="" ctl_xml="" dev m prefix=vd letters=abcdefgh
   if [[ "$BOOT" == "network" ]]; then
     boot_xml="    <boot dev='network'/>"
-    if [[ -n "$DISK" ]]; then
+    if ((${#DISKS[@]} > 0)); then
       boot_xml+=$'\n'"    <boot dev='hd'/>"
     fi
   else
     boot_xml="    <boot dev='hd'/>"
   fi
-  if [[ -n "$DISK" ]]; then
+  if ((${#DISKS[@]} > 0)); then
     if [[ "$DISK_BUS" != virtio ]]; then
-      dev=sda
+      prefix=sd
     fi
     if [[ "$DISK_BUS" == scsi ]]; then
       ctl_xml="    <controller type='scsi' index='0' model='virtio-scsi'/>"
+      disk_xml="$ctl_xml"$'\n'
     fi
-    disk_xml="    <disk type='block' device='disk'>
+    for i in "${!DISKS[@]}"; do
+      dev=$prefix${letters:$i:1}
+      disk_xml+="    <disk type='block' device='disk'>
       <driver name='qemu' type='raw' cache='none' io='native'/>
-      <source dev='$DISK'/>
+      <source dev='${DISKS[$i]}'/>
       <target dev='$dev' bus='$DISK_BUS'/>
     </disk>"
-    if [[ -n "$ctl_xml" ]]; then
-      disk_xml="$ctl_xml"$'\n'"$disk_xml"
-    fi
+      if ((i < ${#DISKS[@]} - 1)); then
+        disk_xml+=$'\n'
+      fi
+    done
   fi
   if [[ -n "$SM_VENDOR" ]]; then
     smbios_os="    <smbios mode='sysinfo'/>"

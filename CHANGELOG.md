@@ -12,6 +12,19 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Several disks per workload VM (2026-11-11)
+
+- new: a workload VM may have 1 to 8 disks (`MAX_DISKS` 8 in `HPS::Workload`).
+  Every disk gets its zvol (and mirror when it has two legs) and the driver
+  passes one `--disk` per disk to `vm-define`, in definition order.
+- new: `vm-define --disk` is repeatable (1..8, each path once): targets `vda`,
+  `vdb`, ... (virtio) or `sda`, `sdb`, ... (scsi, sata); with `--boot network`
+  the NIC boots first, then disk 1. `--image` and `vm-image-write` concern the
+  first disk only. A single-disk domain renders byte-identically to before, so
+  its spec hash is unchanged.
+- tests: `test_p3_170_multi_disk.bats`, `t/77-workload-multi-disk.t`. Needed by
+  the scale test (storage VMs with 3 data disks, `lab/scale`).
+
 ## Resource monitoring of the paired nodes (2026-11-11)
 
 - new: `nagios-check` node script (ctrl-exec-plugins v0.3.11, new flake input

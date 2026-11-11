@@ -37,7 +37,7 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `image` | `^[a-z0-9][a-z0-9._-]{0,63}$`; `hps-resources/images/<image>.qcow2` and `<image>.sha256` must exist on the IPS (checked by `create`; `image-fetch` on the node checks the sum); absent when `boot` is `network` |
 | `boot` | optional, `disk` (default) or `network`. `network`: the VM netboots from the first NIC like a metal node (a nested HPS node, CS-3.12a); `image` is refused, `disks` may be empty or absent, so `compute_host` is required; `create` runs `net-bridge-ensure` and `vm-define --boot network` only (no zvol, image, mirror or image write) and `start`, `stop`, `status` and `destroy` are unchanged |
 | `disks[].size` | `^[1-9][0-9]*[MGT]$` |
-| `disks` | exactly one per VM (`vm-define` keeps one `--disk`); none needed with `boot: network` |
+| `disks` | 1 to 8 per VM, names unique within the VM; none needed with `boot: network`. Each disk gets its own zvol (and mirror when it has two legs); the first disk is the boot disk of a `boot: disk` VM and the only one `vm-image-write` fills, the others are left empty for the guest to use (a storage VM builds its own pool on them) |
 | `legs` | 1 or 2; `{host,pool}` is a local zvol, `{host,iqn[,portal]}` a remote LUN already exported by the storage side; at most one local leg per disk; one leg only if it is local (the disk is then the zvol itself, no mirror) |
 | `nets` | non-empty; every entry is a name in the cluster key `network_layout`, or an object `{"net": "<name>", "pvid": 1-4094, "tagged": [1-4094, ...], "model": "virtio\|e1000e\|rtl8139"}` (only `net` is required). One NIC per entry. `pvid` and `tagged` apply only to a fabric net (layout `kind: fabric`), whose NIC must have a `pvid`; `tagged` VLANs are distinct and not the pvid. Passed to `vm-define` as `--vlan-pvid`, `--vlan-tagged`, `--nic-model` after the `--net` |
 | `hardware` | optional object: `disk_bus` (`virtio` default, `scsi`, `sata`; not `virtio` needs a disk) and `smbios` (`vendor` and `product` required, `serial` optional; each letters, digits, space, `.`, `_`, `-`, first character alphanumeric, at most 63). Passed to `vm-define` as `--disk-bus` and `--smbios` |
@@ -63,9 +63,9 @@ nothing). A node call that exits non-zero ends the run at once.
     (once per image and host; `--from http://<network_dhcp_ip>/images/<image>.qcow2
     --sha256 <sum> --dest /$POOL/enc/images`); `mirror-create <vm>-<disk>` with
     the two leg specs (`local:<zvol>`, `iscsi:<portal>:<iqn>`); `vm-image-write`
-    (base image onto the disk); `net-bridge-ensure` when the host's `nets` key
+    (base image onto the first disk only); `net-bridge-ensure` when the host's `nets` key
     lacks a network of the VM (the key is extended first, because the node reads
-    it; it is put back if the call fails); `vm-define` (`--disk /dev/md/<name>`,
+    it; it is put back if the call fails); `vm-define` (one `--disk <device>` per disk in definition order: `/dev/md/<name>` or `/dev/zvol/<dataset>`,
     one `--net <bridge>` per net from the layout, with that NIC's `--nic-model`,
     `--vlan-pvid` and `--vlan-tagged`, then `--disk-bus` and `--smbios`). Refuses (3) if the workload
     already exists. `--resume` continues a `creating` workload: steps already

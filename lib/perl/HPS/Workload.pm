@@ -31,9 +31,8 @@ my $ADDR_RE  = qr/^[0-9]{1,3}(?:\.[0-9]{1,3}){3}\z/;
 my $HOST_RE  = qr/^[A-Za-z0-9][A-Za-z0-9_.:-]*\z/;     # MAC or registry HOSTNAME
 my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S+|sk-\S+) [A-Za-z0-9+\/=]+(?: \S.*)?\z/;
 
-# vm-define keeps one --disk (the last): a VM has exactly one disk until the
-# script takes several.
-my $MAX_DISKS = 1;
+# vm-define takes --disk 1..8 times.
+my $MAX_DISKS = 8;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status);
 my %TOP = map { $_ => 1 } qw(name project access vms);
@@ -118,7 +117,7 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     my $disks = $net_boot ? ($vm->{disks} // []) : $vm->{disks};
     _bad($where, $net_boot ? 'disks must be a list' : 'disks must be a non-empty list')
         unless ref $disks eq 'ARRAY' && ($net_boot || @$disks);
-    _bad($where, "at most $MAX_DISKS disk per VM (vm-define takes one --disk)") if @$disks > $MAX_DISKS;
+    _bad($where, "at most $MAX_DISKS disks per VM") if @$disks > $MAX_DISKS;
     my (%seen, @d);
     for my $d (@$disks) {
         my $nd = _validate_disk($where, $d);
