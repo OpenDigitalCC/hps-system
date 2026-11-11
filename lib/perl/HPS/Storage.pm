@@ -72,7 +72,7 @@ sub approval_info ($self) { return $self->{approval_info} }
 sub _resolve_host ($self, $host) {
     _fail('usage', 'a host (MAC or HOSTNAME) is required') unless defined $host && length $host;
     my $reg = $self->{registry};
-    my $mac = eval { HPS::Registry::normalise_mac($host) };
+    my $mac = eval { $reg->resolve_mac($host) };
     if (defined $mac) {
         _fail('notfound', "No such host: $host") unless $reg->host_exists($mac);
         return $mac;

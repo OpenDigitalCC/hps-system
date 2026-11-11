@@ -11,6 +11,7 @@ setup() {
 
   # Source first; the stubs below replace the real helpers they would call.
   source "$ROOT/lib/functions.d/ipxe-menu-functions.sh"
+  source "$ROOT/lib/functions.d/host-functions.sh"
 
   hps_log() { :; }
   host_registry() {

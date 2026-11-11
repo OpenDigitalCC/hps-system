@@ -910,6 +910,156 @@ has_sch_host() {
 
 
 #===============================================================================
+# The MAC index (IPS-15)
+# ----------------------
+# A host is stored under the MAC it first booted from (the host key). The host
+# key `macs` lists every physical NIC MAC its audit found. The index maps each
+# of those MACs, and each host key, to its host. It is computed from the
+# registry when asked (a scan of the hosts; the exact-key case needs no scan)
+# and never stored, so forgetting a host frees its MACs. Every caller that has
+# a MAC off the wire goes through host_resolve_mac; none reads hosts/<mac>.db
+# from a raw MAC. The Perl twin is HPS::Registry->resolve_mac.
+#===============================================================================
+
+#===============================================================================
+# host_macs_of
+# ------------
+# The MACs of one host, 12 lower-case hex, one per line: the host key first,
+# then the recorded `macs` in order, no repeats.
+#
+# Parameters:
+#   $1 - host key (any MAC form)
+#===============================================================================
+host_macs_of() {
+  local key norm json
+  key="${1:-}"
+  norm=$(normalise_mac "$key") || return 1
+  printf '%s\n' "$norm"
+  json=$(host_registry "$norm" get macs 2> /dev/null) || return 0
+  [[ -n "$json" ]] || return 0
+  jq -r '.[]? | (if type == "object" then .mac else . end) // empty
+         | ascii_downcase | gsub("[^0-9a-f]"; "") | select(length == 12)' <<< "$json" 2> /dev/null \
+    | awk -v k="$norm" '$0 != k && !seen[$0]++' || true
+}
+
+#===============================================================================
+# host_mac_owner
+# --------------
+# The host key of the host that lists a MAC among its recorded `macs` (a MAC
+# that is itself a host key is not looked up here; see host_resolve_mac).
+#
+# Parameters:
+#   $1 - MAC, 12 hex
+#
+# Returns: 0 and the key, 1 when no host lists it
+#===============================================================================
+host_mac_owner() {
+  local want="${1:-}" h
+  while IFS= read -r h; do
+    [[ -n "$h" ]] || continue
+    if host_macs_of "$h" | grep -qx -- "$want"; then
+      printf '%s\n' "$h"
+      return 0
+    fi
+  done < <(host_registry list_all 2> /dev/null)
+  return 1
+}
+
+#===============================================================================
+# host_resolve_mac
+# ----------------
+# The MAC to use for registry calls for a MAC seen on the wire.
+#   - a MAC that is a host key: printed as given (no scan)
+#   - a MAC recorded under another host: that host's key, 12 hex
+#   - an unknown MAC, or text that is not a MAC (an IP tag): printed as given,
+#     so an unknown MAC still becomes a new HELD host
+# A MAC is never moved between hosts: this only reads.
+#
+# Parameters:
+#   $1 - MAC in any form
+#
+# Returns: 0 known (host key or recorded port), 1 unknown, 2 not a MAC
+#===============================================================================
+host_resolve_mac() {
+  local mac="${1:-}" norm owner
+  norm=$(normalise_mac "$mac" 2> /dev/null) || {
+    printf '%s\n' "$mac"
+    return 2
+  }
+  if host_registry "$norm" exists; then
+    printf '%s\n' "$mac"
+    return 0
+  fi
+  if owner=$(host_mac_owner "$norm") && [[ -n "$owner" ]]; then
+    printf '%s\n' "$owner"
+    return 0
+  fi
+  printf '%s\n' "$mac"
+  return 1
+}
+
+#===============================================================================
+# host_mac_conflicts
+# ------------------
+# Which of the given MACs another host already holds, as its key or among its
+# recorded MACs. One "<mac> <owner key>" line each; no output means no clash.
+#
+# Parameters:
+#   $1   - host key of the host that wants the MACs
+#   $2.. - MACs, 12 hex
+#===============================================================================
+host_mac_conflicts() {
+  local self m owner
+  self=$(normalise_mac "${1:-}") || return 1
+  shift
+  for m in "$@"; do
+    [[ "$m" == "$self" ]] && continue
+    if host_registry "$m" exists; then
+      printf '%s %s\n' "$m" "$m"
+    elif owner=$(host_mac_owner "$m") && [[ "$owner" != "$self" ]]; then
+      printf '%s %s\n' "$m" "$owner"
+    fi
+  done
+  return 0
+}
+
+#===============================================================================
+# host_audit_macs
+# ---------------
+# The physical NIC MACs of an audit, as the JSON array stored in the host key
+# `macs`: [{mac (colons), ifname, driver, speed}], the host key's MAC first.
+#
+# Which interfaces count: the loopback never; a virtual interface (veth,
+# bridge, bond, vlan, tap, dummy, ...) never. The audit's net.nics (hps-audit
+# collect_nics) says which are real: `physical` is true when the interface has
+# a bus device behind it. Locally administered addresses are NOT dropped by
+# their address bit: a VM's virtio NIC (52:54:00:...) has that bit set and is
+# the machine's real NIC, so a real device decides. An older audit without
+# net.nics is read from net.link by interface name and enslavement.
+#
+# Parameters:
+#   $1 - audit JSON file
+#   $2 - host key (its MAC is listed first when it is among the NICs)
+#===============================================================================
+host_audit_macs() {
+  local file="${1:?}" key="${2:?}"
+  jq -c --arg key "$key" '
+    def norm: ascii_downcase | gsub("[^0-9a-f]"; "");
+    def colons: [match(".."; "g").string] | join(":");
+    def virt: test("^(lo|veth|br|bond|vlan|tap|tun|docker|virbr|vnet|dummy|ifb|macvlan|ipvlan|vxlan|gre|sit|wg|nlmon)") or test("[.]");
+    (if (.net.nics | type) == "array"
+       then [.net.nics[] | select(.physical == true)
+             | {mac: .mac, ifname: .ifname, driver: (.driver // null), speed: (.speed // null)}]
+       else [(.net.link // [])[] | select(.link_type == "ether" and ((.ifname // "") | virt | not) and (.master == null))
+             | {mac: .address, ifname: .ifname, driver: null, speed: null}]
+     end)
+    | map(select((.mac | type) == "string" and ((.mac | norm | length) == 12) and ((.mac | norm) != "000000000000")))
+    | map(.mac |= (norm | colons))
+    | reduce .[] as $x ([]; if any(.[]; .mac == $x.mac) then . else . + [$x] end)
+    | (map(select((.mac | norm) == $key))) + (map(select((.mac | norm) != $key)))' "$file"
+}
+
+#===============================================================================
 # host_audit_refuse
 # -----------------
 # Refuse a node_audit request: HTTP status line, plain-text message, log line.
@@ -954,7 +1104,9 @@ host_bmc_select() {
 #   - POST only; body read up to HPS_AUDIT_MAX_BYTES (default 262144)
 #   - body must be JSON with .schema == "hps-audit/1"
 #   - the caller (MAC) must exist and be STATE=HELD
-#   - stores the JSON as host key "audit" and the time as "audit_at"
+#   - refuses (409) when a NIC MAC of the audit is held by another host
+#   - stores the JSON as host key "audit", the time as "audit_at" and the NIC
+#     MACs as "macs" (host_audit_macs)
 #   - replies "ok" (plain text)
 #
 # Parameters:
@@ -967,7 +1119,8 @@ host_audit_intake() {
   local mac="${1:-}"
   local max="${HPS_AUDIT_MAX_BYTES:-262144}"
   local tmp="/tmp/hps-audit-in-$$"
-  local size state schema detail
+  local size state schema detail key macs_json conflicts
+  local -a macs12
 
   if [[ "${REQUEST_METHOD:-}" != "POST" ]]; then
     host_audit_refuse "405 Method Not Allowed" "POST required"
@@ -1008,6 +1161,17 @@ host_audit_intake() {
     return 1
   fi
 
+  key="$(normalise_mac "$mac")" || key="$mac"
+  macs_json="$(host_audit_macs "$tmp" "$key" 2> /dev/null)" || macs_json="[]"
+  mapfile -t macs12 < <(jq -r '.[].mac | gsub(":"; "")' <<< "$macs_json" 2> /dev/null)
+  conflicts="$(host_mac_conflicts "$key" "${macs12[@]}")"
+  if [[ -n "$conflicts" ]]; then
+    rm -f "$tmp"
+    hps_log warn "[$mac] node_audit refused: MAC already held by another host: ${conflicts//$'\n'/; } (hps-onboard forget the other host to free it)"
+    host_audit_refuse "409 Conflict" "a MAC of this machine is held by another host: ${conflicts//$'\n'/; }"
+    return 1
+  fi
+
   detail="$(jq -r '"controllers=" + ((.storage_controllers.scsi_hosts // []) | map(.hba_mode_enabled | tostring) | join(",") | if . == "" then "none" else . end) + " disks=" + ([.block.blockdevices[]? | select(.type == "disk")] | length | tostring)' "$tmp" 2>/dev/null)" || detail=""
   if ! host_registry "$mac" set audit "$(cat "$tmp")"; then
     rm -f "$tmp"
@@ -1019,6 +1183,7 @@ host_audit_intake() {
   host_registry "$mac" set audit_at "$(make_timestamp)"
   # a new audit clears the stale mark set by hps-onboard reaudit (IPS-14)
   host_registry "$mac" delete audit_stale > /dev/null 2>&1 || true
+  host_registry "$mac" set macs "$macs_json" || hps_log warn "[$mac] node_audit: could not store the MAC list"
   host_bmc_select "$mac"
   hps_log info "[$mac] node_audit stored: ${size} bytes ${detail} (hba_mode_enabled per controller)"
   cgi_success "ok"

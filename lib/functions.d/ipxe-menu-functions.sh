@@ -65,7 +65,7 @@ ipxe_boot_from_disk () {
 #     choice; the installer re-uses the stored TYPE/IP/HOSTNAME.
 #
 # Arguments:
-#   $1: MAC address
+#   $1: MAC the node booted from (resolved to its host by host_resolve_mac)
 #
 # Returns:
 #   0 on success (handler executed)
@@ -73,9 +73,17 @@ ipxe_boot_from_disk () {
 #
 #===============================================================================
 ipxe_init_handler() {
-  mac="$1"
-  
+  # IPS-15: $1 is the MAC that booted. A MAC recorded under a host (another
+  # port of the same machine) resolves to that host's key: state, role and
+  # address are the host's. hps.mac stays the booted MAC (HPS_BOOT_MAC).
+  HPS_BOOT_MAC="$1"
+  mac="$(host_resolve_mac "$HPS_BOOT_MAC")" || true
+  [[ -n "$mac" ]] || mac="$HPS_BOOT_MAC"
+
   hps_log info "[$mac] iPXE Initialisation requested"
+  if [[ "$mac" != "$HPS_BOOT_MAC" ]]; then
+    hps_log info "[$mac] booted from another port: $HPS_BOOT_MAC"
+  fi
   
   # Detect architecture (TODO: audit to detect running arch)
   arch="x86_64"
@@ -90,6 +98,7 @@ ipxe_init_handler() {
   fi
   
   host_registry "$mac" set last_boot_at "$(date +%s)"  # ADR 0002 check 3
+  host_registry "$mac" set boot_mac_last "$(normalise_mac "$HPS_BOOT_MAC" 2> /dev/null || printf '%s' "$HPS_BOOT_MAC")"
 
   # Get current state
   state=$(host_registry "$mac" get STATE 2>/dev/null) || state=""

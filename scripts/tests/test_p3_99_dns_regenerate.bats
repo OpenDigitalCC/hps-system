@@ -56,6 +56,8 @@ R
   # shellcheck disable=SC1091
   source "$ROOT/lib/functions.d/network-functions.sh"
   # shellcheck disable=SC1091
+  source "$ROOT/lib/functions.d/host-functions.sh"
+  # shellcheck disable=SC1091
   source "$ROOT/lib/functions.d/dns-dhcp-functions.sh"
   DNS="$CFG/clusters/lab/services/dns_hosts"
   DHCP="$CFG/clusters/lab/services/dhcp_addresses"

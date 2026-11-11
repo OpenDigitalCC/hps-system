@@ -66,6 +66,8 @@ my @KEYS = (
     [ 'bmc_last', 'host', 'json', 'HPS::BMC (every hps-bmc call)', 'The last call: action, rc (the driver exit code), at, and power for a status call.' ],
     [ 'audit_at', 'host', 'stamp', 'node_audit CGI', 'When the audit was stored.' ],
     [ 'audit_stale', 'host', 'bool', 'hps-onboard reaudit (cleared by the node_audit CGI)', 'True when the stored audit is to be redone: a held host with it boots the audit image instead of waiting at iPXE. Absent when the audit is current.' ],
+    [ 'macs', 'host', 'json', 'node_audit CGI (host_audit_intake)', 'Array of the node\'s physical NIC MACs from its audit: {mac, ifname, driver, speed}, the host key MAC first. The MAC index is computed from these, so a boot from any listed port reaches this host. A MAC another host holds refuses the audit.' ],
+    [ 'boot_mac_last', 'host', 'mac', 'ipxe_init_handler', 'The MAC the node last booted from (which port), as the host may boot from any of its macs.' ],
     [ 'storage_note', 'host', 'string', 'hps-onboard', 'Operator note about the node storage plan.' ],
     [ 'poweroff_last', 'host', 'json', 'HPS::Node', 'Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail.' ],
     [ 'storage_last', 'host', 'json', 'HPS::Storage', 'Outcome of the last storage operation: op, ok, at.' ],

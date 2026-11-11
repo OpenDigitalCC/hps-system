@@ -25,6 +25,16 @@ capabilities and removals are called out explicitly.
 - new: `hps-onboard reaudit <mac>` (host key `audit_stale`, cleared when a new
   audit is stored); the audit schema version is not checked.
 
+## IPS-15: every MAC of a machine identifies the same host (2026-11-11)
+
+- new: the audit image records `net.nics` (interface, MAC, physical, driver,
+  speed). Intake stores the physical NIC MACs as host key `macs` and refuses
+  (409) a MAC another host holds. `host_resolve_mac` / `HPS::Registry->resolve_mac`
+  turn any recorded MAC into its host; the iPXE init, the boot_manager CGI and
+  `hps-onboard` (show, assign, repin, nets, forget), `hps-bmc` and `hps-storage`
+  use it. `dhcp_addresses` has one line per host with all its MACs. Registry
+  keys added: `macs`, `boot_mac_last`. The MAC index is computed on demand.
+
 ## IPS-08: modular out-of-band power control (2026-11-10)
 
 - new: `hps-bmc status|on|off|force-off|reset|pxe-once|identify <host>`, `set`,

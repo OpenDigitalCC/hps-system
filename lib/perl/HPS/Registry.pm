@@ -324,6 +324,68 @@ sub host_get_epoch ($self, $mac, $key) {
 
 sub host_list_all ($self) { return _subdirs($self->hosts_dir, '.db') }
 
+#--- the MAC index (IPS-15) ------------------------------------------------------------
+# A host is stored under the MAC it first booted from (hosts/<mac>.db, the host
+# key). The host key `macs` lists every physical NIC MAC the audit found:
+# [{mac, ifname, driver, speed}]. The MAC index maps each of those MACs, and each
+# host key, to its host. It is computed from the registry on every call (a scan of
+# the hosts, a few dozen at most) and never stored, so forgetting a host frees its
+# MACs and nothing can go stale. No caller reads hosts/<mac>.db from a raw MAC:
+# resolve_mac turns any known MAC into its host key first.
+
+# host_macs($key): the MACs of one host as 12-hex strings, the host key first,
+# then its recorded `macs` in order, no repeats. Empty list when no such host.
+sub host_macs ($self, $key) {
+    my $k = normalise_mac($key);
+    return () unless -d $self->_host_db($k);
+    my @out = ($k);
+    my $macs = $self->host_exists($k, 'macs') ? $self->host_get_json($k, 'macs') : undef;
+    if (ref $macs eq 'ARRAY') {
+        for my $e (@$macs) {
+            my $m = ref $e eq 'HASH' ? $e->{mac} : $e;
+            $m = eval { normalise_mac($m) };
+            push @out, $m if defined $m && !grep { $_ eq $m } @out;
+        }
+    }
+    return @out;
+}
+
+# mac_index: {mac12 => host key} over every host. A host key always maps to itself;
+# when two hosts claim the same other MAC the first host (sorted by key) keeps it
+# (mac_conflicts reports the clash, intake refuses it).
+sub mac_index ($self) {
+    my %idx;
+    my @hosts = sort $self->host_list_all;
+    $idx{$_} = $_ for @hosts;
+    for my $h (@hosts) {
+        for my $m ($self->host_macs($h)) { $idx{$m} //= $h }
+    }
+    return \%idx;
+}
+
+# mac_conflicts($key, @macs): [[mac, owner key]...] for each of @macs that another
+# host than $key already holds, as its key or among its recorded MACs.
+sub mac_conflicts ($self, $key, @macs) {
+    my $k = normalise_mac($key);
+    my $idx = $self->mac_index;
+    my @bad;
+    for my $m (map { normalise_mac($_) } @macs) {
+        my $o = $idx->{$m};
+        push @bad, [ $m, $o ] if defined $o && $o ne $k;
+    }
+    return @bad;
+}
+
+# resolve_mac($mac): the host key to use for $mac. A MAC that is a host key is
+# its own answer (the common case, no scan); a MAC recorded under another host
+# gives that host's key; an unknown MAC gives itself, normalised, so it still
+# becomes a new host. Dies on a string that is not a MAC.
+sub resolve_mac ($self, $mac) {
+    my $m = normalise_mac($mac);
+    return $m if -d $self->_host_db($m);
+    return $self->mac_index->{$m} // $m;
+}
+
 # host_remove($mac): delete the host's whole registry entry (its directory of
 # keys, locks included). Returns 1 when it was there, 0 when it was not. The
 # only deletion of a host; hps-onboard forget is its caller.

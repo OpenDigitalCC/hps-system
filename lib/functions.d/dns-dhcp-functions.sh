@@ -106,8 +106,9 @@ update_dns_dhcp_files() {
 #   - Iterates through all cluster hosts using list_cluster_hosts
 #   - Extracts hostname and IP from each host config
 #   - Formats MAC addresses with colons
+#   - One line per host with all its MACs (host key first, then the audit NICs)
 #   - Detects and prevents duplicate MAC addresses and IP addresses
-#   - Writes dhcp-hostsfile format: MAC,IP,hostname
+#   - Writes dhcp-hostsfile format: MAC[,MAC...],IP,hostname
 #   - Creates parent directory if needed
 #   - Validates data before writing
 #
@@ -116,6 +117,7 @@ update_dns_dhcp_files() {
 #
 # Format:
 #   52:54:00:12:34:56,10.99.1.2,TCH-001
+#   30:e1:71:53:c7:48,30:e1:71:53:c7:49,10.99.1.3,sch-001   (a host with two ports)
 #
 # Returns:
 #   0 on success
@@ -169,7 +171,7 @@ build_dhcp_addresses_file() {
   local hostname
   local ip
   local mac_formatted
-  local entry_count=0
+  local m macs_out entry_count=0
   
   # Arrays to track seen MACs and IPs for duplicate detection
   declare -A seen_macs
@@ -203,16 +205,22 @@ build_dhcp_addresses_file() {
       continue
     fi
     
-    # Format MAC with colons
-    mac_formatted=$(format_mac_colons "$mac")
-    if [[ $? -ne 0 ]] || [[ -z "$mac_formatted" ]]; then
-      hps_log warn "Skipping host $mac: could not format MAC address"
-      continue
-    fi
-
-    # Check for duplicate MAC address
-    if [[ ${seen_macs[$mac_formatted]+isset} ]]; then
-      hps_log warn "Skipping host: duplicate MAC address $mac_formatted (already assigned to ${seen_macs[$mac_formatted]})"
+    # Every MAC of the host (the key first, then its recorded NIC MACs) goes on
+    # the one line, so dnsmasq hands the host's address to whichever port asks.
+    # A MAC already given to an earlier host is left off this line, not moved.
+    macs_out=""
+    for m in $(host_macs_of "$mac"); do
+      mac_formatted=$(format_mac_colons "$m") || mac_formatted=""
+      [[ -n "$mac_formatted" ]] || continue
+      if [[ ${seen_macs[$mac_formatted]+isset} ]]; then
+        hps_log warn "Skipping MAC $mac_formatted of $hostname: already assigned to ${seen_macs[$mac_formatted]}"
+        continue
+      fi
+      macs_out+="${mac_formatted},"
+      seen_macs[$mac_formatted]="$hostname"
+    done
+    if [[ -z "$macs_out" ]]; then
+      hps_log warn "Skipping host $mac: no usable MAC address"
       continue
     fi
 
@@ -227,10 +235,9 @@ build_dhcp_addresses_file() {
     
     # Write entry to temp file
     # dnsmasq takes the bare label here; the domain is added from domain=
-    echo "${mac_formatted},${ip},${hostname%%.*}" >> "$dhcp_addresses_tmp"
+    echo "${macs_out}${ip},${hostname%%.*}" >> "$dhcp_addresses_tmp"
     
-    # Track this MAC and IP
-    seen_macs[$mac_formatted]="$hostname"
+    # Track this IP (the MACs are tracked above)
     seen_ips[$ip]="$mac"
     
     entry_count=$((entry_count + 1))

@@ -12,6 +12,13 @@ get_active_cluster_name >/dev/null 2>&1 || {
   exit 1
 }
 
+# IPS-15: $mac is the host the request belongs to. A MAC recorded under a host
+# (another port of the same machine) is that host; boot_mac stays the MAC that
+# made the request (the iPXE init keeps it as hps.mac and boot_mac_last).
+boot_mac="$mac"
+mac="$(host_resolve_mac "$boot_mac")" || true
+[[ -n "$mac" ]] || mac="$boot_mac"
+
 ### ───── Ensure command is present else fail fast ─────
 
 if ! cgi_param exists cmd; then
@@ -435,7 +442,7 @@ fi
 
 # Command: init - iPXE boot initialisation
 if [[ "$cmd" == "init" ]]; then
-  ipxe_init_handler "$mac"
+  ipxe_init_handler "$boot_mac"
   exit $?
 fi
 

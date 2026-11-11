@@ -63,6 +63,37 @@ MAC is not used as a credential after enrolment. No secret is part of a boot
 image. Where the site requires it, MAC and port security are applied at the
 switch, outside HPS.
 
+A machine has one identity, not one per port (IPS-15). The registry keeps the
+host under the MAC it first booted from (`hosts/<mac>.db`, the host key). The
+audit lists the machine's physical NICs and intake records them in the host key
+`macs` (`[{mac, ifname, driver, speed}]`, the host key MAC first). Every MAC
+lookup goes through one helper (bash `host_resolve_mac`, Perl
+`HPS::Registry->resolve_mac`), so a boot from any recorded port reaches the same
+host, state, role and address. Rules:
+
+- Which interfaces count: loopback never; virtual interfaces (veth, bridge,
+  bond, vlan, tap, dummy) never. The audit's `net.nics` (read from
+  `/sys/class/net` by the audit image) marks `physical` when a bus device sits
+  behind the interface. The locally administered bit is not used to decide: a
+  VM's virtio NIC (`52:54:00:...`) has it set and is the machine's real NIC. An
+  audit without `net.nics` is read from `net.link` by interface name.
+- The MAC index is computed from the registry on each lookup (a scan of the
+  host directories; a MAC that is a host key needs no scan) and is never stored,
+  so it cannot go stale and nothing edits it by hand.
+- A MAC held by two hosts is refused at audit intake (409, logged); a MAC is
+  never moved between hosts silently. `hps-onboard forget` on the other host
+  frees its MACs, then the audit is sent again.
+- An unknown MAC still becomes a new HELD host.
+- dnsmasq gets one `dhcp_addresses` line per host listing all its MACs
+  (`mac1,mac2,ip,name`), so the host's single address is handed to whichever
+  port asks. dnsmasq serves that address to one port at a time; a machine with
+  two ports up on the provisioning VLAN at once gets the address on one and a
+  dynamic address on the other. `dns_hosts` is per host and is unchanged.
+- The kernel parameter `hps.mac` stays the MAC that booted, so the
+  `uplink: boot` network role follows the port actually used; the host key
+  `boot_mac_last` records which port booted last. `hps-onboard show` lists all
+  the MACs and accepts any of them.
+
 The provisioning VLAN is the security boundary for this identity. Physical
 breach – someone plugging a device into the provisioning network, or cloning
 a node's MAC address – is **out of scope** for HPS; it is a physical and

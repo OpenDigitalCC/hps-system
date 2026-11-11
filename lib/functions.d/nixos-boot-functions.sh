@@ -107,7 +107,7 @@ nixos_boot_lines() {
   if [[ " ${args} " != *" init="* ]]; then
     args="${args:+${args} }init=${init}"
   fi
-  args="${args} hps.ips=${ips} hps.mac=${mac} hps.profile=${profile} hps.pin=${pin}"
+  args="${args} hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.profile=${profile} hps.pin=${pin}"
   # Registry hostname, when assigned: lets the node name its logs from the
   # first line (hps-log-target reads it); held/audit nodes have none.
   local hostname

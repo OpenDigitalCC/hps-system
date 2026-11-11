@@ -68,15 +68,16 @@ sub list_all ($self) {
     return @all;
 }
 
-# {mac, identity => {key => raw value, audit excluded}, audit => decoded|undef, audit_at}
+# {mac, identity => {key => raw value, audit excluded}, audit => decoded|undef, audit_at,
+#  macs => [{mac, ifname, driver, speed}]|undef, boot_mac_last}. Any recorded MAC of the host finds it.
 sub show ($self, $mac) {
     my $reg = $self->{registry};
-    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    my $m = eval { $reg->resolve_mac($mac) };
     _fail('usage', "Invalid MAC address: $mac") unless defined $m;
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my %identity;
     for my $key ($reg->host_list($m)) {
-        next if $key eq 'audit' || $key eq 'nets' || $key eq 'init_result' || $key eq 'init_result_prev';
+        next if $key eq 'audit' || $key eq 'macs' || $key eq 'nets' || $key eq 'init_result' || $key eq 'init_result_prev';
         $identity{$key} = $reg->host_get($m, $key);
     }
     return {
@@ -85,6 +86,8 @@ sub show ($self, $mac) {
         identity => \%identity,
         audit    => $reg->host_get_json($m, 'audit'),
         audit_at => $identity{audit_at},
+        macs     => scalar($reg->host_get_json($m, 'macs')),
+        boot_mac_last => $identity{boot_mac_last},
         nets     => $reg->host_get_json($m, 'nets'),
         init      => $reg->host_get_json($m, 'init_result'),
         init_prev => $reg->host_get_json($m, 'init_result_prev'),
@@ -110,7 +113,7 @@ sub network_layout ($self) {
 # {mac, nets => [names]}. Nothing is written when any name is refused.
 sub attach_nets ($self, $mac, $names) {
     my $reg = $self->{registry};
-    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    my $m = eval { $reg->resolve_mac($mac) };
     _fail('usage', "Invalid MAC address: $mac") unless defined $m;
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my @names = @{ $names // [] };
@@ -140,7 +143,7 @@ sub attach_nets ($self, $mac, $names) {
 # (layout fields; a name no longer in the layout shows with undef fields).
 sub nets ($self, $mac) {
     my $reg = $self->{registry};
-    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    my $m = eval { $reg->resolve_mac($mac) };
     _fail('usage', "Invalid MAC address: $mac") unless defined $m;
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my $attached = $reg->host_get_json($m, 'nets');
@@ -174,7 +177,7 @@ sub _validate_args ($self, $a) {
 sub assign ($self, $mac, $a) {
     my $reg = $self->{registry};
     $self->_validate_args($a);
-    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    my $m = eval { $reg->resolve_mac($mac) };
     _fail('usage', "Invalid MAC address: $mac") unless defined $m;
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my $state = $reg->host_get($m, 'STATE');
@@ -276,7 +279,7 @@ sub _verify_pin ($self, $pin) {
 # is kept as system_pin_previous. Returns {mac, from, to}.
 sub repin ($self, $mac, $a) {
     my $reg = $self->{registry};
-    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    my $m = eval { $reg->resolve_mac($mac) };
     _fail('usage', "Invalid MAC address: $mac") unless defined $m;
     my $pin = $a->{pin};
     _fail('usage', 'give exactly one of pin and to_latest')
@@ -403,12 +406,13 @@ sub _forget_approval ($self, $mac) {
 
 sub forget ($self, $mac, %opt) {
     my $reg = $self->{registry};
-    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    my $m = eval { $reg->resolve_mac($mac) };
     _fail('usage', "Invalid MAC address: $mac") unless defined $m;
     _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
     my $hostname = $reg->host_get($m, 'HOSTNAME');
     my $agent = eval { $self->agent_name($m) };
     _fail('refused', "Host $m has no usable FQDN: $@") unless defined $agent;
+    my @freed = $reg->host_macs($m);
     my @why = $self->_forget_refusals($m);
     _fail('refused', "Host $m is not forgotten: " . join('; ', @why)) if @why;
 
@@ -419,6 +423,7 @@ sub forget ($self, $mac, %opt) {
         push @steps, $ok ? 'host-forget approval: present and valid' : 'host-forget approval: missing or not usable (run: hps-approve host-forget ' . $m . ')';
         push @steps, "would remove ctrl-exec agent $agent";
         push @steps, "would remove registry host $m" . (defined $hostname ? " ($hostname)" : '');
+        push @steps, 'would free MACs ' . join(', ', @freed) if @freed > 1;
         push @steps, 'would regenerate DHCP and DNS files and reload dnsmasq';
         return $res;
     }
@@ -434,6 +439,7 @@ sub forget ($self, $mac, %opt) {
 
     $reg->host_remove($m);
     push @steps, "removed registry host $m" . (defined $hostname ? " ($hostname)" : '');
+    push @steps, 'freed MACs ' . join(', ', @freed) if @freed > 1;
 
     if (defined $self->_forget_cmd) {
         my ($rc, $out) = $self->_hook('dns-dhcp');

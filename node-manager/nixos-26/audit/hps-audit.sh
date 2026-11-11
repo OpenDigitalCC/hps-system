@@ -268,6 +268,41 @@ collect_pci_drivers() {
   jq -s 'add' "$WORK/pcidrv.ndjson" > "$WORK/pcidrv.json"
 }
 
+# Every network interface the kernel lists (not lo), with what tells a real
+# device from a virtual one (IPS-15): `physical` is true when the interface has
+# a device link (a PCI/USB/virtio bus device; veth, bridge, bond, vlan, tap and
+# dummy interfaces have none), driver is the bound kernel driver, speed is Mb/s
+# (null when the link is down), perm_mac the permanent address when the kernel
+# reports one that differs from the current address. The IPS builds the host's
+# MAC list from this (host_audit_macs).
+collect_nics() {
+  local ifc name addr drv speed
+  log "+ reading $HPS_SYS/class/net/*/{address,speed,device/driver}"
+  : > "$WORK/nics.ndjson"
+  for ifc in "$HPS_SYS"/class/net/*; do
+    [[ -e "$ifc" ]] || continue
+    name=$(basename "$ifc")
+    [[ "$name" == "lo" ]] && continue
+    addr=$(read_attr "$ifc/address")
+    drv=""
+    if [[ -e "$ifc/device/driver" ]]; then
+      drv=$(basename "$(readlink -f "$ifc/device/driver" 2> /dev/null || true)")
+    fi
+    speed=$(read_attr "$ifc/speed")
+    jq -nc \
+      --arg ifname "$name" \
+      --arg mac "$addr" \
+      --argjson physical "$([[ -e "$ifc/device" ]] && echo true || echo false)" \
+      --arg driver "$drv" \
+      --arg speed "$speed" \
+      '{ifname: $ifname, mac: $mac, physical: $physical,
+        driver: (if $driver != "" then $driver else null end),
+        speed: ((try ($speed | tonumber) catch null) as $s | if $s != null and $s > 0 then $s else null end)}' \
+      >> "$WORK/nics.ndjson"
+  done
+  jq -s '.' "$WORK/nics.ndjson" > "$WORK/nics.json"
+}
+
 collect_proc_scsi() {
   log "+ cat $HPS_PROC/scsi/scsi"
   if [[ -r "$HPS_PROC/scsi/scsi" ]]; then
@@ -324,6 +359,7 @@ assemble() {
     --rawfile zpool_import "$WORK/zpool" \
     --argjson link "$(json_or_null "$WORK/iplink")" \
     --argjson addr "$(json_or_null "$WORK/ipaddr")" \
+    --slurpfile nics "$WORK/nics.json" \
     '($dmesg_text | split("\n") | map(select(length > 0))) as $dm
     | {
       schema: $schema,
@@ -348,7 +384,7 @@ assemble() {
       disk_by_id: $disk_by_id,
       blkid: $blkid,
       zpool_import: $zpool_import,
-      net: { link: $link, addr: $addr }
+      net: { link: $link, addr: $addr, nics: $nics[0] }
     }' > "$HPS_AUDIT_OUT"
 }
 
@@ -429,6 +465,7 @@ main() {
   capture zpool zpool import
   capture iplink ip -j link
   capture ipaddr ip -j addr
+  collect_nics
   collect_dmesg
 
   assemble_capped
