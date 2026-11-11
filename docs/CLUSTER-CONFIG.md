@@ -169,6 +169,7 @@ keys may be empty.
 | `monitor_interval_seconds` | monitoring | Seconds between resource checks of the paired nodes (10-86400; 0 disables) | `int0:10..86400` | `60` | no |
 | `held_reboot_after_audit` | onboarding | Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection) | `bool` | `true` | no |
 | `operator_api_listen` | operator | Address of this IPS where the ctrl-exec API listens with TLS for remote operators (empty: no remote operator; `docs/OPERATOR.md`) | `ip` | (empty) | no |
+| `ips_admin_read_timeout` | operator | Seconds to wait for the IPS's own ips-admin agent to answer, so long jobs (publish, storage) return their output (60-3600; needs ctrl-exec 0.14.7; `docs/OPERATOR.md`) | `int:60..3600` | `900` | no |
 | `syslog_forward_host` | operator | Collector to forward every syslog message to over TCP 514 (empty: no forwarding; set by `ips-syslog-forward`) | `ip` | (empty) | no |
 | `syslog_forward_prefix` | operator | Host name prefix of the forwarded messages (`<prefix>.<hostname>`) | `regex:[a-z0-9][a-z0-9-]{0,31}` | (empty) | no |
 

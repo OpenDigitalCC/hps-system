@@ -26,7 +26,7 @@ Whatever works one level down works one level up, and on a real site.
 
 | Piece | Where | What |
 | --- | --- | --- |
-| Local agent | the IPS, `program:ctrl-exec-agent` (supervisord, root, syslog) | the ctrl-exec agent `ips.<cluster DNS domain>` (one hostname rule, `docs/NAMING.md`), port 7446, accepting connections from 127.0.0.1 only |
+| Local agent | the IPS, `program:ctrl-exec-agent` (supervisord, root, syslog) | the ctrl-exec agent `ips.<cluster DNS domain>` (one hostname rule, `docs/NAMING.md`), port 7446, listening on 127.0.0.1 only (`bind`) |
 | `ips-admin` allowlist | `ips-admin/` in hps-system; agent `scripts.conf`, profile `ips-admin` | one thin wrapper per tool, all through `ips-admin/ips-admin-exec` |
 | Operator API | the IPS's `ctrl-exec-api`, TLS on `operator_api_listen`:7445 | the API HPS already runs (unix socket for `hps-jobs`), with a TCP listener added for operators |
 | Auth hook | `scripts/ctrl-exec-auth-hook.sh` (installed as `auth-hook-hps`) | an operator credential may run only `ips-admin` scripts on `ips.<domain>` |
@@ -45,7 +45,8 @@ At every IPS start with a configured cluster (`scripts/run-hps.sh`, step 4c,
    when `ctrl-exec-agent` is not on `PATH`.
 3. `agent.conf` and `scripts.conf` are rewritten (HPS owns them):
    `port = 7446` (the IPS shares the host's network, where the host may run its
-   own agent on 7443), `allowed_ips = 127.0.0.1`, `script_dirs` the `ips-admin`
+   own agent on 7443), `bind = 127.0.0.1` (the agent listens on loopback only;
+   ctrl-exec 0.14.7) with `allowed_ips = 127.0.0.1` kept as defence in depth, `script_dirs` the `ips-admin`
    directory, and every `ips-admin` script under profile `ips-admin`.
 4. If the agent has no certificate, or the dispatcher does not list it, the IPS
    pairs it with its own dispatcher: a 120 s pairing window, `request-pairing
@@ -53,8 +54,10 @@ At every IPS start with a configured cluster (`scripts/run-hps.sh`, step 4c,
    --name ips.<domain> --background`, then the same non-interactive `approve`
    the node approver uses, guarded: only a pending request carrying exactly
    `ips.<domain>` and coming from 127.0.0.1 is approved (`approve <reqid> --ip
-   127.0.0.1 --lookup-by ip --agent-port 7446`); anything else is refused and
-   left pending. The window is closed when the certificate has arrived.
+   127.0.0.1 --lookup-by ip --agent-port 7446 --read-timeout 900`); anything
+   else is refused and left pending. The window is closed when the certificate
+   has arrived. The read timeout (below) is also set on an agent already
+   registered, at every start (`edit-agent ips.<domain> --read-timeout`).
 5. `hps-operator export` restores the auth hook's credential digests from the
    keysafe.
 
@@ -146,17 +149,26 @@ address is refused and the listener stays off. The unix socket stays as it was.
 The hook (`scripts/ctrl-exec-auth-hook.sh`):
 
 - unix socket: root only (unchanged; the job runner and `hps-run.sh`);
-- the dispatcher CLI `ced`: allowed (unchanged). ctrl-exec gives a hook no
-  caller field and `ced` reports 127.0.0.1, so the hook tells `ced` from an
-  API caller by its parent process (`ctrl-exec-api` runs the hook from its
-  request handler); an unreadable parent counts as the API;
-- a TCP caller of the API must present a live operator credential (the request
+- the dispatcher CLI `ced`: allowed (unchanged). ctrl-exec 0.14.7 tells the
+  hook who is asking: `ENVEXEC_CALLER` is `cli` for `ced` and `api` for a
+  request the API serves, and `ENVEXEC_LISTENER` is `unix`, `tcp` or `tls` for
+  an API caller (empty for `ced`). Both are set by ctrl-exec's code path, never
+  from the request, so a local API caller that also appears as 127.0.0.1 is not
+  taken for `ced`;
+- an API caller must arrive on the TLS listener (`ENVEXEC_LISTENER=tls`); on
+  any other listener it is denied. It must present a live operator credential (the request
   `token`). It may pass the API's pre-route check, ping `ips.<domain>`, and run
   an `ips-admin` script on `ips.<domain>`; nothing else (no node agent, no
   other script, no second host, no stored result). Each operator run is logged
   at `auth.notice`, tag `hps-auth-hook`: `OPERATOR run operator=<name>
   source=<ip> user=<claimed> agent=ips.<domain> script=<script> args=<JSON>`.
   Denials are logged as `DENY ...` with the reason.
+- an older dispatcher (ctrl-exec < 0.14.7) sets neither variable. The hook then
+  fails closed for operators (no caller is ever taken for an operator, so remote
+  operator access does not work) and keeps HPS's own callers working: root on
+  the unix socket, and `ced`, recognised by its parent process, which is not the
+  API's request handler (the only remaining use of `/proc`). Bring-up also logs
+  an error and leaves the operator API off.
 
 ## The client
 
@@ -192,20 +204,31 @@ restarted at once. `ips-syslog-forward off` stops it, `show` prints it. The lab
 uses it to gather its clusters' logs on the lab IPS (it replaces
 `lab/syslog-lab.pl --upstream`).
 
+## ctrl-exec 0.14.7 is required
+
+Operator access and the `ips-admin` agent use four things ctrl-exec 0.14.7
+delivers (R-036). Bring-up reads the installed version
+(`ctrl-exec-dispatcher --version`) and, when it is older or unreadable, logs an
+error naming the requirement and leaves the operator API off:
+
+- agent.conf `bind = 127.0.0.1` for the IPS's own agent;
+- `ENVEXEC_CALLER` and `ENVEXEC_LISTENER` for the auth hook;
+- a per-agent read timeout (`approve --read-timeout`, `edit-agent --read-timeout`)
+  for the IPS's own agent only: the cluster key `ips_admin_read_timeout`
+  (seconds, an integer 60..3600, default 900), applied at pairing and at every
+  start, so a long tool run (publish, storage) returns its output. Node agents
+  keep the dispatcher's global `read_timeout`;
+- `api_forward_token = no` in the dispatcher's ctrl-exec.conf, written by
+  bring-up, so the operator's token (the request `token`) is not passed on to
+  the agents. The API's own auth hook still receives it.
+
 ## Gaps
 
-- The agent cannot be bound to 127.0.0.1 (ctrl-exec 0.14.6 has no listen
-  address for the agent): it listens on every address of the host and drops a
-  connection from anywhere but 127.0.0.1 before the TLS handshake
-  (`allowed_ips`).
-- The hook's tell between `ced` and an API caller is the parent process; a
-  caller field from ctrl-exec would make it explicit.
 - Without an executor in the image the `ips-admin` profile is not applied.
-- A call waits at most the dispatcher's `read_timeout` (ctrl-exec.conf, 60 s
-  by default, the same for every agent). A longer tool run carries on on the
-  IPS, but its output does not reach the operator; the `ips-admin end` line in
-  the IPS's syslog has its exit status. ctrl-exec has no per-agent or
-  per-script read timeout.
+- A call to the IPS's agent waits at most `ips_admin_read_timeout` (900 s by
+  default, at most 3600). A tool run longer than that carries on on the IPS,
+  but its output does not reach the operator; the `ips-admin end` line in the
+  IPS's syslog has its exit status. ctrl-exec has no per-script read timeout.
 - The first credential of an IPS is issued at that IPS (`hps-operator issue`
   as root). For an inner IPS on a container host that is the CNH's bootstrap
   step, done once, like a technician at the console; nothing gives an outer

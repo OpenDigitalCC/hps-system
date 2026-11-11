@@ -75,8 +75,9 @@ ips_admin_agent_name() {
 # ips-admin scripts.conf, and the auth hook's view of them
 # ($CONF_DIR/hps-operator.conf: the agent name and the script names). The
 # agent listens on CTRL_EXEC_IPS_AGENT_PORT and drops any connection that is
-# not from 127.0.0.1 before the TLS handshake (allowed_ips; ctrl-exec 0.14.6
-# has no listen-address setting for the agent).
+# not from 127.0.0.1: it listens on 127.0.0.1 only (bind, ctrl-exec >= 0.14.7)
+# and, as defence in depth, drops any other source before the TLS handshake
+# (allowed_ips).
 #===============================================================================
 ce_ips_agent_write_config() {
   local name="${1:?Usage: ce_ips_agent_write_config <agent-name>}"
@@ -89,7 +90,10 @@ ce_ips_agent_write_config() {
     printf '# Rewritten at every IPS start. See hps-system docs/OPERATOR.md.\n'
     printf 'port = %s\n' "$CTRL_EXEC_IPS_AGENT_PORT"
     printf 'cert = %s/agent.crt\nkey  = %s/agent.key\nca   = %s/ca.crt\n' "$etc" "$etc" "$etc"
-    printf '# Only the IPS'"'"'s own dispatcher, on this host, reaches the agent.\n'
+    printf '# Only the IPS'"'"'s own dispatcher, on this host, reaches the agent: it\n'
+    printf '# listens on loopback only (bind; ctrl-exec 0.14.7), and allowed_ips stays\n'
+    printf '# as defence in depth.\n'
+    printf 'bind = 127.0.0.1\n'
     printf 'allowed_ips = 127.0.0.1\n'
     printf 'script_dirs = %s\n' "$dir"
     printf '# No executor in the IPS image: scripts run as the agent'"'"'s user (root,\n'
@@ -138,6 +142,34 @@ _ips_admin_is_raw() {
 }
 
 #===============================================================================
+# ips_admin_read_timeout
+# ----------------------
+# Seconds the dispatcher waits for the IPS's own agent to answer (the cluster
+# key ips_admin_read_timeout; an integer 60..3600, default 900). A value
+# outside the range is logged and the default used.
+#===============================================================================
+: "${IPS_ADMIN_READ_TIMEOUT_DEFAULT:=900}"
+ips_admin_read_timeout() {
+  local cluster value=""
+  if declare -f cluster_registry > /dev/null 2>&1; then
+    cluster=$(hps_get_config active_cluster 2> /dev/null) || cluster=""
+    if [[ -n "$cluster" ]]; then
+      value=$(cluster_registry "$cluster" get ips_admin_read_timeout 2> /dev/null) || value=""
+    fi
+  fi
+  value="${value//\"/}"
+  if [[ -z "$value" ]]; then
+    printf '%s\n' "$IPS_ADMIN_READ_TIMEOUT_DEFAULT"
+  elif [[ "$value" =~ ^[0-9]+$ ]] && ((10#$value >= 60 && 10#$value <= 3600)); then
+    printf '%s\n' "$((10#$value))"
+  else
+    hps_log warn "ce_ips_agent: ips_admin_read_timeout='${value}' is not an integer 60..3600; using ${IPS_ADMIN_READ_TIMEOUT_DEFAULT}"
+    printf '%s\n' "$IPS_ADMIN_READ_TIMEOUT_DEFAULT"
+  fi
+}
+
+
+#===============================================================================
 # _ce_approve_local_agent <reqid> <agent-name>
 # --------------------------------------------
 # The IPS approves its own agent, through the same non-interactive path as a
@@ -168,8 +200,19 @@ _ce_approve_local_agent() {
     hps_log error "ce_ips_agent: request ${reqid} for ${name} came from '${src}', not 127.0.0.1; not approved"
     return 1
   fi
+  local -a rt=()
+  local timeout
+  # The long ips-admin jobs (publish, storage) must return their output: this
+  # agent alone gets a longer read timeout (the cluster key ips_admin_read_timeout);
+  # node agents keep the dispatcher's global one. Needs ctrl-exec >= 0.14.7.
+  if _ce_dispatcher_at_least "$CTRL_EXEC_MIN_VERSION"; then
+    timeout=$(ips_admin_read_timeout)
+    rt=(--read-timeout "$timeout")
+  else
+    hps_log error "ce_ips_agent: ctrl-exec >= ${CTRL_EXEC_MIN_VERSION} is required for the agent's read timeout; long ips-admin jobs may time out"
+  fi
   out=$("$CTRL_EXEC_DISPATCHER" approve "$reqid" --ip 127.0.0.1 --lookup-by ip \
-    --agent-port "$CTRL_EXEC_IPS_AGENT_PORT" 2>&1) || {
+    --agent-port "$CTRL_EXEC_IPS_AGENT_PORT" "${rt[@]}" 2>&1) || {
     hps_log error "ce_ips_agent: approve ${reqid} failed: ${out}"
     return 1
   }
@@ -198,7 +241,7 @@ _ce_approve_local_agent() {
 # Returns: 0 ready; 1 failed (logged; the IPS starts without ips-admin).
 #===============================================================================
 ce_ips_agent_bring_up() {
-  local name reqid fpr waited registered=0
+  local name reqid fpr waited timeout registered=0
   name=$(ips_admin_agent_name) || return 1
 
   _ce_persist_dir "$CTRL_EXEC_PERSIST_AGENT_CONF" "$CTRL_EXEC_IPS_AGENT_ETC" || {
@@ -255,6 +298,14 @@ ce_ips_agent_bring_up() {
       return 1
     fi
     hps_log info "ce_ips_agent: ${name} paired"
+  elif _ce_dispatcher_at_least "$CTRL_EXEC_MIN_VERSION"; then
+    # Already registered (an earlier release, or the cluster key changed): the
+    # read timeout in its registry record follows the key at every start.
+    timeout=$(ips_admin_read_timeout)
+    "$CTRL_EXEC_DISPATCHER" edit-agent "$name" --read-timeout "$timeout" > /dev/null 2>&1 \
+      || hps_log warn "ce_ips_agent: cannot set the read timeout of ${name}"
+  else
+    hps_log error "ce_ips_agent: ctrl-exec >= ${CTRL_EXEC_MIN_VERSION} is required for the agent's read timeout and bind; long ips-admin jobs may time out"
   fi
 
   local op="${HPS_SYSTEM_BASE:-${HPS_BASE:-/srv}/hps-system}/bin/hps-operator"
@@ -320,8 +371,8 @@ _ce_operator_api_listen() {
 
 # _ce_operator_api_listen_ok <ip>: a specific IPv4 address of this host. A
 # loopback or wildcard bind is refused: the API would be reachable from every
-# local user, and the hook tells a TCP caller from the dispatcher CLI by its
-# parent process alone.
+# local user. (The hook no longer relies on the address: ctrl-exec 0.14.7 tells
+# it the caller and the listener.)
 _ce_operator_api_listen_ok() {
   local ip="$1" o
   if [[ ! "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then

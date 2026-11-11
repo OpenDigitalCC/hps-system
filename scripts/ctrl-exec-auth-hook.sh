@@ -4,23 +4,26 @@
 # Installed by ce_api_bring_up as $CTRL_EXEC_DISPATCHER_CONF_DIR/auth-hook-hps
 # and named by `auth_hook =` in ctrl-exec.conf. Called by ctrl-exec-api, and by
 # ced (the dispatcher CLI), before every request with the context in ENVEXEC_*
-# variables (see ctrl-exec's auth-hook.example). Policy on the IPS:
+# variables (see ctrl-exec's auth-hook.example).
+#
+#   Since ctrl-exec 0.14.7 the dispatcher tells the hook who is asking:
+#   ENVEXEC_CALLER (cli = ced, api = a request the API serves) and
+#   ENVEXEC_LISTENER (for an API caller unix, tcp or tls; empty for ced). Both
+#   are set by ctrl-exec's code path, never from the request. Policy on the IPS:
 #
 #   1. a caller on the API's unix socket (ENVEXEC_SOURCE_IP "unix:..."): only
 #      root may act (ENVEXEC_PEER_UID 0; the root job runner hps-jobs and
 #      hps-run.sh). The web user (www-data) never reaches the socket at all
 #      (api_socket_group = ctrl-exec); this is the second line;
-#   2. ced (the CLI), which only a holder of dispatcher.key (root, ctrl-exec)
-#      can run: allowed. ctrl-exec gives the hook no caller field, and ced
-#      reports source 127.0.0.1, so the hook tells ced from a TCP caller of the
-#      API by its parent process: the API runs the hook from its request
-#      handler (ctrl-exec-api), ced from itself. A parent that cannot be read
-#      counts as the API (fail closed);
-#   3. a TCP caller of the API: the API listens on TCP only when the cluster
+#   2. ced (ENVEXEC_CALLER=cli), which only a holder of dispatcher.key (root,
+#      ctrl-exec) can run: allowed;
+#   3. an API caller on the TLS listener (ENVEXEC_CALLER=api,
+#      ENVEXEC_LISTENER=tls): the API listens on TCP only when the cluster
 #      key operator_api_listen is set (TLS, one address of the IPS;
-#      ce_operator_api_configure). Such a caller must present an operator
-#      credential (the request token) that hps-operator issued and has not
-#      revoked: its SHA-256 is in hps-operators beside this hook. An operator
+#      ce_operator_api_configure). An operator call must arrive on tls; an API
+#      caller on any other listener (plain tcp) is denied. Such a caller
+#      must present an operator credential (the request token) that
+#      hps-operator issued and has not revoked: its SHA-256 is in hps-operators beside this hook. An operator
 #      may then
 #        - pass the API's pre-route check (action api),
 #        - ping the IPS's own agent,
@@ -32,6 +35,13 @@
 #      (never the input: ctrl-exec gives hooks only its field names);
 #   4. everything else is denied and logged.
 #
+# An older dispatcher sets neither variable (ENVEXEC_CALLER absent). The hook
+# then fails closed for operators: no TCP caller is ever treated as an operator,
+# so remote operator access does not work (ce_api_bring_up keeps the operator API
+# off for ctrl-exec < 0.14.7). HPS's own callers keep working: the unix socket
+# (root) as above, and ced, recognised as before by its parent process, which
+# is not the API's request handler (the only use left of /proc, for this case).
+#
 # Exit 0 = authorised; 1 denied, 2 bad credentials, 3 insufficient privilege
 # (ctrl-exec's codes). Fail closed.
 set -u
@@ -42,6 +52,8 @@ src="${ENVEXEC_SOURCE_IP:-}"
 uid="${ENVEXEC_PEER_UID:-}"
 token="${ENVEXEC_TOKEN:-}"
 user="${ENVEXEC_USERNAME:-}"
+caller="${ENVEXEC_CALLER:-}"
+listener="${ENVEXEC_LISTENER:-}"
 args_json="${ENVEXEC_ARGS_JSON:-[]}"
 
 HOOK_DIR="${0%/*}"
@@ -56,7 +68,8 @@ deny() {
   exit "$1"
 }
 
-# parent_is_api: the process that ran this hook is ctrl-exec-api.
+# parent_is_api: the process that ran this hook is ctrl-exec-api. Used only when
+# the dispatcher is older than 0.14.7 and sets no ENVEXEC_CALLER.
 parent_is_api() {
   local cmdline=""
   if [[ -r "/proc/${PPID}/cmdline" ]]; then
@@ -113,10 +126,25 @@ case "$src" in
     exit 0 ;;
 esac
 
-if ! parent_is_api; then
-  # ced (the CLI), which only a holder of dispatcher.key (root, ctrl-exec)
-  # can run; ced reports 127.0.0.1.
-  logger -t hps-auth-hook -p auth.info "ALLOW cli action=${action} script=${script} hosts=${hosts} source=${src}"
-  exit 0
-fi
-operator_check
+case "$caller" in
+  cli)
+    # ced (the CLI), which only a holder of dispatcher.key (root, ctrl-exec)
+    # can run.
+    logger -t hps-auth-hook -p auth.info "ALLOW cli action=${action} script=${script} hosts=${hosts} source=${src}"
+    exit 0 ;;
+  api)
+    # An operator call arrives on the TLS listener and nowhere else. (The unix
+    # socket was handled above; a plain tcp listener is not offered.)
+    [[ "$listener" == "tls" ]] || deny 1 "" "API caller on listener '${listener:-none}'; operator calls must arrive on tls"
+    operator_check ;;
+  "")
+    # No ENVEXEC_CALLER: a dispatcher older than 0.14.7. Fail closed for
+    # operators; keep ced working as before.
+    if ! parent_is_api; then
+      logger -t hps-auth-hook -p auth.info "ALLOW cli (no ENVEXEC_CALLER) action=${action} script=${script} hosts=${hosts} source=${src}"
+      exit 0
+    fi
+    deny 1 "" "no ENVEXEC_CALLER (ctrl-exec older than 0.14.7): operator access refused" ;;
+  *)
+    deny 1 "" "unknown caller '${caller}'" ;;
+esac

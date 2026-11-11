@@ -160,6 +160,8 @@ my @CATALOGUE = (
     # Operator access (docs/OPERATOR.md): read at IPS start by ce_api_bring_up.
     _q(key => 'operator_api_listen', group => 'operator', menu => 0,
         prompt => 'Address of this IPS where the ctrl-exec API listens with TLS for remote operators (empty: no remote operator)', rule => 'ip', default => ''),
+    _q(key => 'ips_admin_read_timeout', group => 'operator', menu => 0,
+        prompt => 'Seconds to wait for the IPS\'s own ips-admin agent to answer, so long jobs (publish, storage) return their output (60-3600)', rule => 'int:60..3600', default => '900'),
     # Optional syslog forward, set by the operator action ips-syslog-forward.
     _q(key => 'syslog_forward_host', group => 'operator', menu => 0,
         prompt => 'Collector to forward every syslog message to over TCP 514 (empty: no forwarding)', rule => 'ip', default => ''),

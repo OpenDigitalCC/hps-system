@@ -20,6 +20,11 @@ setup() {
   CONF="$TEST_DIR/etc/ctrl-exec.conf"
   export CTRL_EXEC_DISPATCHER_CONF="$CONF"
   printf 'cert = /x/dispatcher.crt\napi_socket = /run/ctrl-exec-api/api.sock\napi_port = off\n' > "$CONF"
+  # The dispatcher shim reports FAKE_VERSION (default: the required release).
+  mkdir -p "$TEST_DIR/bin"
+  printf '#!/bin/bash\n[[ "$1" == --version ]] && echo "ctrl-exec-dispatcher ${FAKE_VERSION:-0.14.7}"\n' > "$TEST_DIR/bin/ced"
+  chmod +x "$TEST_DIR/bin/ced"
+  export CTRL_EXEC_DISPATCHER="$TEST_DIR/bin/ced"
   source "$ROOT/lib/functions.d/ctrl-exec-functions.sh"
   source "$ROOT/lib/functions.d/ips-admin-functions.sh"
   _ce_local_ipv4s() { printf '127.0.0.1\n10.99.1.1\n192.0.2.5\n'; }
@@ -97,6 +102,42 @@ teardown() {
   FAKE_LISTEN=10.99.1.1 run ce_api_bring_up
   [ "$status" -eq 0 ]
   grep -qx 'api_bind = 10.99.1.1' "$CONF"
+}
+
+@test "api_forward_token = no: the operator's token never reaches the agents" {
+  export CTRL_EXEC_API_PLUGINS_DEB="$TEST_DIR/none.deb"
+  export HPS_SYSTEM_PATH="$TEST_DIR/no-system"
+  FAKE_LISTEN=10.99.1.1 run ce_api_bring_up
+  [ "$status" -eq 0 ]
+  grep -qx 'api_forward_token = no' "$CONF"
+  [ "$(grep -c '^api_forward_token' "$CONF")" -eq 1 ]
+  run ce_api_bring_up
+  [ "$(grep -c '^api_forward_token' "$CONF")" -eq 1 ]
+}
+
+@test "api_forward_token = no also holds with the listener off (the hook still gets the token)" {
+  export CTRL_EXEC_API_PLUGINS_DEB="$TEST_DIR/none.deb"
+  export HPS_SYSTEM_PATH="$TEST_DIR/no-system"
+  run ce_api_bring_up
+  grep -qx 'api_forward_token = no' "$CONF"
+}
+
+@test "ctrl-exec older than 0.14.7: the error names the requirement and the operator API stays off" {
+  export CTRL_EXEC_API_PLUGINS_DEB="$TEST_DIR/none.deb"
+  export HPS_SYSTEM_PATH="$TEST_DIR/no-system"
+  FAKE_VERSION=0.14.6 FAKE_LISTEN=10.99.1.1 run ce_api_bring_up
+  [ "$status" -eq 0 ]
+  grep -q 'ctrl-exec >= 0.14.7 is required for operator access (installed: 0.14.6)' "$TEST_DIR/hps.log"
+  grep -qx 'api_port = off' "$CONF"
+  run ! grep -qE '^(api_bind|api_tls_cert|api_tls_key|api_forward_token)' "$CONF"
+}
+
+@test "an unreadable dispatcher version also keeps the operator API off" {
+  export CTRL_EXEC_API_PLUGINS_DEB="$TEST_DIR/none.deb"
+  export HPS_SYSTEM_PATH="$TEST_DIR/no-system"
+  FAKE_VERSION=weird FAKE_LISTEN=10.99.1.1 run ce_api_bring_up
+  grep -q 'installed: unknown' "$TEST_DIR/hps.log"
+  grep -qx 'api_port = off' "$CONF"
 }
 
 @test "the local addresses come from the kernel and include loopback" {

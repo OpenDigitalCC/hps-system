@@ -43,6 +43,24 @@ capabilities and removals are called out explicitly.
   (catalogued in `docs/REGISTRY-KEYS.md`).
 - tests: `test_p3_178_zfs_hostid.bats`.
 
+## ctrl-exec 0.14.7 for ips-admin (2026-11-11)
+
+Requires ctrl-exec >= 0.14.7 (R-036 delivered). Bring-up reads
+`ctrl-exec-dispatcher --version`; an older or unreadable version logs an error
+naming the requirement and the operator API stays off.
+
+- changed: the IPS's own agent writes `bind = 127.0.0.1` (with `allowed_ips`
+  kept as defence in depth).
+- changed: the auth hook decides CLI or API from `ENVEXEC_CALLER`, and requires
+  an operator call to arrive on `ENVEXEC_LISTENER=tls`, in place of the
+  parent-process check. Without `ENVEXEC_CALLER` (an older dispatcher) it
+  refuses operators and keeps HPS's own callers (unix socket root, `ced`).
+- new: cluster key `ips_admin_read_timeout` (60..3600 s, default 900) is set as
+  the IPS agent's own read timeout at pairing and at every start, so long
+  ips-admin jobs return their output; node agents keep the global default.
+- changed: the dispatcher config the IPS writes has `api_forward_token = no`,
+  so the operator's token never reaches an agent.
+
 ## Storage pools: a mirror of two to four disks (2026-11-11)
 
 - `storage-pool-create` takes 2 to 4 `--disk` by-id names and builds one

@@ -2,7 +2,7 @@
 #
 # ce_ips_agent_bring_up: the IPS's own ctrl-exec agent ips.<domain> is
 # installed from the tarball when absent, persisted under /srv, configured
-# (127.0.0.1 only, the ips-admin allowlist), and paired with the IPS's own
+# (127.0.0.1 only, bound to it, the ips-admin allowlist), and paired with the IPS's own
 # dispatcher by the IPS, approving only that name from 127.0.0.1. Then the
 # supervisord program and the run-hps.sh wiring. The dispatcher (ced) and the
 # agent CLI are shims; the tarball install is a stub.
@@ -37,6 +37,8 @@ setup() {
   cat > "$CTRL_EXEC_DISPATCHER" <<EOT
 #!/bin/bash
 case "\$1" in
+  --version) echo "ctrl-exec-dispatcher \${FAKE_VERSION:-0.14.7}" ;;
+  edit-agent) echo "ced \$*" >> "\$CALLS" ;;
   ca-fingerprint) echo "$FPR" ;;
   pairing-mode) echo "ced pairing-mode \$2" >> "\$CALLS" ;;
   list-requests)
@@ -77,7 +79,8 @@ teardown() {
   [ "$status" -eq 0 ]
   c="$CTRL_EXEC_IPS_AGENT_ETC/agent.conf"
   grep -qx 'port = 7446' "$c"
-  grep -qx 'allowed_ips = 127.0.0.1' "$c"
+  grep -qx 'bind = 127.0.0.1' "$c"
+grep -qx 'allowed_ips = 127.0.0.1' "$c"
   grep -qx "script_dirs = $TEST_DIR/sys/ips-admin" "$c"
   grep -qx '\[profile ips-admin\]' "$c"
   grep -qx '\[profile default\]' "$c"
@@ -108,9 +111,55 @@ teardown() {
   [ "$status" -eq 0 ]
   grep -qx 'ced pairing-mode start' "$CALLS"
   grep -qx "agent request-pairing --dispatcher 127.0.0.1 --dispatcher-fingerprint $FPR --name ips.lab.hps --background --timeout 120" "$CALLS"
-  grep -qx 'ced approve ab12cd34 --ip 127.0.0.1 --lookup-by ip --agent-port 7446' "$CALLS"
+  grep -qx 'ced approve ab12cd34 --ip 127.0.0.1 --lookup-by ip --agent-port 7446 --read-timeout 900' "$CALLS"
   grep -qx 'ced pairing-mode stop' "$CALLS"
   grep -q 'ips.lab.hps paired' "$TEST_DIR/hps.log"
+}
+
+@test "the IPS agent's read timeout is set at approval: the cluster key, default 900, bounded 60..3600" {
+  run ce_ips_agent_bring_up
+  [ "$status" -eq 0 ]
+  grep -q -- '--agent-port 7446 --read-timeout 900$' "$CALLS"
+  : > "$CALLS"
+  rm -f "$CTRL_EXEC_IPS_AGENT_ETC/agent.crt"
+  hps_get_config() { [[ "$1" == active_cluster ]] && echo lab; }
+  cluster_registry() { [[ "$3" == ips_admin_read_timeout ]] && printf '%s\n' "$FAKE_RT"; return 0; }
+  FAKE_RT=1800 run ce_ips_agent_bring_up
+  [ "$status" -eq 0 ]
+  grep -q -- '--read-timeout 1800$' "$CALLS"
+  : > "$CALLS"
+  rm -f "$CTRL_EXEC_IPS_AGENT_ETC/agent.crt"
+  FAKE_RT=5 run ce_ips_agent_bring_up
+  [ "$status" -eq 0 ]
+  grep -q -- '--read-timeout 900$' "$CALLS"
+  grep -q 'ips_admin_read_timeout=.5. is not an integer 60..3600' "$TEST_DIR/hps.log"
+}
+
+@test "an agent already registered gets the read timeout set at every start" {
+  mkdir -p "$CTRL_EXEC_PERSIST_AGENT_CONF"
+  echo cert > "$CTRL_EXEC_PERSIST_AGENT_CONF/agent.crt"
+  echo ips.lab.hps > "$TEST_DIR/agents"
+  run ce_ips_agent_bring_up
+  [ "$status" -eq 0 ]
+  grep -qx 'ced edit-agent ips.lab.hps --read-timeout 900' "$CALLS"
+}
+
+@test "ctrl-exec older than 0.14.7: an error names the requirement, no read timeout is passed, pairing still works" {
+  FAKE_VERSION=0.14.6 run ce_ips_agent_bring_up
+  [ "$status" -eq 0 ]
+  grep -q 'ctrl-exec >= 0.14.7 is required' "$TEST_DIR/hps.log"
+  grep -qx 'ced approve ab12cd34 --ip 127.0.0.1 --lookup-by ip --agent-port 7446' "$CALLS"
+}
+
+@test "the version check compares numerically and treats an unreadable version as older" {
+  FAKE_VERSION=0.14.7 _ce_dispatcher_at_least
+  FAKE_VERSION=0.15.0 _ce_dispatcher_at_least
+  FAKE_VERSION=1.0.0 _ce_dispatcher_at_least
+  FAKE_VERSION=0.14.10 _ce_dispatcher_at_least
+  FAKE_VERSION=0.14.6 run ! _ce_dispatcher_at_least
+  FAKE_VERSION=0.9.20 run ! _ce_dispatcher_at_least
+  FAKE_VERSION=garbage run ! _ce_dispatcher_at_least
+  [ "$(FAKE_VERSION=0.14.9 _ce_dispatcher_version)" = "0.14.9" ]
 }
 
 @test "a request under another name is not approved" {

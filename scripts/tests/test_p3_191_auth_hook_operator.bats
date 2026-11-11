@@ -3,9 +3,11 @@
 # The HPS auth hook (scripts/ctrl-exec-auth-hook.sh) with remote operators:
 # HPS's own callers are unchanged (root on the unix socket; ced, the CLI); a
 # TCP caller of the API needs an operator credential and may then run only the
-# ips-admin scripts on the IPS's own agent. The hook tells the API from ced by
-# its parent process, so each case runs the hook from a launcher named
-# ctrl-exec-api or ctrl-exec-dispatcher (a real parent, read through /proc).
+# ips-admin scripts on the IPS's own agent. The hook tells ced from the API by
+# ENVEXEC_CALLER and ENVEXEC_LISTENER (ctrl-exec 0.14.7), and an operator call
+# must arrive on tls. Without ENVEXEC_CALLER (an older dispatcher) operators are
+# refused and ced still works (the legacy parent-process check, hence the
+# launchers named ctrl-exec-api and ctrl-exec-dispatcher).
 
 bats_require_minimum_version 1.5.0
 
@@ -39,7 +41,7 @@ EOT
   done
   API="$TEST_DIR/launch/ctrl-exec-api"
   CED="$TEST_DIR/launch/ctrl-exec-dispatcher"
-  unset ENVEXEC_PEER_UID ENVEXEC_TOKEN ENVEXEC_ARGS_JSON ENVEXEC_USERNAME
+  unset ENVEXEC_PEER_UID ENVEXEC_TOKEN ENVEXEC_ARGS_JSON ENVEXEC_USERNAME ENVEXEC_CALLER ENVEXEC_LISTENER
 }
 
 teardown() {
@@ -47,8 +49,25 @@ teardown() {
 }
 
 # req <launcher> <action> <script> <hosts> <source> [token]
+# The launcher names the caller: ctrl-exec-api is an API caller on $LISTENER
+# (default tls; unix for a unix source), ctrl-exec-dispatcher is ced.
+# NO_CALLER=1 leaves ENVEXEC_CALLER and ENVEXEC_LISTENER out (an older
+# dispatcher).
 req() {
-  ENVEXEC_ACTION="$2" ENVEXEC_SCRIPT="$3" ENVEXEC_HOSTS="$4" ENVEXEC_SOURCE_IP="$5" \
+  local caller=api listener="${LISTENER-tls}"
+  if [[ "$1" == "$CED" ]]; then
+    caller=cli
+    listener=
+  fi
+  if [[ "$5" == unix:* ]]; then
+    listener=unix
+  fi
+  if [[ -n "${NO_CALLER:-}" ]]; then
+    caller=
+    listener=
+  fi
+  ENVEXEC_CALLER="$caller" ENVEXEC_LISTENER="$listener" \
+    ENVEXEC_ACTION="$2" ENVEXEC_SCRIPT="$3" ENVEXEC_HOSTS="$4" ENVEXEC_SOURCE_IP="$5" \
     ENVEXEC_TOKEN="${6:-}" ENVEXEC_ARGS_JSON='["list","--json"]' ENVEXEC_USERNAME=alice "$1"
 }
 
@@ -67,9 +86,42 @@ req() {
   grep -q 'ALLOW cli action=run script=dataset-unlock' "$TEST_DIR/syslog"
 }
 
-@test "a TCP caller of the API from 127.0.0.1 is not taken for ced" {
+@test "an API caller from 127.0.0.1 is not taken for ced (the caller says api)" {
   run req "$API" run dataset-unlock sch-001.lab.hps 127.0.0.1
   [ "$status" -eq 2 ]
+}
+
+@test "an operator call must arrive on tls: a plain tcp or unlabelled listener is denied" {
+  LISTENER=tcp run req "$API" run hps-onboard ips.lab.hps 10.99.1.50 "$TOKEN"
+  [ "$status" -eq 1 ]
+  grep -q "operator calls must arrive on tls" "$TEST_DIR/syslog"
+  LISTENER= run req "$API" run hps-onboard ips.lab.hps 10.99.1.50 "$TOKEN"
+  [ "$status" -eq 1 ]
+}
+
+@test "ENVEXEC_CALLER=cli is ced whatever the source address says" {
+  run req "$CED" run dataset-unlock sch-001.lab.hps 10.99.1.50
+  [ "$status" -eq 0 ]
+}
+
+@test "an unknown ENVEXEC_CALLER is denied" {
+  ENVEXEC_CALLER=bogus ENVEXEC_ACTION=run ENVEXEC_HOSTS=ips.lab.hps ENVEXEC_SOURCE_IP=10.99.1.50 ENVEXEC_TOKEN="$TOKEN" run "$HOOK"
+  [ "$status" -eq 1 ]
+}
+
+@test "no ENVEXEC_CALLER (ctrl-exec older than 0.14.7): operators are refused, valid token or not" {
+  NO_CALLER=1 run req "$API" run hps-onboard ips.lab.hps 10.99.1.50 "$TOKEN"
+  [ "$status" -eq 1 ]
+  NO_CALLER=1 run req "$API" api '' '' 10.99.1.50 "$TOKEN"
+  [ "$status" -eq 1 ]
+  grep -q "no ENVEXEC_CALLER" "$TEST_DIR/syslog"
+}
+
+@test "no ENVEXEC_CALLER: HPS's own callers work as before (ced, root on the unix socket)" {
+  NO_CALLER=1 run req "$CED" run dataset-unlock sch-001.lab.hps 127.0.0.1
+  [ "$status" -eq 0 ]
+  NO_CALLER=1 ENVEXEC_PEER_UID=0 run req "$API" run hps-node tch-001.lab.hps unix:/run/ctrl-exec-api/api.sock
+  [ "$status" -eq 0 ]
 }
 
 @test "a TCP caller without a credential is denied as bad credentials" {

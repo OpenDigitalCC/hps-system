@@ -215,8 +215,18 @@ ce_api_bring_up() {
     # The TCP listener: off, unless the cluster key operator_api_listen names
     # an address of this IPS, where it listens with TLS for remote operators
     # (ce_operator_api_configure, ips-admin-functions.sh; docs/OPERATOR.md).
-    if declare -f ce_operator_api_configure > /dev/null 2>&1; then
+    # The operator API needs ctrl-exec >= CTRL_EXEC_MIN_VERSION (the hook is told
+    # its caller and listener; api_forward_token): with an older dispatcher it
+    # stays off, and the error names the requirement.
+    if ! _ce_dispatcher_at_least "$CTRL_EXEC_MIN_VERSION"; then
+      hps_log error "ce_api_bring_up: ctrl-exec >= ${CTRL_EXEC_MIN_VERSION} is required for operator access (installed: $(_ce_dispatcher_version || echo unknown)); the operator API stays off"
+      _ce_conf_set "$conf" api_port off || hps_log warn "ce_api_bring_up: cannot set api_port"
+      _ce_conf_unset "$conf" api_bind api_tls_cert api_tls_key api_forward_token || true
+    elif declare -f ce_operator_api_configure > /dev/null 2>&1; then
       ce_operator_api_configure "$conf" || hps_log warn "ce_api_bring_up: cannot configure the operator API listener"
+      # The operator's token must not reach the agents (it would be passed on
+      # to each script's stdin context).
+      _ce_conf_set "$conf" api_forward_token no || hps_log warn "ce_api_bring_up: cannot set api_forward_token"
     elif ! grep -qE '^[[:space:]]*api_port[[:space:]]*=' "$conf"; then
       printf 'api_port = off\n' >> "$conf" || hps_log warn "ce_api_bring_up: cannot set api_port"
     fi
@@ -428,6 +438,48 @@ _ce_close_window_after_approval() {
   fi
   ( sleep "$delay"; ce_pairing_window_close ) > /dev/null 2>&1 < /dev/null &
   disown 2> /dev/null || true
+  return 0
+}
+
+# The ctrl-exec release that delivers what HPS's operator access and ips-admin
+# rely on (R-036): the agent's `bind`, the hook's ENVEXEC_CALLER/ENVEXEC_LISTENER,
+# `approve --read-timeout`, and the dispatcher's api_forward_token.
+: "${CTRL_EXEC_MIN_VERSION:=0.14.7}"
+
+#===============================================================================
+# _ce_dispatcher_version
+# ----------------------
+# The installed dispatcher's version ("ctrl-exec-dispatcher --version" prints
+# "ctrl-exec-dispatcher X.Y.Z"). Prints X.Y.Z, or nothing when it cannot be
+# read. Returns 0 when printed, 1 otherwise.
+#===============================================================================
+_ce_dispatcher_version() {
+  local out ver
+  out=$("$CTRL_EXEC_DISPATCHER" --version 2> /dev/null) || return 1
+  ver="${out##* }"
+  [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf '%s\n' "$ver"
+}
+
+#===============================================================================
+# _ce_dispatcher_at_least [<version>]
+# -----------------------------------
+# True when the installed dispatcher is at least <version> (default
+# CTRL_EXEC_MIN_VERSION). A version that cannot be read counts as older.
+#===============================================================================
+_ce_dispatcher_at_least() {
+  local want="${1:-$CTRL_EXEC_MIN_VERSION}" have a b i
+  have=$(_ce_dispatcher_version) || return 1
+  IFS=. read -r -a a <<< "$have"
+  IFS=. read -r -a b <<< "$want"
+  for i in 0 1 2; do
+    if ((10#${a[i]:-0} > 10#${b[i]:-0})); then
+      return 0
+    fi
+    if ((10#${a[i]:-0} < 10#${b[i]:-0})); then
+      return 1
+    fi
+  done
   return 0
 }
 

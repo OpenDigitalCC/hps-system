@@ -139,7 +139,8 @@ eval-style CGI path has been removed.
 
 5. **Operator access (the IPS's own ctrl-exec API; `docs/OPERATOR.md`).** A
    cluster is run only through its own IPS. The IPS's local ctrl-exec agent,
-   `ips.<domain>`, accepts connections from 127.0.0.1 only (`allowed_ips`) and
+   `ips.<domain>`, listens on 127.0.0.1 only (`bind`, with `allowed_ips`
+   as defence in depth) and
    is paired by the IPS itself, approving only a request carrying that name
    from 127.0.0.1. Remote operators reach the API only when the cluster key
    `operator_api_listen` names an address of the IPS: TLS on that address
@@ -155,7 +156,12 @@ eval-style CGI path has been removed.
    so the request context the agent writes to stdin (with the caller's token)
    never reaches a tool. Secrets (a BMC credential) travel only as ctrl-exec
    confidential input. HPS's own callers are unchanged: root on the unix
-   socket, and `ced`, told from an API caller by the hook's parent process.
+   socket, and `ced`, told from an API caller by `ENVEXEC_CALLER` (an operator
+   call must also arrive on `ENVEXEC_LISTENER=tls`). The dispatcher sets
+   `api_forward_token = no`, so the operator's token reaches the hook but never
+   an agent. Needs ctrl-exec >= 0.14.7; with an older dispatcher the hook has no
+   caller field, refuses operators (fail closed) and bring-up leaves the
+   operator API off.
 
 ## State ownership
 
@@ -206,11 +212,6 @@ the intended verification companion once the platform runs end to end.
 
 - ctrl-exec privileged executor adoption for per-script sandboxing (the IPS's
   own agent runs the `ips-admin` scripts as root without one).
-- the IPS agent's listen address: ctrl-exec 0.14.6 has none, so the agent
-  listens on every address and `allowed_ips = 127.0.0.1` drops the rest
-  before TLS.
-- an explicit caller field (CLI or API, and the listener) from ctrl-exec for
-  the auth hook, in place of the parent-process check.
 - gpg signature coverage for all downloaded artefacts.
 - a second enrolment factor (an HMAC pairing ticket from `HPS::Keysafe`) on ctrl-exec pairing.
 - audit-log completeness review.
