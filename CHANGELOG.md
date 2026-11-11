@@ -185,6 +185,69 @@ capabilities and removals are called out explicitly.
   --forget` removes it too (job kind `workload-destroy <name> [--forget]`).
   Changed behaviour: destroy no longer deletes the definition.
 
+## IPS-01 to IPS-12: IPS hardening (2026-11-10 to 2026-11-11)
+
+IPS-07 and IPS-08 have their own spans above.
+
+- IPS-01 (`79c2f69`, `9a97cb0`): added `hps-ips-check`, a read-only self-check run
+  after every IPS start, one syslog line per check.
+- IPS-02 (`f227180`): added: `n_init_run` reports each step's result (rc, seconds,
+  own stderr tail) to the IPS (`cmd=host_init_result`); host keys `init_result`,
+  `init_result_prev`, `init_ok`; `hps-onboard show` Init section and `list --all`;
+  failed init steps log at `err`. Fixed: `n_remote_host_variable` and
+  `n_remote_cluster_variable` reported the stale error of an earlier call.
+- IPS-03 (`d35c912`): changed: the audit image carries `linux-firmware` and no
+  other firmware.
+- IPS-04 (`c01afb9`): added: graceful shutdown that the node honours, storage first.
+- IPS-05 (`bc3d50a`): added: pin integrity and retention (`hps-pins`, content
+  hashes in `boot.json`, verify before pin); job kind `pins-prune`.
+- IPS-06 (`f19100b`): changed: one hostname rule, the FQDN everywhere; added
+  `hps-onboard forget` and stale agent pruning. See `docs/NAMING.md`.
+- IPS-09 (`87a844b`, `0d43454`): changed: a pinned, current iPXE is built in the
+  flake and served by the IPS.
+- IPS-10 (`234d670`, `2d17752`): changed: `dns_hosts` is generated from the
+  registry through one `dns_regenerate` entry point; the storage allocator uses it.
+- IPS-11 (`3edea8e`, `7884acb`): fixed: normal boots no longer log errors; the
+  kernel hostname is the transient name only.
+- IPS-12 (`29db772`): added: one om3 cluster CA, held by the IPS keysafe and
+  delivered to the nodes. Needs ctrl-exec 0.14.6 (confidential input over 16 KB).
+  `2efa9d6`: `osvc-status` reads the rc60 heartbeat path.
+
+## Phase 3: compute, workloads and OpenSVC (2026-11-09 to 2026-11-10)
+
+- CS-3.1 to CS-3.3 (`2f7ac06`, `d3f24c0`, `7e20c23`, `2f24f46`): added: the
+  compute profile with libvirt guests, network layout keys and bridges; legs and
+  md mirrors (`mirror-create`, `-assemble`, `-status`, `-rejoin`, `-stop`,
+  `-detach-leg`); VM lifecycle node scripts, `image-fetch`, and
+  `vm-confinement-report`. See `docs/CONFINEMENT.md`.
+- CS-3.4a (`d89189c`, `0416780`, `9defece`): added: a per-guest AppArmor profile
+  layer for libvirt guests; confirmed on a lab node.
+- CS-3.5 (`3970ca8`, `4123bdb`): added: OpenSVC (om3) in the flake and on the
+  nodes, and `osvc-status`. See `docs/OPENSVC.md`.
+- CS-3.6 (`c17a73d`, `366abb4`, `50c3e48`): added: `HPS::Workload` and
+  `bin/hps-workload` (definition, driver, job kinds `workload-create`,
+  `-start`, `-stop`, `-destroy`, `-status`); guest zvols under `<pool>/enc/vm`.
+- CS-3.9 (`78b051b`, `a18b7c0`): added: `hps-cluster-config`, declarative
+  cluster configuration; `commit_changes` routes through `hps-cluster-config apply`.
+- CS-3.12a (`a70a6c9`): added: a nested HPS node on the lab segment.
+- tooling (`022b0e2`, `6a6c416`): `hps-run --json` and one JSON runner; parallel
+  bats.
+
+## Phase 2: storage and the privileged IPS (2026-11-09)
+
+- CS-2.0a (`28381b3`): changed: lighttpd (mod_cgi) replaces nginx, spawn-fcgi and
+  fcgiwrap on the IPS; removed: the nginx config generator and the nginx and
+  fcgiwrap supervisor programs. See `docs/adr/0004-lighttpd.md`.
+- CS-2.0b, CS-2.0d (`3ad1129`, `ebd69dd`): static allocations from a declared
+  pool, repin and pin housekeeping; one group (`hps`) owns the IPS state.
+- CS-2.1 to CS-2.3 (`46fe53e`, `841474a`, `a9887d9`): added: node storage scripts
+  and the storage profile; `HPS::Keysafe` with HMAC approvals (the Bash keysafe
+  is retired); `HPS::Storage` and `bin/hps-storage`.
+- CS-2.4, CS-2.5 (`c3704e9`, `660ddb8`, `d62d5c9`): added: privileged IPS actions
+  run by the root job runner `hps-jobs`; `ctrl-exec-api` for script input with
+  the HPS auth hook; zvol lifecycle scripts and an iSCSI test from the IPS.
+  See `docs/adr/0006-ips-privilege-split.md`.
+
 ## 3935261–dd1c254 — Phase 1: NixOS lab trial (2026-11-09)
 
 Everything on `main` after `91c9272`: changesets CS-1.1 to CS-1.16 plus
@@ -244,34 +307,19 @@ what is hardware-tested and what is not. Plan: `plans/phase-1.md`.
   no image garbage collection; static-IP allocator ignores reserved addresses;
   `flake.lock` not committed.
 
-## Unreleased (branches in review)
-
-Work committed on `claude/*` branches, not yet on `main`:
-
-- `claude/ctrl-exec-integration`, `claude/ctrl-exec-dispatcher` — added:
-  ctrl-exec (mTLS remote execution) as the node setup/exec mechanism, with
-  registry-bound automatic enrolment, the `hps-node` agent plugin, node-side
-  agent delivery, and IPS dispatcher bring-up; removed: the MAC-trust
-  `osvc_cmd` CGI join path and the OpenSVC task exec bus; changed: VM creation
-  now runs over ctrl-exec with OpenSVC kept only as the health/placement gate.
-  See `docs/adr/0001..0003`.
-- CS-2.0a — changed: lighttpd (mod_cgi) replaces nginx + spawn-fcgi +
-  fcgiwrap on the IPS; removed: the nginx config generator and the nginx and
-  fcgiwrap supervisor programs. See `docs/adr/0004-lighttpd.md`.
-- `claude/dedup-functions` — changed: consolidated the duplicated
-  `host_config` / `cluster_config` compatibility aliases to a single
-  definition.
-- IPS-02 — added: `n_init_run` reports each step's result (rc, seconds, own
-  stderr tail) to the IPS (`cmd=host_init_result`); host keys `init_result`,
-  `init_result_prev`, `init_ok`; `hps-onboard show` Init section and
-  `list --all`; failed init steps log at `err`. Fixed: `n_remote_host_variable`
-  and `n_remote_cluster_variable` reported the stale error of an earlier call.
-
 ## 25f4602–94eef2e — Registry refactor and bootstrap (2026-07-08 migration)
 
 Migration of the November–December 2025 refactor developed on the deployed
 instance into the repository.
 
+- ctrl-exec (`23237fa`, `bdfa0bb`, `7220e52`, `4c312ae`, `c42515a`) — added:
+  ctrl-exec (mTLS remote execution) as the node setup/exec mechanism, with
+  registry-bound automatic enrolment, the `hps-node` agent plugin, node-side
+  agent delivery and IPS dispatcher bring-up; removed: the MAC-trust `osvc_cmd`
+  CGI join path and the OpenSVC task exec bus; changed: VM creation runs over
+  ctrl-exec with OpenSVC kept only as the health gate. See `docs/adr/0001..0003`.
+- dedup (`95f2406`) — changed: the duplicated `host_config` / `cluster_config`
+  compatibility aliases have a single definition.
 - boot: added a two-tier bootstrap (`lib/hps-system.sh` initialiser plus a
   rewritten loader) and `hps_get_config` as the single configuration service.
 - registry: registry v2 — moved the registry library out of `functions.d/`,

@@ -92,9 +92,19 @@ FQDN agent of a registry host. A registry host still paired under an old
 short name loses that registration and gets its FQDN one at its next boot (nodes
 re-pair on every boot).
 
-## Not verified live
+## Verified live
 
-Dotted om3 node names end to end (`om daemon status` with two FQDN-named nodes),
-the kernel name surviving DHCP on a real node, the short label resolving on the
-node (`/etc/hosts` is store-managed on NixOS; the label is a DNS question for
-IPS-10), and LIO accepting the new initiator name.
+Lab runs fifteen to nineteen (IPS-06 close-out,
+`inbox/archive/2026-11-11-IPS-06-one-hostname-rule.md`; IPS-12 close-out,
+`inbox/archive/2026-11-11-IPS-12-om3-shared-cluster-ca.md`):
+
+* dotted om3 node names: `sch-001.lab.hps` and `tch-001.lab.hps` beat each other
+  (run nineteen);
+* the kernel hostname carries the FQDN on the nested node (run seventeen);
+* LIO accepts the FQDN-based initiator name: login and a 1 MiB read from
+  `tch-001` (runs fifteen to nineteen);
+* the ctrl-exec agent name is the FQDN in every run since fifteen;
+* no `.lab.hps.lab.hps` query appears in the dnsmasq log.
+
+The short label resolves through DNS (IPS-10), because `/etc/hosts` is
+store-managed on NixOS.

@@ -71,7 +71,7 @@ the credential to the PDU command's stdin. The IPMI user name does appear in the
 
 | Driver | Device | Notes |
 |---|---|---|
-| `hpe-ilo` | HPE iLO 4 and later | Redfish, console by ssh VSP, proven in the lab (`lab/ilo.sh`): system `/redfish/v1/Systems/1/`, every path with a trailing slash, the one-time boot override sends UEFI mode (`BMC_OPT_boot_mode=bios` sends Legacy) |
+| `hpe-ilo` | HPE iLO 4 and later | Redfish, console by ssh VSP, proven in the lab through `hps-bmc`: system `/redfish/v1/Systems/1/`, every path with a trailing slash, the one-time boot override sends UEFI mode (`BMC_OPT_boot_mode=bios` sends Legacy) |
 | `redfish-generic` | any DMTF Redfish BMC | system and manager discovered from the collections; `ResetType` taken from `@Redfish.AllowableValues` (candidates in order: on `On ForceOn`; off `GracefulShutdown`; force-off `ForceOff`; reset `ForceRestart PowerCycle GracefulRestart`); the boot mode is sent only when the system has that property; `Pxe` must be an allowed override target |
 | `dell-idrac` | Dell iDRAC | Redfish with the iDRAC paths (`System.Embedded.1`, `iDRAC.Embedded.1`); the boot override sends no mode. Written to the contract and unproven until a Dell is in the lab |
 | `ipmi` | IPMI-only devices | `ipmitool -I lanplus` (`BMC_OPT_interface` overrides); `off` is `chassis power soft`; `pxe-once` is `chassis bootdev pxe options=efiboot` then power on or reset |
@@ -230,11 +230,18 @@ Host: `bmc_driver`, `bmc_driver_source`, `bmc_addr`, `bmc_options`,
    and an assertion that the credential is in no argv. The console shims are in
    `scripts/tests/test_p3_163_bmc_console.bats`.
 
-## Not proven live
+## Proven live, and not
 
-Everything here is tested against shims, not hardware. In particular the
-`hpe-ilo` driver has not yet run against the real iLO through `hps-bmc` (the lab
-chains still use `lab/ilo.sh`); `dell-idrac`, `ipmi` and `external` have never
-met a real device; the `console` action has not run against the real iLO (the lab console tools still
-read `lab/secrets/ilo`); the audit's `ipmitool` and DMI collection has not run on the
-DL360, and the audit image build is not checked here.
+The `hpe-ilo` driver is proven on a real DL360 Gen9 (iLO 4 v2.76) through
+`hps-bmc` (IPS-08 close-out, `inbox/archive/2026-11-11-IPS-08-modular-bmc-control.md`):
+`status` in every lab chain since run 13; `pxe-once` in runs 14 to 17; `off`,
+`on` and `force-off` in runs 16 and 17; `console` in run 17 (the serial console
+captured to the NixOS login). `hps-node power-off` found `hps-bmc` beside it in
+run 15. The credential is in the keysafe only; `lab/ilo.sh` and
+`lab/secrets/ilo` are deleted, and the lab console tools call `hps-bmc console`.
+
+Tested against shims only, never against a real device: the `ipmi`, `external`
+and `redfish-generic` drivers, and `dell-idrac`. `ipmi` cannot be used with the
+DL360 because its iLO password exceeds IPMI 2.0's 20-byte limit. The audit's
+`ipmitool` and DMI collection has not run on the DL360, and the audit image
+build is not checked here.

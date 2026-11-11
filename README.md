@@ -41,10 +41,11 @@ Contributions are welcome!
 
 ## 🏗️ Platform Structure  
 
-HPS is designed to be mounted inside a Debian-based container at:  
+HPS runs inside the Debian-based IPS container (the `hps-container` repository), which mounts the host's `/srv` as `/srv`. This tree is installed at:
 
 ```bash
-/srv/hps-container
+/srv/hps-system
+```
 
 
 ### Software infrastructure
@@ -69,43 +70,50 @@ Layer 6: compute host configuration
 Once your container is running, begin setup with:
 
 ```bash
-sudo docker compose exec hps /srv/hps/cluster-configure.sh
+sudo docker compose exec hps /srv/hps-system/cli/cluster-configure.sh
 ```
 
+For a non-interactive setup use `scripts/cluster-bootstrap.sh` (see "NixOS nodes and the lab IPS" below).
+
 This script:
-- Initializes the configuration directory `/srv/hps-config` if it doesn't exist
+- Initialises the configuration directory `/srv/hps-config` if it doesn't exist
 - Prompts for new or existing cluster configuration
-- Saves structured values to `.cluster` files and global `hps.conf`
-- Prepares the system for PXE/TFTP/DHCP boot services
+- Saves structured values to the cluster configuration and global `hps.conf`
+- Prepares the system for PXE, TFTP and DHCP boot services (served by dnsmasq)
 
 ## 📁 Directory Structure
 
 ```
 └── hps-system
+    ├── bin                  hps-* commands (hps-onboard, hps-bmc, hps-jobs, ...)
     ├── cli
-    │   ├── check-and-download-rocky.sh
-    │   ├── cluster-configure.sh
-    │   ├── reload.sh
-    │   └── test.sh
+    │   ├── cluster-configure.sh
+    │   ├── manage-distros.sh
+    │   ├── reload.sh
+    │   └── ...
+    ├── docs                 reference documents and adr/
     ├── http
-    │   ├── cgi-bin
-    │   └── distros
+    │   ├── api
+    │   └── cgi-bin
+    ├── lab                  rig scripts for the NixOS lab trial
     ├── lib
-    │   ├── functions.d
-    │   └── functions.sh
-    ├── log
-    ├── README.md
+    │   ├── functions.d
+    │   ├── functions.sh
+    │   ├── hps-system.sh
+    │   └── perl             HPS::* modules
+    ├── node-manager         per-OS node scripts (nixos-26, alpine-3, ...)
+    ├── nix                  flake modules and the image builder
     ├── scripts
-    │   ├── cluster-config.d
-    │   ├── hps-initialise.sh
-    │   └── run-hps.sh
+    │   ├── cluster-bootstrap.sh
+    │   ├── cluster-config.d
+    │   ├── run-hps.sh
+    │   └── tests            bats tests
+    ├── t                    Perl tests
     ├── templates
-    │   └── script-init-boilerplate.sh
-    ├── tftp
-    │   ├── ipxe.efi
-    │   ├── snponly.efi
-    │   └── undionly.kpxe
-    └── update-paths.sh
+    └── tftp
+        ├── ipxe.efi
+        ├── snponly.efi
+        └── undionly.kpxe
 
 ```
 
@@ -113,7 +121,7 @@ This script:
 
 ## 📚 Configuration
 
-Global config is saved in `/srv/hps-config/hps.conf` and sourced by:
+Global config is saved in `/srv/hps.conf` (created by `lib/hps-system.sh`; it holds the four base paths under `/srv`: `hps-system`, `hps-config`, `hps-resources` and `hps-log`) and sourced by:
 - cluster configurator fragments
 - service startup scripts
 
@@ -168,21 +176,19 @@ To install a new storage node on a virtual machine, using a commodity home PC ta
 
 # Getting started
 
-You need hardware, the IPS and a download of your preferred O/S. Rocky 10 has been used for testing.
+You need hardware and the IPS. Nodes boot into RAM from the IPS (NixOS 26.05 images built with `nix/build.sh`), so a node needs no installed operating system.
 
 ## Hardware requirements
 
-### Initial Provisioning Node
+### Initial Provisioning Node (IPS)
 
-- Docker container
-- Storage 10GB (Redhat DVD)
+- Docker container (the `hps-container` repository), host networking
+- Storage for the images under `/srv/hps-resources`
 
-### Storage node:
+### Nodes
 
-- Base O/S: min 30GB
-- Swap: min 20GB
-- Storage service: As you wish, probably 100G or more
-- RAM: 16GB min, as much as you have
+- Boot from the network (UEFI PXE)
+- RAM for the node image and its workload; a storage node also needs data disks, named by `by-id` path
 
 
 # Troubleshooting
@@ -191,8 +197,8 @@ Watch the console for errors, and alsop the logfile which is probably too verbos
 
 Common issues:
 
-- insufficient disks - see minimum disk sizes for redhat-based distros
-- BIOS not set to boot the disk before the network
+- a storage node without the data disks its role needs
+- BIOS or UEFI not set to boot from the network
 
 
 # How to help

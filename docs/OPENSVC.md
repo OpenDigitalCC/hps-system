@@ -8,8 +8,13 @@ daemon never places, moves, restarts or fails over anything. The finding that
 this is possible is `plans/opensvc-finding.md`; two rig tests (below) prove the
 last two unproven points on real nodes.
 
-Not run against a real daemon on the development host: the tests use a shimmed
-`om`, `curl`, `systemctl` and `hostname`. The first real run is the lab runsheet.
+The bats tests use a shimmed `om`, `curl`, `systemctl` and `hostname`. A real
+two-node om3 cluster (`sch-001.lab.hps` and `tch-001.lab.hps`) forms and beats
+in the lab: both nodes show `hb#1` running, each peer `is_beating: true`, and
+`osvc-status` reports `peers=1 beating=1` (IPS-12 close-out,
+`inbox/archive/2026-11-11-IPS-12-om3-shared-cluster-ca.md`, chain P run
+nineteen). Cluster CA rotation (`om cluster ca rotate`) has not been run; it
+needs a re-export first.
 
 ## What it does here
 
@@ -18,9 +23,13 @@ Membership and health
   paired node. `osvc-status` reports who is beating and who is stale.
 
 Local service management
-: One OpenSVC object per workload part (a guest: `disk.md` + `container.kvm`).
-  HPS starts and stops it on the owning node with `om <obj> start --local` and
-  `om <obj> stop --local` (`osvc-object-start`, `osvc-object-stop`).
+: The node scripts `osvc-object-set`, `osvc-object-start`, `osvc-object-stop`
+  and `osvc-object-delete` manage one OpenSVC object per workload part
+  (`disk.md` + `container.kvm`) with `om <obj> ... --local`. `HPS::Workload`
+  does not call them: it starts and stops a guest directly with the `vm-start`
+  and `vm-stop` node scripts. The object scripts exist for the workload plane
+  and are exercised by the rig tests; today OpenSVC provides membership and
+  health only.
 
 ## What it is never allowed to do
 

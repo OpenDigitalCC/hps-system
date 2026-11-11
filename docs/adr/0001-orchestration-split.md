@@ -41,6 +41,12 @@ retained **only** for durable availability management:
   membership and heartbeat, node labels for placement, the
   `o_vm_get_healthy_nodes` health gate, and durable VM services
   (`orchestrate=ha`) where failover is wanted.
+- **Amended 2026-11-11**: the `orchestrate=ha` line above records the original
+  decision. The rule now enforced is `orchestrate=no`, one owner node, no
+  placement and no `monitor_action`: `osvc-object-set` refuses anything else and
+  `osvc-object-start` refuses an object that does not hold those keywords. See
+  `docs/OPENSVC.md`, "What it is never allowed to do". HPS starts and stops
+  guests directly (`vm-start`, `vm-stop`).
 - **Retired**: OpenSVC as a config-distribution channel (the HPS
   registry/API already fills that role).
 
