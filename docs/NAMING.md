@@ -26,7 +26,7 @@ letters, digits, `.` and `-`, first character alphanumeric, 63 characters). So:
 | Identity | Form | Produced by | Compared by |
 |---|---|---|---|
 | Registry `HOSTNAME` | `$LABEL` | `host_network_configure` (`_find_available_hostname`) | helpers that derive the FQDN |
-| Kernel hostname, static and transient | `$LABEL.$DOMAIN` | `hps-node-init` (`hostnamectl set-hostname`, transient only where the static name cannot be written); the bundle step `n_set_hostname_and_hosts` sets the same | `hps-iscsi-name`, `hps-osvc-config` (read it back with `hostname`) |
+| Kernel hostname (transient) | `$LABEL.$DOMAIN` | `hps-node-init` (`hostnamectl set-hostname --transient`: `/etc` is read-only on a netbooted node); the bundle step `n_set_hostname_and_hosts` sets the same | `hps-iscsi-name`, `hps-osvc-config` (read it back with `hostname`) |
 | DHCP-supplied name | none (`UseHostname=false`, `SendHostname=false` in the `hps-net` units) | | |
 | om3 node name | `$LABEL.$DOMAIN` | the kernel hostname (om3 takes `os.Hostname()`); the IPS list (`osvc_cluster_node_list`, `cmd=cluster_nodes`) names the same FQDN | `hps-osvc-config`: this node must equal one listed name exactly; the names go to `cluster.conf` and `node.conf` as listed |
 | ctrl-exec agent name | `$LABEL.$DOMAIN` (`hps-<mac>.$DOMAIN` for a node with no `HOSTNAME`) | `hps-pair` (`request-pairing --name`; with `--no-hostname` it uses the kernel hostname) | `ce_approve_pair_request` (request hostname equals `host_fqdn`, case-insensitive), `hps-run.sh` (the FQDN must be a registered agent, no other form tried), `hps-onboard prune-agents` |

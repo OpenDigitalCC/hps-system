@@ -39,6 +39,10 @@
 # script failed, whatever its real status was; the JSON reply carries it
 # (results[0].exit) and hps-run.sh exits 0 unless the API call itself failed.
 #
+# --ping: no script; asks the dispatcher to ping the agent and exits 0 when it
+# answers (status ok), 1 when it does not. storage-up waits on it so its first
+# call does not meet an agent still restarting after pairing.
+#
 # Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
 # $HPS_BASE/hps-system; CTRL_EXEC_DISPATCHER names the dispatcher CLI;
 # CTRL_EXEC_CLI the API client used by --input (default: ctrl-exec-cli on PATH,
@@ -53,26 +57,37 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: hps-run.sh [--input] [--json] <mac-or-hostname> <script> [args...]" >&2
+  echo "usage: hps-run.sh [--input] [--json] <mac-or-hostname> <script> [args...] | --ping <mac-or-hostname>" >&2
 }
 
 INPUT=0
 JSON=0
+PING=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --input) INPUT=1; shift ;;
     --json) JSON=1; shift ;;
+    --ping) PING=1; shift ;;
     *) break ;;
   esac
 done
-if [[ $# -lt 2 || -z "$1" || -z "$2" ]]; then
-  usage
-  exit 2
+if [[ $PING -eq 1 ]]; then
+  if [[ $# -ne 1 || -z "$1" ]]; then
+    usage
+    exit 2
+  fi
+  TARGET="$1"
+  SCRIPT=ping
+  shift
+else
+  if [[ $# -lt 2 || -z "$1" || -z "$2" ]]; then
+    usage
+    exit 2
+  fi
+  TARGET="$1"
+  SCRIPT="$2"
+  shift 2
 fi
-
-TARGET="$1"
-SCRIPT="$2"
-shift 2
 
 if [[ ! "$SCRIPT" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "hps-run: script name must match [A-Za-z0-9_-]+: $SCRIPT" >&2
@@ -145,6 +160,18 @@ REGISTERED=$(registered_agents) || {
 if ! grep -qxF -- "$AGENT" <<< "$REGISTERED"; then
   echo "hps-run: no registered agent for ${TARGET}; expected the FQDN $AGENT" >&2
   exit 4
+fi
+
+# ping_agent <agent>: 0 when the dispatcher's ping shows the agent as ok.
+ping_agent() {
+  local agent="$1" out
+  out=$("$CTRL_EXEC_DISPATCHER" ping "$agent" 2> /dev/null) || return 1
+  awk -v a="$agent" '$1 == a && $2 == "ok" { found = 1 } END { exit found ? 0 : 1 }' <<< "$out"
+}
+
+if [[ $PING -eq 1 ]]; then
+  ping_agent "$AGENT"
+  exit $?
 fi
 echo "hps-run: ${TARGET} -> agent ${AGENT}, script ${SCRIPT}" >&2
 

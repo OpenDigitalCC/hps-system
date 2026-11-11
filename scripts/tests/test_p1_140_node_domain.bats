@@ -92,20 +92,20 @@ PAIR_SH() { echo "$ROOT/node-manager/nixos-26/boot/hps-pair.sh"; }
   node_setup "hps.domain=lab.hps"
   FAKE_HOSTNAME=held01 run timeout 30 bash "$(PAIR_SH)"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname held01.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient held01.lab.hps' "$SHIM_LOG"
   grep -qx 'getent hosts held01.lab.hps' "$SHIM_LOG"
 }
 
 @test "hps-pair uses hps-<mac12>.<domain> without a registry HOSTNAME" {
   node_setup "hps.domain=lab.hps"
   FAKE_HOSTNAME= run timeout 30 bash "$(PAIR_SH)"
-  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
 }
 
 @test "hps-pair keeps the bare name when hps.domain is absent" {
   node_setup "hps.profile=audit"
   FAKE_HOSTNAME=held01 run timeout 30 bash "$(PAIR_SH)"
-  grep -qx 'hostnamectl set-hostname held01' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient held01' "$SHIM_LOG"
   ! grep -q '^getent' "$SHIM_LOG"
 }
 
@@ -129,7 +129,7 @@ PAIR_SH() { echo "$ROOT/node-manager/nixos-26/boot/hps-pair.sh"; }
   printf '#!/usr/bin/env bash\necho "pair $*" >> "$SHIM_LOG"\n' > "$TEST_DIR/pair"
   chmod +x "$TEST_DIR/pair"
   HPS_PAIR="$TEST_DIR/pair" FAKE_HOSTNAME=node01 run timeout 30 bash "$ROOT/node-manager/nixos-26/boot/hps-node-init.sh"
-  grep -qx 'hostnamectl set-hostname node01.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient node01.lab.hps' "$SHIM_LOG"
   grep -qx 'pair --no-hostname' "$SHIM_LOG"
 }
 
@@ -138,7 +138,7 @@ PAIR_SH() { echo "$ROOT/node-manager/nixos-26/boot/hps-pair.sh"; }
   printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_DIR/pair"
   chmod +x "$TEST_DIR/pair"
   HPS_PAIR="$TEST_DIR/pair" FAKE_HOSTNAME= run timeout 30 bash "$ROOT/node-manager/nixos-26/boot/hps-node-init.sh"
-  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff.lab.hps' "$SHIM_LOG"
 }
 
 # ---- hps-run.sh -----------------------------------------------------------

@@ -88,13 +88,13 @@ teardown() {
   run bash "$INIT"
   [ "$status" -eq 0 ]
   grep -q 'curl .*boot_manager.sh?cmd=host_variable&name=HOSTNAME' "$SHIM_LOG"
-  grep -qx 'hostnamectl set-hostname node01' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient node01' "$SHIM_LOG"
 }
 
 @test "falls back to hps-<mac> when the registry has no HOSTNAME" {
   FAKE_HOSTNAME_RC=22 run bash "$INIT"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff' "$SHIM_LOG"
 }
 
 @test "falls back to hostname(1) when hostnamectl fails" {
@@ -185,8 +185,8 @@ teardown() {
 @test "logs every command as it runs" {
   run bash "$INIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"+ curl -fsS http://10.99.1.1/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"* ]]
-  [[ "$output" == *"+ hostnamectl set-hostname node01"* ]]
+  [[ "$output" == *"+ curl -fs http://10.99.1.1/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"* ]]
+  [[ "$output" == *"+ hostnamectl set-hostname --transient node01"* ]]
   [[ "$output" == *"+ ctrl-exec-agent request-pairing"* ]]
   [[ "$output" == *"+ systemctl restart ctrl-exec-agent.service"* ]]
 }

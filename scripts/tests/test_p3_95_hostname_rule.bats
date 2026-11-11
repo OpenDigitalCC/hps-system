@@ -83,21 +83,21 @@ node_shims() {
   export PATH="$T/bin:$PATH"
 }
 
-@test "hps-node-init sets the FQDN as the static name (hostnamectl without --transient)" {
+@test "hps-node-init sets the FQDN as the transient name only (IPS-11: /etc is read-only on a node)" {
   node_shims
   echo "hps.ips=10.0.0.1 hps.mac=aa:bb:cc:dd:ee:ff hps.domain=lab.hps" > "$HPS_CMDLINE"
   run -0 timeout 30 bash "$BOOT/hps-node-init.sh"
-  grep -qx 'hostnamectl set-hostname node01.lab.hps' "$SHIM_LOG"
-  ! grep -q -- '--transient' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient node01.lab.hps' "$SHIM_LOG"
+  [ "$(grep -c '^hostnamectl' "$SHIM_LOG")" -eq 1 ]
 }
 
-@test "hps-node-init falls back to the transient name when the static one cannot be written" {
+@test "hps-node-init falls back to hostname(1) when the transient name cannot be set" {
   node_shims
-  printf '#!/usr/bin/env bash\nprintf "hostnamectl %%s\\n" "$*" >> "$SHIM_LOG"\n[[ "$*" == *--transient* ]]\n' > "$T/bin/hostnamectl"
+  printf '#!/usr/bin/env bash\nprintf "hostnamectl %%s\\n" "$*" >> "$SHIM_LOG"\nexit 1\n' > "$T/bin/hostnamectl"
   echo "hps.ips=10.0.0.1 hps.mac=aa:bb:cc:dd:ee:ff hps.domain=lab.hps" > "$HPS_CMDLINE"
   run -0 timeout 30 bash "$BOOT/hps-node-init.sh"
-  grep -qx 'hostnamectl set-hostname node01.lab.hps' "$SHIM_LOG"
   grep -qx 'hostnamectl set-hostname --transient node01.lab.hps' "$SHIM_LOG"
+  grep -qx 'hostname node01.lab.hps' "$SHIM_LOG"
 }
 
 @test "hps-node-init and hps-pair refuse a domain that makes the FQDN exceed 63 characters" {
@@ -263,8 +263,8 @@ EOT
 @test "nix wiring: DHCP gives no hostname, hostName stays empty, hps-node-init is the only namer" {
   grep -q 'UseHostname=false' "$BOOT/hps-net.sh"
   grep -q 'networking.hostName = ""' "$ROOT/nix/modules/hps-common.nix"
-  grep -q 'hostnamectl set-hostname "\$name" && return 0' "$BOOT/hps-node-init.sh"
-  grep -q 'hostnamectl set-hostname "\$name" && return 0' "$BOOT/hps-pair.sh"
+  grep -q 'hostnamectl set-hostname --transient "\$name" && return 0' "$BOOT/hps-node-init.sh"
+  grep -q 'hostnamectl set-hostname --transient "\$name" && return 0' "$BOOT/hps-pair.sh"
 }
 
 @test "nix wiring: the initiator-name unit can reach the IPS (curl, jq, ip on its path)" {

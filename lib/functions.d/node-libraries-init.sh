@@ -186,7 +186,7 @@ node_build_functions() {
       _load_library_dir "$state_dir" "State Overlay: +$state"
       file_count=$((file_count + _LOADED_COUNT))
     else
-      hps_log warn "State overlay not found: $state_dir"
+      hps_log debug "State overlay not found: $state_dir"
     fi
   fi
   

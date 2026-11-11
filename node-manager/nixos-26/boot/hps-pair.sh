@@ -98,7 +98,8 @@ discover_mac() {
 # The CGI identifies the caller by its DHCP lease, so no MAC parameter.
 fetch_hostname() {
   local ips="$1"
-  run curl -fsS "http://${ips}/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"
+  # -s without -S: a 404 (no name yet) is an expected answer, not an error line.
+  run curl -fs "http://${ips}/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"
 }
 
 # valid_hostname <text>: print the first label when it is a valid host label
@@ -150,8 +151,6 @@ check_self_resolves() {
 set_hostname() {
   local name="$1"
   if command -v hostnamectl > /dev/null 2>&1; then
-    run hostnamectl set-hostname "$name" && return 0
-    log "hostnamectl (static) failed; trying --transient"
     run hostnamectl set-hostname --transient "$name" && return 0
     log "hostnamectl failed; falling back to hostname(1)"
   fi

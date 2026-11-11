@@ -63,20 +63,20 @@ teardown() {
 @test "an error body from the registry is not set as the hostname: hps-<mac12> instead" {
   FAKE_HOSTNAME_BODY="Key 'HOSTNAME' not found" run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff' "$SHIM_LOG"
   ! grep -q "Key 'HOSTNAME'" <(grep '^hostnamectl' "$SHIM_LOG")
 }
 
 @test "an empty registry answer falls back to hps-<mac12>" {
   FAKE_HOSTNAME_BODY="" run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname hps-aabbccddeeff' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff' "$SHIM_LOG"
 }
 
 @test "an FQDN from the registry is cut to its first label" {
   FAKE_HOSTNAME_BODY="held01.lab.hps" run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname held01' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient held01' "$SHIM_LOG"
 }
 
 @test "invalid labels are refused: leading hyphen, underscore, shell text, 64 chars" {
@@ -85,7 +85,7 @@ teardown() {
     rm -f "$TEST_DIR/approved" "$HPS_AGENT_ETC/agent.crt"
     FAKE_HOSTNAME_BODY="$bad" run bash "$PAIR"
     [ "$status" -eq 0 ]
-    grep -qx 'hostnamectl set-hostname hps-aabbccddeeff' "$SHIM_LOG"
+    grep -qx 'hostnamectl set-hostname --transient hps-aabbccddeeff' "$SHIM_LOG"
   done
 }
 
@@ -93,11 +93,11 @@ teardown() {
   label="$(printf 'a%.0s' $(seq 1 63))"
   FAKE_HOSTNAME_BODY="$label" run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx "hostnamectl set-hostname $label" "$SHIM_LOG"
+  grep -qx "hostnamectl set-hostname --transient $label" "$SHIM_LOG"
   : > "$SHIM_LOG"
   rm -f "$TEST_DIR/approved" "$HPS_AGENT_ETC/agent.crt"
   FAKE_HOSTNAME_BODY="7node" run bash "$PAIR"
-  grep -qx 'hostnamectl set-hostname 7node' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient 7node' "$SHIM_LOG"
 }
 
 @test "the reqid is POSTed to the IPS before the agent is approved (no deadlock)" {

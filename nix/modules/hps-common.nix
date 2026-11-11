@@ -36,7 +36,17 @@
     # are enabled below.
     boot.kernelParams = [ "console=tty0" "console=ttyS0,115200n8" "console=ttyS1,115200n8" ];
     systemd.services."serial-getty@ttyS0" = { enable = true; wantedBy = [ "getty.target" ]; };
-    systemd.services."serial-getty@ttyS1" = { enable = true; wantedBy = [ "getty.target" ]; };
+    # ttyS1 gets a getty only where the port is a real UART. /dev/ttyS1 and
+    # /sys/class/tty/ttyS1 can exist with no hardware behind them (a VM with one
+    # serial port): agetty then logs "/dev/ttyS1: not a tty" on every boot. The
+    # kernel's sysfs "type" file is 0 (PORT_UNKNOWN) for such a port and the UART
+    # type number otherwise; ExecCondition exit 1 skips the unit without failing.
+    systemd.services."serial-getty@ttyS1" = {
+      enable = true;
+      wantedBy = [ "getty.target" ];
+      unitConfig.ConditionPathExists = "/sys/class/tty/ttyS1/type";
+      serviceConfig.ExecCondition = "${pkgs.gnugrep}/bin/grep -qvx 0 /sys/class/tty/ttyS1/type";
+    };
     boot.supportedFilesystems = [ "zfs" ];
     # A normal boot imports the pool and never forces it (brief: pool safety);
     # also the 26.11 default.

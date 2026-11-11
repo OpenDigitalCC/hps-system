@@ -99,7 +99,33 @@
     };
   };
 
-  boot.kernelModules = [ "kvm-intel" "kvm-amd" "vhost_net" "8021q" "bridge" ];
+  # kvm-intel and kvm-amd are not listed: on any one CPU one of them always
+  # fails ("Failed to insert module 'kvm_amd'", "CPU 0 isn't AMD or Hygon").
+  # hps-kvm below loads the module of the CPU vendor.
+  boot.kernelModules = [ "vhost_net" "8021q" "bridge" ];
+
+  # The vendor check is read from /proc/cpuinfo, not left to udev's cpu modalias,
+  # so the module is there before libvirtd starts whatever udev's timing. No VT
+  # (or a CPU of neither family) leaves KVM off, as before.
+  systemd.services.hps-kvm = {
+    description = "HPS: load the KVM module for this CPU vendor";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "libvirtd.service" ];
+    path = with pkgs; [ kmod gnugrep ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      if grep -q '^vendor_id[[:space:]]*:[[:space:]]*GenuineIntel' /proc/cpuinfo; then
+        modprobe kvm-intel
+      elif grep -qE '^vendor_id[[:space:]]*:[[:space:]]*(AuthenticAMD|HygonGenuine)' /proc/cpuinfo; then
+        modprobe kvm-amd
+      else
+        echo "hps-kvm: CPU vendor is neither Intel nor AMD/Hygon; no KVM module loaded"
+      fi
+    '';
+  };
 
   # AppArmor in the kernel and the userspace parser. The libvirt profiles that
   # make the per-guest layer work are in compute-apparmor.nix; qemu.conf above

@@ -201,6 +201,10 @@ in
     };
   };
 
+  # No certificate, no start attempt: the unit is skipped (not failed) until
+  # pairing has written agent.crt; /etc/hps/hps-pair restarts it after that.
+  systemd.services.ctrl-exec-agent.unitConfig.ConditionPathExists = "/etc/ctrl-exec-agent/agent.crt";
+
   # Everything the scripts call must be on scriptPath (the system profile).
   environment.systemPackages = with pkgs; [
     coreutils gnugrep gawk procps util-linux iproute2 smartmontools

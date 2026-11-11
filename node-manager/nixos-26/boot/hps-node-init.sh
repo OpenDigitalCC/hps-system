@@ -78,7 +78,8 @@ discover_mac() {
 # The CGI identifies the caller by its DHCP lease, so no MAC parameter.
 fetch_hostname() {
   local ips="$1"
-  run curl -fsS "http://${ips}/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"
+  # -s without -S: a 404 (no name yet) is an expected answer, not an error line.
+  run curl -fs "http://${ips}/cgi-bin/boot_manager.sh?cmd=host_variable&name=HOSTNAME"
 }
 
 # fqdn_of <name>: the node's one identity, <first label>.<hps.domain>
@@ -110,15 +111,12 @@ fqdn_of() {
   printf '%s\n' "$name"
 }
 
-# set_hostname <fqdn>: the static and the transient kernel hostname. hostnamectl
-# without --transient writes both; where the static name cannot be written the
-# transient name alone is set. systemd-networkd takes no hostname from DHCP
+# set_hostname <fqdn>: the transient kernel hostname only. /etc is read-only on
+# a netbooted node, so a static write would fail on every boot. systemd-networkd takes no hostname from DHCP
 # (UseHostname=false, hps-net), so nothing replaces it later.
 set_hostname() {
   local name="$1"
   if command -v hostnamectl > /dev/null 2>&1; then
-    run hostnamectl set-hostname "$name" && return 0
-    log "hostnamectl (static) failed; trying --transient"
     run hostnamectl set-hostname --transient "$name" && return 0
     log "hostnamectl failed; falling back to hostname(1)"
   fi

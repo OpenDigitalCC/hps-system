@@ -381,6 +381,24 @@ sub plan ($self, $op, %a) {
     } @steps ];
 }
 
+# Before the first call of an operation run with a wait: let the node's agent
+# answer a ping (bounded by 30 s and by the wait), so the first call does not
+# meet a node whose agent is still restarting with its certificate after
+# pairing. On timeout the calls go ahead as before. A runner without ping is
+# not asked.
+sub _await_agent ($self) {
+    return 1 unless $self->{wait} > 0 && $self->{runner}->can('ping');
+    my $limit = $self->{wait} < 30 ? $self->{wait} : 30;
+    my $deadline = $self->{now}->() + $limit;
+    while (1) {
+        return 1 if $self->{runner}->ping($self->{mac});
+        last if $self->{now}->() >= $deadline;
+        $self->{sleep}->(2);
+    }
+    $self->_log('info', "agent of $self->{mac} did not answer a ping within ${limit}s; calling anyway");
+    return 0;
+}
+
 # One node call, retried (only when wait > 0) while the agent is not there yet.
 sub _call ($self, $st, $retry) {
     my $input = $st->{input} ? $st->{input}->() : undef;
@@ -413,6 +431,7 @@ sub run ($self, $op, %a) {
     }
     my (@results, $n);
     $n = 0;
+    $self->_await_agent;
     for my $st (@steps) {
         $n++;
         my $r = $self->_call($st, $n == 1);
@@ -500,6 +519,12 @@ sub _spawn ($self, $input, @cmd) {
     waitpid($pid, 0);
     my $rc = $? == -1 ? 1 : ($? & 127) ? 128 + ($? & 127) : $? >> 8;
     return ($rc, $buf{out}, $buf{err});
+}
+
+# ping(mac) -> true when the node's agent answers (hps-run.sh --ping).
+sub ping ($self, $mac) {
+    my ($rc) = eval { $self->_spawn(undef, $self->{hps_run}, '--ping', $mac) };
+    return defined $rc && $rc == 0 ? 1 : 0;
 }
 
 # call(mac, script, args, input) -> {rc, stdout, stderr}

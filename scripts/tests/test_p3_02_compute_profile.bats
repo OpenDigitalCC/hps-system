@@ -35,8 +35,10 @@ setup() {
 }
 
 @test "KVM and VLAN/bridge kernel modules are loaded" {
-  grep -q 'kvm-intel' "$COMPUTE"
-  grep -q 'kvm-amd' "$COMPUTE"
+  # IPS-11: the vendor's module is loaded by hps-kvm (modprobe), not listed in
+  # boot.kernelModules, where one of the two fails on every CPU.
+  grep -q 'modprobe kvm-intel' "$COMPUTE"
+  grep -q 'modprobe kvm-amd' "$COMPUTE"
   grep -q '"8021q"' "$COMPUTE"
   grep -q '"bridge"' "$COMPUTE"
 }

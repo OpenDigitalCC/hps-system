@@ -16,9 +16,10 @@
 # Usage:
 #   cgi_auto_fail "Missing required parameter"
 #   cgi_auto_fail "Key not found" 404 "Not Found"
+#   cgi_auto_fail "Key not found" 404 "Not Found" info   # expected absence: log at info
 cgi_auto_fail() {
-  local msg="${1:?Usage: cgi_auto_fail <message> [code text]}"
-  local code="${2:-}" text="${3:-}"
+  local msg="${1:?Usage: cgi_auto_fail <message> [code text [level]]}"
+  local code="${2:-}" text="${3:-}" level="${4:-}"
   local client_type
   client_type="$(detect_client_type)"
 
@@ -27,7 +28,7 @@ cgi_auto_fail() {
       ipxe_cgi_fail "$msg"
       ;;
     cli|browser|script|unknown)
-      cgi_fail "$msg" "$code" "$text"
+      cgi_fail "$msg" "$code" "$text" "$level"
       ;;
     *)
       hps_log error "$msg"
@@ -66,21 +67,24 @@ cgi_status() {
   echo "Status: ${1:?Usage: cgi_status <code> <text>} ${2:?Usage: cgi_status <code> <text>}"
 }
 
-# cgi_fail <message> [code text]
+# cgi_fail <message> [code text [level]]
 # ------------------------------
 # Plain-text failure with a non-2xx HTTP status (default 500 Internal Server
 # Error) so `curl -f` fails on the node side. host_audit_refuse prints its own
 # Status line before calling this, so no second line is added for that caller.
+# The message is logged at <level> (default error); an expected absence, such
+# as a held node asking for a name it does not have yet, passes info.
 cgi_fail () {
   local cfmsg="$1"
-  local code="${2:-500}" text="${3:-Internal Server Error}"
+  local code="${2:-500}" text="${3:-Internal Server Error}" level="${4:-error}"
+  [[ -n "$level" ]] || level=error
   [[ -n "$code" ]] || code=500
   [[ -n "$text" ]] || text="Internal Server Error"
   if [[ "${FUNCNAME[1]:-}" != "host_audit_refuse" ]]; then
     cgi_status "$code" "$text"
   fi
   cgi_header_plain
-  hps_log error "$cfmsg"
+  hps_log "$level" "$cfmsg"
   echo -n "$cfmsg"
 }
 

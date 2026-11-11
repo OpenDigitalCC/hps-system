@@ -70,7 +70,7 @@ teardown() {
   echo "hps.ips=10.99.1.1 hps.mac=aa:bb:cc:dd:ee:ff hps.domain=lab.example" > "$HPS_CMDLINE"
   FAKE_AGENT_NAME=1 run bash "$PAIR"
   [ "$status" -eq 0 ]
-  grep -qx 'hostnamectl set-hostname held01.lab.example' "$SHIM_LOG"
+  grep -qx 'hostnamectl set-hostname --transient held01.lab.example' "$SHIM_LOG"
   grep -qx 'ctrl-exec-agent request-pairing --background --timeout 4 --dispatcher 10.99.1.1 --name held01.lab.example' "$SHIM_LOG"
 }
 

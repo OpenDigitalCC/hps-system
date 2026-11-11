@@ -136,8 +136,14 @@ if [[ "$cmd" == "host_variable" ]]; then
     if current_value="$(host_registry "$mac" get "$var_name" 2>/dev/null)"; then
       cgi_success "$current_value"
       exit 0
+    elif [[ "$var_name" == "nets" ]]; then
+      # A host with no network attachments has an empty list, not a 404.
+      cgi_success "[]"
+      exit 0
     else
-      cgi_auto_fail "Key '$var_name' not found" 404 "Not Found"
+      # An absent key is an expected answer (a held node asks for the name it
+      # has not been given yet); the 404 stays, the log line is info.
+      cgi_auto_fail "Key '$var_name' not found" 404 "Not Found" info
       exit 1
     fi
   fi
