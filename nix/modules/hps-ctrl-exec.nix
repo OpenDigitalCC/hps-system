@@ -88,6 +88,8 @@ in
       net-bridge-ensure.options.profile = "node";
       net-status.source = mkScript "net-status" (scriptsDir + "/net-status");
       net-status.options.profile = "node";
+      net-capture.source = mkScript "net-capture" (scriptsDir + "/net-capture");
+      net-capture.options.profile = "node";
       # CS-3.2: legs and md mirrors (mdadm and open-iscsi come with the compute profile, CS-3.1).
       leg-resolve.source = mkScript "leg-resolve" (scriptsDir + "/leg-resolve");
       leg-resolve.options.profile = "node";

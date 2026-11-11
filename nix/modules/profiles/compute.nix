@@ -215,6 +215,7 @@
     curl # image-fetch (CS-3.3)
     jq
     iproute2
+    tcpdump # net-capture: read-only frame summary on a bridge port (scale test isolation)
     util-linux
   ];
 }
