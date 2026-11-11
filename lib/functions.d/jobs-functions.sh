@@ -107,10 +107,6 @@ hps_job_validate() {
         esac
       done
       ;;
-    workload-destroy)
-      { [[ $# -eq 1 ]] || { [[ $# -eq 2 ]] && [[ "$2" == "--forget" ]]; }; } && [[ "$1" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
-        || { echo "$kind: needs <workload> [--forget]" >&2; return 1; }
-      ;;
     "")
       echo "hps_job_submit: no kind" >&2
       return 1

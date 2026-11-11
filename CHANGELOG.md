@@ -12,6 +12,18 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## workload-destroy is no longer a job kind (2026-11-11)
+
+- removed: `workload-destroy` from the root job queue (`HPS::Jobs` and
+  `hps_job_validate`). It was the one destructive kind that anything able to
+  write the queue (group `hps`, the web user) could request, and the signed
+  approval that guarded it is gone. Owner ruling 2026-11-11. Destroy runs
+  only as `hps-workload destroy`: root on the IPS, or an operator through the
+  operator API. ADR 0007, SECURITY.md and WORKLOADS.md updated.
+- tests: `t/73-jobs-workload-kinds.t`, `t/45-jobs.t`,
+  `test_p3_50_workload_jobs.bats`,
+  `test_p3_96a_workload_destroy_keeps_definition.bats`.
+
 ## Authorisation is ctrl-exec's: signed approvals removed (2026-11-11)
 
 - removed: HPS's own signed-approval layer (owner ruling 2026-11-11: "the

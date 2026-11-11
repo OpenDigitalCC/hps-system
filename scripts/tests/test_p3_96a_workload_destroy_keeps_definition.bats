@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 #
 # IPS-07: workload destroy keeps workloads/<name>.json; destroy --forget removes
-# it. The driver, CLI and job allowlist (Perl and Bash) agree.
+# it. The driver and CLI agree; destroy is not a queue job kind (owner
+# 2026-11-11), in Perl and in Bash.
 
 bats_require_minimum_version 1.5.0
 
@@ -21,15 +22,10 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
-@test "the job allowlist accepts workload-destroy with --forget only" {
-  run hps_job_validate workload-destroy t0
-  [ "$status" -eq 0 ]
-  run hps_job_validate workload-destroy t0 --forget
-  [ "$status" -eq 0 ]
-  run -1 hps_job_validate workload-destroy t0 --vm x
-  run -1 hps_job_validate workload-destroy t0 --forget x
-  run -1 hps_job_validate workload-destroy --forget
-  run -1 hps_job_validate workload-destroy 'a;b' --forget
+@test "workload-destroy is not a job kind (owner 2026-11-11; ADR 0007)" {
+  run -1 hps_job_validate workload-destroy t0
+  [[ "$output" == *"unknown job kind"* ]]
+  run -1 hps_job_validate workload-destroy t0 --forget
 }
 
 @test "the CLI help says destroy keeps the definition and --forget removes it" {

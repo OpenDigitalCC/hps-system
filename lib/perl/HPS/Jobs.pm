@@ -42,7 +42,6 @@ my %KINDS = (
     'workload-create'      => [ \&_args_wl_create,  3600 ],
     'workload-start'       => [ \&_args_wl_vm,      1800 ],
     'workload-stop'        => [ \&_args_wl_vm,      1800 ],
-    'workload-destroy'     => [ \&_args_wl_destroy, 3600 ],
     'workload-status'      => [ \&_args_wl_vm,      600 ],
     'pins-prune'           => [ \&_args_pins_prune, 600 ],
 );
@@ -88,13 +87,6 @@ sub _args_pins_prune (@args) {
 my $WL_RE = qr/^[a-z][a-z0-9-]{0,31}\z/;
 
 # <workload> [--forget]
-sub _args_wl_destroy (@args) {
-    return 'needs <workload> [--forget]' unless @args == 1 || @args == 2;
-    return 'workload must match ^[a-z][a-z0-9-]{0,31}$' unless $args[0] =~ $WL_RE;
-    return 'the second argument can only be --forget' if @args == 2 && $args[1] ne '--forget';
-    return undef;
-}
-
 # <workload> [--vm <vm>]
 sub _args_wl_vm (@args) {
     return 'needs <workload> [--vm <vm>]' unless @args == 1 || @args == 3;
@@ -140,7 +132,7 @@ sub command ($kind, $args, %env) {
     return ($st, $a[0], 'down')                                        if $kind eq 'storage-down';
     return ($st, $a[0], 'trim-check')                                  if $kind eq 'storage-trim-check';
     return ($st, $a[0], 'status')                                      if $kind eq 'storage-status';
-    if ($kind =~ /^workload-(create|start|stop|destroy|status)\z/) {
+    if ($kind =~ /^workload-(create|start|stop|status)\z/) {
         my $wl = $env{workload} // 'hps-workload';
         return ($wl, $1, @a, ($1 eq 'status' ? ('--json') : ()));
     }

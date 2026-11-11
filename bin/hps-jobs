@@ -28,7 +28,7 @@ Runs queued privileged jobs. Without --once it polls new/ until stopped.
 Kinds: pairing-window-open [seconds], pairing-window-close, pairing-list,
 pairing-approve <reqid> [--replace], storage-up|down|trim-check|status <mac>,
 workload-create <name> [--resume], workload-start|stop|status <name> [--vm <vm>],
-workload-destroy <name>, pins-prune [--keep-previous N] [--dry-run].
+pins-prune [--keep-previous N] [--dry-run].
 Environment: HPS_JOBS_DIR, CTRL_EXEC_DISPATCHER, HPS_STORAGE_CMD, HPS_WORKLOAD_CMD, HPS_PINS_CMD.
 USAGE
     return 2;

@@ -147,8 +147,9 @@ syslog off). No log line carries a key, secret or signature.
 ## Jobs
 
 The root job runner (`hps-jobs`, ADR 0006) accepts `workload-create <name>
-[--resume]`, `workload-start|stop|status <name> [--vm $VM]` and
-`workload-destroy <name> [--forget]`; `workload-status` runs `hps-workload status <name> --json`.
+[--resume]` and `workload-start|stop|status <name> [--vm $VM]`. Destroy is not a
+job kind (owner ruling 2026-11-11, ADR 0007): run `hps-workload destroy` as root
+on the IPS or through the operator API. `workload-status` runs `hps-workload status <name> --json`.
 Environment: `HPS_WORKLOAD_CMD` (default `bin/hps-workload`), `HPS_RUN_CMD`
 (`hps-run.sh`), `HPS_RESOURCES` (default `$HPS_BASE/hps-resources`).
 

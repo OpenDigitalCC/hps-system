@@ -121,11 +121,11 @@ operator API (`ips-admin-exec` passes no `/` outside an IPv4 CIDR).
 - Anyone who can run `hps-storage`, `hps-workload` or `hps-onboard` (root on
   the IPS, or an operator credential) can destroy a pool, a zvol, a workload or
   a host entry in one step. Who holds an operator credential is the control.
-- The job queue (ADR 0006) still offers `workload-destroy <name> [--forget]`
-  to anything that can write it (group `hps`, the web user). It used to need a
-  signed approval as well; now the queue's allowlist is its only gate. No CGI
-  route submits it today. Whether that kind stays in the queue is open for the
-  owner (recorded here, not changed).
+- The job queue (ADR 0006) offered `workload-destroy <name> [--forget]` to
+  anything that can write it (group `hps`, the web user), guarded only by the
+  signed approval. Owner ruling 2026-11-11: the kind is removed from the queue
+  (Perl and Bash allowlists). Destroy runs only as `hps-workload destroy`: root
+  on the IPS, or an operator through the operator API.
 - An IPS that ran an earlier build may still hold `approval_*` keys in host
   registries and `keysafe/approval.hmac`. Nothing reads them; they can be
   deleted by hand.

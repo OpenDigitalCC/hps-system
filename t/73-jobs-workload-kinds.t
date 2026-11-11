@@ -10,16 +10,19 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib/perl";
 use HPS::Jobs;
 
-my @KINDS = qw(workload-create workload-start workload-stop workload-destroy workload-status);
+my @KINDS = qw(workload-create workload-start workload-stop workload-status);
 my %have = map { $_ => 1 } HPS::Jobs::kinds();
 ok($have{$_}, "$_ is a job kind") for @KINDS;
+# Owner 2026-11-11: destroying a workload is not a queue job (the signed
+# approval that used to guard this path is gone; ADR 0007).
+ok(!$have{'workload-destroy'}, 'workload-destroy is not a job kind');
+like(HPS::Jobs::validate('workload-destroy', 't0') // '', qr/unknown/i, 'workload-destroy is refused as unknown');
 
 for my $ok (
     [ 'workload-create', 't0' ], [ 'workload-create', 't0', '--resume' ],
     [ 'workload-start', 't0' ], [ 'workload-start', 't0', '--vm', 't0-app' ],
     [ 'workload-stop', 't0' ], [ 'workload-stop', 't0', '--vm', 't0-app' ],
     [ 'workload-status', 't0' ], [ 'workload-status', 'odoo-test', '--vm', 'odoo-test-db' ],
-    [ 'workload-destroy', 't0' ], [ 'workload-destroy', 't0', '--forget' ],
 ) {
     is(HPS::Jobs::validate(@$ok), undef, "allowed: @$ok");
 }
@@ -31,19 +34,16 @@ for my $bad (
     [ 'workload-start' ], [ 'workload-start', 't0', '--vm' ], [ 'workload-start', 't0', 'app' ], [ 'workload-start', 't0', '--resume' ],
     [ 'workload-start', 't0', '--vm', 'App' ], [ 'workload-start', 't0', '--vm', 'a;b' ], [ 'workload-start', 't0', '--dry-run' ],
     [ 'workload-stop', 't0', '--vm', 'x', 'y' ], [ 'workload-status', '' ],
-    [ 'workload-destroy' ], [ 'workload-destroy', 't0', '--vm', 'x' ], [ 'workload-destroy', 't0', '--resume' ],
-    [ 'workload-destroy', 'T0' ],
 ) {
     my $why = HPS::Jobs::validate(@$bad);
     ok(defined $why, 'refused: ' . join(' ', map { s/\n/\\n/gr } @$bad));
 }
-like(HPS::Jobs::validate('workload-destroy', 't0', 'x'), qr/^workload-destroy: the second argument can only be --forget/, 'the reason carries the kind');
+like(HPS::Jobs::validate('workload-start', 't0', 'app') // '', qr/^workload-start: /, 'the reason carries the kind');
 
 is_deeply([ HPS::Jobs::command('workload-create', ['t0'], workload => 'hw') ], [qw(hw create t0)], 'create');
 is_deeply([ HPS::Jobs::command('workload-create', [ 't0', '--resume' ], workload => 'hw') ], [qw(hw create t0 --resume)], 'create --resume');
 is_deeply([ HPS::Jobs::command('workload-start', [ 't0', '--vm', 'a' ], workload => 'hw') ], [qw(hw start t0 --vm a)], 'start --vm');
 is_deeply([ HPS::Jobs::command('workload-stop', ['t0'], workload => 'hw') ], [qw(hw stop t0)], 'stop');
-is_deeply([ HPS::Jobs::command('workload-destroy', ['t0'], workload => 'hw') ], [qw(hw destroy t0)], 'destroy');
 is_deeply([ HPS::Jobs::command('workload-status', ['t0'], workload => 'hw') ], [qw(hw status t0 --json)], 'status asks for JSON');
 is((HPS::Jobs::command('workload-status', ['t0']))[0], 'hps-workload', 'default command name');
 
@@ -65,13 +65,13 @@ my $j = HPS::Jobs->new(dir => "$root/jobs");
 $j->ensure_dirs;
 my $id1 = $j->submit('workload-create', 't0', '--resume');
 my $id2 = $j->submit('workload-status', 't0');
-my $id3 = $j->submit('workload-destroy', 't0');
+my $id3 = $j->submit('workload-stop', 't0');
 local $ENV{HPS_WORKLOAD_CMD} = "$root/hps-workload";
 my $log = `perl "$Bin/../bin/hps-jobs" --once --dir "$root/jobs" 2>&1`;
 open($fh, '<', "$root/calls.log") or die;
 my @calls = map { s/\n//r } <$fh>;
 close $fh;
-is_deeply([ sort @calls ], [ 'workload create t0 --resume', 'workload destroy t0', 'workload status t0 --json' ], 'the runner ran each job as an argument list');
+is_deeply([ sort @calls ], [ 'workload create t0 --resume', 'workload status t0 --json', 'workload stop t0' ], 'the runner ran each job as an argument list');
 is($j->result($id1)->{exit}, 0, 'result: exit 0');
 is($j->result($id1)->{stdout}, "workload said: create t0 --resume\n", 'result: stdout');
 open($fh, '>', "$root/rc") or die;
