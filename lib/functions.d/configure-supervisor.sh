@@ -152,7 +152,7 @@ EOF
 # supervisor_configure_core_services
 # ----------------------------------
 # Generate supervisord.conf with dnsmasq, lighttpd, rsyslog, chronyd, hps-jobs,
-# ctrl-exec-api, OpenSVC and the one-shot hps-ips-check.
+# hps-monitor, ctrl-exec-api, OpenSVC and the one-shot hps-ips-check.
 #
 # Usage:
 #   supervisor_configure_core_services
@@ -303,6 +303,22 @@ EOF
   _supervisor_append_once "program:hps-jobs" "$(cat <<EOF
 [program:hps-jobs]
 command=${HPS_SYSTEM_BASE}/bin/hps-jobs
+autostart=true
+autorestart=true
+startsecs=2
+stopsignal=TERM
+user=root
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- hps-monitor (resource checks of the paired nodes, logged to syslog; docs/MONITORING.md) ---
+  # Needs root: it lists the dispatcher's agents. Idles when monitor_interval_seconds is 0.
+  _supervisor_append_once "program:hps-monitor" "$(cat <<EOF
+[program:hps-monitor]
+command=${HPS_SYSTEM_BASE}/bin/hps-monitor loop
 autostart=true
 autorestart=true
 startsecs=2

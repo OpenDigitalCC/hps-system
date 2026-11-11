@@ -4,7 +4,7 @@
 { config, pkgs, ... }:
 
 {
-  imports = [ ./hps-ctrl-exec.nix ];
+  imports = [ ./hps-ctrl-exec.nix ./hps-monitor.nix ];
 
   environment.etc."hps/hps-node-init" = {
     source = ../../node-manager/nixos-26/boot/hps-node-init.sh;

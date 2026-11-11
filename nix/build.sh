@@ -19,7 +19,8 @@
 #   build.sh --out DIR --cache DIR [--src DIR] [--profiles "a b"] [--no-cache]
 #            [--date YYYYMMDD]
 # Environment: CTRL_EXEC_FLAKE=<flakeref> overrides the ctrl-exec input
-# (--override-input ctrl-exec <flakeref>); BUILD_DATE as --date.
+# (--override-input ctrl-exec <flakeref>); CTRL_EXEC_PLUGINS_FLAKE the same for
+# the ctrl-exec-plugins input; BUILD_DATE as --date.
 #
 # --no-cache proves the rebuild route: no substituters, and --rebuild on the
 # artefact derivation. A full from-source proof also needs a fresh /nix store
@@ -92,6 +93,9 @@ build_flags() {
   fi
   if [[ -n "${CTRL_EXEC_FLAKE:-}" ]]; then
     FLAKE_FLAGS+=(--override-input ctrl-exec "$CTRL_EXEC_FLAKE")
+  fi
+  if [[ -n "${CTRL_EXEC_PLUGINS_FLAKE:-}" ]]; then
+    FLAKE_FLAGS+=(--override-input ctrl-exec-plugins "$CTRL_EXEC_PLUGINS_FLAKE")
   fi
 }
 

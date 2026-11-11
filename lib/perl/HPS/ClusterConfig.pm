@@ -10,6 +10,7 @@ package HPS::ClusterConfig;
 #   regex:PATTERN   the whole value must match PATTERN
 #   enum:a,b,c      one of the listed values
 #   int:MIN..MAX    decimal integer in range
+#   int0:MIN..MAX   0, or a decimal integer in range
 #   bool            true or false
 #   ip              dotted-quad IPv4 address
 #   cidr            IPv4 address with /prefix
@@ -145,6 +146,9 @@ my @CATALOGUE = (
     # Held nodes (IPS-14): read by the iPXE hold script and the audit boot, not asked by the menu.
     _q(key => 'hold_retry_seconds', group => 'onboarding', menu => 0,
         prompt => 'Seconds a held node with its audit stored waits at iPXE between requests (5-3600)', rule => 'int:5..3600', default => '30'),
+    # Resource monitor (docs/MONITORING.md): hps-monitor loop, run under supervisor.
+    _q(key => 'monitor_interval_seconds', group => 'monitoring', menu => 0,
+        prompt => 'Seconds between resource checks of the paired nodes (10-86400; 0 disables)', rule => 'int0:10..86400', default => '60'),
     _q(key => 'held_reboot_after_audit', group => 'onboarding', menu => 0,
         prompt => 'Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection)', rule => 'bool', default => 'true'),
 );
@@ -202,6 +206,12 @@ sub validate_value ($q, $value) {
         my ($min, $max) = $arg =~ /^(\d+)\.\.(\d+)\z/;
         return "must be a whole number from $min to $max"
             unless $v =~ /^(?:0|[1-9][0-9]*)\z/ && $v >= $min && $v <= $max;
+        return undef;
+    }
+    if ($kind eq 'int0') {    # 0, or an integer in MIN..MAX
+        my ($min, $max) = $arg =~ /^(\d+)\.\.(\d+)\z/;
+        return "must be 0 or a whole number from $min to $max"
+            unless $v =~ /^(?:0|[1-9][0-9]*)\z/ && ($v == 0 || ($v >= $min && $v <= $max));
         return undef;
     }
     if ($kind eq 'bool') { return $v eq 'true' || $v eq 'false' ? undef : 'must be true or false' }

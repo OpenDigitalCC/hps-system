@@ -12,6 +12,19 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Resource monitoring of the paired nodes (2026-11-11)
+
+- new: `nagios-check` node script (ctrl-exec-plugins v0.3.11, new flake input
+  `ctrl-exec-plugins`) with monitoring-plugins, `check_mem` and an HPS
+  `check_zpool`; `/etc/nagios-checks/checks.conf` generated per node
+  (`nix/modules/hps-monitor.nix`, in node-base and node-converged).
+- new: `hps-monitor run|loop|interval` on the IPS (supervisor program
+  `hps-monitor`): one syslog line per check and per host, a `tick` line per run;
+  parallel, never overlapping; paired nodes only. `docs/MONITORING.md`.
+- new: cluster key `monitor_interval_seconds` (0 disables, else 10..86400,
+  default 60); catalogue rule `int0:MIN..MAX`.
+- `nix/build.sh`: `CTRL_EXEC_PLUGINS_FLAKE` overrides the new input.
+
 ## Scale test phase 1: fabric bridge and emulated hardware (2026-11-11)
 
 - new: network layout entry `kind: fabric` (`purpose: emulated-switch`, optional

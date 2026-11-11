@@ -175,7 +175,7 @@ teardown() {
   grep -q 'ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-pair"' "$ROOT/nix/modules/hps-audit.nix"
   grep -q 'environment.etc."hps/hps-pair"' "$ROOT/nix/modules/hps-ctrl-exec.nix"
   grep -q 'node-manager/nixos-26/boot/hps-pair.sh' "$ROOT/nix/modules/hps-ctrl-exec.nix"
-  grep -q 'imports = \[ ./hps-ctrl-exec.nix \]' "$ROOT/nix/modules/hps-node.nix"
+  grep -q 'imports = \[ ./hps-ctrl-exec.nix ./hps-monitor.nix \]' "$ROOT/nix/modules/hps-node.nix"
   grep -q 'imports = \[ ./hps-ctrl-exec.nix \]' "$ROOT/nix/modules/hps-audit.nix"
   # the agent config lives only in the shared module
   ! grep -q 'services.ctrl-exec-agent = {' "$ROOT/nix/modules/hps-node.nix"

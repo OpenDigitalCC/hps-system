@@ -1,0 +1,238 @@
+#!/usr/bin/env perl
+# hps-monitor: resource monitoring of the paired nodes (docs/MONITORING.md).
+#
+# Asks each paired node to run its configured checks (the ctrl-exec nagios-check
+# node script, called through scripts/hps-run.sh with the single argument --all:
+# the IPS sends nothing but that) and logs every result to syslog, OK ones too.
+# Never checks the IPS or its host. `loop` runs under supervisor (program:hps-monitor).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use File::Temp qw(tempdir);
+use JSON::PP ();
+use POSIX qw(WNOHANG);
+use Time::HiRes qw(sleep time);
+use HPS::Registry;
+use HPS::ClusterConfig;
+use HPS::Monitor;
+
+$| = 1;
+
+my $PARALLEL     = 8;     # nodes checked at once
+my $HOST_TIMEOUT = 70;    # seconds per node call (the node's own budget is 50)
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-monitor: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-monitor run [--host <host>]... [--parallel N]
+  hps-monitor loop [--max-ticks N]
+  hps-monitor interval
+run checks every paired node (or the named hosts: MAC, registry HOSTNAME or FQDN)
+once, logs one line per check and one summary line per host to syslog and prints the
+same lines, then "hps-monitor: tick hosts=<n> duration=<s>". loop runs run every
+monitor_interval_seconds (cluster key; default 60, 0 disables, else 10..86400),
+reading the key afresh each tick; a run that overruns its interval skips the ticks it
+covered and logs one line saying so. interval prints the effective interval.
+Environment: HPS_MONITOR_RUN (default scripts/hps-run.sh), HPS_MONITOR_AGENTS (command
+printing the paired agent names; default: ctrl-exec-dispatcher list-agents --json),
+HPS_MONITOR_LOGGER (command called as <cmd> <priority> <line>; default logger -t hps
+-p local0.<priority>).
+Exit: 0 ok, 2 usage, 1 failed.
+USAGE
+    return 2;
+}
+
+my $QUIET = 0;    # loop: supervisor would log stdout a second time
+
+sub emit {
+    my ($prio, $line) = @_;
+    print "$line\n" unless $QUIET;
+    my $cmd = $ENV{HPS_MONITOR_LOGGER};
+    my @argv = defined $cmd && length $cmd ? ($cmd, $prio, $line) : ('logger', '-t', 'hps', '-p', "local0.$prio", '--', $line);
+    local $SIG{__WARN__} = sub { };
+    system { $argv[0] } @argv;
+    return;
+}
+
+sub registry { return HPS::Registry->new }
+
+# paired agent names, one per line from HPS_MONITOR_AGENTS, else the dispatcher.
+sub agent_names {
+    my $cmd = $ENV{HPS_MONITOR_AGENTS};
+    if (defined $cmd && length $cmd) {
+        open(my $fh, '-|', $cmd) or die "cannot run $cmd: $!\n";
+        my @n = map { s/\s+\z//r } <$fh>;
+        close $fh;
+        return @n;
+    }
+    my $ced = $ENV{CTRL_EXEC_DISPATCHER} // 'ctrl-exec-dispatcher';
+    open(my $fh, '-|', $ced, 'list-agents', '--json') or die "cannot run $ced: $!\n";
+    my $text = do { local $/; <$fh> };
+    close $fh or die "$ced list-agents failed\n";
+    return () if !defined $text || $text =~ /\ANo registered agents/;
+    my $d = eval { JSON::PP::decode_json($text) };
+    die "$ced list-agents did not return JSON\n" unless ref $d eq 'ARRAY';
+    return map { $_->{hostname} // () } @$d;
+}
+
+# call_host($host): (rc, stdout, stderr) of the runner bounded by $HOST_TIMEOUT.
+sub call_host {
+    my ($host, $dir, $idx) = @_;
+    my $runner = $ENV{HPS_MONITOR_RUN} // "$RealBin/../scripts/hps-run.sh";
+    my $errf   = "$dir/$idx.err";
+    pipe(my $rd, my $wr) or return (1, '', "pipe: $!");
+    my $pid = fork();
+    return (1, '', "fork: $!") unless defined $pid;
+    if (!$pid) {
+        close $rd;
+        open(STDIN,  '<',  '/dev/null') or exit 126;
+        open(STDOUT, '>&', $wr)         or exit 126;
+        open(STDERR, '>',  $errf)       or exit 126;
+        my @argv = ('timeout', '-k', '5', $HOST_TIMEOUT, $runner, '--json', $host, 'nagios-check', '--all');
+        { exec { $argv[0] } @argv; }
+        print STDERR "cannot run timeout: $!\n";
+        exit 127;
+    }
+    close $wr;
+    my $out = do { local $/; <$rd> };
+    close $rd;
+    waitpid($pid, 0);
+    my $rc = $? == -1 ? 1 : ($? & 127) ? 128 + ($? & 127) : $? >> 8;
+    my $err = '';
+    if (open(my $ef, '<', $errf)) { local $/; $err = <$ef>; close $ef }
+    $err = join ' ', grep { !/^hps-run: .* -> agent / } split /\n/, ($err // '');
+    return ($rc, $out // '', $err);
+}
+
+sub check_host {
+    my ($host, $dir, $idx) = @_;
+    my $t0 = time;
+    my ($rc, $out, $err) = call_host($host, $dir, $idx);
+    my $parsed = HPS::Monitor::parse_reply($rc, $out, $err);
+    return [ HPS::Monitor::host_lines($host, $parsed, time - $t0) ];
+}
+
+sub run_once {
+    my (@hosts) = @_;
+    my $t0 = time;
+    my $reg = registry();
+    if (!@hosts) {
+        @hosts = HPS::Monitor::targets([ agent_names() ], $reg);
+    } else {
+        @hosts = map { resolve_name($reg, $_) } @hosts;
+    }
+    my $dir = tempdir('hps-monitor-XXXXXX', TMPDIR => 1, CLEANUP => 1);
+    my %running;
+    my $i = 0;
+    for my $host (@hosts) {
+        my $idx = $i++;
+        while (keys %running >= $PARALLEL) {
+            my $p = waitpid(-1, 0);
+            delete $running{$p};
+        }
+        my $pid = fork();
+        die "fork failed: $!\n" unless defined $pid;
+        if (!$pid) {
+            my $lines = eval { check_host($host, $dir, $idx) } // [ [ 'err', "hps-monitor: host=$host state=UNREACHABLE internal error: " . ($@ =~ s/\s+/ /gr) ] ];
+            open(my $fh, '>', "$dir/$idx.json") or POSIX::_exit(1);
+            print {$fh} JSON::PP::encode_json($lines);
+            close $fh;
+            POSIX::_exit(0);
+        }
+        $running{$pid} = 1;
+    }
+    while (keys %running) {
+        my $p = waitpid(-1, 0);
+        last if $p < 0;
+        delete $running{$p};
+    }
+    for my $idx (0 .. $#hosts) {
+        my $lines = [ [ 'err', "hps-monitor: host=$hosts[$idx] state=UNREACHABLE no result recorded" ] ];
+        if (open(my $fh, '<', "$dir/$idx.json")) {
+            local $/;
+            my $d = eval { JSON::PP::decode_json(<$fh>) };
+            $lines = $d if ref $d eq 'ARRAY';
+            close $fh;
+        }
+        emit(@$_) for @$lines;
+    }
+    emit('info', sprintf('hps-monitor: tick hosts=%d duration=%.1f', scalar @hosts, time - $t0));
+    return;
+}
+
+# A named host: the FQDN as it is registered (a MAC or HOSTNAME is resolved).
+sub resolve_name {
+    my ($reg, $name) = @_;
+    return $name if $name =~ /\./ && $name !~ /\A[0-9a-fA-F:.-]{12,17}\z/;
+    my $mac = eval { $reg->resolve_mac($name) };
+    if (!defined $mac) {
+        for my $m ($reg->host_list_all) {
+            my $h = eval { $reg->host_get($m, 'HOSTNAME') };
+            if (defined $h && lc($h) eq lc($name)) { $mac = $m; last }
+        }
+    }
+    my $f = defined $mac ? eval { $reg->fqdn($mac) } : undef;
+    return defined $f ? $f : $name;
+}
+
+sub current_interval {
+    my $raw = eval { HPS::ClusterConfig->new(logger => sub { })->get('monitor_interval_seconds') };
+    return HPS::Monitor::interval($raw);
+}
+
+sub loop {
+    my ($max) = @_;
+    my $stop = 0;
+    $QUIET = 1;
+    $SIG{TERM} = $SIG{INT} = sub { $stop = 1 };
+    my ($n, $last_warn, $was_disabled) = (0, '', 0);
+    emit('info', 'hps-monitor: started');
+    while (!$stop) {
+        my ($iv, $warn) = current_interval();
+        if (defined $warn && $warn ne $last_warn) { emit('warning', "hps-monitor: $warn") }
+        $last_warn = $warn // '';
+        $n++;
+        my $wait = 60;
+        if ($iv == 0) {
+            emit('info', 'hps-monitor: disabled (monitor_interval_seconds=0)') unless $was_disabled;
+            $was_disabled = 1;
+        } else {
+            if ($was_disabled) { emit('info', "hps-monitor: enabled interval=${iv}s"); $was_disabled = 0 }
+            my $t0 = time;
+            eval { run_once(); 1 } or emit('err', 'hps-monitor: run failed: ' . ($@ =~ s/\s+/ /gr));
+            my $el     = time - $t0;
+            my $missed = HPS::Monitor::missed_ticks($el, $iv);
+            emit('warning', sprintf('hps-monitor: tick skipped missed=%d run=%.1fs interval=%ds', $missed, $el, $iv)) if $missed;
+            $wait = $t0 + $iv * ($missed + 1) - time;
+        }
+        last if defined $max && $n >= $max;
+        $wait = 0 if $wait < 0;
+        my $end = time + $wait;
+        while (!$stop && time < $end) { sleep(($end - time) < 1 ? ($end - time) : 1) }
+    }
+    emit('info', 'hps-monitor: stopped');
+    return 0;
+}
+
+sub main {
+    my @argv = @_;
+    my $cmd = shift @argv // return usage();
+    my (@host, $max);
+    GetOptionsFromArray(\@argv, 'host=s' => \@host, 'parallel=i' => \$PARALLEL, 'max-ticks=i' => \$max) or return usage();
+    return usage() if @argv || $PARALLEL < 1;
+    if ($cmd eq 'run')  { run_once(@host); return 0 }
+    if ($cmd eq 'loop') { return usage('loop takes no --host') if @host; return loop($max) }
+    if ($cmd eq 'interval') {
+        my ($iv, $warn) = current_interval();
+        print "$iv\n";
+        print STDERR "hps-monitor: $warn\n" if $warn;
+        return 0;
+    }
+    return usage("unknown command: $cmd");
+}
+
+exit main(@ARGV);

@@ -28,9 +28,17 @@
       url = "github:opensvc/om3/v3.0.0-rc60"; # 4ff6def4972f1975c8eff458765f9cb9b6049717
       flake = false;
     };
+    # ctrl-exec agent plugins (nagios-check, check_mem): the node resource
+    # monitor (docs/MONITORING.md). Pinned to a release tag, bumped as releases
+    # land; the lab builder overrides it with a local export, like ctrl-exec:
+    #   nix build --override-input ctrl-exec-plugins path:/ctrl-exec-plugins .#node-base
+    ctrl-exec-plugins = {
+      url = "github:OpenDigitalCC/ctrl-exec-plugins/v0.3.11";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, ctrl-exec, om3-src }:
+  outputs = { self, nixpkgs, ctrl-exec, om3-src, ctrl-exec-plugins }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -53,7 +61,7 @@
 
       # The platform is set once, in hps-common.nix (nixpkgs.hostPlatform).
       mkSystem = name: extra: lib.nixosSystem {
-        specialArgs = { inherit ctrl-exec; hpsProfile = name; };
+        specialArgs = { inherit ctrl-exec ctrl-exec-plugins; hpsProfile = name; };
         modules = [ ./nix/modules/hps-common.nix { nixpkgs.overlays = [ om3Overlay ]; } ] ++ extra;
       };
 

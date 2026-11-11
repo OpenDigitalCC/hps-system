@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# check_zpool - Nagios plugin: health of the imported ZFS pools.
+#
+# Run by nagios-check (ctrl-exec) on storage nodes. Reads `zpool list` only.
+#   OK        every imported pool is ONLINE (or no pool is imported)
+#   WARNING   a pool is DEGRADED
+#   CRITICAL  a pool is FAULTED, UNAVAIL, OFFLINE, REMOVED or SUSPENDED
+#   UNKNOWN   zpool cannot be run
+# Output: "ZPOOL <STATE> - <n> pools: name=HEALTH ..." with perfdata
+# "<pool>_cap=<percent>%;80;90;0;100" per pool.
+#
+# Usage: check_zpool          (no arguments)
+# Exit: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
+
+set -uo pipefail
+
+if [[ $# -ne 0 ]]; then
+  echo "ZPOOL UNKNOWN - takes no arguments"
+  exit 3
+fi
+
+if ! out=$(zpool list -H -o name,health,capacity 2>&1); then
+  echo "ZPOOL UNKNOWN - zpool list failed: ${out//$'\n'/ }"
+  exit 3
+fi
+
+state=OK
+code=0
+n=0
+desc=""
+perf=""
+while IFS=$'\t' read -r name health cap; do
+  [[ -n $name ]] || continue
+  n=$((n + 1))
+  desc+="${desc:+ }$name=$health"
+  cap=${cap%\%}
+  perf+="${perf:+ }${name}_cap=${cap}%;80;90;0;100"
+  case $health in
+    ONLINE) ;;
+    DEGRADED)
+      if [[ $code -lt 1 ]]; then state=WARNING; code=1; fi
+      ;;
+    *) state=CRITICAL; code=2 ;;
+  esac
+done <<< "$out"
+
+if [[ $n -eq 0 ]]; then
+  echo "ZPOOL OK - no pools imported"
+  exit 0
+fi
+echo "ZPOOL $state - $n pools: $desc | $perf"
+exit "$code"

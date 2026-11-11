@@ -164,6 +164,7 @@ keys may be empty.
 | `osvc_packages_url` | opensvc | Packages URL | `text` | (empty) | no |
 | `osvc_hb_type` | opensvc | Heartbeat type (multicast/unicast) | `enum:multicast,unicast` | `unicast` | no |
 | `hold_retry_seconds` | onboarding | Seconds a held node with its audit stored waits at iPXE between requests (5-3600) | `int:5..3600` | `30` | no |
+| `monitor_interval_seconds` | monitoring | Seconds between resource checks of the paired nodes (10-86400; 0 disables) | `int0:10..86400` | `60` | no |
 | `held_reboot_after_audit` | onboarding | Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection) | `bool` | `true` | no |
 
 ## Exit codes
