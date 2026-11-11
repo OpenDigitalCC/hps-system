@@ -60,6 +60,7 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `bmc_evidence` | `json` | HPS::BMC (audit selection) | The BMC facts the driver was chosen from: vendor, product, mc_manufacturer_id, bmc_ip, redfish_host_if, ipmi and the drivers.map rule line. |
 | `bmc_last` | `json` | HPS::BMC (every hps-bmc call) | The last call: action, rc (the driver exit code), at, and power for a status call. |
 | `audit_at` | `stamp` | node_audit CGI | When the audit was stored. |
+| `audit_stale` | `bool` | hps-onboard reaudit (cleared by the node_audit CGI) | True when the stored audit is to be redone: a held host with it boots the audit image instead of waiting at iPXE. Absent when the audit is current. |
 | `storage_note` | `string` | hps-onboard | Operator note about the node storage plan. |
 | `poweroff_last` | `json` | HPS::Node | Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail. |
 | `storage_last` | `json` | HPS::Storage | Outcome of the last storage operation: op, ok, at. |
@@ -124,6 +125,8 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `osvc_hb_type` | `string` | hps-cluster-config | Heartbeat type: multicast or unicast. |
 | `OPENSVC_AGENT_KEY` | `string` | opensvc-function-helpers | Secret: the OpenSVC agent key. Never logged or put in an image. |
 | `OPENSVC_CLUSTER_SECRET` | `string` | opensvc-function-helpers | Secret: the OpenSVC cluster secret. Never logged or put in an image. |
+| `hold_retry_seconds` | `int` | hps-cluster-config; read by the iPXE menu | Seconds a held node with its audit stored waits at iPXE before asking the IPS again; an integer 5..3600, default 30 (a value outside the range is logged and 30 used). |
+| `held_reboot_after_audit` | `bool` | hps-cluster-config; read by the iPXE menu | Whether the audit image reboots after the IPS accepts its audit (true, the default) or stays up for inspection over ctrl-exec (false); passed to the image as hps.audit_reboot=0. |
 | `nixos_default_pin` | `pin` | operator (hps-cluster-config or the API); read by the iPXE menu | The pin a NixOS node boots when it has no pin of its own. |
 | `power_devices` | `json` | HPS::BMC (hps-bmc device set) | Object of power devices (PDU, smart plug) keyed by name: addr and options (cmd template). Hosts using the external driver refer to one as outlet=<name>:<n>. Credentials are in the keysafe, never here. |
 | `workload_<name>` | `json` | HPS::Workload (create, start, stop; removed by destroy) | Instance record of a workload: state, VMs, disks, macs, created_at, by. |

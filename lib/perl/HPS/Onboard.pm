@@ -206,6 +206,27 @@ sub assign ($self, $mac, $a) {
     return { mac => $m, state => 'NETWORK_BOOT' };
 }
 
+# reaudit($mac): ask a held host to audit again. Marks the stored audit stale
+# (host key audit_stale=true); the next boot request of the held host serves the
+# audit image, and the node_audit intake clears the mark when the new audit is
+# stored. Only a HELD host is audited, so any other state is refused.
+# (The audit JSON carries schema "hps-audit/1" but the code holds no version
+# constant, so a schema change does not mark audits stale by itself.)
+# Returns {mac, state, had_audit}.
+sub reaudit ($self, $mac) {
+    my $reg = $self->{registry};
+    my $m = eval { HPS::Registry::normalise_mac($mac) };
+    _fail('usage', "Invalid MAC address: $mac") unless defined $m;
+    _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
+    my $state = $reg->host_get($m, 'STATE');
+    $state = '(none)' unless defined $state;
+    _fail('refused', "Host $m is in state $state; only HELD hosts are audited")
+        unless $state eq 'HELD';
+    my $had = $reg->host_exists($m, 'audit') ? 1 : 0;
+    $reg->host_set($m, 'audit_stale', 'true');
+    return { mac => $m, state => $state, had_audit => $had };
+}
+
 # The pin named by <nixos>/latest; fails (notfound) when it is missing or empty.
 sub _latest_pin ($self) {
     my $file = $self->nixos_dir . '/latest';

@@ -133,6 +133,15 @@ nixos_boot_lines() {
   if [[ "$bridge" =~ ^br-[a-z0-9-]{1,12}$ ]]; then
     args="${args} hps.bridge=${bridge}"
   fi
+  # Audit image only: the cluster key held_reboot_after_audit=false (IPS-14)
+  # keeps it up after the audit (default: it reboots into the hold loop).
+  if [[ "$profile" == audit && -n "$cluster" ]]; then
+    local keep_up
+    keep_up="$(cluster_registry "$cluster" get held_reboot_after_audit 2>/dev/null)" || keep_up=""
+    case "$keep_up" in
+      false|0|no) args="${args} hps.audit_reboot=0" ;;
+    esac
+  fi
   printf 'kernel %s/bzImage %s\n' "$base" "$args"
   printf 'initrd %s/initrd\n' "$base"
   printf 'boot\n'
@@ -176,6 +185,71 @@ ipxe_boot_audit() {
   # The audit image runs the ctrl-exec agent and pairs (CS-1.10), so a held
   # node needs the pairing window like an assigned one.
   nixos_open_pairing_window "$mac"
+}
+
+# ipxe_hold_retry_seconds
+# Seconds a held node waits between boot requests: cluster key
+# hold_retry_seconds, an integer 5..3600, default 30. A value outside that
+# range is logged and replaced by the default.
+ipxe_hold_retry_seconds() {
+  local cluster val=""
+  cluster="$(hps_get_config active_cluster 2>/dev/null)" || cluster=""
+  if [[ -n "$cluster" ]]; then
+    val="$(cluster_registry "$cluster" get hold_retry_seconds 2>/dev/null)" || val=""
+  fi
+  if [[ -z "$val" ]]; then
+    echo 30
+    return 0
+  fi
+  if [[ "$val" =~ ^[0-9]{1,4}$ ]] && (( 10#$val >= 5 && 10#$val <= 3600 )); then
+    echo $(( 10#$val ))
+    return 0
+  fi
+  hps_log warn "cluster key hold_retry_seconds='${val}' is not an integer 5..3600; using 30"
+  echo 30
+}
+
+# ipxe_held_needs_audit <mac>
+# True (0) when a held host must boot the audit image: it has no stored audit,
+# or the audit is marked stale (hps-onboard reaudit; cleared when a new audit
+# is stored by host_audit_intake).
+ipxe_held_needs_audit() {
+  local mac="$1" stale=""
+  host_registry "$mac" exists audit 2>/dev/null || return 0
+  stale="$(host_registry "$mac" get audit_stale 2>/dev/null)" || stale=""
+  [[ "$stale" == "true" ]]
+}
+
+# ipxe_boot_held <mac>
+# A HELD host without a (fresh) audit boots the audit image. One with its
+# audit stored waits at iPXE: a script that prints the hold message, sleeps,
+# then chains back to the boot URL the DHCP boot option points at
+# (boot_manager.sh?cmd=init). The next request after hps-onboard assign finds
+# the host assigned and boots its role; no power action is involved. If the
+# IPS is down the chain fails, iPXE shows its error and the script retries.
+# Nothing secret is in the script.
+ipxe_boot_held() {
+  local mac="${1:-${mac:-}}"
+  local n
+  if ipxe_held_needs_audit "$mac"; then
+    ipxe_boot_audit "$mac"
+    return
+  fi
+  n="$(ipxe_hold_retry_seconds)"
+  hps_log debug "[$mac] held with audit stored: hold script, retry in ${n}s"
+  cgi_header_plain
+  cat <<EOF
+#!ipxe
+echo HPS: ${mac} is held; waiting for a role (retry in ${n} s)
+sleep ${n}
+:retry
+chain --replace ${CGI_URL}?cmd=init || goto failed
+exit
+:failed
+echo HPS: the IPS did not answer; retry in ${n} s
+sleep ${n}
+goto retry
+EOF
 }
 
 # nixos_image_profile <host profile>

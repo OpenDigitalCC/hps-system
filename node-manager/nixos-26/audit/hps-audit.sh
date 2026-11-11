@@ -13,7 +13,12 @@
 # host and device attributes, /proc/scsi/scsi and the hpsa/smartpqi driver
 # bindings. The JSON is kept under HPS_AUDIT_TRIM_BYTES (the intake refuses
 # more than HPS_AUDIT_MAX_BYTES, 256 KiB) by dropping the oldest dmesg lines.
-# Then prints a banner to the consoles and exits 0; the system idles.
+# Then prints a banner to the consoles. After a post the IPS accepted (HTTP 200)
+# it logs one line and reboots (IPS-14): the IPS then holds the node at iPXE
+# until a role is set, so a node without power control needs no power action.
+# A failed or skipped post leaves the system up (nothing was stored). The IPS
+# turns the reboot off with hps.audit_reboot=0 on the kernel command line
+# (cluster key held_reboot_after_audit=false).
 #
 # STRICTLY READ-ONLY: every command here only reads. `zpool import` with no
 # pool name and no -f lists importable pools and imports nothing. Never add a
@@ -23,7 +28,9 @@
 # Overrides for tests: HPS_CMDLINE (file, default /proc/cmdline), HPS_SYS
 # (default /sys), HPS_PROC (default /proc), HPS_CONSOLES (space list of
 # console devices), HPS_AUDIT_OUT (keep the JSON here), HPS_IPS (skip
-# discovery), HPS_AUDIT_TRIM_BYTES
+# discovery), HPS_REBOOT_CMD (default `systemctl reboot`), HPS_REBOOT_DELAY
+# (seconds the banner stays readable before the reboot, default 5),
+# HPS_AUDIT_TRIM_BYTES
 # (default 204800), HPS_DMESG_LINES (default 2000).
 #
 # BMC identity (IPS-08): `ipmitool lan print` and `ipmitool mc info` when a local
@@ -43,6 +50,8 @@ set -euo pipefail
 : "${HPS_AUDIT_TRIM_BYTES:=204800}"
 : "${HPS_DMESG_LINES:=2000}"
 : "${HPS_DEV:=/dev}"
+: "${HPS_REBOOT_CMD:=systemctl reboot}"
+: "${HPS_REBOOT_DELAY:=5}"
 
 WORK="/tmp/hps-audit-$$"
 mkdir -p "$WORK"
@@ -370,7 +379,7 @@ banner() {
   local status="$1"
   local ips="$2"
   local text con
-  printf -v text '\n==================== HPS AUDIT ====================\n%s\nIPS: %s\nThis node is held for onboarding. Nothing was written to any disk.\nThe system stays up; the IPS decides what happens next.\n===================================================\n' \
+  printf -v text '\n==================== HPS AUDIT ====================\n%s\nIPS: %s\nThis node is held for onboarding. Nothing was written to any disk.\nAfter a stored audit the node reboots and waits at iPXE for a role.\n===================================================\n' \
     "$status" "$ips"
   printf '%s' "$text"
   for con in $HPS_CONSOLES; do
@@ -380,8 +389,26 @@ banner() {
   done
 }
 
+# reboot_after_audit: the audit is stored; reboot into the IPS hold loop unless
+# the IPS asked for the node to stay up (hps.audit_reboot=0).
+reboot_after_audit() {
+  local flag=""
+  local -a cmd
+  flag=$(cmdline_value hps.audit_reboot || true)
+  if [[ "$flag" == "0" ]]; then
+    log "audit stored (HTTP 200); staying up (hps.audit_reboot=0)"
+    return 0
+  fi
+  log "audit stored (HTTP 200); rebooting into the IPS hold loop"
+  sleep "$HPS_REBOOT_DELAY"
+  read -r -a cmd <<< "$HPS_REBOOT_CMD"
+  if ! "${cmd[@]}"; then
+    log "reboot command failed ($HPS_REBOOT_CMD); staying up"
+  fi
+}
+
 main() {
-  local ips status
+  local ips status posted=0
   mkdir -p "$(dirname "$HPS_AUDIT_OUT")"
   ips=$(discover_ips || true)
   log "IPS: ${ips:-<none>}"
@@ -411,10 +438,14 @@ main() {
     status="NOT SENT: no IPS address (hps.ips= missing and no default gateway)"
   elif post_audit "$ips"; then
     status="Audit sent to the IPS."
+    posted=1
   else
     status="SEND FAILED: the IPS did not accept the audit (see journal)."
   fi
   banner "$status" "${ips:-unknown}"
+  if [[ "$posted" == 1 ]]; then
+    reboot_after_audit
+  fi
   return 0
 }
 

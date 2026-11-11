@@ -56,7 +56,8 @@ A booting node is identified by its **MAC address on the dedicated
 provisioning VLAN** (`$MAC`). The IPS looks the MAC up in the registry and
 delivers that node's keys and identity from the registry; a MAC the registry
 does not know is held (`STATE=HELD`) and boots only the audit image, never a
-menu or an install. Once running, the node authenticates with its ctrl-exec
+menu or an install. Once its audit is stored it waits at iPXE (a hold script that
+carries only the MAC and the retry interval) until a role is assigned. Once running, the node authenticates with its ctrl-exec
 identity (mutual TLS, per-node certificate issued by the IPS-hosted CA); the
 MAC is not used as a credential after enrolment. No secret is part of a boot
 image. Where the site requires it, MAC and port security are applied at the

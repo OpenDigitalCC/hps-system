@@ -107,8 +107,9 @@ ipxe_init_handler() {
   # Dispatch based on state
   case "$state" in
     HELD)
-      hps_log info "State: $state - audit boot (no menu)"
-      ipxe_boot_audit "$mac"
+      # audit boot, or the hold loop once the audit is stored (IPS-14)
+      hps_log debug "State: $state - held (no menu)"
+      ipxe_boot_held "$mac"
       ;;
 
     NETWORK_BOOT)

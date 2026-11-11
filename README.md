@@ -133,11 +133,18 @@ The usual sequence, with placeholders:
    (network `$NETWORK`, IPS address `$IPS_IP`, DHCP interface `$IFACE`).
 2. Build the images in the builder container (`nix/build.sh`); the artefacts
    land under `hps-resources/nixos/<pin>/<profile>/`.
-3. Power on `$NODE` on the provisioning network. Its audit appears under
+3. Power on `$NODE` on the provisioning network. It boots the audit image,
+   posts its audit and reboots by itself. Its audit appears under
    `hps-onboard show $MAC`.
-4. Assign it: `hps-onboard assign $MAC --type $TYPE --profile $PROFILE --os $OS`.
-5. Reboot `$NODE`; it pairs with the IPS over ctrl-exec. Run node operations
-   with `scripts/hps-run.sh $NODE <script> [args]`.
+4. The rebooted node waits at iPXE, asking the IPS again every
+   `hold_retry_seconds` (default 30; cluster key). Nothing needs power control
+   from here. `hps-onboard reaudit $MAC` makes the next retry run the audit image
+   again; setting the cluster key `held_reboot_after_audit` to `false` keeps the
+   audit image up after the audit, so a held node can be inspected over ctrl-exec.
+5. Assign it: `hps-onboard assign $MAC --type $TYPE --profile $PROFILE --os $OS`.
+   The node's next retry boots its role image with no power action; it pairs
+   with the IPS over ctrl-exec. Run node operations with
+   `scripts/hps-run.sh $NODE <script> [args]`.
 
 Where to read more:
 

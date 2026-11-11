@@ -40,6 +40,7 @@ audit_setup() {
   export HPS_SYS="$TEST_DIR/sys" HPS_PROC="$TEST_DIR/proc" HPS_DEV="$TEST_DIR/dev"
   export HPS_CMDLINE="$TEST_DIR/proc/cmdline" HPS_CONSOLES="$TEST_DIR/console"
   export HPS_AUDIT_OUT="$TEST_DIR/run/audit.json" HPS_IPS=10.99.1.1
+  export HPS_REBOOT_CMD=true HPS_REBOOT_DELAY=0
   mkdir -p "$HPS_SYS/class/dmi/id" "$HPS_PROC" "$HPS_DEV"
   : > "$TEST_DIR/console"
   echo "BOOT_IMAGE=bzImage" > "$HPS_CMDLINE"

@@ -34,6 +34,9 @@ Usage:
   hps-onboard assign <mac> --type SCH,TCH,DRH --profile NAME \
       --os arch:name:version --pin PIN [--storage "note"]
   hps-onboard repin <mac> (--pin PIN | --to-latest)
+  hps-onboard reaudit <mac>
+      Mark a held host's stored audit stale: its next boot request serves the audit
+      image again (the node posts a new audit and waits at iPXE). Held hosts only.
   hps-onboard nets <mac> [--attach NAME[,NAME...]] [--json]
       without --attach: the networks attached to the host. With --attach:
       REPLACE the list (names from the cluster network layout; an empty
@@ -219,6 +222,11 @@ sub main {
                 }
             }
             return 1 if @{ $r->{failed} };
+        }
+        elsif ($cmd eq 'reaudit') {
+            return usage('reaudit needs one MAC') unless @argv == 1;
+            my $r = $ob->reaudit($argv[0]);
+            print "Audit of $r->{mac} marked stale: its next boot request runs the audit image\n";
         }
         elsif ($cmd eq 'repin') {
             return usage('repin needs one MAC') unless @argv == 1;

@@ -75,7 +75,7 @@ my %osvc_default;
 is($by_key{$_}{default}, $osvc_default{$_}, "$_ default matches 090") for @osvc;
 
 # Catalogue shape.
-my %groups = map { $_ => 1 } qw(description dns dhcp storage-networks services networks opensvc);
+my %groups = map { $_ => 1 } qw(description dns dhcp storage-networks services networks opensvc onboarding);
 for my $q (HPS::ClusterConfig::questions()) {
     ok($groups{ $q->{group} }, "$q->{key}: group $q->{group} is a known group");
     ok(length $q->{prompt} && length $q->{rule}, "$q->{key}: prompt and rule present");

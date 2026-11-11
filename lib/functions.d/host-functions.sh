@@ -1017,6 +1017,8 @@ host_audit_intake() {
   fi
   rm -f "$tmp"
   host_registry "$mac" set audit_at "$(make_timestamp)"
+  # a new audit clears the stale mark set by hps-onboard reaudit (IPS-14)
+  host_registry "$mac" delete audit_stale > /dev/null 2>&1 || true
   host_bmc_select "$mac"
   hps_log info "[$mac] node_audit stored: ${size} bytes ${detail} (hba_mode_enabled per controller)"
   cgi_success "ok"

@@ -139,6 +139,12 @@ my @CATALOGUE = (
         prompt => 'Packages URL', rule => 'text', default => ''),
     _q(key => 'osvc_hb_type', group => 'opensvc',
         prompt => 'Heartbeat type (multicast/unicast)', rule => 'enum:multicast,unicast', default => 'unicast'),
+
+    # Held nodes (IPS-14): read by the iPXE hold script and the audit boot, not asked by the menu.
+    _q(key => 'hold_retry_seconds', group => 'onboarding', menu => 0,
+        prompt => 'Seconds a held node with its audit stored waits at iPXE between requests (5-3600)', rule => 'int:5..3600', default => '30'),
+    _q(key => 'held_reboot_after_audit', group => 'onboarding', menu => 0,
+        prompt => 'Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection)', rule => 'bool', default => 'true'),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

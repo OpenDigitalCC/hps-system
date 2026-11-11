@@ -2,12 +2,17 @@
 #
 # Full driver set so an unknown node is seen whole (hpsa/smartpqi controllers,
 # Broadcom/Intel NICs, firmware), then one oneshot that runs the read-only
-# audit script and POSTs its JSON to the IPS (cmd=node_audit). The system then
-# idles at a console banner. Nothing here writes to a disk.
+# audit script and POSTs its JSON to the IPS (cmd=node_audit). After the IPS
+# accepts the post the script reboots the node (IPS-14), and the IPS holds it at
+# iPXE until a role is set; the cluster key held_reboot_after_audit=false keeps
+# the node up instead (hps.audit_reboot=0 on the command line). Nothing here
+# writes to a disk.
 #
 # The image also runs the ctrl-exec agent (hps-ctrl-exec.nix) and, once the
 # audit report is posted, pairs it (hps-audit-pair -> hps-pair), so a HELD node
-# can be inspected with `ced run` (the IPS approver accepts STATE=HELD).
+# can be inspected with `ced run` (the IPS approver accepts STATE=HELD). That
+# inspection needs the node to stay up: with the reboot after the audit (the
+# default) the window is short; set held_reboot_after_audit=false to inspect.
 { config, pkgs, ... }:
 
 {

@@ -12,6 +12,19 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## IPS-14: a held node waits at iPXE and boots its role when one is set (2026-11-11)
+
+- audit image: after the IPS accepts the audit (HTTP 200) it reboots
+  (`systemctl reboot`); a failed post leaves it up. Cluster key
+  `held_reboot_after_audit=false` keeps it up (`hps.audit_reboot=0`), for
+  inspection of a held node over ctrl-exec, which the reboot otherwise ends.
+- iPXE: a HELD host with its audit stored is served a hold script (message,
+  `sleep`, chain back to `boot_manager.sh?cmd=init`) instead of the audit
+  image; cluster key `hold_retry_seconds` (5..3600, default 30). Assign needs
+  no power action: the next retry boots the role. Holds log at debug.
+- new: `hps-onboard reaudit <mac>` (host key `audit_stale`, cleared when a new
+  audit is stored); the audit schema version is not checked.
+
 ## IPS-08: modular out-of-band power control (2026-11-10)
 
 - new: `hps-bmc status|on|off|force-off|reset|pxe-once|identify <host>`, `set`,

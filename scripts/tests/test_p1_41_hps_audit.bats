@@ -14,6 +14,7 @@ setup() {
   export HPS_CMDLINE="$TEST_DIR/proc/cmdline"
   export HPS_CONSOLES="$TEST_DIR/console"
   export HPS_AUDIT_OUT="$TEST_DIR/run/audit.json"
+  export HPS_REBOOT_CMD=true HPS_REBOOT_DELAY=0
   AUDIT="${BATS_TEST_DIRNAME}/../../node-manager/nixos-26/audit/hps-audit.sh"
   export PATH="$TEST_DIR/bin:$PATH"
   mkdir -p "$TEST_DIR/bin" "$HPS_PROC" "$HPS_SYS/class/dmi/id" "$HPS_SYS/class/scsi_host/host0" "$HPS_SYS/class/scsi_host/host1"
