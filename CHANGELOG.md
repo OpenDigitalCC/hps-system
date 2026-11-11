@@ -20,6 +20,11 @@ capabilities and removals are called out explicitly.
   `podman.service` and `hps-ips.service`.
 - tests: `test_p3_175_cnh_wiring.bats` (cycle regression); the usage-checks
   test is renumbered to 181 (172 was taken twice).
+- fix: `cnh-disk-prepare` refused on every CNH: podman's tmpfiles rule makes
+  `/var/lib/containers/storage/tmp` at boot, and the "already holds files"
+  check counted that empty directory. Only non-directories count now, and the
+  mount-point refusals run before any format, so a refused run writes nothing
+  (it used to format, then refuse). Tests: `test_p3_171_cnh_disk_prepare.bats`.
 
 ## Audits start only when there is room for them (2026-11-11)
 

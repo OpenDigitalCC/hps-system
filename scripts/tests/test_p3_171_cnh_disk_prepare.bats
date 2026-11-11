@@ -110,9 +110,20 @@ teardown() {
   [[ "$output" == *"already mounted from $HPS_DEV/vdc"* ]]
   rm -f "$STATE/mounts" "$STATE/sig.vdb"
   mkdir -p "$C/storage"
+  touch "$C/storage/db.sql"
   run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 3 ]
   [[ "$output" == *"already holds files"* ]]
+  # refused before any format (lab 2026-11-11: the refusal came after mkfs)
+  [[ "$output" != *"making an ext4 filesystem"* ]]
+}
+
+@test "empty directories (podman's tmpfiles storage/tmp at boot) are not files: the disk is prepared" {
+  p3_171_disk vdb
+  mkdir -p "$C/storage/tmp" "$I"
+  run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CNH-DISK $HPS_DEV/vdb formatted=yes"* ]]
 }
 
 @test "a failing mkfs fails (1) without mounting" {

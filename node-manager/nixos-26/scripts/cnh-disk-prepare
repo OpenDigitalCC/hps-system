@@ -140,9 +140,27 @@ mounted_source() {
   printf '%s' "$src"
 }
 
+# Anything but directories. Empty directories hide nothing, and podman's own
+# tmpfiles rule (D! /var/lib/containers/storage/tmp) makes some at every boot
+# (lab 2026-11-11: every run refused).
 dir_has_files() {
   [[ -d "$1" ]] || return 1
-  [[ -n "$(ls -A -- "$1")" ]]
+  [[ -n "$(find "$1" -mindepth 1 ! -type d -print -quit)" ]]
+}
+
+# Refusals that need no change: checked before any format, so a refused run
+# writes nothing.
+precheck_mounts() {
+  local src
+  src=$(mounted_source "$CONTAINERS")
+  if [[ -n "$src" ]]; then
+    same_device "$src" "$DEV" || refuse "$CONTAINERS is already mounted from $src, not $DEV"
+  elif dir_has_files "$CONTAINERS"; then
+    refuse "$CONTAINERS already holds files (container storage in RAM): they would be hidden by the mount; reboot the CNH, then run this before any container is loaded"
+  fi
+  if [[ -z "$(mounted_source "$IPSDIR")" ]] && dir_has_files "$IPSDIR"; then
+    refuse "$IPSDIR already holds files: they would be hidden by the bind mount"
+  fi
 }
 
 same_device() {
@@ -191,6 +209,7 @@ main() {
   fi
   DEV=$1
   check_device
+  precheck_mounts
   if probe; then
     if is_prepared; then
       log "$DEV already carries an ext4 filesystem labelled $LABEL: not formatting"
