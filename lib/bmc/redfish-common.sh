@@ -196,8 +196,23 @@ current_power() {
 act_power() {
   load_system
   case "$1" in
-    on) do_reset On ForceOn ;;
-    off) do_reset GracefulShutdown ;;
+    on)
+      if [[ "$(current_power)" == on ]]; then
+        printf '%s: already on\n' "${RF_NAME:-redfish}" >&2
+        return 0
+      fi
+      do_reset On ForceOn
+      ;;
+    # PushPowerButton when GracefulShutdown is not offered (iLO 4 v2.76 lists
+    # On, ForceOff, ForceRestart, Nmi, PushPowerButton; lab 2026-11-11). A
+    # button press toggles, so an Off system is left alone.
+    off)
+      if [[ "$(current_power)" == off ]]; then
+        printf '%s: already off\n' "${RF_NAME:-redfish}" >&2
+        return 0
+      fi
+      do_reset GracefulShutdown PushPowerButton
+      ;;
     force-off) do_reset ForceOff ;;
     reset) do_reset ForceRestart PowerCycle GracefulRestart ;;
     *) die 1 "unknown power action $1" ;;

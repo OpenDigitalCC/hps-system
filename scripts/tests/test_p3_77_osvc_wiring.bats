@@ -102,3 +102,8 @@ SCRIPTS="osvc-status osvc-object-set osvc-object-start osvc-object-stop osvc-obj
   shellcheck -S warning -x "$SD"/osvc-* "$ROOT/node-manager/nixos-26/boot/hps-osvc-config.sh" \
     "$ROOT/lab/osvc-rig-lib.sh" "$ROOT/lab/osvc-rig-1.sh" "$ROOT/lab/osvc-rig-2.sh"
 }
+
+@test "the daemon finds iscsiadm and its socket group exists (lab 2026-11-11)" {
+  grep -qE '^\s+openiscsi config\.systemd\.package pkgs\.om3$' "$ROOT/nix/modules/hps-opensvc.nix"
+  grep -qF 'users.groups.opensvc = { };' "$ROOT/nix/modules/hps-opensvc.nix"
+}

@@ -33,6 +33,10 @@
   # than 1215 is not reachable until this list follows it (hps-osvc-config warns).
   networking.firewall.allowedTCPPorts = [ 1215 10000 ];
 
+  # The daemon's user socket directory is owned by group opensvc (lab
+  # 2026-11-11: "ux: own the socket directory: group: unknown group opensvc").
+  users.groups.opensvc = { };
+
   systemd.services.opensvc-daemon = {
     description = "OpenSVC v3 daemon (membership, health, local service management)";
     wantedBy = [ "multi-user.target" ];
@@ -44,9 +48,11 @@
       ConditionPathExists = "/run/hps/osvc-cluster-secret";
       StartLimitIntervalSec = 0;
     };
+    # openiscsi: the node monitor lists SAN paths with iscsiadm (lab 2026-11-11:
+    # "get san paths: exec: iscsiadm: executable file not found in $PATH").
     path = with pkgs; [
       bash coreutils curl jq iproute2 gawk gnugrep gnused hostname util-linux
-      config.systemd.package pkgs.om3
+      openiscsi config.systemd.package pkgs.om3
     ];
     serviceConfig = {
       Type = "simple";

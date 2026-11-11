@@ -50,6 +50,7 @@ ilo_system() {
   ilo_system Off
   p97_run_driver hpe-ilo on
   [ "$status" -eq 0 ]
+  ilo_system On
   p97_run_driver hpe-ilo off
   [ "$status" -eq 0 ]
   p97_run_driver hpe-ilo force-off
@@ -115,14 +116,14 @@ ilo_system() {
 }
 
 @test "hpe-ilo exits 3 when the BMC answers 409 to an action" {
-  ilo_system On
+  ilo_system Off
   p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{"error":{}}' 409
   p97_run_driver hpe-ilo on
   [ "$status" -eq 3 ]
 }
 
 @test "hpe-ilo exits 5 when the action target is not found" {
-  ilo_system On
+  ilo_system Off
   p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{}' 404
   p97_run_driver hpe-ilo on
   [ "$status" -eq 5 ]
@@ -135,7 +136,7 @@ ilo_system() {
 }
 
 @test "hpe-ilo exits 1 on a server error" {
-  ilo_system On
+  ilo_system Off
   p97_fix POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/ '{}' 500
   p97_run_driver hpe-ilo on
   [ "$status" -eq 1 ]
@@ -428,4 +429,23 @@ PDU_TEMPLATE='pdu-ctl --host {addr} --outlet {outlet} {action}'
   run grep -E '^PATCH ' "$CALLS_LOG"
   [ "$status" -eq 1 ]
   grep -qF '{"ResetType":"On"}' "$CALLS_LOG"
+}
+
+@test "hpe-ilo off on iLO 4 (no GracefulShutdown): PushPowerButton; Off and On states left alone" {
+  ilo_system On
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"On","Model":"ProLiant DL360 Gen9","SerialNumber":"SER123","Boot":{"BootSourceOverrideSupported":["None","Pxe","UefiTarget"]},"Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","ForceRestart","Nmi","PushPowerButton"]}}}'
+  p97_run_driver hpe-ilo off
+  [ "$status" -eq 0 ]
+  grep -qF '{"ResetType":"PushPowerButton"}' "$CALLS_LOG"
+  : > "$CALLS_LOG"
+  p97_run_driver hpe-ilo on
+  [ "$status" -eq 0 ]
+  run grep -q 'ComputerSystem.Reset' "$CALLS_LOG"
+  [ "$status" -ne 0 ]
+  p97_fix GET /redfish/v1/Systems/1/ '{"PowerState":"Off","Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/","ResetType@Redfish.AllowableValues":["On","ForceOff","PushPowerButton"]}}}'
+  : > "$CALLS_LOG"
+  p97_run_driver hpe-ilo off
+  [ "$status" -eq 0 ]
+  run grep -q 'ComputerSystem.Reset' "$CALLS_LOG"
+  [ "$status" -ne 0 ]
 }
