@@ -5,14 +5,13 @@
 
 osvc_prepare_cluster() {
   
-  hps_log info "Configuring OpenSVC cluster for IPS"
-  
-  # 1. Ensure OpenSVC is installed
-
-  if ! ensure_opensvc_installed; then
-    hps_log error "Cannot proceed without OpenSVC"
-    return 1
+  # 1. The IPS never installs OpenSVC (IPS-30): om3 is built in the flake and
+  # runs on the nodes. With no om here there is nothing to prepare.
+  if ! command -v om >/dev/null 2>&1; then
+    hps_log info "osvc_prepare_cluster: om not on this IPS, nothing to prepare"
+    return 0
   fi
+  hps_log info "Configuring OpenSVC cluster for IPS"
   
   # 2. Setup directory structure
   if ! _osvc_setup_directories; then

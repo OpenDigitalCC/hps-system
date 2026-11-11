@@ -12,6 +12,16 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## The IPS no longer installs OpenSVC (2026-11-11)
+
+- removed: `ensure_opensvc_installed` and `ips_install_opensvc`, the IPS-side
+  OpenSVC install path (owner ruling 2026-11-11). No OpenSVC package exists
+  to publish: om3 is built in the flake and runs on the nodes. With no `om`
+  on the IPS, `osvc_prepare_cluster` logs that there is nothing to prepare
+  and returns 0. With `om` present it prepares as before.
+- tests: `test_p3_183_opensvc_offline_install.bats`, rewritten. The function
+  reference pages for the two functions are removed.
+
 ## The IPS never reaches the internet for OpenSVC (2026-11-11)
 
 - fix (IPS-30): `ips_install_opensvc` installs only a package published in
