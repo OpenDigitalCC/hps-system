@@ -47,13 +47,11 @@ n_fqdn() {
 
 n_set_kernel_hostname() {
     local name="$1"
+    # The NixOS path only (n_set_hostname_and_hosts): /etc/hostname is
+    # store-managed (a link into the read-only store), so a static name always
+    # fails and systemd-hostnamed logs it. The transient name only (lab
+    # 2026-11-11).
     if command -v hostnamectl >/dev/null 2>&1; then
-        # A read-only /etc (a netbooted NixOS node) cannot hold a static name:
-        # set the transient one only, so hostnamed logs no write failure.
-        local etc="${HPS_ETC_DIR:-/etc}"
-        if [[ -w "$etc/hostname" || ( ! -e "$etc/hostname" && -w "$etc" ) ]] && hostnamectl set-hostname "${name}"; then
-            return 0
-        fi
         if hostnamectl set-hostname --transient "${name}"; then
             return 0
         fi
