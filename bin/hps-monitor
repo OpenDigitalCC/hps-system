@@ -128,6 +128,21 @@ sub run_once {
     } else {
         @hosts = map { resolve_name($reg, $_) } @hosts;
     }
+    if ($memo) {
+        my %mac_of;
+        for my $mac ($reg->host_list_all) {
+            my $f = eval { $reg->fqdn($mac) };
+            $mac_of{$f} = $mac if defined $f;
+        }
+        my $now = time;
+        @hosts = grep {
+            my $mac = $mac_of{$_};
+            my $boot = defined $mac ? eval { $reg->host_get($mac, 'last_boot_at') } : undef;
+            $boot = undef unless defined $boot && $boot =~ /\A\d+\z/;
+            !HPS::Monitor::skip_call($memo, $_, $now, $boot);
+        } @hosts;
+        $memo->{$_}{tried} = $now for grep { $memo->{$_} } @hosts;
+    }
     my $dir = tempdir('hps-monitor-XXXXXX', TMPDIR => 1, CLEANUP => 1);
     my %running;
     my $i = 0;

@@ -183,4 +183,21 @@ is($rc, 2, 'unknown command is a usage error');
     is($n->(\%memo, 'n2.lab.hps', $ok, 1690), 2, 'a host never unreachable: unchanged');
 }
 
+# --- skip_call: an unreachable host is called every 300 s, or at once after a netboot
+{
+    my %memo;
+    my $u = [ [ 'err', 'hps-monitor: host=n1.lab.hps state=UNREACHABLE no route' ] ];
+    my @x = HPS::Monitor::throttle(\%memo, 'n1.lab.hps', $u, 1000);
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1030), 1, 'unreachable 30 s ago: not called');
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1300), 0, 'after 300 s: called again');
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1030, 1020), 0, 'a netboot since the last call: called at once');
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1030, 900), 1, 'a netboot before the last call does not count');
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1061, 900), 0, 'within 15 min of a netboot: called every 60 s');
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1059, 900), 1, 'within 15 min of a netboot: not before 60 s');
+    is(HPS::Monitor::skip_call(\%memo, 'n2.lab.hps', 1030), 0, 'a host that was never unreachable: called');
+    my $ok = [ [ 'info', 'hps-monitor: host=n1.lab.hps checks=1 worst=OK duration=0.1' ] ];
+    @x = HPS::Monitor::throttle(\%memo, 'n1.lab.hps', $ok, 1040);
+    is(HPS::Monitor::skip_call(\%memo, 'n1.lab.hps', 1050), 0, 'reachable again: called every tick');
+}
+
 done_testing;

@@ -120,8 +120,8 @@ sub throttle ($memo, $host, $lines, $now, $every = 600) {
     my $unreach = @$lines == 1 && $lines->[0][1] =~ /\shost=\S+ state=UNREACHABLE /;
     my $m = $memo->{$host};
     if ($unreach) {
-        if ($m && $m->{since} && $now - $m->{logged} < $every) { return () }
-        $memo->{$host} = { since => ($m && $m->{since}) ? $m->{since} : $now, logged => $now };
+        if ($m && $m->{since} && $now - ($m->{logged} // 0) < $every) { return () }
+        $memo->{$host} = { since => ($m && $m->{since}) ? $m->{since} : $now, logged => $now, tried => (($m && $m->{tried}) // $now) };
         return @$lines;
     }
     if ($m && $m->{since}) {
@@ -129,6 +129,24 @@ sub throttle ($memo, $host, $lines, $now, $every = 600) {
         return ([ 'info', sprintf('hps-monitor: host=%s state=REACHABLE after %ds unreachable', $host, $now - $m->{since}) ], @$lines);
     }
     return @$lines;
+}
+
+# skip_call($memo, $host, $now, $boot_at, $retry): true when the loop should
+# not call an unreachable host this tick. A host unreachable since an earlier
+# tick is called again every $retry seconds (300 by default); at once when
+# the IPS has seen it netboot since the last call (registry last_boot_at,
+# set at every iPXE init); and every 60 s within 15 minutes of that netboot,
+# while the node comes up. Each call to a powered-off node makes ctrl-exec
+# log an error of its own (lab 2026-11-11: one every 30 s while the DL360
+# booted).
+sub skip_call ($memo, $host, $now, $boot_at = undef, $retry = 300) {
+    my $m = $memo->{$host} or return 0;
+    return 0 unless $m->{since};
+    my $tried = $m->{tried} // 0;
+    return 0 if defined $boot_at && $boot_at > $tried;
+    # within 15 minutes of a netboot the node is coming up: retry every 60 s
+    my $every = (defined $boot_at && $now - $boot_at < 900) ? 60 : $retry;
+    return $now - $tried < $every ? 1 : 0;
 }
 
 # targets($agents, $registry): the paired nodes to check: agent names known to
