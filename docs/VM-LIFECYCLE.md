@@ -32,7 +32,7 @@ and can run at any time.
 | `image-fetch <name> --from http://<ips>/<path> --sha256 <hex> --dest <dir>` | curl (http only, no redirects) to `<dir>/<name>.qcow2.part`, checks sha256, renames. File present with the right hash: no download. Last line `IMAGE <name> <sha256> <path>` | 0 ok, 2 usage, 3 refused (scheme/host/URL shape, bad name or hash, sha256 mismatch), 1 command failed |
 | `vm-define <vm> --memory <MiB> --vcpus <n> --disk <dev> --net <bridge> [--mac <mac>] [--net ...]... --image <qcow2> [--serial-log <path>] [--replace]` | Renders the domain XML (q35, OVMF, raw virtio disk on `<dev>`, virtio NIC per bridge, serial console to a log, no graphics) and `virsh define`s it. Same definition again: no change. A different one: refused unless `--replace` (guest must be shut off). Never reads or copies `--image` (recorded in the metadata only). Last line `VM <vm> defined`. `--boot network` (CS-3.12a) instead: OVMF netboots from the first NIC (`<boot dev='network'/>`, then the disk if any), `--disk` and `--image` are optional (a guest may have no disk), `--mac` (lower-case unicast) fixes the MAC of the `--net` before it (else libvirt generates one) and the last lines are one `VM <vm> defined mac=<mac>` per NIC | 0, 2, 3 refused (bad argument, different definition, running with `--replace`), 1 |
 | `vm-image-write <vm> --disk <dev> --image <qcow2> [--force]` | `qemu-img convert -f qcow2 -O raw` onto the disk, only if its first 512 bytes are zero (or `--force`) and the guest is not running. Logs the image sha256. Last line `IMAGE <vm> <sha256> written` | 0, 2, 3 refused (data in first sector, guest in use, bad argument), 1 |
-| `vm-start <vm>` | `virsh start`, waits up to 30 s for running. Running already: no-op. Last line `VM <vm> running` | 0, 2, 3 (paused or other odd state), 4 not defined, 1 not running in time |
+| `vm-start <vm>` | `virsh start`, waits up to 30 s for running, then applies the fabric-port VLANs recorded by `vm-define` (below). Running already: nothing to start, VLANs re-applied. Last line `VM <vm> running` | 0, 2, 3 (paused or other odd state), 4 not defined, 1 not running in time |
 | `vm-stop <vm> [--timeout 60] [--force]` | `virsh shutdown`, waits. `virsh destroy` only with `--force` after the timeout. Last line `VM <vm> shut off` | 0, 2, 4 not defined, 1 still running |
 | `vm-status [<vm>]` | Read-only: `virsh list --all`, `dominfo`, `domblklist`. Last line per guest `VM <vm> <state>`, or `no VMs` | 0, 2, 4 |
 | `vm-undefine <vm>` | `virsh undefine --nvram` of a shut-off guest. Not defined: no-op. Does not touch disks, mirrors or images. Last line `VM <vm> undefined` | 0, 2, 3 (not shut off), 1 |
@@ -61,6 +61,40 @@ layout entry `{"cidr": ..., "bridge": "<br-name>", "purpose": "provisioning",
 and leaves it alone. `iscsi-login-test <portal-ip> <iqn>` is the node-side proof
 (log in, read 1 MiB, log out, delete the node record; last line
 `ISCSI <iqn> <device> <bytes> OK`).
+
+### Emulated switch ports and emulated hardware (scale test)
+
+`vm-define` takes more options. Per-NIC ones follow the `--net` they belong to,
+once each, like `--mac`:
+
+| option | meaning |
+| --- | --- |
+| `--nic-model virtio\|e1000e\|rtl8139` | the NIC model (default `virtio`) |
+| `--vlan-pvid <1-4094>` | the NIC's native (untagged) VLAN on a VLAN-aware bridge |
+| `--vlan-tagged <v[,v...]>` | its tagged VLANs (distinct, 1-4094, not the pvid) |
+| `--disk-bus virtio\|scsi\|sata` | VM level, the bus of `--disk` (default `virtio`, target `vda`); `scsi` adds a virtio-scsi controller (target `sda`); `sata` uses the q35 AHCI controller (target `sda`) |
+| `--smbios vendor=<v>,product=<p>[,serial=<s>]` | VM level; the guest's SMBIOS system manufacturer, product and serial (`<sysinfo type='smbios'>` and `<smbios mode='sysinfo'/>`). Values: letters, digits, space, `.`, `_`, `-`, first character alphanumeric, at most 63 |
+
+A fabric bridge is a network layout entry with `kind: fabric` (see
+`docs/CLUSTER-CONFIG.md`): `net-bridge-ensure` builds it as a bridge with
+`vlan_filtering 1`, no member NIC, no address and MTU 9000 (or the entry's
+`mtu`), and takes the bridge's own port out of VLAN 1. A tap port on it passes
+nothing until it has a VLAN, so `vm-define` refuses (3) a NIC on a bridge that
+has `vlan_filtering 1` (read with `ip -d link show dev <bridge>`) and no
+`--vlan-pvid`. libvirt configures no VLANs on the tap of a Linux bridge, so
+`vm-define` only records them in the domain metadata
+(`<hps:nic index='<n>' pvid='<p>' tagged='<a,b>'/>`, part of the definition hash,
+so a changed VLAN is a different definition) and `vm-start`, after the guest
+runs, reads each NIC's tap (`<target dev=>` in `virsh dumpxml`, the NIC at that
+index) and runs, per NIC with VLAN metadata:
+
+    bridge vlan del dev <tap> vid 1          (only while the port is in VLAN 1)
+    bridge vlan add dev <tap> vid <pvid> pvid untagged
+    bridge vlan add dev <tap> vid <v>        (per tagged VLAN)
+
+A guest with no VLAN options runs no `bridge` command. `bridge` is in iproute2,
+which is already on the ctrl-exec script path. A failing `bridge` command makes
+`vm-start` exit 1 with the guest left running.
 
 ## Assumptions to confirm in the lab
 

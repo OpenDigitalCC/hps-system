@@ -109,7 +109,17 @@ is `boot` only, and only with `purpose` `provisioning`, with no `vlan` and no
 `nic`: the bridge is the one `hps-net` builds on the node's boot NIC (host key
 `boot_bridge`, see `docs/VM-LIFECYCLE.md`), so a VM can sit on the provisioning
 segment itself; `net-bridge-ensure` only checks that it exists. VLANs and
-bridges may not repeat. In the text file format the JSON goes on one line
+bridges may not repeat.
+
+A fabric network (an emulated switch for the scale test) is
+`{"kind": "fabric", "purpose": "emulated-switch", "bridge": "br-fab", "mtu"?}`:
+no `cidr`, `vlan`, `nic` or `uplink`; `mtu` is 576 to 9216 (default 9000).
+`kind` is `fabric` only, `purpose` `emulated-switch` only with it, and `mtu`
+only with it. `net-bridge-ensure` builds a bridge with `vlan_filtering 1` and no
+member NIC (see `docs/VM-LIFECYCLE.md`); VMs attach with per-NIC VLANs
+(`docs/WORKLOADS.md`).
+
+In the text file format the JSON goes on one line
 after `network_layout =`; in a JSON file it may be an object. It is stored,
 compared and exported as canonical one-line JSON.
 

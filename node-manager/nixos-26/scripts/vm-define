@@ -7,6 +7,7 @@
 # Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
 #          --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
 #          --image <base qcow2> [--serial-log <path>] [--replace]
+#          [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
 #        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
 #          --net <bridge> [--mac <mac>] [--net ...] [--disk <dev>]
 #          [--serial-log <path>] [--replace]
@@ -24,10 +25,26 @@
 #             over the network, like metal).
 #   --mac     the MAC of the NIC given by the --net just before it (lower-case
 #             unicast aa:bb:cc:dd:ee:ff); without it libvirt generates one.
+#   --nic-model   virtio (default) | e1000e | rtl8139: the model of the NIC given
+#             by the --net just before it (like --mac).
+#   --vlan-pvid <1-4094>, --vlan-tagged <v[,v...]>   per NIC, after its --net:
+#             the NIC's native (untagged) VLAN and its tagged VLANs on a
+#             VLAN-aware (fabric) bridge. libvirt gives a Linux bridge's tap
+#             ports no VLAN config, so they are only RECORDED in the domain
+#             metadata (<hps:nic index= pvid= tagged=/>); vm-start applies them
+#             with `bridge vlan` after the guest starts. A NIC on a bridge with
+#             vlan_filtering 1 (a fabric bridge, see net-bridge-ensure) must
+#             have a --vlan-pvid: such a port passes nothing without a VLAN.
+#   --disk-bus  virtio (default) | scsi | sata: the bus of --disk. scsi adds a
+#             virtio-scsi controller (target sda); sata uses the q35 AHCI
+#             controller (target sda); virtio is vda.
+#   --smbios  vendor=<v>,product=<p>[,serial=<s>]: the guest's SMBIOS system
+#             manufacturer, product name and serial (libvirt sysinfo smbios).
+#             Values: letters, digits, space, . _ - (first one alphanumeric).
 #   --serial-log  default /var/log/libvirt/qemu/<vm>-serial.log
 #
 # The domain: q35, OVMF UEFI, host-passthrough CPU, virtio disk (raw, cache
-# none), virtio NIC per bridge, serial console written to a log file, NO
+# none), virtio NIC (unless --nic-model) per bridge, serial console written to a log file, NO
 # graphics, NO spice, no video device.
 #
 # Firmware paths ASSUMED (unverified on a real node; nix is not available on
@@ -68,6 +85,15 @@ BOOT="disk"
 REPLACE=0
 NETS=()
 MACS=()
+PVIDS=()
+TAGGEDS=()
+MODELS=()
+DISK_BUS="virtio"
+SMBIOS=""
+SM_VENDOR=""
+SM_PRODUCT=""
+SM_SERIAL=""
+NIC_META=""
 TMP=""
 
 log() {
@@ -91,6 +117,9 @@ usage() {
 Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device>
          --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
          --image <base qcow2> [--serial-log <path>] [--replace]
+         per --net: [--mac <mac>] [--nic-model virtio|e1000e|rtl8139]
+                    [--vlan-pvid <1-4094>] [--vlan-tagged <v[,v...]>]
+         [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
          --net <bridge> [--mac <mac>] [...] [--disk <dev>] [--serial-log <path>]
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
@@ -102,6 +131,28 @@ refuse() {
   exit 3
 }
 
+# set_nic_option <flag> <array name> <value>: a per-NIC option, once, after its --net.
+set_nic_option() {
+  local flag=$1 arr=$2 value=$3
+  local -n ref=$arr
+  if [[ ${#NETS[@]} -eq 0 ]]; then
+    log "$flag must follow the --net it belongs to"
+    usage
+    exit 2
+  fi
+  if [[ "$flag" != --mac && -z "$value" ]]; then
+    log "$flag needs a value"
+    usage
+    exit 2
+  fi
+  if [[ -n "${ref[-1]}" ]]; then
+    log "only one $flag per --net"
+    usage
+    exit 2
+  fi
+  ref[-1]=$value
+}
+
 parse_args() {
   [[ $# -ge 1 ]] || { usage; exit 2; }
   case "$1" in
@@ -111,7 +162,8 @@ parse_args() {
   shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --memory | --vcpus | --disk | --net | --image | --serial-log | --boot | --mac)
+      --memory | --vcpus | --disk | --net | --image | --serial-log | --boot | --mac \
+        | --nic-model | --vlan-pvid | --vlan-tagged | --disk-bus | --smbios)
         [[ $# -ge 2 ]] || { usage; exit 2; }
         case "$1" in
           --memory) MEMORY=$2 ;;
@@ -124,20 +176,13 @@ parse_args() {
             fi
             DISK=$2
             ;;
-          --net) NETS+=("$2"); MACS+=("") ;;
-          --mac)
-            if [[ ${#NETS[@]} -eq 0 ]]; then
-              log "--mac must follow the --net it belongs to"
-              usage
-              exit 2
-            fi
-            if [[ -n "${MACS[-1]}" ]]; then
-              log "only one --mac per --net"
-              usage
-              exit 2
-            fi
-            MACS[-1]=$2
-            ;;
+          --net) NETS+=("$2"); MACS+=(""); PVIDS+=(""); TAGGEDS+=(""); MODELS+=("") ;;
+          --mac) set_nic_option "$1" MACS "$2" ;;
+          --nic-model) set_nic_option "$1" MODELS "$2" ;;
+          --vlan-pvid) set_nic_option "$1" PVIDS "$2" ;;
+          --vlan-tagged) set_nic_option "$1" TAGGEDS "$2" ;;
+          --disk-bus) DISK_BUS=$2 ;;
+          --smbios) SMBIOS=$2 ;;
           --boot) BOOT=$2 ;;
           --image) IMAGE=$2 ;;
           --serial-log) SERIAL=$2 ;;
@@ -170,6 +215,71 @@ check_macs() {
   done
 }
 
+# check_vlans: --vlan-pvid 1-4094, --vlan-tagged a list of distinct 1-4094
+# without the pvid; fills NIC_META (one <hps:nic/> per NIC that has either).
+check_vlans() {
+  local i p t v seen
+  NIC_META=""
+  for i in "${!NETS[@]}"; do
+    p=${PVIDS[$i]}
+    t=${TAGGEDS[$i]}
+    if [[ -n "$p" ]]; then
+      [[ "$p" =~ ^[1-9][0-9]{0,3}$ ]] && ((p <= 4094)) || refuse "--vlan-pvid '$p' is not 1-4094"
+    fi
+    if [[ -n "$t" ]]; then
+      seen=",${p},"
+      for v in ${t//,/ }; do
+        [[ "$v" =~ ^[1-9][0-9]{0,3}$ ]] && ((v <= 4094)) || refuse "--vlan-tagged '$t': '$v' is not 1-4094"
+        [[ "$seen" != *",$v,"* ]] || refuse "--vlan-tagged '$t': VLAN $v is given twice or is also the pvid"
+        seen+="$v,"
+      done
+      [[ "$t" =~ ^[0-9]+(,[0-9]+)*$ ]] || refuse "--vlan-tagged '$t' is not a comma separated list of VLAN ids"
+    fi
+    if [[ -z "$p" ]] && is_filtering_bridge "${NETS[$i]}"; then
+      refuse "--net '${NETS[$i]}' is a VLAN-aware (fabric) bridge: a NIC on it needs --vlan-pvid (a port without a VLAN passes nothing)"
+    fi
+    if [[ -n "$p$t" ]]; then
+      NIC_META+="      <hps:nic index='$i'${p:+ pvid='$p'}${t:+ tagged='$t'}/>"$'\n'
+    fi
+  done
+}
+
+# is_filtering_bridge <bridge>: it exists and has vlan_filtering 1.
+is_filtering_bridge() {
+  local out
+  out=$(run_q ip -d link show dev "$1") || return 1
+  [[ "$out" == *"vlan_filtering 1"* ]]
+}
+
+# check_hardware: --nic-model, --disk-bus, --smbios.
+check_hardware() {
+  local m kv k v
+  for m in "${MODELS[@]}"; do
+    [[ -z "$m" || "$m" == virtio || "$m" == e1000e || "$m" == rtl8139 ]] || refuse "--nic-model '$m' is not virtio, e1000e or rtl8139"
+  done
+  case "$DISK_BUS" in
+    virtio | scsi | sata) ;;
+    *) refuse "--disk-bus '$DISK_BUS' is not virtio, scsi or sata" ;;
+  esac
+  [[ "$DISK_BUS" == virtio || -n "$DISK" ]] || refuse "--disk-bus $DISK_BUS needs a --disk"
+  [[ -n "$SMBIOS" ]] || return 0
+  local -a parts
+  IFS=',' read -r -a parts <<< "$SMBIOS"
+  for kv in "${parts[@]}"; do
+    [[ "$kv" == *=* ]] || refuse "--smbios '$SMBIOS': '$kv' is not key=value"
+    k=${kv%%=*}
+    v=${kv#*=}
+    [[ "$v" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._-]{0,62}$ ]] || refuse "--smbios $k value '$v' must be letters, digits, space, . _ - (at most 63, first alphanumeric)"
+    case "$k" in
+      vendor) [[ -z "$SM_VENDOR" ]] || refuse "--smbios vendor given twice"; SM_VENDOR=$v ;;
+      product) [[ -z "$SM_PRODUCT" ]] || refuse "--smbios product given twice"; SM_PRODUCT=$v ;;
+      serial) [[ -z "$SM_SERIAL" ]] || refuse "--smbios serial given twice"; SM_SERIAL=$v ;;
+      *) refuse "--smbios key '$k' is not vendor, product or serial" ;;
+    esac
+  done
+  [[ -n "$SM_VENDOR" && -n "$SM_PRODUCT" ]] || refuse "--smbios needs vendor=<v> and product=<p>"
+}
+
 check_args() {
   local n
   [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
@@ -189,6 +299,8 @@ check_args() {
     [[ "$n" =~ ^[a-z][a-z0-9_.-]{0,14}$ ]] || refuse "--net '$n' is not a bridge name"
   done
   check_macs
+  check_hardware
+  check_vlans
   if [[ -n "$IMAGE" ]]; then
     [[ "$IMAGE" =~ ^/[A-Za-z0-9/_.-]+\.qcow2$ && "$IMAGE" != *..* ]] || refuse "--image '$IMAGE' is not an absolute path ending .qcow2"
   fi
@@ -200,7 +312,7 @@ check_args() {
 
 # render_xml <uuid-or-empty>: the domain XML on stdout, the spec hash inside.
 render_xml() {
-  local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml
+  local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml smbios_os="" sysinfo_xml="" ctl_xml="" dev=vda m
   if [[ "$BOOT" == "network" ]]; then
     boot_xml="    <boot dev='network'/>"
     if [[ -n "$DISK" ]]; then
@@ -210,11 +322,30 @@ render_xml() {
     boot_xml="    <boot dev='hd'/>"
   fi
   if [[ -n "$DISK" ]]; then
+    if [[ "$DISK_BUS" != virtio ]]; then
+      dev=sda
+    fi
+    if [[ "$DISK_BUS" == scsi ]]; then
+      ctl_xml="    <controller type='scsi' index='0' model='virtio-scsi'/>"
+    fi
     disk_xml="    <disk type='block' device='disk'>
       <driver name='qemu' type='raw' cache='none' io='native'/>
       <source dev='$DISK'/>
-      <target dev='vda' bus='virtio'/>
+      <target dev='$dev' bus='$DISK_BUS'/>
     </disk>"
+    if [[ -n "$ctl_xml" ]]; then
+      disk_xml="$ctl_xml"$'\n'"$disk_xml"
+    fi
+  fi
+  if [[ -n "$SM_VENDOR" ]]; then
+    smbios_os="    <smbios mode='sysinfo'/>"
+    sysinfo_xml="  <sysinfo type='smbios'>
+    <system>
+      <entry name='manufacturer'>$SM_VENDOR</entry>
+      <entry name='product'>$SM_PRODUCT</entry>${SM_SERIAL:+
+      <entry name='serial'>$SM_SERIAL</entry>}
+    </system>
+  </sysinfo>"
   fi
   body=$(
     cat <<XML
@@ -226,8 +357,10 @@ render_xml() {
     <type arch='x86_64' machine='q35'>hvm</type>
     <loader readonly='yes' type='pflash' format='raw'>$HPS_OVMF_CODE</loader>
     <nvram template='$HPS_OVMF_VARS' templateFormat='raw' format='raw'>$HPS_NVRAM_DIR/${VM}_VARS.fd</nvram>
-$boot_xml
-  </os>
+$boot_xml${smbios_os:+
+$smbios_os}
+  </os>${sysinfo_xml:+
+$sysinfo_xml}
   <features><acpi/><apic/></features>
   <cpu mode='host-passthrough' check='none'/>
   <clock offset='utc'/>
@@ -244,10 +377,11 @@ XML
         mac_xml="
       <mac address='${MACS[$i]}'/>"
       fi
+      m=${MODELS[$i]:-virtio}
       cat <<XML
     <interface type='bridge'>$mac_xml
       <source bridge='$n'/>
-      <model type='virtio'/>
+      <model type='$m'/>
     </interface>
 XML
     done
@@ -265,7 +399,9 @@ XML
   </devices>
 XML
   )
-  hash=$(printf '%s\n%s\n' "$body" "$IMAGE" | sha256sum)
+  # The NIC VLAN metadata joins the hash only when there is any, so a
+  # definition made before --vlan-* existed keeps its hash.
+  hash=$(printf '%s\n%s\n%s' "$body" "$IMAGE" "${NIC_META:+$NIC_META}" | sha256sum)
   hash=${hash%% *}
   SPEC_HASH=$hash
   printf "<domain type='kvm'>\n"
@@ -277,6 +413,7 @@ XML
   if [[ -n "$IMAGE" ]]; then
     printf '      <hps:image>%s</hps:image>\n' "$IMAGE"
   fi
+  printf '%s' "$NIC_META"
   printf "      <hps:spec>%s</hps:spec>\n    </hps:vm>\n  </metadata>\n" "$hash"
   printf '%s\n' "$body" | sed -n '/<\/os>/,$p' | sed '1d'
   printf '</domain>\n'

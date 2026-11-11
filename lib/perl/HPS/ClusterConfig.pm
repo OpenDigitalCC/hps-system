@@ -22,6 +22,8 @@ package HPS::ClusterConfig;
 #   iplist          IPv4 addresses separated by commas and/or spaces
 #   hostlist        host names or IPv4 addresses separated by commas and/or spaces
 #   layout          JSON object {"<name>": {cidr, vlan, bridge, purpose, nic?, uplink?}}
+#                   or a fabric entry {kind: "fabric", purpose: "emulated-switch", bridge, mtu?}
+#                   (no cidr, vlan, nic or uplink: a VLAN-aware bridge with no uplink)
 #                   (uplink boot, only with purpose provisioning: the bridge hps-net builds on the boot NIC)
 # An optional (not required) key may be the empty string.
 use strict;
@@ -253,13 +255,32 @@ sub validate_layout ($text) {
         my $n = $data->{$name};
         return "network name '$name' must match ^[a-z][a-z0-9-]{0,15}\$" unless $name =~ /^[a-z][a-z0-9-]{0,15}\z/;
         return "network '$name' must be an object" unless ref $n eq 'HASH';
-        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic uplink);
+        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic uplink kind mtu);
         my ($extra) = grep { !$ok{$_} } sort keys %$n;
         return "network '$name': unknown field '$extra'" if defined $extra;
-        for my $req (qw(cidr bridge purpose)) {
+        my $fabric = defined $n->{kind};
+        if ($fabric) {
+            return "network '$name': kind must be \"fabric\"" unless !ref $n->{kind} && $n->{kind} eq 'fabric';
+            return "network '$name': a fabric network has purpose \"emulated-switch\""
+                unless defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'emulated-switch';
+            for my $f (qw(cidr vlan nic uplink)) {
+                return "network '$name': a fabric network (an emulated switch) takes no $f" if defined $n->{$f};
+            }
+            return "network '$name': bridge is required" unless defined $n->{bridge} && !ref $n->{bridge} && length $n->{bridge};
+            if (defined $n->{mtu}) {
+                return "network '$name': mtu must be 576 to 9216"
+                    unless !ref $n->{mtu} && $n->{mtu} =~ /^[1-9][0-9]{2,3}\z/ && $n->{mtu} >= 576 && $n->{mtu} <= 9216;
+            }
+        }
+        else {
+            return "network '$name': mtu is only for a fabric network" if defined $n->{mtu};
+            return "network '$name': purpose emulated-switch needs kind \"fabric\""
+                if defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'emulated-switch';
+        }
+        for my $req ($fabric ? qw(bridge purpose) : qw(cidr bridge purpose)) {
             return "network '$name': $req is required" unless defined $n->{$req} && !ref $n->{$req} && length $n->{$req};
         }
-        return "network '$name': cidr must be IPv4/prefix" if defined validate_value({ rule => 'cidr', required => 1 }, $n->{cidr});
+        return "network '$name': cidr must be IPv4/prefix" if !$fabric && defined validate_value({ rule => 'cidr', required => 1 }, $n->{cidr});
         return "network '$name': bridge must match ^br-[a-z0-9-]{1,12}\$" unless $n->{bridge} =~ /^br-[a-z0-9-]{1,12}\z/;
         return "network '$name': purpose must be a short word" unless $n->{purpose} =~ /^[a-z][a-z0-9-]{0,15}\z/;
         if (defined $n->{uplink}) {

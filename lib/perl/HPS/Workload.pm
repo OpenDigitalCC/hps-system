@@ -37,7 +37,13 @@ my $MAX_DISKS = 1;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status);
 my %TOP = map { $_ => 1 } qw(name project access vms);
-my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot);
+my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware);
+my %NICK = map { $_ => 1 } qw(net pvid tagged model);
+my %HWK  = map { $_ => 1 } qw(disk_bus smbios);
+my %SMK  = map { $_ => 1 } qw(vendor product serial);
+my %NIC_MODELS = map { $_ => 1 } qw(virtio e1000e rtl8139);
+my %DISK_BUSES = map { $_ => 1 } qw(virtio scsi sata);
+my $SMBIOS_RE = qr/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\z/;
 my %DSK = map { $_ => 1 } qw(name size legs);
 my %LEG = map { $_ => 1 } qw(host pool iqn portal);
 
@@ -124,11 +130,69 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     # A net may be listed more than once: one NIC per entry, so a VM can have
     # two ports on one network like a machine cabled twice (IPS-15 test, lab
     # 2026-11-11).
-    for my $n (@$nets) {
+    # An entry is a name, or an object {net, pvid?, tagged?, model?}: the
+    # port's VLANs on a fabric (emulated switch) net and its NIC model.
+    my (@names, @nics, $has_obj);
+    for my $e (@$nets) {
+        my ($n, %nic);
+        if (ref $e eq 'HASH') {
+            $has_obj = 1;
+            _only($where, $e, \%NICK);
+            $n = $e->{net};
+            if (exists $e->{pvid}) {
+                _bad($where, 'pvid must be 1-4094') unless _int_in($e->{pvid}, 1, 4094);
+                $nic{pvid} = $e->{pvid} + 0;
+            }
+            if (exists $e->{tagged}) {
+                _bad($where, 'tagged must be a list of VLAN ids 1-4094') unless ref $e->{tagged} eq 'ARRAY';
+                my %tseen;
+                for my $t (@{ $e->{tagged} }) {
+                    _bad($where, 'tagged must be a list of VLAN ids 1-4094') unless _int_in($t, 1, 4094);
+                    _bad($where, "tagged VLAN $t is listed twice or is also the pvid")
+                        if $tseen{ $t + 0 }++ || (exists $nic{pvid} && $nic{pvid} == $t);
+                }
+                $nic{tagged} = [ map { $_ + 0 } @{ $e->{tagged} } ];
+            }
+            if (exists $e->{model}) {
+                _bad($where, 'model must be virtio, e1000e or rtl8139') unless _plain($e->{model}) && $NIC_MODELS{ $e->{model} };
+                $nic{model} = "$e->{model}";
+            }
+        }
+        else { $n = $e }
         _bad($where, "net names must match $NAME_RE") unless _plain($n) && $n =~ $NAME_RE;
         if ($layout_given) {
             _bad($where, "net '$n' is not in the cluster's network_layout")
                 unless ref $layout eq 'HASH' && ref $layout->{$n} eq 'HASH' && _plain($layout->{$n}{bridge});
+            my $fabric = defined $layout->{$n}{kind} && $layout->{$n}{kind} eq 'fabric';
+            _bad($where, "net '$n' is a fabric (emulated switch): its NIC needs a pvid") if $fabric && !exists $nic{pvid};
+            _bad($where, "net '$n' is not a fabric: pvid and tagged apply only to a fabric port")
+                if !$fabric && (exists $nic{pvid} || exists $nic{tagged});
+        }
+        push @names, "$n";
+        push @nics, { net => "$n", %nic };
+    }
+    my %hw;
+    if (exists $vm->{hardware}) {
+        my $h = $vm->{hardware};
+        _bad($where, 'hardware must be an object') unless ref $h eq 'HASH';
+        _only("$where hardware", $h, \%HWK);
+        if (exists $h->{disk_bus}) {
+            _bad($where, 'hardware disk_bus must be virtio, scsi or sata') unless _plain($h->{disk_bus}) && $DISK_BUSES{ $h->{disk_bus} };
+            _bad($where, 'hardware disk_bus scsi/sata needs a disk') if $h->{disk_bus} ne 'virtio' && !@d;
+            $hw{disk_bus} = "$h->{disk_bus}";
+        }
+        if (exists $h->{smbios}) {
+            my $sm = $h->{smbios};
+            _bad($where, 'hardware smbios must be an object') unless ref $sm eq 'HASH';
+            _only("$where hardware smbios", $sm, \%SMK);
+            for my $k (qw(vendor product)) {
+                _bad($where, "hardware smbios $k is required") unless exists $sm->{$k};
+            }
+            for my $k (sort keys %$sm) {
+                _bad($where, "hardware smbios $k must match $SMBIOS_RE (letters, digits, space, . _ -)")
+                    unless _plain($sm->{$k}) && $sm->{$k} =~ $SMBIOS_RE;
+            }
+            $hw{smbios} = { map { $_ => "$sm->{$_}" } keys %$sm };
         }
     }
     # The compute host: the host of the local legs, else compute_host.
@@ -145,7 +209,8 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     elsif (@lh) { $compute = $lh[0] }
     else { _bad($where, 'no local {host,pool} leg and no compute_host: the compute host is unknown') }
     return { name => "$vm->{name}", memory_mib => $vm->{memory_mib} + 0, vcpus => $vm->{vcpus} + 0,
-        boot => $boot, (defined $vm->{image} ? (image => "$vm->{image}") : ()), disks => \@d, nets => [ map {"$_"} @$nets ],
+        boot => $boot, (defined $vm->{image} ? (image => "$vm->{image}") : ()), disks => \@d, nets => \@names,
+        ($has_obj ? (nics => \@nics) : ()), (%hw ? (hardware => \%hw) : ()),
         priority => $prio + 0, compute => $compute };
 }
 
@@ -378,6 +443,23 @@ sub _attached ($self, $mac) {
     return ref $n eq 'ARRAY' ? [@$n] : [];
 }
 
+# The vm-define arguments of NIC $i: --net <bridge> then its per-NIC options.
+sub _net_args ($self, $layout, $vm, $i) {
+    my $nic = $vm->{nics} ? $vm->{nics}[$i] : {};
+    return ('--net', $layout->{ $vm->{nets}[$i] }{bridge},
+        (defined $nic->{model} ? ('--nic-model', $nic->{model}) : ()),
+        (defined $nic->{pvid} ? ('--vlan-pvid', $nic->{pvid}) : ()),
+        ($nic->{tagged} && @{ $nic->{tagged} } ? ('--vlan-tagged', join(',', @{ $nic->{tagged} })) : ()));
+}
+
+# The VM-level hardware options of vm-define.
+sub _hardware_args ($vm) {
+    my $hw = $vm->{hardware} or return ();
+    my $sm = $hw->{smbios};
+    return ((defined $hw->{disk_bus} ? ('--disk-bus', $hw->{disk_bus}) : ()),
+        ($sm ? ('--smbios', join(',', map { "$_=$sm->{$_}" } grep { defined $sm->{$_} } qw(vendor product serial))) : ()));
+}
+
 sub _steps_create ($self, $def, %a) {
     my $name = $def->{name};
     my $rec = $self->record($name);
@@ -429,7 +511,8 @@ sub _steps_create ($self, $def, %a) {
         push @s, _step($mac, 'vm-define', [ $vm->{name}, '--memory', $vm->{memory_mib}, '--vcpus', $vm->{vcpus},
             ($net_boot ? ('--boot', 'network') : ()),
             (map { ('--disk', $_->{device}) } @{ $in->{disks} }),
-            (map { ('--net', $layout->{$_}{bridge}) } @{ $vm->{nets} }), ($net_boot ? () : ('--image', $path)) ],
+            (map { $self->_net_args($layout, $vm, $_) } 0 .. $#{ $vm->{nets} }),
+            ($net_boot ? () : ('--image', $path)), _hardware_args($vm) ],
             key => "define:$vm->{name}",
             ($net_boot ? (after => sub ($r) { $self->_record_macs($wl, $vmname, $r) }) : ()));
     }

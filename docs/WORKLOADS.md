@@ -39,7 +39,8 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `disks[].size` | `^[1-9][0-9]*[MGT]$` |
 | `disks` | exactly one per VM (`vm-define` keeps one `--disk`); none needed with `boot: network` |
 | `legs` | 1 or 2; `{host,pool}` is a local zvol, `{host,iqn[,portal]}` a remote LUN already exported by the storage side; at most one local leg per disk; one leg only if it is local (the disk is then the zvol itself, no mirror) |
-| `nets` | non-empty; every name must be in the cluster key `network_layout` |
+| `nets` | non-empty; every entry is a name in the cluster key `network_layout`, or an object `{"net": "<name>", "pvid": 1-4094, "tagged": [1-4094, ...], "model": "virtio\|e1000e\|rtl8139"}` (only `net` is required). One NIC per entry. `pvid` and `tagged` apply only to a fabric net (layout `kind: fabric`), whose NIC must have a `pvid`; `tagged` VLANs are distinct and not the pvid. Passed to `vm-define` as `--vlan-pvid`, `--vlan-tagged`, `--nic-model` after the `--net` |
+| `hardware` | optional object: `disk_bus` (`virtio` default, `scsi`, `sata`; not `virtio` needs a disk) and `smbios` (`vendor` and `product` required, `serial` optional; each letters, digits, space, `.`, `_`, `-`, first character alphanumeric, at most 63). Passed to `vm-define` as `--disk-bus` and `--smbios` |
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
 | unknown fields | refused |
 
@@ -65,7 +66,8 @@ nothing). A node call that exits non-zero ends the run at once.
     (base image onto the disk); `net-bridge-ensure` when the host's `nets` key
     lacks a network of the VM (the key is extended first, because the node reads
     it; it is put back if the call fails); `vm-define` (`--disk /dev/md/<name>`,
-    one `--net <bridge>` per net from the layout). Refuses (3) if the workload
+    one `--net <bridge>` per net from the layout, with that NIC's `--nic-model`,
+    `--vlan-pvid` and `--vlan-tagged`, then `--disk-bus` and `--smbios`). Refuses (3) if the workload
     already exists. `--resume` continues a `creating` workload: steps already
     recorded in `done` are skipped. The leg resolution itself happens on the node
     (`mirror-create` calls `leg-resolve`).

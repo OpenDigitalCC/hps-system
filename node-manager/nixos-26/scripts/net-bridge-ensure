@@ -16,6 +16,15 @@
 #   untagged network  the bridge alone; a physical NIC joins it only when the
 #                     layout names one (nic=<mac>), never the boot NIC
 #
+#   fabric network    {"kind": "fabric", "purpose": "emulated-switch", "bridge",
+#                     "mtu"?}: an emulated switch. A VLAN-aware bridge
+#                     (vlan_filtering 1) with NO member NIC, no address, the
+#                     given MTU (default 9000) and the bridge's own port taken
+#                     out of VLAN 1 (bridge vlan del dev <br> vid 1 self), so
+#                     nothing passes until a port is given VLANs (vm-define
+#                     --vlan-pvid / --vlan-tagged, applied by vm-start). No
+#                     vlan, nic or uplink is allowed on it.
+#
 #   uplink "boot"    (purpose provisioning) the bridge hps-net builds on the boot
 #                     NIC itself (host key boot_bridge). Only checked: it must
 #                     exist and be a bridge; its members, address and the
@@ -179,7 +188,7 @@ net_field() {
 
 # check_net <name>: refuse a network the layout does not define or cannot be built.
 check_net() {
-  local name="$1" bridge vlan nic purpose uplink
+  local name="$1" bridge vlan nic purpose uplink kind mtu
   printf '%s' "$LAYOUT" | jq -e --arg n "$name" 'has($n) and (.[$n] | type == "object")' > /dev/null 2>&1 \
     || refuse "network '$name' is not in the network layout"
   bridge=$(net_field "$name" bridge)
@@ -187,7 +196,19 @@ check_net() {
   nic=$(net_field "$name" nic)
   purpose=$(net_field "$name" purpose)
   uplink=$(net_field "$name" uplink)
+  kind=$(net_field "$name" kind)
+  mtu=$(net_field "$name" mtu)
   [[ "$bridge" =~ ^[a-z][a-z0-9-]{0,14}$ ]] || refuse "network '$name': bridge '$bridge' is not a valid interface name"
+  if [[ -n "$kind" ]]; then
+    [[ "$kind" == "fabric" ]] || refuse "network '$name': kind '$kind' is not fabric"
+    [[ "$purpose" == "emulated-switch" ]] || refuse "network '$name': a fabric network has purpose emulated-switch"
+    [[ -z "$vlan" && -z "$nic" && -z "$uplink" ]] || refuse "network '$name': a fabric network takes no vlan, nic or uplink"
+    if [[ -n "$mtu" ]]; then
+      [[ "$mtu" =~ ^[0-9]+$ ]] && (( mtu >= 576 && mtu <= 9216 )) || refuse "network '$name': mtu '$mtu' is not 576-9216"
+    fi
+    return 0
+  fi
+  [[ -z "$mtu" ]] || refuse "network '$name': mtu is only for a fabric network"
   if [[ -n "$vlan" ]]; then
     [[ "$vlan" =~ ^[0-9]+$ ]] || refuse "network '$name': vlan '$vlan' is not 1-4094"
     (( vlan >= 1 && vlan <= 4094 )) || refuse "network '$name': vlan '$vlan' is not 1-4094"
@@ -283,6 +304,36 @@ ensure_bridge() {
   fi
 }
 
+# bridge_has_vid <link> <vid>: the link (the bridge itself, when <link> is a bridge) has that VLAN.
+bridge_has_vid() {
+  bridge vlan show dev "$1" 2> /dev/null | awk -v want="$2" '
+    { v = ($1 ~ /^[0-9]+$/) ? $1 : $2; if (v == want) found = 1 }
+    END { exit found ? 0 : 1 }'
+}
+
+# ensure_fabric <bridge> <mtu>: a VLAN-aware bridge with no member and no address.
+ensure_fabric() {
+  local bridge="$1" mtu="$2" kind
+  if link_json "$bridge" > /dev/null; then
+    kind=$(link_field "$bridge" '.[0].linkinfo.info_kind // ""')
+    [[ "$kind" == "bridge" ]] || refuse "interface $bridge exists and is a '${kind:-plain}' link, not a bridge"
+    if [[ "$(link_field "$bridge" '.[0].linkinfo.info_data.vlan_filtering // 0')" != "1" ]]; then
+      run ip link set dev "$bridge" type bridge vlan_filtering 1
+    fi
+  else
+    run ip link add name "$bridge" addrgenmode none type bridge vlan_filtering 1
+  fi
+  if [[ "$(link_field "$bridge" '.[0].mtu // 0')" != "$mtu" ]]; then
+    run ip link set dev "$bridge" mtu "$mtu"
+  fi
+  if bridge_has_vid "$bridge" 1; then
+    run bridge vlan del dev "$bridge" vid 1 self
+  fi
+  if ! link_is_up "$bridge"; then
+    run ip link set dev "$bridge" up
+  fi
+}
+
 # enslave <link> <bridge>
 enslave() {
   local link="$1" bridge="$2" master
@@ -328,8 +379,14 @@ check_boot_bridge() {
 }
 
 ensure_net() {
-  local name="$1" bridge vlan nic
+  local name="$1" bridge vlan nic mtu
   bridge=$(net_field "$name" bridge)
+  if [[ -n "$(net_field "$name" kind)" ]]; then
+    mtu=$(net_field "$name" mtu)
+    ensure_fabric "$bridge" "${mtu:-9000}"
+    printf 'network %s: bridge %s ready (fabric, vlan_filtering, mtu %s)\n' "$name" "$bridge" "${mtu:-9000}"
+    return 0
+  fi
   if [[ -n "$(net_field "$name" uplink)" ]]; then
     check_boot_bridge "$bridge"
     printf 'network %s: bridge %s ready (boot NIC bridge, made by hps-net)\n' "$name" "$bridge"

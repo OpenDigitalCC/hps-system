@@ -16,22 +16,24 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
-@test "vm-start: starts a shut-off guest; calls domstate, start, domstate; last line VM vm1 running" {
+@test "vm-start: starts a shut-off guest; calls domstate, start, domstate, dumpxml (VLAN metadata); last line VM vm1 running" {
   p3_20_fake_dom vm1 "shut off"
+  echo '<domain/>' > "$STATE/xml.vm1"
   run bash "$S/vm-start" vm1
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "VM vm1 running" ]
-  [ "$(p3_20_virsh_cmds | paste -sd' ' -)" = "domstate start domstate" ]
+  [ "$(p3_20_virsh_cmds | paste -sd' ' -)" = "domstate start domstate dumpxml" ]
 }
 
 @test "vm-start: idempotent, a running guest is a no-op (no start call) and exits 0" {
   p3_20_fake_dom vm1 "shut off"
+  echo '<domain/>' > "$STATE/xml.vm1"
   run bash "$S/vm-start" vm1
   : > "$SHIM_LOG"
   run bash "$S/vm-start" vm1
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "VM vm1 running" ]
-  [ "$(p3_20_virsh_cmds | paste -sd' ' -)" = "domstate" ]
+  [ "$(p3_20_virsh_cmds | paste -sd' ' -)" = "domstate dumpxml" ]
 }
 
 @test "vm-start: not defined exits 4 and does not start" {
@@ -42,6 +44,7 @@ teardown() {
 
 @test "vm-start: waits for the running state when libvirt is slow" {
   p3_20_fake_dom vm1 "shut off"
+  echo '<domain/>' > "$STATE/xml.vm1"
   echo 3 > "$STATE/startdelay"
   run bash "$S/vm-start" vm1
   [ "$status" -eq 0 ]

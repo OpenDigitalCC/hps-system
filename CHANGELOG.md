@@ -12,6 +12,17 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Scale test phase 1: fabric bridge and emulated hardware (2026-11-11)
+
+- new: network layout entry `kind: fabric` (`purpose: emulated-switch`, optional
+  `mtu`, default 9000): `net-bridge-ensure` builds a VLAN-aware bridge with no
+  uplink, no address and nothing in VLAN 1; `hps-cluster-config` validates it.
+- new: `vm-define --vlan-pvid`, `--vlan-tagged`, `--nic-model`, `--disk-bus`,
+  `--smbios`; `vm-start` applies recorded VLANs to the guest's tap ports with
+  `bridge vlan` (a NIC on a VLAN-aware bridge without a pvid is refused).
+- new: workload definitions: `nets` entries may be `{net, pvid, tagged, model}`
+  and a VM may have `hardware: {disk_bus, smbios}`.
+
 ## IPS-14: a held node waits at iPXE and boots its role when one is set (2026-11-11)
 
 - audit image: after the IPS accepts the audit (HTTP 200) it reboots

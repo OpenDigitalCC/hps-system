@@ -10,6 +10,17 @@
 # Any other state (paused, crashed, ...) is refused (3). The mirror under the
 # guest must already be assembled (mirror-assemble/mirror-create): this script
 # does not touch it.
+#
+# Fabric ports. A NIC defined with --vlan-pvid / --vlan-tagged (vm-define) has
+# them recorded in the domain metadata (<hps:nic index= pvid= tagged=/>), because
+# libvirt configures no VLANs on the tap port of a Linux bridge. After the guest
+# runs (and also when it already runs: re-applying is harmless), each such NIC's
+# tap (<target dev=> of the interface at that index, from virsh dumpxml) gets:
+#   bridge vlan del dev <tap> vid 1            (only if the port is in VLAN 1)
+#   bridge vlan add dev <tap> vid <pvid> pvid untagged
+#   bridge vlan add dev <tap> vid <v>          (per tagged VLAN)
+# A guest with no such metadata gets no bridge call. Needs `bridge` (iproute2)
+# on the ctrl-exec script path.
 # Last line on success: VM <vm> running
 # Exit: 0 running, 2 usage, 3 refused, 4 not defined, 1 failed or not running in time.
 
@@ -73,6 +84,57 @@ wait_running() {
   done
 }
 
+# nic_vlans: one "<tap> <pvid|-> <tagged,list|->" line per NIC with VLAN
+# metadata, from the domain XML on stdin.
+nic_vlans() {
+  awk -v q="'" '
+    function attr(line, name,    r) {
+      if (match(line, name "=" q "[^" q "]*" q)) {
+        r = substr(line, RSTART + length(name) + 2, RLENGTH - length(name) - 3)
+        return r
+      }
+      return ""
+    }
+    /<interface[ >]/ { inif = 1; idx++ }
+    inif && /<target dev=/ { tap[idx - 1] = attr($0, "dev") }
+    /<\/interface>/ { inif = 0 }
+    /<hps:nic / { m++; mi[m] = attr($0, "index"); mp[m] = attr($0, "pvid"); mt[m] = attr($0, "tagged") }
+    END {
+      for (i = 1; i <= m; i++)
+        printf "%s %s %s\n", (tap[mi[i]] == "" ? "-" : tap[mi[i]]), (mp[i] == "" ? "-" : mp[i]), (mt[i] == "" ? "-" : mt[i])
+    }'
+}
+
+# port_has_vid <tap> <vid>
+port_has_vid() {
+  bridge vlan show dev "$1" 2> /dev/null | awk -v want="$2" '
+    { v = ($1 ~ /^[0-9]+$/) ? $1 : $2; if (v == want) found = 1 }
+    END { exit found ? 0 : 1 }'
+}
+
+apply_vlans() {
+  local xml tap pvid tagged v
+  xml=$(run virsh -c qemu:///system dumpxml "$VM")
+  while read -r tap pvid tagged; do
+    [[ -n "$tap" ]] || continue
+    if [[ "$tap" == "-" ]]; then
+      log "no tap device found for a NIC with VLANs"
+      exit 1
+    fi
+    if port_has_vid "$tap" 1; then
+      run bridge vlan del dev "$tap" vid 1
+    fi
+    if [[ "$pvid" != "-" ]]; then
+      run bridge vlan add dev "$tap" vid "$pvid" pvid untagged
+    fi
+    if [[ "$tagged" != "-" ]]; then
+      for v in ${tagged//,/ }; do
+        run bridge vlan add dev "$tap" vid "$v"
+      done
+    fi
+  done < <(nic_vlans <<< "$xml")
+}
+
 main() {
   local state
   parse_args "$@"
@@ -82,7 +144,8 @@ main() {
   fi
   case "$state" in
     running)
-      log "$VM is already running; nothing to do"
+      log "$VM is already running; nothing to start"
+      apply_vlans
       printf 'VM %s running\n' "$VM"
       return 0
       ;;
@@ -91,6 +154,7 @@ main() {
   esac
   run virsh -c qemu:///system start "$VM"
   wait_running
+  apply_vlans
   printf 'VM %s running\n' "$VM"
 }
 
