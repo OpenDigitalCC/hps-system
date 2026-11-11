@@ -317,7 +317,7 @@ EOT
     [ -f "$P/$p" ]
   done
   grep -qF "HPS_ZPOOL:-\${config.boot.zfs.package}/bin/zpool}" "$MOD"
-  grep -qF "HPS_VIRSH:-\${pkgs.libvirt}/bin/virsh}" "$MOD"
+  grep -qF "HPS_VIRSH:-\${config.virtualisation.libvirtd.package}/bin/virsh}" "$MOD"
   grep -qF 'ZPOOL=${HPS_ZPOOL:-zpool}' "$P/check_zpool_io"
   grep -qF 'VIRSH=${HPS_VIRSH:-virsh}' "$P/check_vms"
   grep -qF '${usagePlugins}' "$MOD"

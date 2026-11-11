@@ -59,7 +59,7 @@ let
     ++ lib.optional isStorage (usagePlugin "check_zpool_io"
       "--replace-fail 'HPS_ZPOOL:-zpool}' 'HPS_ZPOOL:-${config.boot.zfs.package}/bin/zpool}'")
     ++ lib.optional isCompute (usagePlugin "check_vms"
-      "--replace-fail 'HPS_VIRSH:-virsh}' 'HPS_VIRSH:-${pkgs.libvirt}/bin/virsh}'")
+      "--replace-fail 'HPS_VIRSH:-virsh}' 'HPS_VIRSH:-${config.virtualisation.libvirtd.package}/bin/virsh}'")
   );
 
   isStorage = lib.hasInfix "SCH" config.hps.roles;
