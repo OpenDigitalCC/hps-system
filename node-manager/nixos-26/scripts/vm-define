@@ -40,6 +40,10 @@
 #             with `bridge vlan` after the guest starts. A NIC on a bridge with
 #             vlan_filtering 1 (a fabric bridge, see net-bridge-ensure) must
 #             have a --vlan-pvid: such a port passes nothing without a VLAN.
+#   Every disk gets a <serial> "<vm>-d<N>" (N = 1-based position in the --disk
+#             order), so the guest finds it under /dev/disk/by-id; at most 20
+#             characters (the virtio-blk and ATA limit): a longer one keeps its
+#             last 20. Two disks of one VM with the same serial are refused.
 #   --disk-bus  virtio (default) | scsi | sata: the bus of every --disk. scsi adds
 #             one virtio-scsi controller (targets sda, sdb, ...); sata uses the
 #             q35 AHCI controller, one port each (sda, sdb, ...); virtio is
@@ -102,6 +106,7 @@ SM_SERIAL=""
 NIC_META=""
 TMP=""
 MAX_DISKS=8
+SERIAL_MAX=20
 
 log() {
   printf '[vm-define] %s\n' "$*" >&2
@@ -302,6 +307,7 @@ check_args() {
   for n in "${NETS[@]}"; do
     [[ "$n" =~ ^[a-z][a-z0-9_.-]{0,14}$ ]] || refuse "--net '$n' is not a bridge name"
   done
+  check_serials
   check_macs
   check_hardware
   check_vlans
@@ -312,6 +318,27 @@ check_args() {
     SERIAL="$HPS_LIBVIRT_LOGDIR/$VM-serial.log"
   fi
   [[ "$SERIAL" =~ ^/[A-Za-z0-9/_.-]+$ && "$SERIAL" != *..* ]] || refuse "--serial-log '$SERIAL' is not a plain absolute path"
+}
+
+# disk_serial <index>: the stable serial of disk index+1, "<vm>-d<N>"; when
+# longer than SERIAL_MAX (the virtio-blk and ATA limit) its last SERIAL_MAX
+# characters, so the disk number survives.
+disk_serial() {
+  local s="$VM-d$(($1 + 1))"
+  if ((${#s} > SERIAL_MAX)); then
+    s=${s:${#s}-SERIAL_MAX}
+  fi
+  printf '%s' "$s"
+}
+
+# check_serials: no two disks of the VM end up with the same serial.
+check_serials() {
+  local i s seen=" "
+  for i in "${!DISKS[@]}"; do
+    s=$(disk_serial "$i")
+    [[ "$seen" != *" $s "* ]] || refuse "disk serial '$s' is used twice (vm name too long to keep the disk number)"
+    seen+="$s "
+  done
 }
 
 # render_xml <uuid-or-empty>: the domain XML on stdout, the spec hash inside.
@@ -339,6 +366,7 @@ render_xml() {
       <driver name='qemu' type='raw' cache='none' io='native'/>
       <source dev='${DISKS[$i]}'/>
       <target dev='$dev' bus='$DISK_BUS'/>
+      <serial>$(disk_serial "$i")</serial>
     </disk>"
       if ((i < ${#DISKS[@]} - 1)); then
         disk_xml+=$'\n'

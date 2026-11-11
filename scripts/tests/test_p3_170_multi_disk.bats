@@ -116,7 +116,7 @@ targets() {
   [ ! -e "$STATE/xml.s1" ]
 }
 
-@test "a single disk is exactly the old definition: one disk element, vda, no controller (byte-identical to the old script)" {
+@test "a single disk is exactly the old definition: one disk element, vda, no controller (serial only)" {
   run p3_20_define
   [ "$status" -eq 0 ]
   x="$STATE/xml.vm1"
@@ -133,4 +133,28 @@ targets() {
   run p3_20_define --replace --disk-bus sata
   [ "$status" -eq 0 ]
   [ "$(targets vm1 | paste -sd' ' -)" = "$DISK sda sata" ]
+}
+
+@test "every disk has a serial <vm>-d<N>, a single disk too" {
+  run three_net
+  [ "$status" -eq 0 ]
+  [ "$(grep -o '<serial>[^<]*</serial>' "$STATE/xml.s1" | paste -sd' ' -)" = "<serial>s1-d1</serial> <serial>s1-d2</serial> <serial>s1-d3</serial>" ]
+  run p3_20_define
+  [ "$status" -eq 0 ]
+  grep -qF "<serial>vm1-d1</serial>" "$STATE/xml.vm1"
+}
+
+@test "a serial longer than 20 characters keeps its last 20, so the disk number survives" {
+  run bash "$S/vm-define" abcdefghijklmnopqrstuvwxyz012345 --boot network --memory 2048 --vcpus 2 --disk "$D1" --disk "$D2" --net br-work
+  [ "$status" -eq 0 ]
+  x="$STATE/xml.abcdefghijklmnopqrstuvwxyz012345"
+  [ "$(grep -o '<serial>[^<]*</serial>' "$x" | paste -sd' ' -)" = "<serial>pqrstuvwxyz012345-d1</serial> <serial>pqrstuvwxyz012345-d2</serial>" ]
+}
+
+@test "the serial is part of the spec: the same definition twice is a no-op" {
+  run p3_20_define
+  [ "$status" -eq 0 ]
+  run p3_20_define
+  [ "$status" -eq 0 ]
+  [ "$(p3_20_virsh_cmds | grep -c '^define$')" -eq 1 ]
 }

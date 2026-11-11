@@ -22,6 +22,10 @@ capabilities and removals are called out explicitly.
   the NIC boots first, then disk 1. `--image` and `vm-image-write` concern the
   first disk only. A single-disk domain renders byte-identically to before, so
   its spec hash is unchanged.
+- new: every `vm-define` disk carries a `<serial>` `<vm>-d<N>` (last 20
+  characters when longer) so guests can use `/dev/disk/by-id`. This changes the
+  rendered XML and spec hash of existing single-disk domains; a redefine of one
+  needs `--replace`.
 - tests: `test_p3_170_multi_disk.bats`, `t/77-workload-multi-disk.t`. Needed by
   the scale test (storage VMs with 3 data disks, `lab/scale`).
 
