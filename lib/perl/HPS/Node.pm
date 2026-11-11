@@ -153,11 +153,19 @@ use strict;
 use warnings;
 use feature qw(signatures);
 no warnings 'experimental::signatures';
+use FindBin ();
 use IPC::Open3;
 use IO::Select;
 use Symbol qw(gensym);
 
-sub new ($class, %opt) { return bless { cmd => $opt{cmd} // $ENV{HPS_BMC_CMD} // 'hps-bmc' }, $class }
+# Default: the hps-bmc beside the running tool (bin/), then hps-bmc on PATH.
+# The IPS keeps its tools in /srv/hps-system/bin, which is not on PATH (lab
+# 2026-11-11: hps-node reported "no BMC driver" while hps-bmc drove the iLO).
+sub new ($class, %opt) {
+    my $beside = "$FindBin::RealBin/hps-bmc";
+    my $cmd    = $opt{cmd} // $ENV{HPS_BMC_CMD} // (-x $beside ? $beside : 'hps-bmc');
+    return bless { cmd => $cmd }, $class;
+}
 
 sub run ($self, $action, $host, @extra) {
     my ($in, $out);

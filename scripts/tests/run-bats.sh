@@ -36,8 +36,18 @@ if [[ ${#bats_files[@]} -eq 0 ]]; then
   exit 1
 fi
 
-echo "Running ${#bats_files[@]} bats file(s)"
-bats "${bats_files[@]}"
+# Parallel when GNU parallel is present (bats --jobs needs it): the suite
+# takes ~2 min on 8 jobs against ~11 min serial. HPS_BATS_JOBS=1 forces serial.
+jobs="${HPS_BATS_JOBS:-}"
+if [[ -z "$jobs" ]]; then
+  if command -v parallel >/dev/null 2>&1; then jobs="$(nproc)"; else jobs=1; fi
+fi
+echo "Running ${#bats_files[@]} bats file(s), $jobs job(s)"
+if [[ "$jobs" -gt 1 ]]; then
+  bats --jobs "$jobs" "${bats_files[@]}"
+else
+  bats "${bats_files[@]}"
+fi
 
 if [[ $run_integration -eq 1 ]]; then
   echo

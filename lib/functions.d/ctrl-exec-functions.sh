@@ -625,18 +625,29 @@ ce_approve_pair_request() {
 #   $2  - script : allowlisted script name (e.g. hps-node)
 #   $@  - args   : remaining args passed after '--' to the script
 #
-# Returns: the dispatcher's exit status (0 all-ok).
+# The call is bounded by CE_RUN_TIMEOUT seconds (default 900): lab
+# 2026-11-10, the agent answered osvc-status (EXIT=0, 257 ms) and the
+# dispatcher CLI never returned, holding chain P for nine hours.
+#
+# Returns: the dispatcher's exit status (0 all-ok); 124 when the call did not
+# return within CE_RUN_TIMEOUT.
 #===============================================================================
 ce_run() {
   local host="${1:?Usage: ce_run <host> <script> [args...]}"
   local script="${2:?Usage: ce_run <host> <script> [args...]}"
   shift 2
+  local limit="${CE_RUN_TIMEOUT:-900}" rc=0
 
   if (( $# > 0 )); then
-    "$CTRL_EXEC_DISPATCHER" run "$host" "$script" -- "$@"
+    timeout --kill-after=10 "$limit" "$CTRL_EXEC_DISPATCHER" run "$host" "$script" -- "$@" || rc=$?
   else
-    "$CTRL_EXEC_DISPATCHER" run "$host" "$script"
+    timeout --kill-after=10 "$limit" "$CTRL_EXEC_DISPATCHER" run "$host" "$script" || rc=$?
   fi
+  if (( rc == 124 || rc == 137 )); then
+    echo "ce_run: ${script} on ${host}: no answer from the dispatcher within ${limit}s" >&2
+    return 124
+  fi
+  return "$rc"
 }
 
 #===============================================================================

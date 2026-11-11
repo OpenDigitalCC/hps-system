@@ -49,6 +49,7 @@ if [[ "$1" == list-agents ]]; then
   cat "$TEST_DIR/agents"
   exit 0
 fi
+[[ -n "${FAKE_CED_HANG:-}" ]] && sleep 30
 echo "ced-stdout"
 echo "ced-stderr" >&2
 exit "${FAKE_CED_RC:-0}"
@@ -152,4 +153,10 @@ teardown() {
   HPS_SYSTEM_PATH="$TEST_DIR/none" run bash "$RUN" held01 node-facts
   [ "$status" -eq 1 ]
   [[ "$output" == *"function library not found"* ]]
+}
+
+@test "a dispatcher that never returns is cut off after CE_RUN_TIMEOUT (124)" {
+  FAKE_CED_HANG=1 CE_RUN_TIMEOUT=1 run bash "$RUN" held01 osvc-status
+  [ "$status" -eq 124 ]
+  [[ "$output" == *"osvc-status on held01.lab.hps: no answer from the dispatcher within 1s"* ]]
 }

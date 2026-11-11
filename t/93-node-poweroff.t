@@ -197,4 +197,15 @@ BMC
     is($rc, 1, 'cli: node script fails: 1');
 }
 
+# --- default BMC command: the hps-bmc beside the tool, PATH only as fallback
+{
+    local $ENV{HPS_BMC_CMD};
+    delete $ENV{HPS_BMC_CMD};
+    local $FindBin::RealBin = "$Bin/../bin";
+    like(HPS::Node::Bmc->new->{cmd}, qr{/bin/hps-bmc$}, 'default BMC command is bin/hps-bmc beside the tool');
+    my $none = tempdir(CLEANUP => 1);
+    local $FindBin::RealBin = $none;
+    is(HPS::Node::Bmc->new->{cmd}, 'hps-bmc', 'no hps-bmc beside the tool: hps-bmc on PATH');
+}
+
 done_testing;
