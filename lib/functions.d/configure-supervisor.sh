@@ -349,6 +349,26 @@ environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
+  # --- ctrl-exec-agent (the IPS's own agent ips.<domain>: ips-admin) ---
+  # Root: the ips-admin tools act on the IPS's state as root, and the image
+  # has no executor to raise a profile (docs/OPERATOR.md). Reached only from
+  # 127.0.0.1 (allowed_ips). A renewed certificate the agent staged is
+  # promoted first, as the node OpenRC service does.
+  _supervisor_append_once "program:ctrl-exec-agent" "$(cat <<EOF
+[program:ctrl-exec-agent]
+command=/bin/bash -c 'ctrl-exec-agent promote-cert > /dev/null 2>&1 || true; exec ctrl-exec-agent serve'
+autostart=true
+autorestart=true
+startsecs=2
+startretries=3
+stopsignal=TERM
+user=root
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
   # --- OpenSVC agent ---
   install_opensvc_foreground_wrapper
 

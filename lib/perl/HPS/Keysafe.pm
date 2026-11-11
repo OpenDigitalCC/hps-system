@@ -287,6 +287,17 @@ sub get_secret ($self, $name) {
     return $buf;
 }
 
+# The names of the stored secrets, sorted (without .cred); with $prefix only
+# those starting with it. Never the values.
+sub list_secrets ($self, $prefix = '') {
+    my $dir = $self->_secret_dir(0) // return ();
+    opendir(my $dh, $dir) or _fail('failed', "Cannot read $dir: $!");
+    my @names = sort grep { $_ =~ $NAME_RE && index($_, $prefix) == 0 }
+        map { /\A(.+)\.cred\z/ ? $1 : () } readdir $dh;
+    closedir $dh;
+    return @names;
+}
+
 sub has_secret ($self, $name) {
     _check_name('secret', $name);
     my $dir = $self->_secret_dir(0) // return 0;

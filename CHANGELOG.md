@@ -19,6 +19,44 @@ capabilities and removals are called out explicitly.
   ruling for the scale test's storage nodes). A disk given twice is refused.
   The approval document already lists the disks it was issued for.
 
+## Operator access: every IPS manages itself (ips-admin, 2026-11-11)
+
+- new: the IPS runs its own ctrl-exec agent, `ips.<cluster domain>`
+  (`program:ctrl-exec-agent`, root, port 7446, 127.0.0.1 only), installed from
+  the dispatcher tarball (`install.sh --agent`), state under
+  `/srv/ctrl-exec/agent-{conf,state}`, and paired with the IPS's own
+  dispatcher at IPS start by the IPS itself: verified pairing against its own
+  CA, and only a request named `ips.<domain>` from 127.0.0.1 is approved
+  (`ce_ips_agent_bring_up`, `lib/functions.d/ips-admin-functions.sh`; owner
+  rulings 2026-11-11, "inside cluster should be fractal of outside").
+- new: the `ips-admin` allowlist (`ips-admin/`, profile `ips-admin`):
+  `hps-onboard`, `hps-cluster-config`, `hps-cluster-config-apply` (input),
+  `hps-bmc` (status, list, set, select), `hps-bmc-credential` (confidential
+  input), `hps-node`, `hps-storage`, `hps-workload`, `hps-pins`,
+  `hps-ips-check`, `hps-osvc`, `hps-monitor` (run), `ips-syslog-forward`.
+  Arguments pass through as plain tokens only; every call is logged
+  (tag `ips-admin`).
+- new: remote operators through the IPS's own ctrl-exec API. Cluster key
+  `operator_api_listen` (default empty: no listener) turns on the API's TLS
+  listener on that address, port 7445, with a self-signed certificate for the
+  IP. `bin/hps-operator issue|list|revoke|export|ca` manages operator
+  credentials (random tokens, SHA-256 in the keysafe, shown once). The auth
+  hook lets a credential run only `ips-admin` scripts on `ips.<domain>`, logs
+  each run, and tells `ced` from an API caller by its parent process; HPS's
+  own callers are unchanged.
+- new: `bin/hps-op`, the operator client (any machine with this tree and
+  `ctrl-exec-cli`): `hps-op --cred FILE [--input] <tool> [args...]`.
+- new: optional syslog forward to a collector, `ips-syslog-forward <ipv4>
+  <prefix>|off|show` (`bin/hps-syslog-forward`), kept in the cluster keys
+  `syslog_forward_host` / `syslog_forward_prefix` and written by the rsyslog
+  generator; the product form of `lab/syslog-lab.pl --upstream`.
+- `HPS::Keysafe::list_secrets`; rsyslog files `ctrl-exec-agent` and
+  `ips-admin` under `ips/<program>/`.
+- docs: `docs/OPERATOR.md`; `docs/SECURITY.md` (trust boundary 5, hardening
+  items); `docs/CLUSTER-CONFIG.md`, `docs/REGISTRY-KEYS.md`.
+- tests: `test_p3_190`..`194` (wrappers, auth hook, agent bring-up, operator
+  API listener, syslog forward), `t/190-operator.t`, `t/191-hps-op.t`.
+
 ## Usage checks in node monitoring (2026-11-11)
 
 - new: five usage checks collect trend and baseline data (owner request,

@@ -174,6 +174,15 @@ if declare -f ce_dispatcher_bring_up >/dev/null 2>&1; then
 fi
 
 #===============================================================================
+# Step 4c: The IPS's own ctrl-exec agent (ips-admin; docs/OPERATOR.md). Its
+# name is ips.<cluster domain>, so it needs a configured cluster.
+#===============================================================================
+if [[ "${CLUSTER_CONFIGURED}" == "true" ]] && declare -f ce_ips_agent_bring_up >/dev/null 2>&1; then
+  hps_log info "Bringing up the IPS's own ctrl-exec agent (ips-admin)"
+  ce_ips_agent_bring_up || hps_log warn "IPS agent bring-up failed; ips-admin and operator access unavailable until resolved"
+fi
+
+#===============================================================================
 # Step 5: Prepare Services (if cluster configured)
 #===============================================================================
 if [[ "${CLUSTER_CONFIGURED}" == "true" ]]; then

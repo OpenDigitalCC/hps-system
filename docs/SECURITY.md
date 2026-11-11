@@ -137,6 +137,26 @@ executor is deferred — `docs/adr/0003`); the `hps-node` allowlist is the
 containment boundary there. See *Node scripts under the executor* for NixOS. The `osvc_cmd`
 eval-style CGI path has been removed.
 
+5. **Operator access (the IPS's own ctrl-exec API; `docs/OPERATOR.md`).** A
+   cluster is run only through its own IPS. The IPS's local ctrl-exec agent,
+   `ips.<domain>`, accepts connections from 127.0.0.1 only (`allowed_ips`) and
+   is paired by the IPS itself, approving only a request carrying that name
+   from 127.0.0.1. Remote operators reach the API only when the cluster key
+   `operator_api_listen` names an address of the IPS: TLS on that address
+   (self-signed certificate for the IP, pinned by the operator), never a
+   loopback or wildcard bind. An operator credential is a 256-bit random
+   token, shown once; the IPS keeps its SHA-256 (keysafe, and a 0640 digest
+   file for the hook, which runs as the API user). The auth hook lets a
+   credential run only the `ips-admin` scripts on `ips.<domain>` and ping that
+   agent: never a node agent, another script, two hosts or a stored result.
+   Every operator run is logged (operator, source, script, arguments). The
+   `ips-admin` wrapper accepts only plain-token arguments (no metacharacters,
+   no file names) and gives a tool stdin only for the two `input=raw` scripts,
+   so the request context the agent writes to stdin (with the caller's token)
+   never reaches a tool. Secrets (a BMC credential) travel only as ctrl-exec
+   confidential input. HPS's own callers are unchanged: root on the unix
+   socket, and `ced`, told from an API caller by the hook's parent process.
+
 ## State ownership
 
 One system group, `hps`, owns the IPS state. The web user (`www-data`, to
@@ -181,7 +201,13 @@ the intended verification companion once the platform runs end to end.
 
 ## Open hardening items (tracked)
 
-- ctrl-exec privileged executor adoption for per-script sandboxing.
+- ctrl-exec privileged executor adoption for per-script sandboxing (the IPS's
+  own agent runs the `ips-admin` scripts as root without one).
+- the IPS agent's listen address: ctrl-exec 0.14.6 has none, so the agent
+  listens on every address and `allowed_ips = 127.0.0.1` drops the rest
+  before TLS.
+- an explicit caller field (CLI or API, and the listener) from ctrl-exec for
+  the auth hook, in place of the parent-process check.
 - gpg signature coverage for all downloaded artefacts.
 - a second enrolment factor (an HMAC pairing ticket from `HPS::Keysafe`) on ctrl-exec pairing.
 - audit-log completeness review.

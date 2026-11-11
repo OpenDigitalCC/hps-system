@@ -84,13 +84,14 @@ _ce_persist_dir() {
 # _ce_tarball_install <install.sh role flag>
 # -----------------------------------------
 # Unpack $CTRL_EXEC_DISPATCHER_TARBALL into a scratch directory and run its
-# install.sh with the given role flag (--dispatcher or --api). Logs and returns
-# 1 when the tarball, install.sh or the install itself fails.
+# install.sh with the given role flag (--dispatcher, --api, or --agent for the
+# IPS's own agent, ce_ips_agent_bring_up). Logs and returns 1 when the tarball,
+# install.sh or the install itself fails.
 #===============================================================================
 _ce_tarball_install() {
   local role="$1"
   if [[ ! -f "$CTRL_EXEC_DISPATCHER_TARBALL" ]]; then
-    hps_log error "ce_dispatcher_bring_up: dispatcher tarball missing: $CTRL_EXEC_DISPATCHER_TARBALL"
+    hps_log error "_ce_tarball_install ${role}: ctrl-exec tarball missing: $CTRL_EXEC_DISPATCHER_TARBALL"
     return 1
   fi
   local work="/tmp/ce-dispatcher-install.$$"
@@ -211,9 +212,12 @@ ce_api_bring_up() {
       }
       hps_log info "ce_api_bring_up: api_socket set in $conf"
     fi
-    # Socket only: with no TCP listener the auth hook can treat every
-    # non-socket request as ced.
-    if ! grep -qE '^[[:space:]]*api_port[[:space:]]*=' "$conf"; then
+    # The TCP listener: off, unless the cluster key operator_api_listen names
+    # an address of this IPS, where it listens with TLS for remote operators
+    # (ce_operator_api_configure, ips-admin-functions.sh; docs/OPERATOR.md).
+    if declare -f ce_operator_api_configure > /dev/null 2>&1; then
+      ce_operator_api_configure "$conf" || hps_log warn "ce_api_bring_up: cannot configure the operator API listener"
+    elif ! grep -qE '^[[:space:]]*api_port[[:space:]]*=' "$conf"; then
       printf 'api_port = off\n' >> "$conf" || hps_log warn "ce_api_bring_up: cannot set api_port"
     fi
     # The authorisation hook: only the root job runner, on the unix socket,

@@ -1,0 +1,3 @@
+#!/bin/bash
+# ips-admin agent script hps-cluster-config: the gate and the call are in ips-admin-exec.
+exec "${0%/*}/ips-admin-exec" hps-cluster-config "$@"

@@ -1,0 +1,131 @@
+#!/usr/bin/env perl
+# hps-op: run an ips-admin tool on an IPS through that IPS's own ctrl-exec API,
+# as an operator (docs/OPERATOR.md). The same call at every level: a lab IPS,
+# a cluster's inner IPS, a real site.
+#
+# Needs only this tree and ctrl-exec-cli (the ctrl-exec-api-plugins package).
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptionsFromArray :config require_order no_ignore_case);
+use File::Temp qw(tempfile);
+use JSON::PP;
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-op: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-op [--ips URL] --cred FILE [--input] [--timeout S] [--json] <tool> [args...]
+Runs the ips-admin script <tool> (hps-onboard, hps-cluster-config,
+hps-cluster-config-apply, hps-bmc, hps-bmc-credential, hps-node, hps-storage,
+hps-workload, hps-pins, hps-ips-check, hps-osvc, hps-monitor, ips-syslog-forward)
+on the IPS's own agent, with <args> passed through, and prints its stdout and
+stderr; the exit status is the tool's.
+  --cred FILE   the credential from `hps-operator issue` on that IPS (mode 0600
+                or tighter; anything wider is refused)
+  --ips URL     the IPS's API, https://<operator_api_listen>:7445 (default: the
+                credential's url line)
+  --ca FILE     the API certificate (default: the one in the credential)
+  --input       send stdin as the run's confidential input (hps-bmc-credential,
+                hps-cluster-config-apply); never in an argument or a log
+  --timeout S   seconds to wait for the answer (default 900)
+  --json        print the API's JSON reply as it is
+Environment: CTRL_EXEC_CLI (the client; default ctrl-exec-cli on PATH, else the
+ctrl-exec-api-plugins location). The token reaches the client in its
+environment (CTRL_EXEC_TOKEN), never on a command line.
+Exit: the tool's; 2 usage or a refused credential file; 1 the API call failed.
+USAGE
+    return 2;
+}
+
+sub read_cred {
+    my ($file) = @_;
+    my @st = stat $file or die "hps-op: cannot read $file: $!\n";
+    die sprintf("hps-op: %s is mode %04o; a credential must be 0600 or tighter\n", $file, $st[2] & 07777)
+        if $st[2] & 077;
+    open(my $fh, '<', $file) or die "hps-op: cannot read $file: $!\n";
+    my (%c, $pem);
+    while (my $line = <$fh>) {
+        if (defined $pem || $line =~ /^-----BEGIN CERTIFICATE-----/) { $pem .= $line; next }
+        next if $line =~ /^\s*(#|$)/;
+        $c{$1} = $2 if $line =~ /^\s*([a-z]+)\s*=\s*(.*?)\s*$/;
+    }
+    close $fh;
+    $c{ca_pem} = $pem;
+    return \%c;
+}
+
+sub client {
+    return $ENV{CTRL_EXEC_CLI} if defined $ENV{CTRL_EXEC_CLI} && length $ENV{CTRL_EXEC_CLI};
+    for my $d (split /:/, $ENV{PATH} // '') {
+        return "$d/ctrl-exec-cli" if length $d && -x "$d/ctrl-exec-cli";
+    }
+    return '/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli';
+}
+
+sub main {
+    my (@argv) = @_;
+    my ($ips, $cred_file, $ca, $input, $json, $help);
+    my $timeout = 900;
+    GetOptionsFromArray(\@argv,
+        'ips=s' => \$ips, 'cred=s' => \$cred_file, 'ca=s' => \$ca, 'input' => \$input,
+        'timeout=i' => \$timeout, 'json' => \$json, 'help' => \$help) or return usage();
+    return usage() if $help;
+    return usage('--cred is required') unless defined $cred_file;
+    my $tool = shift @argv // return usage('no tool named');
+    return usage("not an ips-admin tool name: $tool") unless $tool =~ /\A[a-z][a-z0-9-]{1,63}\z/;
+    return usage('--timeout must be 1 or more seconds') unless $timeout >= 1;
+
+    my $c = eval { read_cred($cred_file) };
+    if (!$c) { print STDERR $@; return 2 }
+    my $url = $ips // $c->{url} // '';
+    return usage('no API URL: give --ips or a url line in the credential') unless length $url;
+    return usage("the API URL must be https:// (the token travels in the request): $url") unless $url =~ m{\Ahttps://}i;
+    for my $k (qw(token agent)) {
+        return usage("the credential has no $k line") unless length($c->{$k} // '');
+    }
+
+    my $cafile = $ca;
+    if (!defined $cafile) {
+        return usage('the credential has no API certificate: give --ca (hps-operator ca on the IPS prints it)')
+            unless defined $c->{ca_pem};
+        my $fh;
+        ($fh, $cafile) = tempfile('hps-op-ca-XXXXXXXX', TMPDIR => 1, UNLINK => 1);
+        print {$fh} $c->{ca_pem};
+        close $fh or die "hps-op: cannot write the CA file\n";
+    }
+
+    my @cmd = (client(), '--url', $url, '--ca', $cafile, '--timeout', $timeout);
+    push @cmd, '--username', $c->{name} if length($c->{name} // '');
+    push @cmd, 'run', $c->{agent}, '--script', $tool, '--json';
+    push @cmd, '--input', '-' if $input;
+    push @cmd, '--', @argv if @argv;
+
+    local $ENV{CTRL_EXEC_TOKEN} = $c->{token};
+    unless ($input) {
+        open(STDIN, '<', '/dev/null') or die "hps-op: cannot reopen stdin: $!\n";
+    }
+    open(my $out, '-|', @cmd) or do { print STDERR "hps-op: cannot run $cmd[0]: $!\n"; return 1 };
+    my $reply = do { local $/; <$out> } // '';
+    close $out;
+    my $rc = $? >> 8;
+    if ($json) { print $reply; return $rc }
+    if ($rc != 0) {
+        print STDERR $reply if length $reply;
+        print STDERR "hps-op: the API call failed (exit $rc)\n";
+        return 1;
+    }
+    my $data = eval { decode_json($reply) };
+    unless (ref $data eq 'HASH' && ref $data->{results} eq 'ARRAY' && @{ $data->{results} }) {
+        print STDERR "hps-op: the API reply has no result\n";
+        print STDERR $reply if length $reply;
+        return 1;
+    }
+    my $r = $data->{results}[0];
+    print STDOUT $r->{stdout} // '';
+    print STDERR $r->{stderr} // '';
+    my $exit = $r->{exit} // 1;
+    return ($exit =~ /\A\d+\z/ && $exit <= 255) ? $exit : 1;
+}
+
+exit main(@ARGV);

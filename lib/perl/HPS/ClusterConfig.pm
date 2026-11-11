@@ -151,6 +151,15 @@ my @CATALOGUE = (
         prompt => 'Seconds between resource checks of the paired nodes (10-86400; 0 disables)', rule => 'int0:10..86400', default => '60'),
     _q(key => 'held_reboot_after_audit', group => 'onboarding', menu => 0,
         prompt => 'Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection)', rule => 'bool', default => 'true'),
+
+    # Operator access (docs/OPERATOR.md): read at IPS start by ce_api_bring_up.
+    _q(key => 'operator_api_listen', group => 'operator', menu => 0,
+        prompt => 'Address of this IPS where the ctrl-exec API listens with TLS for remote operators (empty: no remote operator)', rule => 'ip', default => ''),
+    # Optional syslog forward, set by the operator action ips-syslog-forward.
+    _q(key => 'syslog_forward_host', group => 'operator', menu => 0,
+        prompt => 'Collector to forward every syslog message to over TCP 514 (empty: no forwarding)', rule => 'ip', default => ''),
+    _q(key => 'syslog_forward_prefix', group => 'operator', menu => 0,
+        prompt => 'Host name prefix of the forwarded messages (<prefix>.<hostname>)', rule => 'regex:[a-z0-9][a-z0-9-]{0,31}', default => ''),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

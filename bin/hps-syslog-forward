@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#===============================================================================
+# hps-syslog-forward <ipv4> <prefix> | off | show
+# -----------------------------------------------
+# Optional: forward everything this IPS's rsyslog receives or logs to a
+# collector at <ipv4> (TCP 514), host names as <prefix>.<hostname>. Kept in the
+# cluster keys syslog_forward_host / syslog_forward_prefix (survives an IPS
+# restart); rsyslog.conf is regenerated and rsyslogd restarted. `off` stops it.
+# An operator reaches it as the ips-admin script ips-syslog-forward
+# (docs/OPERATOR.md); the lab uses it to collect its clusters' logs.
+#
+# Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
+# $HPS_BASE/hps-system.
+# Exit: 0 done, 2 usage, 1 failed.
+#===============================================================================
+set -euo pipefail
+
+HPS_BASE="${HPS_BASE:-/srv}"
+SYSTEM_PATH="${HPS_SYSTEM_PATH:-${HPS_BASE}/hps-system}"
+export HPS_BASE
+
+case "${1:-}" in
+  -h | --help | "")
+    echo "usage: hps-syslog-forward <ipv4> <prefix> | off | show" >&2
+    exit 2 ;;
+esac
+
+if [[ ! -f "${SYSTEM_PATH}/lib/functions.sh" ]]; then
+  echo "hps-syslog-forward: function library not found: ${SYSTEM_PATH}/lib/functions.sh" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${SYSTEM_PATH}/lib/functions.sh"
+
+rc=0
+ips_syslog_forward "$@" || rc=$?
+exit "$rc"

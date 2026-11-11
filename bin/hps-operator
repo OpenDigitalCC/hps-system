@@ -1,0 +1,138 @@
+#!/usr/bin/env perl
+# hps-operator: operator credentials for this IPS's own ctrl-exec API
+# (docs/OPERATOR.md). Root, on the IPS.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use POSIX qw(strftime);
+use HPS::Registry;
+use HPS::Keysafe;
+use HPS::Operator;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1, perms => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-operator: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-operator issue <name>     a new credential for <name>, printed once on stdout
+  hps-operator list [--json]    the names holding a credential, with the issue time
+  hps-operator revoke <name>    the credential stops working at once
+  hps-operator export           rewrite the auth hook's digest file from the keysafe
+  hps-operator ca               print the API's TLS certificate (the credential's CA)
+<name>: 1-32 of a-z 0-9 -, starting with a letter. issue prints a credential file
+(name, agent, url, token, and the API certificate when there is one): save it
+mode 0600 on the operator's machine for hps-op --cred. The token is random; the IPS
+keeps only its SHA-256, in the keysafe, and cannot show it again. An operator
+may run only the ips-admin scripts on this IPS's own agent, ips.<domain>.
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (the name has a credential), 4 not found.
+USAGE
+    return 2;
+}
+
+sub conf_dir { return $ENV{CTRL_EXEC_DISPATCHER_CONF_DIR} // '/etc/ctrl-exec-dispatcher' }
+sub cert_path { return conf_dir() . '/hps-api-tls.crt' }
+
+sub read_cert {
+    open(my $fh, '<', cert_path()) or return undef;
+    local $/;
+    my $pem = <$fh>;
+    close $fh;
+    return undef unless defined $pem && $pem =~ /-----BEGIN CERTIFICATE-----/;
+    return $pem;
+}
+
+sub cluster_value {
+    my ($reg, $key) = @_;
+    my $c = eval { $reg->active_cluster } // return '';
+    my $v = eval { $reg->cluster_get($c, $key) } // '';
+    $v =~ s/"//g;
+    return $v;
+}
+
+sub cmd_issue {
+    my ($op, $reg, @args) = @_;
+    return usage('issue needs one name') unless @args == 1;
+    my $r = $op->issue($args[0]);
+    my $domain = lc cluster_value($reg, 'network_dns_domain');
+    my $listen = cluster_value($reg, 'operator_api_listen');
+    my $port   = $ENV{CTRL_EXEC_OPERATOR_API_PORT} // 7445;
+    my $cluster = eval { $reg->active_cluster } // '';
+    my $out = "# HPS operator credential '$r->{name}' for cluster $cluster, issued "
+        . strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $r->{issued}) . ".\n"
+        . "# Keep this file mode 0600. The IPS cannot show the token again.\n"
+        . "name = $r->{name}\n"
+        . 'agent = ' . ($domain ne '' ? "ips.$domain" : '') . "\n"
+        . 'url = ' . ($listen ne '' ? "https://$listen:$port" : '') . "\n"
+        . "token = $r->{token}\n";
+    my $pem = read_cert();
+    $out .= $pem if defined $pem;
+    print $out;
+    print STDERR "hps-operator: operator_api_listen is unset: no operator can reach this IPS until it is set and the IPS restarted\n"
+        if $listen eq '';
+    print STDERR "hps-operator: no API certificate yet (" . cert_path() . "); add it to the credential later with 'hps-operator ca'\n"
+        unless defined $pem;
+    print STDERR "hps-operator: the cluster has no network_dns_domain; set the agent line by hand\n"
+        if $domain eq '';
+    return 0;
+}
+
+sub cmd_list {
+    my ($op, @args) = @_;
+    my $json;
+    GetOptionsFromArray(\@args, 'json' => \$json) or return usage();
+    return usage('list takes no names') if @args;
+    my $l = $op->list;
+    if ($json) { print JSON::PP->new->canonical->encode($l), "\n"; return 0 }
+    print "No operator credentials.\n" unless @$l;
+    printf "%-32s issued %s\n", $_->{name}, strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $_->{issued}) for @$l;
+    return 0;
+}
+
+sub main {
+    my (@argv) = @_;
+    my $cmd = shift @argv // return usage();
+    return usage() if $cmd eq '--help' || $cmd eq 'help';
+    if ($cmd eq 'ca') {
+        my $pem = read_cert();
+        unless (defined $pem) {
+            print STDERR 'hps-operator: no API certificate at ' . cert_path() . " (operator_api_listen unset, or the IPS not restarted since)\n";
+            return 4;
+        }
+        print $pem;
+        return 0;
+    }
+    my $reg = HPS::Registry->new;
+    my $op  = HPS::Operator->new(keysafe => HPS::Keysafe->new(registry => $reg));
+    my $rc = eval {
+        return cmd_issue($op, $reg, @argv) if $cmd eq 'issue';
+        return cmd_list($op, @argv) if $cmd eq 'list';
+        if ($cmd eq 'revoke') {
+            return usage('revoke needs one name') unless @argv == 1;
+            $op->revoke($argv[0]);
+            print "revoked $argv[0]\n";
+            return 0;
+        }
+        if ($cmd eq 'export') {
+            return usage('export takes no arguments') if @argv;
+            my $n = $op->export;
+            print "exported $n credential(s) to " . $op->export_path . "\n";
+            return 0;
+        }
+        return usage("unknown command: $cmd");
+    };
+    return $rc if defined $rc;
+    my $e = $@;
+    if (ref $e && $e->can('kind')) {
+        print STDERR 'hps-operator: ' . $e->message . "\n";
+        return $EXIT{ $e->kind } // 1;
+    }
+    print STDERR "hps-operator: $e";
+    return 1;
+}
+
+exit main(@ARGV);
