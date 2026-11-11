@@ -12,6 +12,15 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Container host boots without an ordering cycle (2026-11-11)
+
+- fix: `hps-cnh-mount` is no longer ordered before `podman.socket`. Sockets
+  start before `basic.target`, which the mount unit follows, so systemd broke
+  a cycle at boot (lab, scale test phase 2). It still runs before
+  `podman.service` and `hps-ips.service`.
+- tests: `test_p3_175_cnh_wiring.bats` (cycle regression); the usage-checks
+  test is renumbered to 181 (172 was taken twice).
+
 ## Audits start only when there is room for them (2026-11-11)
 
 - new (IPS-16): cluster keys `audit_max_concurrent` (default 2, 0 = no limit)
@@ -144,7 +153,7 @@ naming the requirement and the operator API stays off.
 - `hps-monitor.nix` installs them, gives each its tools and `isCompute`
   selects the guest check like `isStorage` the pool one. `docs/MONITORING.md`
   has the label scheme and the time budget (about 5 s more per node run).
-- tests: `test_p3_172_usage_checks.bats`.
+- tests: `test_p3_181_usage_checks.bats`.
 
 ## Several disks per workload VM (2026-11-11)
 

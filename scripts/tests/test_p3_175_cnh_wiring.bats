@@ -187,3 +187,7 @@ nix_code() {
   [ -f "$I/hps-system/scripts/run-hps.sh" ]
   rm -rf "$TEST_DIR"
 }
+
+@test "hps-cnh-mount is not ordered before podman.socket (an ordering cycle with basic.target, lab 2026-11-11)" {
+  run ! grep -qE 'before = \[[^]]*"podman\.socket"' "$BATS_TEST_DIRNAME/../../nix/modules/profiles/container-host.nix"
+}

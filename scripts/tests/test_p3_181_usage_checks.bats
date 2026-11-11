@@ -13,7 +13,7 @@ setup() {
   ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
   P="$ROOT/node-manager/nixos-26/plugins"
   MOD="$ROOT/nix/modules/hps-monitor.nix"
-  TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p3-172.XXXXXX")"
+  TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p3-181.XXXXXX")"
   export TEST_DIR
   mkdir -p "$TEST_DIR/root/proc" "$TEST_DIR/root/sys/class/net" "$TEST_DIR/second/proc" "$TEST_DIR/second/sys/class/net" "$TEST_DIR/bin"
   printf '#!/bin/sh\ncp -r "%s/second/." "%s/root/"\n' "$TEST_DIR" "$TEST_DIR" > "$TEST_DIR/bin/sleep-shim"

@@ -69,7 +69,10 @@ in
     description = "HPS: mount the container host disk (label hps-cnh) if present";
     wantedBy = [ "multi-user.target" ];
     after = [ "local-fs.target" "systemd-udevd.service" ];
-    before = [ "hps-ips.service" "podman.service" "podman.socket" ];
+    # Not before podman.socket: sockets start before basic.target, which this
+    # unit (default dependencies) is after: an ordering cycle (lab
+    # 2026-11-11). podman.service is what uses the storage.
+    before = [ "hps-ips.service" "podman.service" ];
     path = with pkgs; [ bash coreutils util-linux config.systemd.package ];
     serviceConfig = {
       Type = "oneshot";
