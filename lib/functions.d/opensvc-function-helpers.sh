@@ -561,17 +561,25 @@ ips_install_opensvc () {
   local packages_dir=$(hps_get_config resources) || return 1
   # Verify presence, install, fix deps, and sanity-check 'om'
   # Check the .deb exists and is non-empty
-  OSVC_DEB="$(ls -t ${packages_dir}/packages/opensvc/*.deb | head -n 1)"
-
+  # IPS-30: only from the IPS's own repository, never from the internet (owner
+  # ruling 2026-11-11: a cluster needing packages gets them from the IPS repo
+  # or through a router VM). The old form ran `test -s $OSVC_DEB` unquoted:
+  # with no package that is `test -s`, true, and apt-get update followed.
+  local deb
+  OSVC_DEB=""
+  for deb in "${packages_dir}"/packages/opensvc/*.deb; do
+    [[ -s "$deb" && ( -z "$OSVC_DEB" || "$deb" -nt "$OSVC_DEB" ) ]] && OSVC_DEB=$deb
+  done
+  if [[ -z "$OSVC_DEB" ]]; then
+    hps_log warn "OpenSVC: no package in ${packages_dir}/packages/opensvc/ (publish one there; nothing is fetched from the internet)"
+    return 1
+  fi
   hps_log debug "Installing OSVC_DEB: $OSVC_DEB"
-  test -s $OSVC_DEB || { 
-    hps_log error "ERROR: $OSVC_DEB missing or empty"
-    return 1 
-    }
-  # Install; resolve any missing deps from Debian repos
-  apt-get update
-  apt-get install -y --no-install-recommends $OSVC_DEB || apt-get -f install -y
-  rm -rf /var/lib/apt/lists/*
+  # dpkg only: a missing dependency fails here and belongs in the image
+  if ! dpkg -i "$OSVC_DEB"; then
+    hps_log error "OpenSVC: dpkg -i $OSVC_DEB failed (missing dependencies belong in the hps-container image)"
+    return 1
+  fi
   # Sanity check: ensure 'om' is available and prints a version
   if ! command -v om >/dev/null 2>&1; then 
     hps_log error "ERROR: 'om' command not found after installing OpenSVC"

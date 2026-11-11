@@ -12,6 +12,18 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## The IPS never reaches the internet for OpenSVC (2026-11-11)
+
+- fix (IPS-30): `ips_install_opensvc` installs only a package published in
+  the IPS's own repository (`packages/opensvc/*.deb`), with `dpkg -i`, and
+  never calls `apt-get`. Its old check, `test -s $OSVC_DEB` unquoted, was true
+  with no package, so every IPS start ran `apt-get update` against
+  deb.debian.org (seen from the s1 IPS in the scale test). With no package
+  the IPS warns and starts without OpenSVC, as before. Owner ruling
+  2026-11-11: a cluster that needs packages gets them from the IPS repository
+  or through a router VM.
+- tests: `test_p3_183_opensvc_offline_install.bats`.
+
 ## Container host boots without an ordering cycle (2026-11-11)
 
 - fix: `hps-cnh-mount` is no longer ordered before `podman.socket`. Sockets
