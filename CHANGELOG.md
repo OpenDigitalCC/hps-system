@@ -34,6 +34,29 @@ capabilities and removals are called out explicitly.
   or through a router VM.
 - tests: `test_p3_183_opensvc_offline_install.bats`.
 
+## An inner IPS's first operator credential, from its CNH (2026-11-11)
+
+- new: CNH node script `cnh-ips-operator-init <address>:7445 <label>`. In the
+  running `hps-ips` container it sets `operator_api_listen`, brings the
+  operator API up on that address and issues the first operator credential
+  (`hps-operator issue <label>`). The address must be on a non-loopback
+  interface of the CNH (the container shares its network); the port is the
+  IPS's fixed 7445. Refused (3): the container not running, a label that
+  already holds a credential (checked before anything changes; revoke it
+  first with `hps-operator revoke <label>`), the IPS not taking the address.
+- The credential is the run's stdout and goes nowhere else: the script is
+  allowlisted on the CNH image with `output=confidential`, so ctrl-exec
+  returns it only in the synchronous response, never stores it, and refuses
+  an async run. The last line, `OPERATOR-INIT done label=<label>
+  url=https://<address>:7445`, carries no token.
+- new: `bin/hps-operator-api-apply` (`ce_operator_api_apply`) applies
+  `operator_api_listen` without an IPS restart: `ce_api_bring_up`, a check
+  that it left `api_bind` on the address, then `supervisorctl restart
+  ctrl-exec-api`. The rest of the IPS keeps running.
+- tests: `test_p3_182_cnh_ips_operator_init.bats`; `test_p3_175_cnh_wiring.bats`
+  covers the new script. Docs: `docs/CONTAINER-HOST.md` (step 8),
+  `docs/OPERATOR.md`.
+
 ## Container host boots without an ordering cycle (2026-11-11)
 
 - fix: `hps-cnh-mount` is no longer ordered before `podman.socket`. Sockets

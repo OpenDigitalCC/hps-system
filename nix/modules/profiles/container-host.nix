@@ -131,6 +131,12 @@ in
       cnh-ips-run.options.profile = "node";
       cnh-ips-stop.source = mkScript "cnh-ips-stop" (scriptsDir + "/cnh-ips-stop");
       cnh-ips-stop.options.profile = "node";
+      # Prints the IPS's first operator credential: output=confidential, so the
+      # dispatcher never stores its stdout and an async run is refused
+      # (ctrl-exec >= 0.13.0, REFERENCE.md "Confidential output").
+      cnh-ips-operator-init.source = mkScript "cnh-ips-operator-init" (scriptsDir + "/cnh-ips-operator-init");
+      cnh-ips-operator-init.options.profile = "node";
+      cnh-ips-operator-init.options.output = "confidential";
   };
 
   # What the CNH scripts call, on the agent's scriptPath (the system profile).

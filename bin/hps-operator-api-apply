@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#===============================================================================
+# hps-operator-api-apply
+# ----------------------
+# Apply the cluster key operator_api_listen now, without restarting the IPS:
+# the API's TLS listener is configured as at IPS start (ce_api_bring_up) and
+# ctrl-exec-api is restarted (supervisord). Root, on the IPS. The CNH script
+# cnh-ips-operator-init runs it in the IPS container (docs/OPERATOR.md).
+#
+# stdout: operator API: https://<address>:7445
+# Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
+# $HPS_BASE/hps-system.
+# Exit: 0 applied, 2 usage, 3 refused (operator_api_listen unset, or the IPS
+# left the listener off: not one of its addresses, ctrl-exec too old), 1 failed.
+#===============================================================================
+set -euo pipefail
+
+HPS_BASE="${HPS_BASE:-/srv}"
+SYSTEM_PATH="${HPS_SYSTEM_PATH:-${HPS_BASE}/hps-system}"
+export HPS_BASE
+
+if [[ $# -ne 0 ]]; then
+  echo "usage: hps-operator-api-apply     (no arguments; applies operator_api_listen)" >&2
+  exit 2
+fi
+
+if [[ ! -f "${SYSTEM_PATH}/lib/functions.sh" ]]; then
+  echo "hps-operator-api-apply: function library not found: ${SYSTEM_PATH}/lib/functions.sh" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${SYSTEM_PATH}/lib/functions.sh"
+
+rc=0
+ce_operator_api_apply || rc=$?
+exit "$rc"

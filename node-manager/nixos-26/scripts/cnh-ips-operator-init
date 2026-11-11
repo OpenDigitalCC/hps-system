@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+#
+# cnh-ips-operator-init - give an outside operator its first credential for the
+# operator API of the IPS that this container host runs.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix),
+# declared output=confidential: its stdout carries the credential.
+#
+# Usage: cnh-ips-operator-init <listen-address>:<port> <label>
+#
+#   <listen-address>:<port>
+#              where the IPS's operator API listens: an IPv4 address assigned
+#              to an interface of this CNH (the IPS runs with --network=host,
+#              so its addresses are the CNH's), and the port 7445, the only
+#              one the IPS serves the operator API on
+#              (CTRL_EXEC_OPERATOR_API_PORT, docs/OPERATOR.md)
+#   <label>    the operator's name for the credential: 1-32 of a-z 0-9 -,
+#              starting with a letter (hps-operator's rule)
+#
+# The first credential of an IPS is issued at that IPS (docs/OPERATOR.md,
+# "Gaps"); for an inner IPS that is this step on its CNH, done once. Every
+# later step goes through the operator API with that credential. Inside the
+# running hps-ips container (podman exec, through systemd-run as the other
+# cnh-ips-* scripts call podman):
+#
+#   1. hps-operator list --json: a credential already held under <label> is
+#      refused before anything changes. Nothing is ever re-issued silently.
+#   2. hps-cluster-config set operator_api_listen <listen-address>
+#   3. hps-operator-api-apply (ce_operator_api_apply): the IPS's own start
+#      step ce_api_bring_up writes api_port, api_bind and the TLS settings
+#      into the dispatcher's ctrl-exec.conf and makes the API's self-signed
+#      certificate for the address; it must leave api_bind = <listen-address>
+#      (the IPS refuses a loopback, wildcard or foreign address and turns the
+#      listener off). Then `supervisorctl restart ctrl-exec-api`: the API
+#      reads its config only at start. The rest of the IPS keeps running.
+#   4. hps-operator issue <label>: the credential file (name, agent, url,
+#      token, the API certificate) goes straight to this script's stdout and
+#      nowhere else. It is never held in a variable, a file, stderr or a log.
+#      ctrl-exec returns it to the caller in the synchronous response only
+#      (output=confidential: the dispatcher stores the result without stdout
+#      and stderr, and an async run is refused). Save it mode 0600 for
+#      hps-op --cred.
+#
+# A lost or leaked credential: revoke it on the IPS as root (`hps-operator
+# revoke <label>`; hps-operator is not an ips-admin script, so no operator
+# credential can revoke one), then run this again. This script never revokes.
+#
+# Refused (exit 3): the hps-ips container not running, the address not on a
+# CNH interface (or loopback/wildcard), a port other than 7445, a bad label, a
+# credential already held under <label>, the IPS not taking the address
+# (hps-cluster-config validation, or ce_api_bring_up leaving the listener off).
+#
+# stdout: the credential file, then the last line
+#   OPERATOR-INIT done label=<label> url=https://<address>:7445
+# (never the token). Progress and every command run go to stderr.
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
+#
+# Overrides for tests: none (podman, systemd-run and ip are stubbed on PATH).
+
+set -euo pipefail
+
+CONTAINER=hps-ips
+API_PORT=7445
+HPS=/srv/hps-system
+LISTEN=""
+LABEL=""
+
+log() {
+  printf '[cnh-ips-operator-init] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute. Never given a secret.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# in_ips <command...>: run a command in the IPS container, podman with root's
+# full capabilities (as cnh-ips-cluster-bootstrap).
+in_ips() {
+  run systemd-run --quiet --wait --pipe --collect -- podman exec "$CONTAINER" "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-ips-operator-init <listen-address>:<port> <label>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+parse_args() {
+  local addr port o
+  if [[ $# -ne 2 || "$1" == -* || "$2" == -* ]]; then
+    usage
+    exit 2
+  fi
+  [[ "$1" =~ ^([0-9]{1,3}(\.[0-9]{1,3}){3}):([0-9]{1,5})$ ]] \
+    || refuse "'$1' is not <IPv4 address>:<port>"
+  addr=${BASH_REMATCH[1]}
+  port=${BASH_REMATCH[3]}
+  for o in ${addr//./ }; do
+    [[ $((10#$o)) -le 255 ]] || refuse "'$addr' is not an IPv4 address"
+  done
+  [[ $((10#$port)) -eq $API_PORT ]] \
+    || refuse "port $port: the IPS serves the operator API on $API_PORT only"
+  LISTEN=$addr
+  LABEL=$2
+  [[ "$LABEL" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+    || refuse "label '$LABEL' is not 1-32 of a-z 0-9 -, starting with a letter"
+}
+
+# The IPS shares the CNH's network (--network=host): the address must be on
+# one of the CNH's own interfaces, not a loopback one and not host-scoped (a
+# wildcard or broadcast address is never assigned, so it fails here too).
+check_address() {
+  local found
+  found=$(run ip -j -4 addr show | jq -r --arg a "$LISTEN" \
+    '[.[] | select((.flags // []) | index("LOOPBACK") | not) | .ifname as $i
+      | .addr_info[]? | select(.family == "inet" and .local == $a and .scope != "host") | $i][0] // empty')
+  [[ -n "$found" ]] || refuse "$LISTEN is not assigned to a (non-loopback) interface of this CNH"
+  log "$LISTEN is on $found"
+}
+
+check_running() {
+  local state
+  state=$(run systemd-run --quiet --wait --pipe --collect -- \
+    podman container inspect --format '{{.State.Running}}' "$CONTAINER" || true)
+  [[ "$state" == true ]] || refuse "the $CONTAINER container is not running: start it with cnh-ips-run"
+}
+
+check_label_free() {
+  local list
+  list=$(in_ips "$HPS/bin/hps-operator" list --json) || {
+    log "hps-operator list failed in $CONTAINER"
+    exit 1
+  }
+  if printf '%s\n' "$list" | jq -e --arg n "$LABEL" 'any(.[]; .name == $n)' > /dev/null; then
+    refuse "an operator credential '$LABEL' already exists; nothing re-issued. Revoke it first, as root on the IPS (hps-operator revoke $LABEL), to issue a new one"
+  fi
+}
+
+set_listen() {
+  local rc=0
+  in_ips "$HPS/bin/hps-cluster-config" set operator_api_listen "$LISTEN" >&2 || rc=$?
+  case $rc in
+    0) ;;
+    3) refuse "the IPS refused operator_api_listen = $LISTEN (hps-cluster-config)" ;;
+    *)
+      log "hps-cluster-config set failed ($rc)"
+      exit 1 ;;
+  esac
+}
+
+apply_listen() {
+  local rc=0
+  in_ips "$HPS/bin/hps-operator-api-apply" >&2 || rc=$?
+  case $rc in
+    0) ;;
+    3) refuse "the IPS did not take $LISTEN for the operator API" ;;
+    *)
+      log "bringing up the operator API on $LISTEN failed ($rc)"
+      exit 1 ;;
+  esac
+}
+
+# The credential goes from hps-operator's stdout to this script's stdout, and
+# nowhere else.
+issue() {
+  local rc=0
+  in_ips "$HPS/bin/hps-operator" issue "$LABEL" || rc=$?
+  case $rc in
+    0) ;;
+    3) refuse "an operator credential '$LABEL' already exists (issued meanwhile); nothing re-issued" ;;
+    *)
+      log "hps-operator issue failed ($rc)"
+      exit 1 ;;
+  esac
+}
+
+main() {
+  parse_args "$@"
+  check_address
+  check_running
+  check_label_free
+  set_listen
+  apply_listen
+  issue
+  printf 'OPERATOR-INIT done label=%s url=https://%s:%s\n' "$LABEL" "$LISTEN" "$API_PORT"
+}
+
+main "$@"

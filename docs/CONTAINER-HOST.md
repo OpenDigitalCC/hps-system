@@ -73,6 +73,7 @@ failed.
 | `cnh-ips-cluster-bootstrap <image> <options...>` | run `scripts/cluster-bootstrap.sh` once in the image (entrypoint replaced, the IPS mounts): the inner cluster's registry, keys and CA are made on the CNH | `CLUSTER-BOOTSTRAP done image=<image>` |
 | `cnh-ips-run <image> <interface> [<address>/<prefix>]` | write `/var/lib/hps-ips/ips.env` and restart `hps-ips.service` | `IPS running image=<image> iface=<interface> address=<cidr>` |
 | `cnh-ips-stop` | stop `hps-ips.service`; rename `ips.env` to `ips.env.stopped` so it stays off after a reboot | `IPS stopped` |
+| `cnh-ips-operator-init <address>:7445 <label>` | in the running `hps-ips` container: set `operator_api_listen` to `<address>` (one of the CNH's own, the container shares its network), bring the operator API up on it (`ce_api_bring_up`, then `supervisorctl restart ctrl-exec-api`) and issue the first operator credential `<label>` (`hps-operator issue`), printed on stdout. Allowlisted `output=confidential`: run it synchronously; ctrl-exec never stores its output. A label that already holds a credential is refused; revoke it first (`hps-operator revoke <label>`) | `OPERATOR-INIT done label=<label> url=https://<address>:7445` |
 
 Every podman call from a node script goes through `systemd-run --wait --pipe`,
 as a transient unit of the system manager: podman then has root's full
@@ -212,6 +213,10 @@ address, `$PIN` a pin built with `node-cnh`:
 5. `cnh-image-load http://$IPS/packages/cnh/<archive> <sha256>`.
 6. `cnh-ips-cluster-bootstrap <image> --name <cluster> --dhcp-iface <interface> --network <cidr> --ips-ip <address> --dhcp-range <a>-<b> --dns-domain <domain> [--network-add ...]`.
 7. `cnh-ips-run <image> <interface> <address>/<prefix>`.
+8. `cnh-ips-operator-init <address>:7445 <operator>` (synchronously): the
+   operator's credential file is the run's output; save it mode 0600 for
+   `hps-op --cred` (`docs/OPERATOR.md`). Every later step goes through that
+   cluster's own operator API.
 
 From then on the inner IPS is its own cluster's; the outer HPS keeps only its
 CNH node (power, the node scripts above).

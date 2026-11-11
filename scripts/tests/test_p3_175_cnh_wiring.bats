@@ -12,7 +12,7 @@ SD="$ROOT/node-manager/nixos-26/scripts"
 BD="$ROOT/node-manager/nixos-26/boot"
 CNH="$ROOT/nix/modules/profiles/container-host.nix"
 CTRL="$ROOT/nix/modules/hps-ctrl-exec.nix"
-SCRIPTS="cnh-disk-prepare cnh-image-load cnh-ips-bootstrap cnh-ips-cluster-bootstrap cnh-ips-run cnh-ips-stop"
+SCRIPTS="cnh-disk-prepare cnh-image-load cnh-ips-bootstrap cnh-ips-cluster-bootstrap cnh-ips-run cnh-ips-stop cnh-ips-operator-init"
 BOOT="hps-cnh-mount.sh hps-ips-launch.sh"
 
 # joined <file>: without comment lines, backslash continuations joined.

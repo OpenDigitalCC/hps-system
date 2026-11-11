@@ -145,6 +145,10 @@ TCP listener and no remote operator, as before. Set: at the next IPS start
 every operator needs `hps-operator ca` again); the operator verifies the API
 against it. The address must be one of the IPS's own; a loopback or wildcard
 address is refused and the listener stays off. The unix socket stays as it was.
+To apply a change without restarting the IPS, run `hps-operator-api-apply` as
+root on the IPS: the same bring-up, a check that `api_bind` is now the address
+(exit 3 when the IPS left the listener off), then `supervisorctl restart
+ctrl-exec-api`.
 
 The hook (`scripts/ctrl-exec-auth-hook.sh`):
 
@@ -231,5 +235,7 @@ error naming the requirement and leaves the operator API off:
   IPS's syslog has its exit status. ctrl-exec has no per-script read timeout.
 - The first credential of an IPS is issued at that IPS (`hps-operator issue`
   as root). For an inner IPS on a container host that is the CNH's bootstrap
-  step, done once, like a technician at the console; nothing gives an outer
-  HPS standing access.
+  step `cnh-ips-operator-init <address>:7445 <label>` (`docs/CONTAINER-HOST.md`),
+  done once, like a technician at the console: it sets `operator_api_listen`,
+  restarts the API and returns the credential as confidential output; nothing
+  gives an outer HPS standing access.

@@ -14,12 +14,13 @@
 #   - ce_operator_api_configure: the ctrl-exec API's TLS listener for remote
 #     operators on the cluster key operator_api_listen (empty: no listener);
 #     the HPS auth hook lets an operator credential (hps-operator) run only
-#     ips-admin scripts on ips.<domain>;
+#     ips-admin scripts on ips.<domain>; ce_operator_api_apply applies a new
+#     operator_api_listen without an IPS restart;
 #   - ips_syslog_forward: the optional operator action that forwards this
 #     IPS's syslog to a collector (cluster keys syslog_forward_host/_prefix).
 #
-# Callers: scripts/run-hps.sh (bring-up, root), ce_api_bring_up, and
-# bin/hps-syslog-forward.
+# Callers: scripts/run-hps.sh (bring-up, root), ce_api_bring_up,
+# bin/hps-syslog-forward and bin/hps-operator-api-apply.
 
 # The agent's paths (ctrl-exec defaults) and their persistent homes under /srv,
 # next to the dispatcher's (CTRL_EXEC_PERSIST_CONF/STATE).
@@ -464,6 +465,52 @@ ce_operator_api_configure() {
   _ce_conf_set "$conf" api_port off || return 1
   _ce_conf_unset "$conf" api_bind api_tls_cert api_tls_key || return 1
   return 0
+}
+
+#===============================================================================
+# ce_operator_api_apply
+# ---------------------
+# Apply operator_api_listen now instead of at the next IPS start: the start
+# step (ce_api_bring_up, which configures the TLS listener and its
+# certificate), a check that it left api_bind on that address, then a restart
+# of program:ctrl-exec-api, which reads its config only at start. The rest of
+# the IPS keeps running. Called by bin/hps-operator-api-apply (the CNH's
+# cnh-ips-operator-init runs that in the IPS container).
+#
+# Prints the operator API URL on stdout; everything else on stderr.
+# Returns: 0 the API restarted on operator_api_listen; 3 the key is unset, or
+# the IPS left the listener off (not an address of this IPS, loopback or
+# wildcard, ctrl-exec too old: ce_operator_api / ce_api_bring_up log why);
+# 1 bring-up or the restart failed.
+#===============================================================================
+ce_operator_api_apply() {
+  local listen conf bind sv
+  listen=$(_ce_operator_api_listen)
+  if [[ -z "$listen" ]]; then
+    echo "hps-operator-api-apply: operator_api_listen is unset; set it first (hps-cluster-config set operator_api_listen <address>)" >&2
+    return 3
+  fi
+  if ! ce_api_bring_up; then
+    echo "hps-operator-api-apply: ce_api_bring_up failed (see the IPS syslog)" >&2
+    return 1
+  fi
+  conf="${CTRL_EXEC_DISPATCHER_CONF:-$(_ce_conf_dir)/ctrl-exec.conf}"
+  bind=$(awk '/^[[:space:]]*api_bind[[:space:]]*=/ { sub(/^[^=]*=/, ""); gsub(/[[:space:]]/, ""); print; exit }' "$conf" 2> /dev/null) || bind=""
+  if [[ "$bind" != "$listen" ]]; then
+    echo "hps-operator-api-apply: the IPS left the operator API off for ${listen} (see its syslog, ce_operator_api)" >&2
+    return 3
+  fi
+  sv=$(hps_get_config supervisord_conf 2> /dev/null) || sv=""
+  if [[ -z "$sv" ]]; then
+    echo "hps-operator-api-apply: no supervisord_conf; the API picks the listener up at the next IPS start" >&2
+    return 1
+  fi
+  if ! supervisorctl -c "$sv" restart ctrl-exec-api >&2; then
+    echo "hps-operator-api-apply: ctrl-exec-api did not restart (supervisorctl)" >&2
+    return 1
+  fi
+  hps_log info "ce_operator_api: applied, operator API on https://${listen}:${CTRL_EXEC_OPERATOR_API_PORT}"
+  echo "operator API: https://${listen}:${CTRL_EXEC_OPERATOR_API_PORT}"
 }
 
 #===============================================================================
