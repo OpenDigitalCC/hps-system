@@ -8,8 +8,9 @@
 #
 #   OSVC <node> peers=<n> beating=<n> stale=<comma list or -> frozen=<yes|no>
 #
-# from .daemon.nodename, .daemon.heartbeat.streams[].peers.<peer>.is_beating and
-# .cluster.status.is_frozen of the daemon status. A peer is stale when no
+# from .daemon.nodename, .cluster.node.<nodename>.daemon.heartbeat.streams[]
+# .peers.<peer>.is_beating (om3 rc60; older releases: .daemon.heartbeat.streams)
+# and .cluster.status.is_frozen of the daemon status. A peer is stale when no
 # heartbeat stream sees it beating; a node with no peers (a one-node cluster)
 # is healthy. HPS reads the summary line and the JSON; it never acts on the
 # daemon for them.
@@ -50,7 +51,9 @@ main() {
   printf '== om daemon status --format json\n%s\n' "$status"
   printf '== om mon --format json\n%s\n' "$mon"
   summary=$(printf '%s' "$status" | jq -r '
-    [.daemon.heartbeat.streams[]? | (.peers // {}) | to_entries[]] as $p
+    (.daemon.nodename // "") as $me
+    | ((.cluster.node[$me].daemon.heartbeat.streams // .daemon.heartbeat.streams) // []) as $streams
+    | [$streams[]? | (.peers // {}) | to_entries[]] as $p
     | ($p | map(.key) | unique) as $peers
     | [$peers[] as $n | select(([$p[] | select(.key == $n) | .value.is_beating] | any) | not) | $n] as $stale
     | ["OSVC", (.daemon.nodename // "?"),

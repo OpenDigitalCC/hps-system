@@ -94,3 +94,17 @@ JSON
   run -0 bash "$SCRIPT"
   [ "$(wc -l < "$SHIM_LOG")" -eq 2 ]
 }
+
+@test "om3 rc60 layout: the heartbeat under .cluster.node.<self>.daemon (lab 2026-11-11: peers=0 while beating)" {
+  cat > "$STATUS_JSON" <<'JSON'
+{"cluster":{"status":{"is_frozen":false},
+  "node":{"sch-001.lab.hps":{"daemon":{"heartbeat":{"streams":[
+     {"id":"hb#1.rx","state":"running","peers":{"tch-001.lab.hps":{"is_beating":true}}},
+     {"id":"hb#1.tx","state":"running","peers":{"tch-001.lab.hps":{"is_beating":true}}}]}}},
+   "tch-001.lab.hps":{"daemon":{"heartbeat":{"streams":[
+     {"id":"hb#1.rx","peers":{"sch-001.lab.hps":{"is_beating":false}}}]}}}}},
+ "daemon":{"nodename":"sch-001.lab.hps","routines":130}}
+JSON
+  run -0 bash "$SCRIPT"
+  [[ "$output" == *"OSVC sch-001.lab.hps peers=1 beating=1 stale=- frozen=no"* ]]
+}
