@@ -38,7 +38,7 @@ n_setup_ntp() {
   n_remote_log "Configuring NTP time synchronization..."
   
   # Get NTP server from cluster config
-  ntp_server=$(n_remote_cluster_variable NTP_SERVER)
+  ntp_server=$(n_remote_cluster_variable network_time_server)
   
   # Fall back to default if not set
   if [[ -z "${ntp_server}" ]]; then
