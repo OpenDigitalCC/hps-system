@@ -48,7 +48,10 @@ n_fqdn() {
 n_set_kernel_hostname() {
     local name="$1"
     if command -v hostnamectl >/dev/null 2>&1; then
-        if hostnamectl set-hostname "${name}"; then
+        # A read-only /etc (a netbooted NixOS node) cannot hold a static name:
+        # set the transient one only, so hostnamed logs no write failure.
+        local etc="${HPS_ETC_DIR:-/etc}"
+        if [[ -w "$etc/hostname" || ( ! -e "$etc/hostname" && -w "$etc" ) ]] && hostnamectl set-hostname "${name}"; then
             return 0
         fi
         if hostnamectl set-hostname --transient "${name}"; then

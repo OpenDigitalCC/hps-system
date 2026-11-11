@@ -129,7 +129,7 @@ node_shims() {
   n_remote_cluster_variable() { echo '"lab.hps"'; }
   node_shims
   run -0 n_set_hostname_and_hosts
-  grep -qx 'hostnamectl set-hostname node-01.lab.hps' "$SHIM_LOG"
+  grep -qxE 'hostnamectl set-hostname (--transient )?node-01.lab.hps' "$SHIM_LOG"
   ! grep -q 'hostnamectl set-hostname node-01$' "$SHIM_LOG"
 }
 

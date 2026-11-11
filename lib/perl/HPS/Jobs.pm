@@ -289,6 +289,16 @@ sub _cap ($self, $text) {
 # done/ (exit 0) or failed/, then remove the job file from run/.
 sub finish ($self, $job, %r) {
     umask 002;
+    # A pairing window that is already open is the outcome asked for: the audit
+    # boot opened it and the node rebooted into its role before it closed
+    # (IPS-14). The dispatcher dies with "already running"; its exit code is
+    # whatever errno held (25 in the lab, 2026-11-11), so the text decides.
+    my $already;
+    if (($job->{kind} // '') eq 'pairing-window-open' && $r{exit} != 0
+        && ($r{stderr} // '') =~ /Pairing mode is already running/) {
+        $r{exit}  = 0;
+        $already = 1;
+    }
     my ($out, $otr) = $self->_cap($r{stdout});
     my ($err, $etr) = $self->_cap($r{stderr});
     my $now = $self->{now}->();
@@ -299,6 +309,7 @@ sub finish ($self, $job, %r) {
     $res->{stdout_truncated} = JSON::PP::true if $otr;
     $res->{stderr_truncated} = JSON::PP::true if $etr;
     $res->{duration} = $r{duration} + 0 if defined $r{duration};
+    $res->{already_open} = JSON::PP::true if $already;
     my $dest = $r{exit} == 0 ? 'done' : 'failed';
     _write_atomic($self->sub_dir($dest) . "/$job->{id}.result.json", JSON::PP->new->canonical->encode($res) . "\n");
     unlink $self->sub_dir('run') . "/$job->{file}" if defined $job->{file};

@@ -185,4 +185,18 @@ sub fresh {
     like($@, qr/Job queue not available/, 'submit says so when new/ is missing');
 }
 
+# --- an already-open pairing window is success (IPS-11 item 11)
+{
+    my $j = fresh();
+    my $id = $j->submit('pairing-window-open', 300);
+    my ($job) = $j->claim(($j->pending)[0]);
+    is($j->finish($job, exit => 25, stdout => '', stderr => "Pairing mode is already running in the background (PID 42).\n"), 'done', 'already running: done');
+    my $r = $j->result($id);
+    is($r->{exit}, 0, 'already running: exit 0');
+    ok($r->{already_open}, 'already running: already_open recorded');
+    my $id2 = $j->submit('pairing-window-open', 300);
+    my ($job2) = $j->claim(($j->pending)[0]);
+    is($j->finish($job2, exit => 2, stdout => '', stderr => "Cannot start pairing mode: the dispatcher key is missing\n"), 'failed', 'another failure still fails');
+}
+
 done_testing;

@@ -144,7 +144,7 @@ build_bundle() {
   ' _ "$TEST_DIR/bundle.sh" < /dev/null
   [ "$status" -eq 0 ]
   [[ "$output" != *"Function not found"* ]]
-  grep -q "^hostnamectl set-hostname node-01.lab.example" "$CALL_LOG"
+  grep -qE "^hostnamectl set-hostname (--transient )?node-01.lab.example" "$CALL_LOG"
   [ -f "$HPS_RUN_DIR/profile.d/hps-env.sh" ]
   [ ! -e "$HPS_OS_ROOT/etc/hosts" ]
   [ ! -e "$HPS_OS_ROOT/etc/hostname" ]
@@ -299,7 +299,7 @@ build_bundle() {
   source "$NM/base/n_configure-hostname.sh"
   run n_set_hostname_and_hosts
   [ "$status" -eq 0 ]
-  grep -q "^hostnamectl set-hostname node-01.lab.example" "$CALL_LOG"
+  grep -qE "^hostnamectl set-hostname (--transient )?node-01.lab.example" "$CALL_LOG"
   grep -q "log: nixos: skipped /etc/hostname and /etc/hosts writes" "$CALL_LOG"
   [ ! -e "$HPS_OS_ROOT/etc/hostname" ]
   [ ! -e "$HPS_OS_ROOT/etc/hosts" ]

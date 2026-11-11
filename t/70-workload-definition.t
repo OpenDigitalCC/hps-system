@@ -75,7 +75,13 @@ refuses(sub { $_[0]{vms}[0]{image} = '../etc' }, qr/image must match/, 'image pa
 refuses(sub { $_[0]{vms}[0]{image} = '-x' }, qr/image must match/, 'image starts with a dash');
 refuses(sub { $_[0]{vms}[0]{bogus} = 1 }, qr/unknown field 'bogus'/, 'unknown vm field');
 refuses(sub { $_[0]{vms}[0]{nets} = [] }, qr/nets must be a non-empty list/, 'no nets');
-refuses(sub { $_[0]{vms}[0]{nets} = [ 'mgmt', 'mgmt' ] }, qr/listed twice/, 'net twice');
+# a net listed twice is two NICs on that network (IPS-15: two ports, one segment)
+{
+    my $x = StorageFixture::base_def();
+    $x->{vms}[0]{nets} = [ 'mgmt', 'mgmt' ];
+    my $d = HPS::Workload::validate($x, layout => $layout);
+    is_deeply($d->{vms}[0]{nets}, [ 'mgmt', 'mgmt' ], 'a net listed twice gives two NICs on it');
+}
 refuses(sub { $_[0]{vms}[0]{nets} = ['nowhere'] }, qr/net 'nowhere' is not in the cluster's network_layout/, 'net not in the layout');
 
 # no layout at all

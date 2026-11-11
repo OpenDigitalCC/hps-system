@@ -121,10 +121,11 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     }
     my $nets = $vm->{nets};
     _bad($where, 'nets must be a non-empty list of network names') unless ref $nets eq 'ARRAY' && @$nets;
-    my %ns;
+    # A net may be listed more than once: one NIC per entry, so a VM can have
+    # two ports on one network like a machine cabled twice (IPS-15 test, lab
+    # 2026-11-11).
     for my $n (@$nets) {
         _bad($where, "net names must match $NAME_RE") unless _plain($n) && $n =~ $NAME_RE;
-        _bad($where, "net '$n' is listed twice") if $ns{$n}++;
         if ($layout_given) {
             _bad($where, "net '$n' is not in the cluster's network_layout")
                 unless ref $layout eq 'HASH' && ref $layout->{$n} eq 'HASH' && _plain($layout->{$n}{bridge});
