@@ -145,6 +145,13 @@ validate_request() {
   
   # Get client identity using HPS function
   CLIENT_MAC=$(hps_origin_tag)
+  # Any MAC a host's audit recorded is that host (IPS-15): a node booted from
+  # its second port calls from that port's address (lab 2026-11-11: "401
+  # Unknown host" for the second MAC of n0, so its init failed).
+  local resolved
+  if [[ -n "$CLIENT_MAC" && "$CLIENT_MAC" != localhost ]] && resolved="$(host_resolve_mac "$CLIENT_MAC" 2> /dev/null)" && [[ -n "$resolved" ]]; then
+    CLIENT_MAC="$resolved"
+  fi
   # The connection address only. X-Real-IP / X-Forwarded-For are set by the
   # caller (no proxy sits in front of the IPS CGI) and would let a node claim
   # another address; the HELD-node pairing binding relies on this value.

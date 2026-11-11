@@ -347,3 +347,10 @@ BARE_NO_B='{"schema":"hps-audit/1","net":{"nics":[
   [ "$(jq -r '.[] | select(.ifname=="eno1") | "\(.physical) \(.driver) \(.speed)"' "$WORK/nics.json")" = "true tg3 1000" ]
   [ "$(jq -r '.[] | select(.ifname=="br0") | .physical' "$WORK/nics.json")" = "false" ]
 }
+
+@test "the API resolves the caller's MAC through the index before the known-host check (lab 2026-11-11)" {
+  api="$BATS_TEST_DIRNAME/../../http/api/api.sh"
+  r=$(grep -n 'resolved="$(host_resolve_mac "$CLIENT_MAC"' "$api" | head -1 | cut -d: -f1)
+  k=$(grep -n 'if ! host_config_exists "$CLIENT_MAC"' "$api" | head -1 | cut -d: -f1)
+  [ -n "$r" ] && [ -n "$k" ] && [ "$r" -lt "$k" ]
+}
