@@ -21,7 +21,7 @@ teardown() {
   run bash "$S/vm-status" vm1
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "VM vm1 running" ]
-  [ "$(p3_20_virsh_cmds | paste -sd' ' -)" = "list dominfo dominfo domblklist domstate" ]
+  [ "$(p3_20_virsh_cmds | paste -sd' ' -)" = "list dominfo dominfo domblklist domstate domiflist" ]
   [[ "$output" == *"vda"* ]]
 }
 
@@ -130,4 +130,15 @@ teardown() {
   [ "$status" -eq 2 ]
   run bash "$S/vm-console-log" vm1 --bogus
   [ "$status" -eq 2 ]
+}
+
+@test "vm-status: one NIC line per interface with its tap, bridge, MAC and VLANs (scale test)" {
+  p3_20_fake_dom vm1 running
+  printf "<domain>\n<interface type='bridge'>\n<mac address='52:54:00:aa:00:01'/>\n<source bridge='br-fab'/>\n</interface>\n</domain>\n" > "$STATE/xml.vm1"
+  mkdir -p "$TEST_DIR/bin2"
+  printf '#!/usr/bin/env bash\nprintf "port              vlan-id\\nvnet1             110 PVID Egress Untagged\\n                  111\\n"\n' > "$TEST_DIR/bin2/bridge"
+  chmod +x "$TEST_DIR/bin2/bridge"
+  PATH="$TEST_DIR/bin2:$PATH" run -0 bash "$S/vm-status" vm1
+  [[ "$output" == *"NIC vm1 0 vnet1 br-fab 52:54:00:aa:00:01 vlans=110PU,111"* ]]
+  [ "${lines[-1]}" = "VM vm1 running" ]
 }

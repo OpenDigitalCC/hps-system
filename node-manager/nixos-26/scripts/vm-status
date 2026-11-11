@@ -4,7 +4,9 @@
 #
 # Usage: vm-status [<vm>]
 # virsh list --all, then for each guest (the named one, else every defined
-# one): virsh dominfo, virsh domblklist, and a line  VM <vm> <state>  where
+# one): virsh dominfo, virsh domblklist, one NIC line per interface
+#   NIC <vm> <index> <tap|-> <bridge> <mac> vlans=<vid[P][U],...|->
+# and a line  VM <vm> <state>  where
 # state is what virsh domstate prints (running, shut off, paused, ...). The
 # last line is always a VM line, or "no VMs" when none is defined.
 # Exit: 0, 2 usage, 4 the named VM is not defined.
@@ -39,7 +41,30 @@ report_one() {
   run virsh -c qemu:///system dominfo "$vm"
   run virsh -c qemu:///system domblklist "$vm"
   state=$(run virsh -c qemu:///system domstate "$vm")
+  report_nics "$vm"
   printf 'VM %s %s\n' "$vm" "$state"
+}
+
+# report_nics <vm>: one line per interface,
+#   NIC <vm> <index> <tap|-> <bridge> <mac> vlans=<vid[P][U],...|->
+# from virsh domiflist; the VLANs are the tap's on its bridge (bridge vlan
+# show; P = pvid, U = untagged), so a fabric port's configuration is visible.
+report_nics() {
+  local vm=$1 list idx=0 tap typ src _model mac vl
+  list=$(run_q virsh -c qemu:///system domiflist "$vm") || return 0
+  while read -r tap typ src _model mac; do
+    [[ "$typ" == bridge ]] || continue
+    vl=-
+    if [[ "$tap" != - ]]; then
+      vl=$(bridge vlan show dev "$tap" 2> /dev/null | awk -v d="$tap" '
+        { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) { v = $i; f = "";
+            for (j = i + 1; j <= NF; j++) { if ($j == "PVID") f = f "P"; else if ($j ~ /^Egress/) f = f "U" }
+            out = out (out == "" ? "" : ",") v f; break } }
+        END { print (out == "" ? "-" : out) }')
+    fi
+    printf 'NIC %s %s %s %s %s vlans=%s\n' "$vm" "$idx" "$tap" "$src" "$mac" "$vl"
+    idx=$((idx + 1))
+  done <<< "$list"
 }
 
 main() {
