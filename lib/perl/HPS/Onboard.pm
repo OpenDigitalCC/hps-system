@@ -465,6 +465,11 @@ sub prune_agents ($self, %opt) {
         my $n = eval { $self->agent_name($mac) };
         $keep{$n} = $mac if defined $n;
     }
+    # The IPS's own agent (ips-admin, ips.<domain>) is no registry host. Pruning
+    # it cut the operator API off at every lab chain run (2026-11-11: "unknown
+    # agent: not a registered agent: ips.lab.hps" until the next IPS start).
+    my $dom = eval { $reg->cluster_dns_domain };
+    $keep{"ips.$dom"} = 'ips' if defined $dom && length $dom;
     my ($rc, $out) = $self->_hook('agents');
     _fail('failed', "listing the dispatcher's agents failed (exit $rc): $out") if $rc != 0;
     my (@have, @stale, @kept);

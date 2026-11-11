@@ -175,12 +175,12 @@ $reg->host_set($StorageFixture::MAC,  'HOSTNAME', 'sch-001');
 $reg->host_set($StorageFixture::MAC2, 'HOSTNAME', 'tch-002');
 $reg->host_set($StorageFixture::MAC2, 'STATE', 'NETWORK_BOOT');
 open(my $afh, '>', "$tmp/agents") or die;
-print {$afh} join("\n", qw(sch-001.lab.hps tch-002.lab.hps tch-002 stale-abc hps-aabbccddeeff.lab.hps tch-001.lab.hps)), "\n";
+print {$afh} join("\n", qw(sch-001.lab.hps tch-002.lab.hps tch-002 stale-abc hps-aabbccddeeff.lab.hps tch-001.lab.hps ips.lab.hps ips.other.hps)), "\n";
 close $afh;
 reset_log();
 $r = $ob->prune_agents(dry_run => 1);
-is_deeply($r->{keep},  [qw(sch-001.lab.hps tch-002.lab.hps)], 'the FQDN agents of registry hosts are kept');
-is_deeply($r->{stale}, [qw(hps-aabbccddeeff.lab.hps stale-abc tch-001.lab.hps tch-002)], 'short-name duplicates, stale-*, hps-<mac> and forgotten hosts are stale');
+is_deeply($r->{keep},  [qw(ips.lab.hps sch-001.lab.hps tch-002.lab.hps)], 'the FQDN agents of registry hosts and the IPS own agent are kept');
+is_deeply($r->{stale}, [qw(hps-aabbccddeeff.lab.hps ips.other.hps stale-abc tch-001.lab.hps tch-002)], 'an ips agent of another domain, short-name duplicates, stale-*, hps-<mac> and forgotten hosts are stale');
 is_deeply([ hook_calls() ], ['agents'], 'dry run removes nothing');
 reset_log();
 $r = $ob->prune_agents;
@@ -189,7 +189,7 @@ is_deeply([ hook_calls() ], [ 'agents', map { "agent $_" } @{ $r->{stale} } ], '
 {
     local $ENV{HOOK_AGENT_RC} = 1;
     $r = $ob->prune_agents;
-    is(scalar @{ $r->{failed} }, 4, 'failures are reported');
+    is(scalar @{ $r->{failed} }, 5, 'failures are reported');
 }
 
 #--- the CLI -----------------------------------------------------------------------------------
@@ -204,7 +204,7 @@ sub cli {
 reset_log();
 my ($rc, $out) = cli('prune-agents', '--dry-run');
 is($rc, 0, 'hps-onboard prune-agents --dry-run exits 0') or diag $out;
-like($out, qr/Stale agents that would be removed: 4/, 'prints the stale count');
+like($out, qr/Stale agents that would be removed: 5/, 'prints the stale count');
 ($rc) = cli('prune-agents', 'x');
 is($rc, 2, 'prune-agents takes no arguments');
 ($rc, $out) = cli('forget', $StorageFixture::MAC2, '--dry-run');

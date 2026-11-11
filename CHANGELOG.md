@@ -12,6 +12,16 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## prune-agents keeps the IPS's own agent (2026-11-11)
+
+- fix: `hps-onboard prune-agents` removed every agent with no registry host,
+  including the IPS's own `ips.<domain>` (ips-admin). Every lab chain run cut
+  the operator API off: "unknown agent: not a registered agent: ips.lab.hps",
+  found by the cluster browser. Run through an inner IPS's operator API, it
+  would have locked the operator out of that cluster. The IPS's own agent is
+  now always kept; an `ips.` agent of another domain is still stale.
+- tests: `t/95-hostname-forget.t`.
+
 ## An IPS with no builder gets a latest pin (2026-11-11)
 
 - new: `hps-pins latest <pin>` points `nixos/latest` at a pin on disk that
