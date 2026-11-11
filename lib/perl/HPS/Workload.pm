@@ -16,6 +16,7 @@ use feature qw(signatures);
 no warnings 'experimental::signatures';
 
 use JSON::PP;
+use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX qw(strftime);
 use HPS::Registry;
 use HPS::Keysafe;
@@ -308,18 +309,98 @@ sub layout ($self) {
     return $reg->cluster_exists($self->_cluster, 'network_layout') ? $reg->cluster_get_json($self->_cluster, 'network_layout') : undef;
 }
 
-# load($name): the checked definition from workloads/<name>.json.
-sub load ($self, $name) {
+# _checked($name, $text, $what): the checked definition of workload <name> from
+# its JSON text. The one check of a definition: load() (create and every other
+# operation) and define() both use it.
+sub _checked ($self, $name, $text, $what) {
+    my $def = eval { JSON::PP->new->utf8->decode($text) };
+    _fail('refused', "$what is not valid JSON") unless defined $def;
+    my $ok = validate($def, layout => $self->layout);
+    _fail('refused', "workload: name '$ok->{name}' differs from the file name '$name'") unless $ok->{name} eq $name;
+    return $ok;
+}
+
+sub _read_definition ($self, $name) {
     my $path = $self->definition_path($name);
     _fail('notfound', "no workload definition: $path") unless -f $path;
     open(my $fh, '<:raw', $path) or _fail('failed', "cannot read $path: $!");
     my $text = do { local $/; <$fh> };
     close $fh;
-    my $def = eval { JSON::PP->new->utf8->decode($text) };
-    _fail('refused', "$path is not valid JSON") unless defined $def;
-    my $ok = validate($def, layout => $self->layout);
-    _fail('refused', "workload: name '$ok->{name}' differs from the file name '$name'") unless $ok->{name} eq $name;
-    return $ok;
+    return ($path, $text // '');
+}
+
+# load($name): the checked definition from workloads/<name>.json.
+sub load ($self, $name) {
+    my ($path, $text) = $self->_read_definition($name);
+    return $self->_checked($name, $text, $path);
+}
+
+# show_definition($name): the stored JSON text of workloads/<name>.json, as it is.
+sub show_definition ($self, $name) {
+    my (undef, $text) = $self->_read_definition($name);
+    return $text;
+}
+
+# The largest definition define() takes, in bytes.
+our $MAX_DEFINITION_BYTES = 1024 * 1024;
+
+# define($name, $text, replace => 0|1, dry_run => 0|1): check the JSON text as
+# create checks a definition (_checked), then write it to workloads/<name>.json
+# through a temporary file and a rename. An existing definition is replaced
+# only with replace, and never while the workload exists (a registry record:
+# created, creating or partial; destroy removes it). A new file is mode 0664
+# with the directory's group (the shared hps group, HPS::Registry::mkdir_p); a
+# replaced file keeps its own mode, owner and group. dry_run checks everything
+# and writes nothing. Returns {name, path, replaced, written, dry_run, vms}.
+sub define ($self, $name, $text, %a) {
+    my $path = $self->definition_path($name);
+    _fail('refused', 'no definition: the JSON definition is the input') unless defined $text && length $text;
+    _fail('refused', "the definition is larger than $MAX_DEFINITION_BYTES bytes") if length $text > $MAX_DEFINITION_BYTES;
+    my $def = $self->_checked($name, $text, 'the definition');
+    my $exists = -e $path || -l $path;
+    _fail('refused', "workload '$name' is already defined ($path); give --replace to overwrite it")
+        if $exists && !$a{replace};
+    if ($a{replace}) {
+        my $rec = $self->record($name);
+        _fail('refused', "workload '$name' exists (state $rec->{state}); destroy it before replacing its definition")
+            if defined $rec;
+    }
+    _fail('refused', "$path is not a regular file") if $exists && (-l $path || !-f $path);
+    my $out = { name => $name, path => $path, replaced => $exists ? 1 : 0, dry_run => $a{dry_run} ? 1 : 0,
+        written => 0, vms => [ map { $_->{name} } @{ $def->{vms} } ] };
+    return $out if $a{dry_run};
+
+    $text .= "\n" unless $text =~ /\n\z/;
+    my $dir = $self->{registry}->workload_dir($self->_cluster);
+    HPS::Registry::mkdir_p($dir);
+    my @old = $exists ? stat $path : ();
+    my $tmp = "$dir/.$name.json.$$.tmp";
+    my $ok = eval {
+        sysopen(my $fh, $tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600) or die "cannot create $tmp: $!\n";
+        binmode $fh;
+        print {$fh} $text or die "cannot write $tmp: $!\n";
+        close $fh or die "cannot close $tmp: $!\n";
+        if (@old) {
+            chown($old[4], $old[5], $tmp) if $> == 0;
+            chmod($old[2] & 07777, $tmp) or die "cannot chmod $tmp: $!\n";
+        }
+        else {
+            my $gid = (stat $dir)[5];
+            chown(-1, $gid, $tmp);    # best effort: a member of the group, or root
+            chmod(0664, $tmp) or die "cannot chmod $tmp: $!\n";
+        }
+        rename($tmp, $path) or die "cannot rename $tmp to $path: $!\n";
+        1;
+    };
+    my $err = $@;
+    if (!$ok) {
+        unlink $tmp;
+        $err =~ s/\s+\z//;
+        _fail('failed', $err);
+    }
+    $out->{written} = 1;
+    $self->_log('info', ($exists ? 'replaced' : 'defined') . " workload $name: $path");
+    return $out;
 }
 
 sub _rec_key ($name) { return "workload_$name" }

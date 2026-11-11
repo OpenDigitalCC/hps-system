@@ -44,6 +44,27 @@ Checked before any node call; a refusal exits 3 and names the field:
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
 | unknown fields | refused |
 
+### Writing and reading a definition
+
+```
+hps-workload define <name> [--replace] [--dry-run] [--json]   < <name>.json
+hps-workload show-definition <name>
+```
+
+`define` reads the JSON definition on stdin (at most 1 MiB) and checks it with
+the same code `create` uses to load a definition (the table above, the
+`network_layout` nets included, and the workload `name` equal to `<name>`).
+It refuses (3) an existing definition unless `--replace`, and refuses
+`--replace` while the workload exists (a registry record `workload_<name>`:
+`creating`, `created`, `running`, `stopped` or `partial`; `destroy` removes
+it). A symlink at the path is never replaced. The file is written as given
+(a final newline added) through a temporary file in the same directory and a
+rename: a new file is mode 0664 with the directory's group (the shared `hps`
+group), a replaced one keeps its mode, owner and group. `--dry-run` checks
+everything and writes nothing. Exit 0 ok, 2 usage (a bad name), 3 refused.
+`show-definition` prints the stored file as it is (4 when there is none).
+Through the operator API: `hps-workload-define` (`docs/OPERATOR.md`).
+
 The zvol of a local leg is `<pool>/enc/vm/<workload>-<vm>-<disk>` (guest disks
 live under `<pool>/enc/vm`, where `leg-resolve` looks; `storage-zvol-create` makes
 that dataset when absent); the mirror is
@@ -53,7 +74,8 @@ else that host's registry `IP`.
 
 ## Operations
 
-`hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`.
+`hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`
+(and `define`, `show-definition` above, which make no node call).
 Each operation is an ordered list of node calls (`--dry-run` prints it, changes
 nothing). A node call that exits non-zero ends the run at once.
 

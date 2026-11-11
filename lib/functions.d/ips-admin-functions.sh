@@ -37,11 +37,12 @@
 # The operator API (TLS) port on operator_api_listen.
 : "${CTRL_EXEC_OPERATOR_API_PORT:=7445}"
 
-# The ips-admin allowlist: one wrapper per name in ips-admin/. The two input=raw
+# The ips-admin allowlist: one wrapper per name in ips-admin/. The input=raw
 # names take their stdin as confidential input (ips-admin/ips-admin-exec).
 IPS_ADMIN_SCRIPTS=(hps-onboard hps-cluster-config hps-cluster-config-apply hps-bmc hps-bmc-credential
-  hps-node hps-storage hps-workload hps-pins hps-ips-check hps-osvc hps-monitor ips-syslog-forward)
-IPS_ADMIN_RAW_SCRIPTS=(hps-bmc-credential hps-cluster-config-apply)
+  hps-node hps-storage hps-workload hps-workload-define hps-pins hps-ips-check hps-osvc hps-monitor
+  ips-syslog-forward)
+IPS_ADMIN_RAW_SCRIPTS=(hps-bmc-credential hps-cluster-config-apply hps-workload-define)
 
 _ips_admin_dir() {
   printf '%s/ips-admin\n' "${HPS_SYSTEM_BASE:-${HPS_BASE:-/srv}/hps-system}"

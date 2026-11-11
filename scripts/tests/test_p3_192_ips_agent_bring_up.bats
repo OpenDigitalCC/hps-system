@@ -87,15 +87,16 @@ grep -qx 'allowed_ips = 127.0.0.1' "$c"
   run ! grep -q '^executor_socket' "$c"
 }
 
-@test "scripts.conf: every ips-admin script under profile ips-admin, the two credential paths input=raw" {
+@test "scripts.conf: every ips-admin script under profile ips-admin, the three input paths input=raw" {
   run ce_ips_agent_bring_up
   [ "$status" -eq 0 ]
   s="$CTRL_EXEC_IPS_AGENT_ETC/scripts.conf"
-  [ "$(grep -c ' profile=ips-admin' "$s")" -eq 13 ]
+  [ "$(grep -c ' profile=ips-admin' "$s")" -eq 14 ]
   grep -qx "hps-onboard = $TEST_DIR/sys/ips-admin/hps-onboard profile=ips-admin" "$s"
   grep -qx "hps-bmc-credential = $TEST_DIR/sys/ips-admin/hps-bmc-credential profile=ips-admin input=raw" "$s"
   grep -qx "hps-cluster-config-apply = $TEST_DIR/sys/ips-admin/hps-cluster-config-apply profile=ips-admin input=raw" "$s"
-  [ "$(grep -c 'input=raw' "$s")" -eq 2 ]
+  grep -qx "hps-workload-define = $TEST_DIR/sys/ips-admin/hps-workload-define profile=ips-admin input=raw" "$s"
+  [ "$(grep -c 'input=raw' "$s")" -eq 3 ]
 }
 
 @test "the auth hook's hps-operator.conf names the agent and the scripts" {

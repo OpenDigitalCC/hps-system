@@ -25,12 +25,18 @@ Usage:
   hps-workload stop    <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
+  hps-workload show-definition <name>
 <name> is the workload: workloads/<name>.json under the cluster's config directory.
 create refuses a workload that already exists unless --resume (continue an
 unfinished create). destroy removes the instance (VMs, zvols, mirrors, record) and
 keeps workloads/<name>.json, so a later create works; destroy --forget also removes
 the definition.
---dry-run prints the node calls and changes nothing.
+define checks the JSON on stdin as create checks a definition and writes it to
+workloads/<name>.json; an existing definition is replaced only with --replace,
+and never while the workload exists (destroy it first). show-definition prints
+the stored JSON.
+--dry-run prints the node calls (define: checks the definition) and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
     return 2;
@@ -73,15 +79,70 @@ sub render_status {
     return $out;
 }
 
+sub fail_exit {
+    my ($err) = @_;
+    if (ref $err && $err->isa('HPS::Keysafe::Error')) {
+        print STDERR 'hps-workload: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    $err =~ s/\s+\z//;
+    print STDERR "hps-workload: $err\n";
+    return 1;
+}
+
+# define <name> (the JSON on stdin) and show-definition <name>: the definition
+# file itself, no node call.
+sub definition_verb {
+    my ($op, $name, $rest, %o) = @_;
+    return usage("$op takes no further arguments") if @$rest;
+    return usage("$op takes no --resume, --allow-any-pool-name, --vm or --forget") if $o{other};
+    if ($op eq 'show-definition') {
+        return usage('show-definition takes no options') if $o{json} || $o{dry_run} || $o{replace};
+    }
+    my $rc = eval {
+        my $wl = HPS::Workload->new;
+        if ($op eq 'show-definition') {
+            my $text = $wl->show_definition($name);
+            print $text, ($text =~ /\n\z/ || !length $text ? '' : "\n");
+            return 0;
+        }
+        binmode STDIN;
+        my $text = '';
+        my $max = $HPS::Workload::MAX_DEFINITION_BYTES + 1;
+        while (length $text < $max) {
+            my $got = read(STDIN, $text, $max - length $text, length $text);
+            die "cannot read the definition on stdin: $!\n" unless defined $got;
+            last if $got == 0;
+        }
+        my $r = $wl->define($name, $text, replace => $o{replace}, dry_run => $o{dry_run});
+        if ($o{json}) { print JSON::PP->new->canonical->pretty->encode($r) }
+        elsif ($r->{dry_run}) {
+            print "Dry run: define $name; the definition is valid (VMs: " . join(', ', @{ $r->{vms} })
+                . "); $r->{path} would be " . ($r->{replaced} ? 'replaced' : 'written') . "; nothing is changed.\n";
+        }
+        else {
+            print 'define ok: workload ' . $name . ' ' . ($r->{replaced} ? 'replaced' : 'defined')
+                . " in $r->{path} (VMs: " . join(', ', @{ $r->{vms} }) . ")\n";
+        }
+        return 0;
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget,
+        'replace' => \$replace,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     my $name = shift @argv // return usage('workload name required');
+    return definition_verb($op, $name, \@argv, json => $json, dry_run => $dry, replace => $replace,
+        other => ($resume || $any || defined $vm || $forget))
+        if $op eq 'define' || $op eq 'show-definition';
+    return usage('--replace is only for define') if $replace;
     return usage("unknown operation '$op'") unless grep { $_ eq $op } HPS::Workload::ops();
     return usage("$op takes no further arguments") if @argv;
     return usage('--resume is only for create') if $resume && $op ne 'create';
@@ -114,14 +175,7 @@ sub main {
         return $r->{ok} ? 0 : 1;
     };
     return $rc if defined $rc;
-    my $err = $@;
-    if (ref $err && $err->isa('HPS::Keysafe::Error')) {
-        print STDERR 'hps-workload: ' . $err->message . "\n";
-        return $EXIT{ $err->kind } // 1;
-    }
-    $err =~ s/\s+\z//;
-    print STDERR "hps-workload: $err\n";
-    return 1;
+    return fail_exit($@);
 }
 
 exit main(@ARGV);

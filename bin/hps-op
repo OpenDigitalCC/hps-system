@@ -18,7 +18,7 @@ Usage:
   hps-op [--ips URL] --cred FILE [--input] [--timeout S] [--json] <tool> [args...]
 Runs the ips-admin script <tool> (hps-onboard, hps-cluster-config,
 hps-cluster-config-apply, hps-bmc, hps-bmc-credential, hps-node, hps-storage,
-hps-workload, hps-pins, hps-ips-check, hps-osvc, hps-monitor, ips-syslog-forward)
+hps-workload, hps-workload-define, hps-pins, hps-ips-check, hps-osvc, hps-monitor, ips-syslog-forward)
 on the IPS's own agent, with <args> passed through, and prints its stdout and
 stderr; the exit status is the tool's.
   --cred FILE   the credential from `hps-operator issue` on that IPS (mode 0600
@@ -27,7 +27,7 @@ stderr; the exit status is the tool's.
                 credential's url line)
   --ca FILE     the API certificate (default: the one in the credential)
   --input       send stdin as the run's confidential input (hps-bmc-credential,
-                hps-cluster-config-apply); never in an argument or a log
+                hps-cluster-config-apply, hps-workload-define); never in an argument or a log
   --timeout S   seconds to wait for the answer (default 900)
   --json        print the API's JSON reply as it is
 Environment: CTRL_EXEC_CLI (the client; default ctrl-exec-cli on PATH, else the

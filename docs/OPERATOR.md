@@ -79,6 +79,7 @@ executor.
 | `hps-node` | `bin/hps-node` | - |
 | `hps-storage` | `bin/hps-storage` | - |
 | `hps-workload` | `bin/hps-workload` | - |
+| `hps-workload-define` | `bin/hps-workload define <name>` | one workload name, `--dry-run`, `--replace`, `--json`; the JSON definition is the run's input (`input=raw`) |
 | `hps-pins` | `bin/hps-pins` | - |
 | `hps-ips-check` | `bin/hps-ips-check` | - |
 | `hps-osvc` | `bin/hps-osvc` | - |
@@ -87,12 +88,17 @@ executor.
 
 `ips-admin-exec` passes the arguments through (the tools validate their own)
 but only as conservative tokens: 1 to 256 characters of `A-Z a-z 0-9 _ . , :
-= @ + -`, no `..`, and a `/` only inside an IPv4 CIDR such as `10.0.0.1/24`; at
-most 64 arguments. A shell metacharacter, a space, a quote or a newline never
+= @ + -`, no `..`, and a `/` only inside an IPv4 CIDR such as `10.0.0.1/24` or,
+for `hps-storage` only, in exactly the dataset forms `hps-storage` itself
+accepts: `<pool>/enc`, `<pool>/enc/<name>` and `<pool>/enc/vm/<name>` (the
+pattern `^[a-z][a-z0-9_.-]*/enc(/(vm/)?[A-Za-z0-9_-]+)?$`, `HPS::Storage`'s
+`$DS_RE`); no leading `/`, no empty part, no other directory; at most 64
+arguments. A shell metacharacter, a space, a quote or a newline never
 passes, and no argument can name a file. A value that does not fit (a
 description with spaces, a URL, a JSON layout) goes through
-`hps-cluster-config-apply`, whose input is not an argument. The tool runs in an
-empty private directory with stdin `/dev/null`, except for the two `input=raw`
+`hps-cluster-config-apply`, whose input is not an argument; a workload
+definition goes through `hps-workload-define` the same way. The tool runs in an
+empty private directory with stdin `/dev/null`, except for the three `input=raw`
 scripts. Without `input=raw` the agent writes the request context (the caller's
 token included) to the script's stdin: it never reaches a tool. Each call logs
 two syslog lines, tag `ips-admin`: the tool and its arguments, then its exit
@@ -184,12 +190,13 @@ It runs `ctrl-exec-cli --url <url> --ca <the credential's certificate> run
 ips.<domain> --script <tool> --json -- <args>`, with the token in the client's
 environment (`CTRL_EXEC_TOKEN`, never an argument), and prints the tool's
 stdout and stderr; its exit status is the tool's. `--input` sends stdin as the
-run's confidential input, for `hps-bmc-credential` and
-`hps-cluster-config-apply`:
+run's confidential input, for `hps-bmc-credential`, `hps-cluster-config-apply`
+and `hps-workload-define`:
 
 ```
 printf '%s\n%s\n' "$user" "$password" | hps-op --cred FILE --input hps-bmc-credential tch-003
 hps-op --cred FILE --input hps-cluster-config-apply < s1.conf
+hps-op --cred FILE --input hps-workload-define w1 < w1.json
 ```
 
 A credential file readable by group or others, a plain `http://` URL, or a
@@ -213,6 +220,18 @@ hps-op --cred FILE hps-workload destroy t0 --dry-run
 hps-op --cred FILE hps-onboard forget 525400000009
 ```
 
+Zvols and exports take the dataset as an argument (`<pool>/enc/vm/<name>` for
+a guest disk), which `ips-admin-exec` passes for `hps-storage`:
+
+```
+hps-op --cred FILE hps-storage sch-001 zvol-create c1/enc/vm/probe-a 1G
+hps-op --cred FILE hps-storage sch-001 export c1/enc/vm/probe-a \
+  --iqn iqn.2026-01.example.c1:probe-a --initiator iqn.2026-01.example.c1:tch-001 \
+  --portal 192.0.2.10
+hps-op --cred FILE hps-storage sch-001 unexport iqn.2026-01.example.c1:probe-a
+hps-op --cred FILE hps-storage sch-001 zvol-destroy c1/enc/vm/probe-a
+```
+
 Give each disk as its bare `/dev/disk/by-id` name (`ata-...`, `nvme-...`,
 `wwn-...`): `ips-admin-exec` passes no `/` outside an IPv4 CIDR, so the
 `/dev/disk/by-id/` prefix is refused there (`hps-storage` accepts both forms
@@ -223,6 +242,44 @@ mounted disk, a disk with a holder or a member of an imported pool is refused
 even with `--wipe`. Run `--dry-run` first: it prints the node calls and
 changes nothing. A long `create` returns its output within the IPS agent's read
 timeout (`ips_admin_read_timeout`, default 900 s).
+
+### Defining and creating a workload
+
+A workload's definition is the file `workloads/<name>.json` in the cluster's
+config directory (`docs/WORKLOADS.md`). An operator writes it with
+`hps-workload-define <name>`, the definition being the run's input; it is
+checked exactly as `create` checks a definition, the name must equal the
+definition's `name`, an existing definition is replaced only with `--replace`,
+and never while the workload exists (destroy it first). `hps-workload
+show-definition <name>` prints the stored JSON. For example, a workload `w1`
+on an inner cluster `c1`, one VM whose disk mirrors a local zvol on `tch-001`
+with a LUN exported by `sch-001` (the `mgmt` network is in the cluster's
+`network_layout`):
+
+```
+cat > w1.json <<'JSON'
+{"name": "w1", "project": "c1",
+ "vms": [{"name": "w1-app", "memory_mib": 2048, "vcpus": 2,
+          "image": "debian-13-generic-amd64", "nets": ["mgmt"],
+          "disks": [{"name": "root", "size": "20G",
+                     "legs": [{"host": "tch-001", "pool": "c1"},
+                              {"host": "sch-001", "iqn": "iqn.2026-01.example.c1:w1-root",
+                               "portal": "192.0.2.10"}]}]}]}
+JSON
+hps-op --cred FILE hps-storage sch-001 zvol-create c1/enc/vm/w1-root 20G
+hps-op --cred FILE hps-storage sch-001 export c1/enc/vm/w1-root \
+  --iqn iqn.2026-01.example.c1:w1-root --initiator iqn.2026-01.example.c1:tch-001 \
+  --portal 192.0.2.10
+hps-op --cred FILE --input hps-workload-define w1 --dry-run < w1.json
+hps-op --cred FILE --input hps-workload-define w1 < w1.json
+hps-op --cred FILE hps-workload show-definition w1
+hps-op --cred FILE hps-workload create w1 --dry-run
+hps-op --cred FILE hps-workload create w1
+hps-op --cred FILE hps-workload start w1
+```
+
+To change it later: `hps-workload destroy w1`, then `hps-workload-define w1
+--replace` and `create` again.
 
 ## Optional: forward the IPS's syslog
 

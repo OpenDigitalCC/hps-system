@@ -12,6 +12,33 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Zvols and workload definitions through the operator API (2026-11-11)
+
+- new: `ips-admin-exec` passes a `/` for `hps-storage` in exactly the dataset
+  forms `hps-storage` validates (`<pool>/enc`, `<pool>/enc/<name>`,
+  `<pool>/enc/vm/<name>`; `^[a-z][a-z0-9_.-]*/enc(/(vm/)?[A-Za-z0-9_-]+)?$`,
+  `HPS::Storage` `$DS_RE`), so an operator can `zvol-create`, `export`,
+  `unexport` and `zvol-destroy` through the operator API. No `..`, no leading
+  `/`, no other slash; every other refusal unchanged, and no other tool takes
+  a dataset.
+- new: `hps-workload define <name> [--replace] [--dry-run] [--json]` writes
+  `workloads/<name>.json` from the JSON on stdin, checked by the same code
+  `create` loads a definition with; refuses an existing definition without
+  `--replace` and `--replace` while the workload exists; temp file and rename,
+  mode 0664 and the directory's group (a replaced file keeps its own).
+  `hps-workload show-definition <name>` prints the stored JSON.
+- new: ips-admin script `hps-workload-define` (`input=raw`), mapped to
+  `hps-workload define <name>` like `hps-cluster-config-apply`; one name and
+  only `--dry-run`, `--replace`, `--json`. In `IPS_ADMIN_SCRIPTS` and
+  `IPS_ADMIN_RAW_SCRIPTS`, so the agent's `scripts.conf` and the auth hook's
+  `hps-operator.conf` list it.
+- docs: `docs/OPERATOR.md` (dataset arguments; defining and creating a
+  two-leg workload through `hps-op`), `docs/WORKLOADS.md` (define,
+  show-definition).
+- tests: `t/200-workload-define.t`,
+  `test_p3_200_ips_admin_datasets_and_define.bats`; script counts in
+  `test_p3_190`, `test_p3_192`.
+
 ## Workload start after a compute host reboot (2026-11-11)
 
 - fix: `hps-workload start` brings a workload back after its compute host
