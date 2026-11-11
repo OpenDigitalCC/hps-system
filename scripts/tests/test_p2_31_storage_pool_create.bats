@@ -352,3 +352,21 @@ fixture_payload() {
   [[ "$stderr" == *"+ zfs create "* ]]
   [[ "$stderr" == *"+ zpool status lab"* ]]
 }
+
+@test "a three-way mirror: three approved disks, one mirror of all three (owner 2026-11-11)" {
+  ARGS=(lab --disk "$P2_DISK_A" --disk "$P2_DISK_B" --disk ata-DISK-C --approval-file -)
+  create "$(p2_payload "$(p2_approval pool-create lab 0 4102444800 aabbccddeeff '["ata-DISK-A","ata-DISK-B","ata-DISK-C"]')")"
+  [ "$status" -eq 0 ]
+  grep -qxF "zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none lab mirror /dev/disk/by-id/$P2_DISK_A /dev/disk/by-id/$P2_DISK_B /dev/disk/by-id/ata-DISK-C" "$SHIM_LOG"
+}
+
+@test "one disk, or five, is a usage error; a disk given twice is refused; nothing is touched" {
+  ARGS=(lab --disk a1 --disk a2 --disk a3 --disk a4 --disk a5 --approval-file -)
+  create "$(p2_create_payload 0)"
+  [ "$status" -eq 2 ]
+  ARGS=(lab --disk "$P2_DISK_A" --disk "$P2_DISK_B" --disk "$P2_DISK_A" --approval-file -)
+  create "$(p2_create_payload 0)"
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"given more than once"* ]]
+  no_disk_touched
+}

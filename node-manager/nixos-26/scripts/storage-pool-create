@@ -18,7 +18,9 @@
 # remaining seven-member bytes, computed here without the key reaching a
 # command line.
 #
-# Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id>
+# Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>]...
+# A mirror of every disk given (2 to 4: a three-way mirror survives two disk
+# losses; owner 2026-11-11, scale test storage nodes).
 #            --approval-file <path|-> [--secret-from-stdin]
 #
 #   --approval-file -   the JSON document above is on stdin (the ctrl-exec use)
@@ -65,7 +67,8 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> --approval-file <path|-> [--secret-from-stdin]
+Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id> ...] --approval-file <path|-> [--secret-from-stdin]
+  2 to 4 disks; the pool is one mirror of them all.
 Input (stdin for "-"): {"approval":{...,"hmac":"<hex>"},"secret":"<64 hex>","key_hex":"<64 hex>"}
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
@@ -115,12 +118,12 @@ parse_args() {
     esac
   done
   [[ -n "$POOL" && -n "$APPROVAL_FILE" ]] || { usage; exit 2; }
-  [[ ${#DISKS[@]} -eq 2 ]] || { log "exactly two --disk arguments are required"; usage; exit 2; }
+  [[ ${#DISKS[@]} -ge 2 && ${#DISKS[@]} -le 4 ]] || { log "two to four --disk arguments are required"; usage; exit 2; }
   if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
     refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
   fi
-  if [[ "${DISKS[0]}" == "${DISKS[1]}" ]]; then
-    refuse "the two disks are the same device"
+  if [[ "$(printf '%s\n' "${DISKS[@]}" | sort | uniq -d | head -1)" != "" ]]; then
+    refuse "a disk is given more than once"
   fi
 }
 
@@ -310,10 +313,12 @@ wipe_disks() {
 
 create_pool() {
   local d
+  local -a DEVS=()
+  for d in "${DISKS[@]}"; do DEVS+=("/dev/disk/by-id/$d"); done
   for d in "${DISKS[@]}"; do
     log "using /dev/disk/by-id/$d"
   done
-  run zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none "$POOL" mirror "/dev/disk/by-id/${DISKS[0]}" "/dev/disk/by-id/${DISKS[1]}"
+  run zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none "$POOL" mirror "${DEVS[@]}"
 }
 
 enc_exists() {

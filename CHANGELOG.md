@@ -12,6 +12,13 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Storage pools: a mirror of two to four disks (2026-11-11)
+
+- `storage-pool-create` takes 2 to 4 `--disk` by-id names and builds one
+  mirror of them all (a three-way mirror survives two disk losses; owner
+  ruling for the scale test's storage nodes). A disk given twice is refused.
+  The approval document already lists the disks it was issued for.
+
 ## Usage checks in node monitoring (2026-11-11)
 
 - new: five usage checks collect trend and baseline data (owner request,
