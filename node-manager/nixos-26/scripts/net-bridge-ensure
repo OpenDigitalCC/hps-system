@@ -297,7 +297,11 @@ ensure_bridge() {
     kind=$(link_field "$bridge" '.[0].linkinfo.info_kind // ""')
     [[ "$kind" == "bridge" ]] || refuse "interface $bridge exists and is a '${kind:-plain}' link, not a bridge"
   else
-    run ip link add name "$bridge" addrgenmode none type bridge
+    # addrgenmode is set after creation: the kernel refuses it in the create
+    # request ("RTNETLINK answers: Address family not supported by protocol",
+    # lab 2026-11-11; no bridge but the boot bridge had ever been made).
+    run ip link add name "$bridge" type bridge
+    run ip link set dev "$bridge" addrgenmode none
   fi
   if ! link_is_up "$bridge"; then
     run ip link set dev "$bridge" up
@@ -321,7 +325,8 @@ ensure_fabric() {
       run ip link set dev "$bridge" type bridge vlan_filtering 1
     fi
   else
-    run ip link add name "$bridge" addrgenmode none type bridge vlan_filtering 1
+    run ip link add name "$bridge" type bridge vlan_filtering 1
+    run ip link set dev "$bridge" addrgenmode none
   fi
   if [[ "$(link_field "$bridge" '.[0].mtu // 0')" != "$mtu" ]]; then
     run ip link set dev "$bridge" mtu "$mtu"
@@ -355,7 +360,8 @@ ensure_vlan() {
     [[ "$kind" == "vlan" && "$id" == "$vlan" && "$parent" == "$BOOT_NIC" ]] \
       || refuse "interface $sub exists but is not vlan $vlan on $BOOT_NIC"
   else
-    run ip link add link "$BOOT_NIC" name "$sub" addrgenmode none type vlan id "$vlan"
+    run ip link add link "$BOOT_NIC" name "$sub" type vlan id "$vlan"
+    run ip link set dev "$sub" addrgenmode none
   fi
   enslave "$sub" "$bridge"
 }

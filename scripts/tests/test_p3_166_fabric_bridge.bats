@@ -116,6 +116,7 @@ if [[ "$1" == "link" && "$2" == "set" && "$3" == "dev" ]]; then
   case "$1" in
     up) echo up > "$L/$dev/state" ;;
     master) echo "$2" > "$L/$dev/master" ;;
+    addrgenmode) echo "$2" > "$L/$dev/addrgenmode" ;;
     mtu) echo "$2" > "$L/$dev/mtu" ;;
     type) [[ "$2" == bridge && "$3" == vlan_filtering ]] || exit 1; echo "$4" > "$L/$dev/vlanf"
           [[ "$4" != 1 ]] || printf '%s 1 PVID Egress Untagged\n' "$dev" > "$T/vlans/$dev" ;;
@@ -167,7 +168,8 @@ changes() {
   attach '["fab"]'
   run "$SCRIPT"
   [ "$status" -eq 0 ]
-  grep -q '^ip link add name br-fab addrgenmode none type bridge vlan_filtering 1$' "$SHIM_LOG"
+  grep -q '^ip link add name br-fab type bridge vlan_filtering 1$' "$SHIM_LOG"
+  grep -q '^ip link set dev br-fab addrgenmode none$' "$SHIM_LOG"
   [ "$(cat "$T/links/br-fab/kind")" = "bridge" ]
   [ "$(cat "$T/links/br-fab/vlanf")" = "1" ]
   [ "$(cat "$T/links/br-fab/state")" = "up" ]

@@ -7,6 +7,8 @@
 # network not in the layout BEFORE any ip change, no address ever configured,
 # the networkd Unmanaged files, and that the boot NIC is never modified.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
   SCRIPT="$ROOT/node-manager/nixos-26/scripts/net-bridge-ensure"
@@ -109,6 +111,7 @@ if [[ "$1" == "link" && "$2" == "set" && "$3" == "dev" ]]; then
   [[ -d "$L/$dev" ]] || exit 1
   case "$1" in
     master) echo "$2" > "$L/$dev/master" ;;
+    addrgenmode) echo "$2" > "$L/$dev/addrgenmode" ;;
     up) echo up > "$L/$dev/state" ;;
     *) exit 1 ;;
   esac
@@ -154,7 +157,8 @@ ip_changes() {
   [ "$(cat "$T/links/eth0.40/parent")" = "eth0" ]
   [ "$(cat "$T/links/eth0.40/master")" = "br-odoo" ]
   [ "$(cat "$T/links/eth0.40/state")" = "up" ]
-  grep -q '^ip link add link eth0 name eth0.40 addrgenmode none type vlan id 40$' "$SHIM_LOG"
+  grep -q '^ip link add link eth0 name eth0.40 type vlan id 40$' "$SHIM_LOG"
+  grep -q '^ip link set dev eth0.40 addrgenmode none$' "$SHIM_LOG"
   [[ "$output" == *"network odoo: bridge br-odoo ready (vlan 40 on eth0)"* ]]
 }
 
@@ -326,7 +330,8 @@ ip_changes() {
 @test "every ip command is logged as it runs" {
   attach '["odoo"]'
   run "$SCRIPT"
-  [[ "$output" == *"+ ip link add name br-odoo addrgenmode none type bridge"* ]]
+  [[ "$output" == *"+ ip link add name br-odoo type bridge"* ]]
+  [[ "$output" == *"+ ip link set dev br-odoo addrgenmode none"* ]]
   [[ "$output" == *"+ ip link set dev eth0.40 master br-odoo"* ]]
 }
 
@@ -370,4 +375,8 @@ ip_changes() {
   [[ "$output" == *"=== bridges ==="*"none"* ]]
   run "$STATUS" x
   [ "$status" -eq 2 ]
+}
+
+@test "no create request carries addrgenmode: the kernel refuses it there (lab 2026-11-11)" {
+  run ! grep -nE 'ip link add .*addrgenmode' "$BATS_TEST_DIRNAME/../../node-manager/nixos-26/scripts/net-bridge-ensure"
 }

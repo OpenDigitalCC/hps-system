@@ -82,6 +82,9 @@ if [[ "$1" == "link" && "$2" == "set" && "$3" == "dev" && "$5" == "up" ]]; then
   echo up > "$T/links/$4/state"
   exit 0
 fi
+if [[ "$1" == "link" && "$2" == "set" && "$3" == "dev" && "$5" == "addrgenmode" ]]; then
+  exit 0
+fi
 echo "ip shim: unhandled (a change?): $*" >&2
 exit 99
 SHIM
@@ -145,7 +148,8 @@ attach() {
   attach '["prov","flat"]'
   run "$SCRIPT"
   [ "$status" -eq 0 ]
-  grep -q '^ip link add name br-flat addrgenmode none type bridge$' "$SHIM_LOG"
+  grep -q '^ip link add name br-flat type bridge$' "$SHIM_LOG"
+  grep -q '^ip link set dev br-flat addrgenmode none$' "$SHIM_LOG"
   run ! grep -E "^ip link (add|set).*br-prov" "$SHIM_LOG"
   [ -f "$T/net/05-hps-br-flat.network" ]
   [ ! -e "$T/net/05-hps-br-prov.network" ]
