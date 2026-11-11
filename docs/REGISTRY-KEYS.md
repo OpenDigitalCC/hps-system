@@ -61,6 +61,7 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `bmc_last` | `json` | HPS::BMC (every hps-bmc call) | The last call: action, rc (the driver exit code), at, and power for a status call. |
 | `audit_at` | `stamp` | node_audit CGI | When the audit was stored. |
 | `audit_stale` | `bool` | hps-onboard reaudit (cleared by the node_audit CGI) | True when the stored audit is to be redone: a held host with it boots the audit image instead of waiting at iPXE. Absent when the audit is current. |
+| `zfs_hostid` | `string` | nixos_boot_lines (nixos-boot-functions.sh) | The node's ZFS hostid: 8 hex digits, the first 8 of the sha256 of the host key MAC (12 lower-case hex digits). Derived, so stable and never needed back; recorded so an operator can see which id a pool was imported under. Passed to the node as spl.spl_hostid=0x<id> on the kernel command line. |
 | `macs` | `json` | node_audit CGI (host_audit_intake) | Array of the node's physical NIC MACs from its audit: {mac, ifname, driver, speed}, the host key MAC first. The MAC index is computed from these, so a boot from any listed port reaches this host. A MAC another host holds refuses the audit. |
 | `boot_mac_last` | `mac` | ipxe_init_handler | The MAC the node last booted from (which port), as the host may boot from any of its macs. |
 | `storage_note` | `string` | hps-onboard | Operator note about the node storage plan. |

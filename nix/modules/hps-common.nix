@@ -52,9 +52,15 @@
     # also the 26.11 default.
     boot.zfs.forceImportRoot = false;
     boot.zfs.forceImportAll = false;
-    # ZFS refuses to build without a hostId. A fixed image-wide id is accepted
-    # for phase 1 (read-only listing; no import). Per-node ids are a phase-2
-    # item (plans/phase-1.md §6).
+    # ZFS refuses to build without a hostId, and NixOS bakes this one into the
+    # image as /etc/hostid (a read-only store file). It is only a build-time
+    # placeholder and the fallback for a boot without the parameter below. The
+    # real id is per node: the IPS passes spl.spl_hostid=0x<8 hex> on the
+    # kernel command line, derived from the registry host key MAC
+    # (nixos_zfs_hostid in nixos-boot-functions.sh; host key zfs_hostid). The
+    # spl module takes a non-zero spl_hostid in preference to /etc/hostid, in
+    # the kernel (pool import ownership, multihost) and in libzfs (zpool
+    # import), so each storage node owns its own pools.
     networking.hostId = "48505331";
 
     # Empty: no name is baked into the image. hps-node-init sets the kernel

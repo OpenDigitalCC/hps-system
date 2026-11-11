@@ -12,6 +12,23 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A ZFS hostid per node (2026-11-11)
+
+- changed: every node had the image-wide ZFS hostid `48505331`, so with
+  several storage nodes a pool looked owned by every one of them (ZFS uses the
+  hostid to tell which host imported a pool, and for multihost protection).
+  The IPS now passes `spl.spl_hostid=0x<id>` on the kernel command line of
+  every NixOS boot, audit image included. The id is the first 8 hex digits of
+  the sha256 of the host key MAC (12 lower-case hex digits), so it is stable
+  across reboots, needs no storage, and a boot from another port of the same
+  machine (IPS-15) gets the same id. spl takes a non-zero `spl_hostid` in
+  preference to `/etc/hostid`, in the kernel and in `zpool import`; the
+  image's fixed `networking.hostId` stays only to satisfy the NixOS build and
+  as the fallback for a boot without the parameter.
+- new: host key `zfs_hostid` (8 hex digits) records the id the IPS handed out
+  (catalogued in `docs/REGISTRY-KEYS.md`).
+- tests: `test_p3_178_zfs_hostid.bats`.
+
 ## Storage pools: a mirror of two to four disks (2026-11-11)
 
 - `storage-pool-create` takes 2 to 4 `--disk` by-id names and builds one

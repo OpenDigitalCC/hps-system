@@ -68,6 +68,20 @@ nixos_ips_address() {
   cluster_registry "$cluster" get network_dhcp_ip
 }
 
+# nixos_zfs_hostid <host key mac>
+# The node's ZFS hostid: the first 8 hex digits of the sha256 of the host key
+# MAC as 12 lower-case hex digits (no separators). Deterministic, so a node has
+# the same id on every boot and nothing needs storing; different for every
+# host. 00000000 means "unset" to the spl module, so it is never returned
+# (00000001 instead). Prints the 8 digits; returns 1 for a malformed MAC.
+nixos_zfs_hostid() {
+  local key id
+  key="$(normalise_mac "${1:-}" 2> /dev/null)" || return 1
+  id="$(printf '%s' "$key" | sha256sum | cut -c1-8)"
+  [[ "$id" == 00000000 ]] && id=00000001
+  printf '%s\n' "$id"
+}
+
 # nixos_boot_lines <mac> <profile> [pin]
 # The iPXE kernel/initrd/boot lines for a profile, from its manifest.
 # Pin: argument, else the host's system_pin, else cluster default, else latest.
@@ -108,6 +122,20 @@ nixos_boot_lines() {
     args="${args:+${args} }init=${init}"
   fi
   args="${args} hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.profile=${profile} hps.pin=${pin}"
+  # Per-node ZFS hostid (scale test phase 2): derived from the host key MAC
+  # (mac here is the registry key, never an alias boot MAC), so every port a
+  # node can boot from gives the same id. spl reads spl.spl_hostid from the
+  # kernel command line when it loads and prefers it to /etc/hostid; the image
+  # keeps a fixed build-time networking.hostId only to satisfy NixOS.
+  local zfs_hostid
+  if zfs_hostid="$(nixos_zfs_hostid "$mac")"; then
+    args="${args} spl.spl_hostid=0x${zfs_hostid}"
+    if [[ "$(host_registry "$mac" get zfs_hostid 2>/dev/null)" != "$zfs_hostid" ]]; then
+      host_registry "$mac" set zfs_hostid "$zfs_hostid" > /dev/null 2>&1 || hps_log warn "[$mac] could not record zfs_hostid"
+    fi
+  else
+    hps_log warn "[$mac] no ZFS hostid derived (malformed host key MAC); the image default applies"
+  fi
   # Registry hostname, when assigned: lets the node name its logs from the
   # first line (hps-log-target reads it); held/audit nodes have none.
   local hostname
