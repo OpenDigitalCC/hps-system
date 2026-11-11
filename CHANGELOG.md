@@ -61,6 +61,28 @@ naming the requirement and the operator API stays off.
 - changed: the dispatcher config the IPS writes has `api_forward_token = no`,
   so the operator's token never reaches an agent.
 
+## Audit image: firmware as its own initrd layer (2026-11-11)
+
+- The audit image no longer carries linux-firmware in its store
+  (`hardware.firmware` forced to `[ ]`). Before this change,
+  `enableAllHardware` also merged in the sound, TV-tuner and Wi-Fi firmware
+  that IPS-03 was meant to drop. A normal audit build therefore no longer
+  repacks about 825 MiB of firmware.
+- new: `nix/pkgs/hps-firmware-layer.nix` (flake package `firmware-layer`). It
+  is a cpio holding `/firmware.squashfs` (linux-firmware, zstd 6), published
+  once per content as `nixos/firmware/<hash>-<name>.cpio` and shared by every
+  pin. The audit `boot.json` names it in `extra_initrds` (sha256, size), and
+  `SHA256SUMS` lists it as `../firmware/<file>`.
+- The IPS emits one `initrd` line per `extra_initrds` entry, after the image's
+  own. Pins without the key boot unchanged, and a missing or malformed layer
+  refuses the boot. The audit initrd mounts the layer at `/run/hps-firmware`
+  before udev, and `firmware_class.path` points at it.
+- `hps-pins verify`, `prune` and `delete` cover layers: a layer is kept while
+  a remaining pin names it, plus one hour of grace. `nixos-prune-pins.sh`
+  skips `firmware/`, and `hps-cnh-publish` ships the layers with their pins.
+- docs: `docs/IPXE.md` (Firmware layer). tests: `test_p3_197`,
+  `t/197-firmware-layer.t`, `test_p3_92` updated.
+
 ## Storage pools: a mirror of two to four disks (2026-11-11)
 
 - `storage-pool-create` takes 2 to 4 `--disk` by-id names and builds one

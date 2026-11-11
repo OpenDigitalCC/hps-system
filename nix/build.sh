@@ -15,6 +15,16 @@
 # two files and the three iPXE binaries. ipxe.json carries version, files,
 # sha256 and size of the iPXE binaries (built by `nix build <src>#ipxe`).
 #
+# Firmware layer: a profile whose store boot.json names firmware_layer (the
+# audit image: firmware.cpio) has it published ONCE per store path, shared by
+# every pin and never copied again while it is unchanged:
+#   <out>/firmware/<store hash>-<name>.cpio
+# The published boot.json drops firmware_layer and gains
+#   extra_initrds: [{path: "firmware/<file>", sha256, size}]
+# (path relative to <out>, which the IPS serves as /nixos/); the IPS has iPXE
+# load each after the profile's initrd. SHA256SUMS lists it as ../firmware/<file>.
+# hps-pins verify checks it; hps-pins prune removes layers no pin names.
+#
 # Usage:
 #   build.sh --out DIR --cache DIR [--src DIR] [--profiles "a b"] [--no-cache]
 #            [--date YYYYMMDD]
@@ -138,15 +148,69 @@ verify_store_file() {
   fi
 }
 
+# firmware_layer_file <link>: the layer file a profile's store boot.json names
+# (firmware_layer), as a path under <link>; prints nothing for a profile
+# without one. Fails for a name that is not a plain file name or a named file
+# that is not there.
+firmware_layer_file() {
+  local link="$1" name
+  name=$(jq -r '.firmware_layer // empty' "$link/boot.json")
+  [[ -n "$name" ]] || return 0
+  if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+    echo "build.sh: $link/boot.json: firmware_layer '$name' is not a plain file name" >&2
+    return 1
+  fi
+  if [[ ! -s "$link/$name" ]]; then
+    echo "build.sh: $link/boot.json names firmware_layer $name, which the build did not produce" >&2
+    return 1
+  fi
+  printf '%s\n' "$link/$name"
+}
+
+# publish_firmware_layer <layer file>: <out>/firmware/<store hash>-<name>.cpio,
+# named after the store path that holds the file, so one name is one content.
+# An identical published file is kept (touched, so a prune running meanwhile
+# sees it as new); a missing or different one is written via a temporary name.
+# Sets FW_REL (path under <out>), FW_SHA and FW_SIZE (of the published file).
+publish_firmware_layer() {
+  local file="$1" real store name dest
+  verify_store_file "$file" || return 1
+  real=$(readlink -f "$file")
+  store=$(basename "$(dirname "$real")")
+  if [[ ! "$store" =~ ^[0-9a-z]{32}-[A-Za-z0-9._+-]+$ ]]; then
+    echo "build.sh: firmware layer $real is not in a store path (<hash>-<name>/)" >&2
+    return 1
+  fi
+  name="$store.cpio"
+  dest="$OUT/firmware/$name"
+  run mkdir -p "$OUT/firmware"
+  if [[ -f "$dest" ]] && cmp -s "$real" "$dest"; then
+    log "firmware layer unchanged: $dest"
+    run touch "$dest"
+  else
+    run install -m 0644 "$real" "$OUT/firmware/.$name.tmp"
+    run mv -f "$OUT/firmware/.$name.tmp" "$dest"
+  fi
+  FW_REL="firmware/$name"
+  FW_SHA=$(file_sha256 "$dest")
+  FW_SIZE=$(file_size "$dest")
+}
+
 publish_profile() {
   local profile="$1"
   local link="$2"
   local pin="$3"
   local dest="$OUT/$pin/$profile"
-  local built_at
+  local built_at layer extra_initrds="[]"
   built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   verify_store_file "$link/bzImage" || return 1
   verify_store_file "$link/initrd" || return 1
+  layer=$(firmware_layer_file "$link") || return 1
+  if [[ -n "$layer" ]]; then
+    publish_firmware_layer "$layer" || return 1
+    extra_initrds=$(jq -cn --arg path "$FW_REL" --arg sha "$FW_SHA" --argjson size "$FW_SIZE" \
+      '[{path: $path, sha256: $sha, size: $size}]')
+  fi
   run mkdir -p "$dest"
   run install -m 0644 "$link/bzImage" "$dest/bzImage.tmp"
   run install -m 0644 "$link/initrd" "$dest/initrd.tmp"
@@ -164,11 +228,13 @@ publish_profile() {
   jq --arg built_at "$built_at" --arg pin "$pin" --arg profile "$profile" \
     --arg bz_sha "$bz_sha" --arg rd_sha "$rd_sha" \
     --argjson bz_size "$bz_size" --argjson rd_size "$rd_size" \
-    --arg ipxe "$IPXE_VERSION" \
+    --arg ipxe "$IPXE_VERSION" --argjson extra "$extra_initrds" \
     '.built_at = $built_at | .pin = $pin | .profile = $profile
      | (if $ipxe != "" then .ipxe = {version: $ipxe} else . end)
      | .sha256 = {bzImage: $bz_sha, initrd: $rd_sha}
-     | .size = {bzImage: $bz_size, initrd: $rd_size}' \
+     | .size = {bzImage: $bz_size, initrd: $rd_size}
+     | del(.firmware_layer)
+     | (if ($extra | length) > 0 then .extra_initrds = $extra else . end)' \
     "$link/boot.json" > "$dest/boot.json.tmp"
   run mv -f "$dest/boot.json.tmp" "$dest/boot.json"
 }
@@ -237,10 +303,20 @@ write_sums() {
   local profile f
   log "+ write $dir/SHA256SUMS"
   : > "$dir/SHA256SUMS.tmp"
+  local -A layers=()
   for profile in $(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
     [[ -f "$dir/$profile/bzImage" && -f "$dir/$profile/initrd" ]] || continue
     printf '%s  %s/bzImage\n' "$(file_sha256 "$dir/$profile/bzImage")" "$profile" >> "$dir/SHA256SUMS.tmp"
     printf '%s  %s/initrd\n' "$(file_sha256 "$dir/$profile/initrd")" "$profile" >> "$dir/SHA256SUMS.tmp"
+    [[ -f "$dir/$profile/boot.json" ]] || continue
+    while IFS=$'\t' read -r f sha; do
+      [[ -n "$f" ]] && layers["$f"]="$sha"
+    done < <(jq -r '.extra_initrds[]? | [.path, .sha256] | @tsv' "$dir/$profile/boot.json")
+  done
+  # Shared layers outside the pin, by the hash boot.json recorded on
+  # publishing (hashing ~800 MB again per pin would add nothing).
+  for f in $(printf '%s\n' "${!layers[@]}" | sort); do
+    printf '%s  ../%s\n' "${layers[$f]}" "$f" >> "$dir/SHA256SUMS.tmp"
   done
   for f in $IPXE_FILES; do
     [[ -f "$dir/ipxe/$f" ]] || continue
@@ -268,11 +344,17 @@ cleanup() {
 # content_suffix: 7 hex chars of sha256 over the built systems' store paths, in
 # profile order. The date and the nixpkgs rev alone do not change when the HPS
 # modules do; two builds of different images on one day must not share a pin.
+# A firmware layer counts too (one line per profile that has one), so a
+# layer change alone also gives a new pin.
 content_suffix() {
-  local profile init
+  local profile init layer
   for profile in $PROFILES; do
     init=$(jq -r '.init' "$WORK/result-$profile/boot.json")
     printf '%s %s\n' "$profile" "$init"
+    layer=$(firmware_layer_file "$WORK/result-$profile") || return 1
+    if [[ -n "$layer" ]]; then
+      printf '%s-firmware %s\n' "$profile" "$(readlink -f "$layer")"
+    fi
   done | sha256sum | cut -c1-7
 }
 

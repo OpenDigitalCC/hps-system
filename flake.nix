@@ -4,7 +4,9 @@
   # Built by nix/build.sh inside the builder container (lab/builder). Each
   # package output is the netboot artefact set for one profile: bzImage, initrd
   # (kernel initrd + compressed squashfs store) and boot.json (init= store path,
-  # base cmdline, nixpkgs rev). The IPS appends hps.ips= hps.mac= hps.profile=.
+  # base cmdline, nixpkgs rev); the audit image also firmware.cpio, its
+  # firmware layer (nix/pkgs/hps-firmware-layer.nix). The IPS appends hps.ips=
+  # hps.mac= hps.profile=.
   #
   # NO SECRET OF ANY KIND IS PLACED IN THESE IMAGES: one image per profile,
   # per-node identity comes from the registry at boot (plans/phase-1.md §2).
@@ -69,11 +71,15 @@
 
       # The netboot artefact set for one built system. boot.json carries only
       # build-determined facts; build.sh adds built_at and pin when it copies
-      # the set out of the store.
+      # the set out of the store. A profile with a firmware layer (the audit image: system.build
+      # .hpsFirmwareLayer) also gets firmware.cpio, and boot.json names it
+      # (firmware_layer); build.sh publishes it once under nixos/firmware/
+      # and turns that into extra_initrds.
       netbootArtefacts = name: nixos:
         let
           cfg = nixos.config;
-          bootJson = pkgs.writeText "hps-boot-${name}.json" (builtins.toJSON {
+          firmwareLayer = cfg.system.build.hpsFirmwareLayer or null;
+          bootJson = pkgs.writeText "hps-boot-${name}.json" (builtins.toJSON ({
             kernel = "bzImage";
             initrd = "initrd";
             init = "${cfg.system.build.toplevel}/init";
@@ -83,16 +89,20 @@
             nixpkgs_rev = nixpkgs.rev or "dirty";
             nixos_version = cfg.system.nixos.release;
             profile = name;
-          });
+          } // lib.optionalAttrs (firmwareLayer != null) {
+            firmware_layer = "firmware.cpio";
+          }));
         in
         pkgs.runCommand "hps-netboot-${name}"
-          { passthru = { toplevel = cfg.system.build.toplevel; }; }
-          ''
+          { passthru = { toplevel = cfg.system.build.toplevel; inherit firmwareLayer; }; }
+          (''
             mkdir -p "$out"
             ln -s ${cfg.system.build.kernel}/${cfg.system.boot.loader.kernelFile} "$out/bzImage"
             ln -s ${cfg.system.build.netbootRamdisk}/${cfg.system.boot.loader.initrdFile} "$out/initrd"
             cp ${bootJson} "$out/boot.json"
-          '';
+          '' + lib.optionalString (firmwareLayer != null) ''
+            ln -s ${firmwareLayer}/firmware.cpio "$out/firmware.cpio"
+          '');
 
       # iPXE from the pinned nixpkgs, built with exactly the targets the IPS
       # serves (IPS-09): snponly.efi (UEFI, dnsmasq's first chain step),
@@ -142,6 +152,9 @@
           default = self.packages.${system}.node-base;
           ipxe = ipxeArtefacts;
           om3 = (pkgs.extend om3Overlay).om3;
+          # The audit image's firmware layer on its own (size checks:
+          # nix path-info -S .#firmware-layer).
+          firmware-layer = self.nixosConfigurations.audit.config.system.build.hpsFirmwareLayer;
         };
 
       # The AppArmor profiles of the compute role, parsed (no kernel load) from

@@ -4,8 +4,11 @@
 #
 # The builder (nix/build.sh) writes, under ${resources}/nixos:
 #   <pin>/<profile>/{bzImage,initrd,boot.json}      and   latest  (the pin)
-# boot.json carries the kernel command line and init path; nothing about a
-# NixOS boot is hard-coded here. lighttpd serves the tree at /nixos/.
+#   firmware/<store hash>-<name>.cpio               (shared firmware layers)
+# boot.json carries the kernel command line and init path, and for a profile
+# with a firmware layer (the audit image) extra_initrds: [{path, ...}], paths
+# under ${resources}/nixos; nothing about a NixOS boot is hard-coded here.
+# lighttpd serves the tree at /nixos/.
 #===============================================================================
 
 # nixos_resolve_pin [mac]
@@ -114,6 +117,11 @@ nixos_boot_lines() {
     hps_log error "[$mac] NixOS manifest has no init: ${manifest}"
     return 1
   fi
+  local extra
+  extra="$(nixos_extra_initrds "$manifest")" || {
+    hps_log error "[$mac] NixOS manifest names an unusable extra initrd: ${manifest}"
+    return 1
+  }
 
   local base="http://${ips}/nixos/${pin}/${profile}"
   local args="$cmdline"
@@ -121,6 +129,14 @@ nixos_boot_lines() {
   if [[ " ${args} " != *" init="* ]]; then
     args="${args:+${args} }init=${init}"
   fi
+  # Each extra initrd also by name for the EFI stub, beside initrd=initrd: a
+  # kernel that reads initrd= from its command line (no LoadFile2 initrd from
+  # iPXE) then still gets every image. iPXE names an image after the last
+  # part of its URL.
+  local rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] && args="${args} initrd=${rel##*/}"
+  done <<< "$extra"
   args="${args} hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.profile=${profile} hps.pin=${pin}"
   # Per-node ZFS hostid (scale test phase 2): derived from the host key MAC
   # (mac here is the registry key, never an alias boot MAC), so every port a
@@ -172,7 +188,38 @@ nixos_boot_lines() {
   fi
   printf 'kernel %s/bzImage %s\n' "$base" "$args"
   printf 'initrd %s/initrd\n' "$base"
+  # After the image's own initrd: the kernel unpacks them in this order.
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] && printf 'initrd http://%s/nixos/%s\n' "$ips" "$rel"
+  done <<< "$extra"
   printf 'boot\n'
+}
+
+# nixos_extra_initrds <manifest>
+# The manifest's extra_initrds paths (relative to ${resources}/nixos), one per
+# line; nothing for a manifest without them (every pin built before the
+# firmware layer). Returns 1, with a log line, when the list is malformed, a
+# path is not firmware/<plain file name>, or the file is not published: the
+# boot is refused rather than served without its firmware.
+nixos_extra_initrds() {
+  local manifest="$1" root paths rel
+  paths="$(jq -r '(.extra_initrds // []) | if type == "array" then .[] | (if (.path | type) == "string" and .path != "" then .path else "<no path>" end) else error("not a list") end' "$manifest" 2>/dev/null)" || {
+    hps_log error "NixOS manifest ${manifest}: extra_initrds is not a list of {path, ...}"
+    return 1
+  }
+  [[ -n "$paths" ]] || return 0
+  root="$(hps_get_config resources)" || return 1
+  while IFS= read -r rel; do
+    if [[ ! "$rel" =~ ^firmware/[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+      hps_log error "NixOS manifest ${manifest}: extra initrd '${rel}' is not firmware/<file name>"
+      return 1
+    fi
+    if [[ ! -r "${root}/nixos/${rel}" ]]; then
+      hps_log error "NixOS manifest ${manifest}: extra initrd ${root}/nixos/${rel} is missing"
+      return 1
+    fi
+  done <<< "$paths"
+  printf '%s\n' "$paths"
 }
 
 # nixos_emit_boot <mac> <profile> [pin]

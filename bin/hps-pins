@@ -20,13 +20,16 @@ Usage:
   hps-pins prune [--keep-previous N] [--dry-run]
   hps-pins delete <pin>
 list: pin, date, size, profiles, hosts pinned to it, latest marker.
-verify: sha256 and size of every bzImage and initrd against boot.json and
+verify: sha256 and size of every bzImage and initrd, and of each firmware
+  layer a boot.json names (nixos/firmware/), against boot.json and
   SHA256SUMS; FAIL lines name the file. A file with no recorded hash (a pin
   built before IPS-05) is reported UNVERIFIED and does not fail.
 prune: removes pins nothing references (not the latest, not a host's
   system_pin or system_pin_previous, not the cluster nixos_default_pin, not a
   pin a host booted from in the last 15 minutes), keeping the newest N
-  (default 1) of those. delete: the same protection, one named pin.
+  (default 1) of those; then every firmware layer under nixos/firmware/ that
+  no remaining pin names (one written in the last hour is kept). delete: the
+  same protection, one named pin, then the same layer clean-up.
 Exit: 0 ok, 1 failed, 2 usage, 3 refused (verify: a FAIL; delete or prune: a
 protected pin or no latest), 4 not found.
 USAGE
@@ -78,6 +81,8 @@ sub cmd_prune {
     my $r = $p->prune(keep_previous => $opt->{keep}, dry_run => $opt->{dry});
     print "keep   $_->{pin} ($_->{why})\n" for @{ $r->{kept} };
     print(($r->{dry_run} ? 'would delete' : 'deleted     ') . " $_->{pin} ($_->{why})\n") for @{ $r->{removed} };
+    print "keep   $_->{file} ($_->{why})\n" for @{ $r->{layers_kept} // [] };
+    print(($r->{dry_run} ? 'would delete' : 'deleted     ') . " $_->{file} ($_->{why})\n") for @{ $r->{layers_removed} // [] };
     return 0;
 }
 
@@ -93,8 +98,9 @@ sub dispatch {
     return cmd_prune($p, $argv, $opt)  if $cmd eq 'prune';
     if ($cmd eq 'delete') {
         return usage('delete needs one pin') unless @$argv == 1;
-        $p->delete($argv->[0]);
+        my $r = $p->delete($argv->[0]);
         print "deleted $argv->[0]\n";
+        print "deleted $_->{file} ($_->{why})\n" for @{ $r->{layers_removed} // [] };
         return 0;
     }
     return usage("unknown command '$cmd'");

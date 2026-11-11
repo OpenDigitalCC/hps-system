@@ -13,7 +13,8 @@
 # Refuses (exit 1, nothing removed) when "latest" is missing, empty or names a
 # pin that is not there. Only the artefact directories are removed: the
 # builder's Nix store is a separate matter. Directories whose names are not
-# valid pin names are left alone and reported.
+# valid pin names are left alone and reported, as is firmware/ (the shared
+# firmware layers, which hps-pins prune manages).
 #
 # Environment: HPS_BASE (default /srv); HPS_SYSTEM_PATH overrides
 # $HPS_BASE/hps-system. The pin directory is "resources" from hps_get_config.
@@ -122,6 +123,7 @@ keep_newest() {
   while IFS= read -r pin; do
     [[ -n "${REFERENCED[$pin]:-}" ]] && continue
     [[ "$pin" =~ ^[a-z0-9][a-z0-9.-]+$ ]] || continue
+    [[ "$pin" != firmware ]] || continue
     (( kept < KEEP )) || break
     note_ref "$pin" "among the ${KEEP} newest"
     kept=$((kept + 1))
@@ -143,6 +145,10 @@ report_and_act() {
     [[ -n "$pin" ]] || continue
     if ! [[ "$pin" =~ ^[a-z0-9][a-z0-9.-]+$ ]]; then
       echo "skipped   ${pin} (not a pin name)"
+      continue
+    fi
+    if [[ "$pin" == firmware ]]; then
+      echo "skipped   ${pin} (shared firmware layers; hps-pins prune removes the unused ones)"
       continue
     fi
     if [[ -n "${REFERENCED[$pin]:-}" ]]; then

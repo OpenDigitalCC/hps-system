@@ -22,7 +22,9 @@ package HPS::CnhPublish;
 #   url:  its path under the IPS base URL (packages/..., nixos/...)
 #
 # Every pin is verified with HPS::Pins before it is listed (a pin that fails
-# verification is refused); symlinks inside a pin are refused.
+# verification is refused); symlinks inside a pin are refused. The firmware
+# layers a pin's boot.json names (nixos/firmware/<file>, shared by pins) are
+# listed with it, once per manifest.
 use strict;
 use warnings;
 use feature qw(signatures);
@@ -115,6 +117,15 @@ sub pin_entries ($self, $pin) {
         push @e, _entry("srv/hps-resources/nixos/$pin/$rel", "nixos/$pin/$rel", $f);
     }
     _fail('refused', "Pin $pin holds no files") unless @e;
+    # Shared firmware layers (verified above with the pin).
+    my %layer;
+    for my $ref (@{ $self->_pins->layer_refs($pin) }) {
+        my $rel = $ref->{path};
+        next if $layer{$rel}++;
+        my $f = "$self->{resources}/nixos/$rel";
+        _fail('refused', "Pin $pin names firmware layer $rel, which is a symlink") if -l $f;
+        push @e, _entry("srv/hps-resources/nixos/$rel", "nixos/$rel", $f);
+    }
     return @e;
 }
 
@@ -181,8 +192,9 @@ sub publish ($self, %o) {
     my @packages = @{ $o{packages} // [] };
     @packages = ($DEFAULT_PACKAGE) unless @packages;
     # Every input is checked before anything is written.
-    my @files;
-    push @files, $self->pin_entries($_) for @pins;
+    my (@files, %path);
+    # A firmware layer two pins share is listed once.
+    push @files, grep { !$path{ $_->{path} }++ } $self->pin_entries($_) for @pins;
     my %pk;
     for my $rel (@packages) {
         _fail('usage', "package $rel given twice") if $pk{$rel}++;

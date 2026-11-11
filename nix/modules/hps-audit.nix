@@ -13,17 +13,76 @@
 # can be inspected with `ced run` (the IPS approver accepts STATE=HELD). That
 # inspection needs the node to stay up: with the reboot after the audit (the
 # default) the window is short; set held_reboot_after_audit=false to inspect.
-{ config, pkgs, ... }:
+#
+# Firmware is a layer of its own (owner go-ahead 2026-11-11): the full
+# linux-firmware set (owner, 2026-11-10: keep it whole; audit image only) is
+# NOT in this image's store. nix/pkgs/hps-firmware-layer.nix packs it as a
+# second initrd (one file, /firmware.squashfs) that changes only with the
+# firmware; nix/build.sh publishes it once under <resources>/nixos/firmware/
+# and the IPS has iPXE load it after the image's initrd (boot.json
+# extra_initrds). Below: mount it before udev starts and point the kernel's
+# firmware loader at it (docs/IPXE.md, "Firmware layer").
+{ config, lib, pkgs, ... }:
 
+let
+  firmwareLayer = pkgs.callPackage ../pkgs/hps-firmware-layer.nix { };
+  # Where the firmware squashfs is mounted; the kernel's firmware_class.path.
+  firmwareDir = "/run/hps-firmware";
+in
 {
   imports = [ ./hps-ctrl-exec.nix ];
 
   hardware.enableAllHardware = true;
-  # The full linux-firmware set (owner, 2026-11-10: keep it whole for now,
-  # revisit later), and nothing else: enableRedistributableFirmware also adds
-  # sound (sof, alsa), TV-tuner (libreelec-dvb) and Wi-Fi firmware packages
-  # (IPS-03 measurement: ~57 MiB of the audit closure, none of it for a server).
-  hardware.firmware = [ pkgs.linux-firmware ];
+  # No firmware in the image itself. enableAllHardware turns on
+  # enableRedistributableFirmware, whose package list (linux-firmware plus
+  # sound, TV-tuner and Wi-Fi firmware and wireless-regdb, IPS-03) would be
+  # merged with any list given here, so both are forced.
+  hardware.enableRedistributableFirmware = lib.mkForce false;
+  hardware.firmware = lib.mkForce [ ];
+
+  # The layer, for flake.nix (netbootArtefacts publishes it beside the image).
+  system.build.hpsFirmwareLayer = firmwareLayer;
+
+  # Stage 1 (systemd initrd): mount the layer's squashfs as soon as the loop
+  # module is loaded and before udev triggers the coldplug, so a driver that
+  # requests firmware while probing in the initrd already finds it. Under /run:
+  # the initrd's /run (submounts included) is carried into the system, so the
+  # same path serves stage 2. A boot without the layer (an old IPS serving one
+  # initrd) skips the mount and comes up without firmware, as with no files.
+  boot.initrd.systemd.mounts = [
+    {
+      what = "/firmware.squashfs";
+      where = firmwareDir;
+      type = "squashfs";
+      options = lib.concatStringsSep "," (
+        [ "loop" "ro" ]
+        ++ lib.optional (config.boot.kernelPackages.kernel.kernelAtLeast "6.2") "threads=multi"
+      );
+      wantedBy = [ "sysinit.target" ];
+      after = [ "systemd-modules-load.service" ];
+      before = [ "sysinit.target" "systemd-udev-trigger.service" ];
+      unitConfig = {
+        DefaultDependencies = false;
+        ConditionPathExists = "/firmware.squashfs";
+        # Kept across the switch to the system (initrd-switch-root isolates).
+        IgnoreOnIsolate = true;
+      };
+    }
+  ];
+  # firmware_class is built into the kernel: the parameter applies from the
+  # first request (the initrd included).
+  boot.kernelParams = [ "firmware_class.path=${firmwareDir}" ];
+  # NixOS's activation (system.activationScripts.udevd) writes
+  # ${config.hardware.firmware}/lib/firmware, here an empty tree, into the same
+  # parameter; put the layer back right after it, when it is mounted.
+  system.activationScripts.hpsFirmwarePath = {
+    deps = [ "udevd" ];
+    text = ''
+      if [ -e /sys/module/firmware_class/parameters/path ] && [ -d ${firmwareDir} ]; then
+        echo -n ${firmwareDir} > /sys/module/firmware_class/parameters/path
+      fi
+    '';
+  };
 
   # Netboot needs none of these in stage 1 (root is RAM); listed so the audit
   # kernel has every storage/NIC driver module available at stage 2 as well.

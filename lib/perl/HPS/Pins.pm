@@ -6,12 +6,19 @@ package HPS::Pins;
 #                                             (IPS-09; not a profile)
 #   <resources>/nixos/<pin>/SHA256SUMS        (written by nix/build.sh)
 #   <resources>/nixos/latest                  (the newest pin)
+#   <resources>/nixos/firmware/<hash>-<name>.cpio
+#                                             shared firmware layers; a profile's
+#                                             boot.json names its own in
+#                                             extra_initrds [{path, sha256, size}]
 #
 # list, verify (served files against boot.json and SHA256SUMS), prune and
 # delete. A pin is protected, never pruned or deleted, when it is the latest,
 # when a host's system_pin or system_pin_previous names it, when it is the
 # cluster's nixos_default_pin, or when a host that booted within the last 15
 # minutes resolves to it. The registry is read through HPS::Registry only.
+# A firmware layer is kept while any pin left on disk names it (and for an
+# hour after it was written, so a build publishing it is never raced); prune
+# and delete remove the others.
 use strict;
 use warnings;
 use feature qw(signatures);
@@ -34,6 +41,10 @@ my $PIN_RE = qr/^[a-z0-9][a-z0-9.-]+\z/;
 my @ARTEFACTS = qw(bzImage initrd);
 # The pin's iPXE directory sits beside the profile directories and is not one.
 my $IPXE_DIR = 'ipxe';
+# The shared firmware layers sit beside the pins under nixos/ and are not one.
+my $LAYER_DIR = 'firmware';
+my $LAYER_RE  = qr{\A\Q$LAYER_DIR\E/([A-Za-z0-9][A-Za-z0-9._+-]*)\z};
+my $LAYER_FILE_RE = qr{\A[A-Za-z0-9][A-Za-z0-9._+-]*\.cpio\z};
 
 sub new ($class, %opt) {
     my $self = {
@@ -42,6 +53,7 @@ sub new ($class, %opt) {
         now         => $opt{now} // sub { time },
         logger      => $opt{logger} // \&_default_logger,
         boot_window => $opt{boot_window} // 900,
+        layer_grace => $opt{layer_grace} // 3600,
     };
     return bless $self, $class;
 }
@@ -127,7 +139,7 @@ sub pin_size ($self, $pin) {
 sub pin_names ($self) {
     my $root = $self->nixos_dir;
     opendir(my $dh, $root) or _fail('notfound', "Cannot read $root: $!");
-    my @pins = grep { /$PIN_RE/ && -d "$root/$_" && !-l "$root/$_" } readdir $dh;
+    my @pins = grep { /$PIN_RE/ && $_ ne $LAYER_DIR && -d "$root/$_" && !-l "$root/$_" } readdir $dh;
     closedir $dh;
     my %date = map { $_ => $self->pin_date($_) } @pins;
     return sort { $date{$b} cmp $date{$a} || $b cmp $a } @pins;
@@ -228,7 +240,12 @@ sub _sums ($self, $pin) {
 }
 
 sub _check_file ($self, $pin, $rel, $sha, $size, $fail) {
-    my $file = $self->nixos_dir . "/$pin/$rel";
+    return _check_path($self->nixos_dir . "/$pin/$rel", $rel, $sha, $size, $fail);
+}
+
+# _check_path($file, $label, $sha, $size, $fail): the file against a sha256
+# and, when given, a size; failures are pushed under $label.
+sub _check_path ($file, $rel, $sha, $size, $fail) {
     unless (-f $file) { push @$fail, { file => $rel, reason => 'missing' }; return }
     my $have = -s $file;
     if (defined $size && $have != $size) {
@@ -275,8 +292,129 @@ sub verify_pin ($self, $pin) {
             push @fail, @here;
         }
     }
+    $self->_verify_layers($pin, $sums, \@fail, \@unverified);
     $self->_verify_ipxe($pin, $sums, \@fail, \@unverified);
     return { pin => $pin, ok => (@fail ? 0 : 1), failures => \@fail, unverified => \@unverified };
+}
+
+#--- firmware layers -----------------------------------------------------------
+
+# _extra_initrds($boot_json): the list under extra_initrds ([] when absent),
+# or undef when it is not a list of objects.
+sub _extra_initrds ($b) {
+    my $x = $b->{extra_initrds};
+    return [] unless defined $x;
+    return undef unless ref $x eq 'ARRAY';
+    return undef if grep { ref $_ ne 'HASH' } @$x;
+    return $x;
+}
+
+# layer_refs($pin): [{profile, path, sha256, size}] for every extra initrd the
+# pin's boot.json files name, valid or not (verify judges them).
+sub layer_refs ($self, $pin) {
+    my @r;
+    for my $prof ($self->profiles($pin)) {
+        my $b = $self->_boot_json($pin, $prof) or next;
+        my $x = _extra_initrds($b) or next;
+        push @r, map { { profile => $prof, path => $_->{path}, sha256 => $_->{sha256}, size => $_->{size} } } @$x;
+    }
+    return \@r;
+}
+
+# Every profile's extra initrds: a path of the form firmware/<file>, the file
+# against the sha256 and size boot.json recorded and the ../<path> line of
+# SHA256SUMS. Failures and unverified files are named by that path.
+sub _verify_layers ($self, $pin, $sums, $fail, $unverified) {
+    for my $prof ($self->profiles($pin)) {
+        my $b = $self->_boot_json($pin, $prof) or next;
+        my $x = _extra_initrds($b);
+        unless ($x) {
+            push @$fail, { file => "$prof/boot.json", reason => 'extra_initrds is not a list of {path, sha256, size}' };
+            next;
+        }
+        for my $e (@$x) {
+            my $rel = $e->{path};
+            unless (defined $rel && !ref $rel && $rel =~ $LAYER_RE) {
+                push @$fail, { file => "$prof/boot.json", reason => 'extra initrd path ' . (defined $rel && !ref $rel ? "'$rel'" : '(none)') . " is not $LAYER_DIR/<file>" };
+                next;
+            }
+            my $file = $self->nixos_dir . "/$rel";
+            my $sha  = $e->{sha256};
+            my $sum  = $sums ? $sums->{"../$rel"} : undef;
+            if (!defined $sha && !defined $sum) {
+                push @$unverified, $rel;
+                push @$fail, { file => $rel, reason => 'missing' } unless -f $file;
+                next;
+            }
+            unless (-f $file) { push @$fail, { file => $rel, reason => 'missing' }; next }
+            my $have = -s $file;
+            if (defined $e->{size} && $have != $e->{size}) {
+                push @$fail, { file => $rel, reason => "size $have, boot.json says $e->{size}" };
+                next;
+            }
+            my $got = $self->_layer_sha($file);
+            for my $want (grep { defined } $sha, $sum) {
+                next if defined $got && $got eq $want;
+                push @$fail, { file => $rel, reason => 'sha256 ' . ($got // 'unreadable') . ", expected $want" };
+                last;
+            }
+        }
+    }
+    return;
+}
+
+# sha256 of a layer file, hashed once per object while its size and mtime stay
+# the same: every pin names the same ~800 MB file.
+sub _layer_sha ($self, $file) {
+    my @st = stat $file;
+    my $key = join ':', $file, $st[7] // '', $st[9] // '';
+    return $self->{layer_sha}{$key} //= _sha256_file($file);
+}
+
+# The layer files on disk: names under nixos/firmware/ (no temporary files,
+# no symlinks), sorted.
+sub layer_files ($self) {
+    my $dir = $self->nixos_dir . "/$LAYER_DIR";
+    opendir(my $dh, $dir) or return ();
+    my @f = sort grep { /$LAYER_FILE_RE/ && -f "$dir/$_" && !-l "$dir/$_" } readdir $dh;
+    closedir $dh;
+    return @f;
+}
+
+# _prune_layers(\@pins_left, dry_run): remove the layer files none of the
+# given pins names, except one written within layer_grace seconds. Returns
+# {kept => [{file, why}], removed => [{file, why}]}; file is firmware/<name>.
+sub _prune_layers ($self, $left, $dry) {
+    my %used;
+    for my $pin (@$left) {
+        for my $e (@{ $self->layer_refs($pin) }) {
+            next unless defined $e->{path} && !ref $e->{path} && $e->{path} =~ $LAYER_RE;
+            push @{ $used{$1} }, $pin;
+        }
+    }
+    my $now = $self->{now}->();
+    my (@kept, @removed);
+    my $dir = $self->nixos_dir . "/$LAYER_DIR";
+    for my $name ($self->layer_files) {
+        my $rel = "$LAYER_DIR/$name";
+        if (my $by = $used{$name}) {
+            my %u = map { $_ => 1 } @$by;
+            push @kept, { file => $rel, why => 'named by ' . join(', ', sort keys %u) };
+            next;
+        }
+        my $mtime = (stat "$dir/$name")[9] // 0;
+        if ($now - $mtime < $self->{layer_grace}) {
+            push @kept, { file => $rel, why => 'written within the last ' . $self->{layer_grace} . ' s (a build may be publishing it)' };
+            next;
+        }
+        my $why = 'no pin names it';
+        unless ($dry) {
+            unlink "$dir/$name" or _fail('failed', "Could not remove $dir/$name: $!");
+            $self->_log('info', "deleted firmware layer $rel ($why)");
+        }
+        push @removed, { file => $rel, why => $why };
+    }
+    return { kept => \@kept, removed => \@removed };
 }
 
 # The pin's ipxe/ files, when the directory exists: each file named in
@@ -346,12 +484,14 @@ sub delete ($self, $pin) {
         _fail('refused', "Pin $pin is in use and is not deleted: " . join(', ', @$why));
     }
     $self->_remove($pin, 'explicit delete; no host, cluster default or latest references it');
-    return { pin => $pin };
+    my $l = $self->_prune_layers([ $self->pin_names ], 0);
+    return { pin => $pin, layers_removed => $l->{removed} };
 }
 
 # prune(keep_previous => N, dry_run => 0|1): remove unreferenced pins except
-# the newest N of them (default 1). Needs a readable `latest`. Returns
-# {kept => [{pin, why}], removed => [{pin, why}], dry_run}.
+# the newest N of them (default 1), then the firmware layers no kept pin names.
+# Needs a readable `latest`. Returns {kept => [{pin, why}], removed => [{pin,
+# why}], layers_kept => [{file, why}], layers_removed => [{file, why}], dry_run}.
 sub prune ($self, %o) {
     my $keep = $o{keep_previous} // 1;
     _fail('usage', 'keep-previous must be a non-negative integer') unless $keep =~ /^[0-9]+\z/;
@@ -376,7 +516,9 @@ sub prune ($self, %o) {
             push @removed, { pin => $pin, why => $why };
         }
     }
-    return { kept => \@kept, removed => \@removed, dry_run => $o{dry_run} ? 1 : 0 };
+    my $l = $self->_prune_layers([ map { $_->{pin} } @kept ], $o{dry_run});
+    return { kept => \@kept, removed => \@removed, layers_kept => $l->{kept},
+        layers_removed => $l->{removed}, dry_run => $o{dry_run} ? 1 : 0 };
 }
 
 1;
