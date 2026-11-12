@@ -17,6 +17,7 @@ sub usage {
 Usage:
   hps-cnh-publish --pin PIN [--pin PIN ...] [--package packages/REL ...] [--image NAME ...]
                   [--resources DIR] [--system DIR]
+  hps-cnh-publish --source-only [--resources DIR] [--system DIR]
 Writes into <resources>/packages/cnh/ (served as http://<ips>/packages/cnh/):
   hps-system-<sha16>.tar.gz   the hps-system tree (default /srv/hps-system)
   manifest-<sha256>.json      the files a CNH copies into /var/lib/hps-ips:
@@ -28,6 +29,9 @@ Writes into <resources>/packages/cnh/ (served as http://<ips>/packages/cnh/):
   latest                      the newest manifest's sha256
 Prints the manifest sha256 last:  MANIFEST <sha256> <url path> files=<n>
 On the CNH:  cnh-ips-bootstrap http://<this ips> <sha256>
+--source-only writes the tarball alone (no manifest; latest is left as it is)
+and prints  SOURCE <sha256> <url path>; an image builder builds from it:
+builder-build <sha256> (docs/BUILDER.md).
 Exit: 0 ok, 1 failed, 2 usage, 3 refused (a pin does not verify, a symlink),
 4 not found.
 USAGE
@@ -36,11 +40,21 @@ USAGE
 
 sub main {
     my @argv = @_;
-    my (@pins, @packages, @images, $resources, $system, $help);
+    my (@pins, @packages, @images, $resources, $system, $help, $source_only);
     GetOptionsFromArray(\@argv, 'pin=s' => \@pins, 'package=s' => \@packages, 'image=s' => \@images,
-        'resources=s' => \$resources, 'system=s' => \$system, 'help|h' => \$help) or return usage();
+        'resources=s' => \$resources, 'system=s' => \$system, 'source-only' => \$source_only,
+        'help|h' => \$help) or return usage();
     if ($help) { usage(); return 0 }
     return usage('unexpected arguments: ' . join(' ', @argv)) if @argv;
+    if ($source_only) {
+        return usage('--source-only takes no --pin, --package or --image') if @pins || @packages || @images;
+        my $e = eval { HPS::CnhPublish->new(resources => $resources, system => $system)->system_tarball };
+        if ($e) {
+            print "SOURCE $e->{sha256} $e->{url}\n";
+            return 0;
+        }
+        return report($@);
+    }
     return usage('at least one --pin is required') unless @pins;
     my $r = eval {
         HPS::CnhPublish->new(resources => $resources, system => $system)
@@ -51,7 +65,11 @@ sub main {
         print "MANIFEST $r->{sha256} $r->{url} files=$r->{files}\n";
         return 0;
     }
-    my $err = $@;
+    return report($@);
+}
+
+sub report {
+    my ($err) = @_;
     if (ref $err && $err->isa('HPS::CnhPublish::Error')) {
         print STDERR 'hps-cnh-publish: ' . $err->message . "\n";
         return $EXIT{ $err->kind } // 1;

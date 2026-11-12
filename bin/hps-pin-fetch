@@ -1,0 +1,67 @@
+#!/usr/bin/env perl
+# hps-pin-fetch: pull one pin from an image builder's read-only HTTP server
+# into the IPS's nixos/ folder, proved on disk with O_DIRECT reads
+# (HPS::PinFetch, docs/BUILDER.md). IPS tool.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use HPS::PinFetch;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-pin-fetch: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-pin-fetch --from http://<builder>:8090 --pin PIN [--latest]
+                [--rate RATE] [--tries N] [--pause SECONDS] [--resources DIR]
+Fetches <from>/<PIN>/SHA256SUMS, every profile's boot.json, ipxe/ipxe.json and
+every file SHA256SUMS lists (shared firmware layers into nixos/firmware/),
+checks that the JSON files and SHA256SUMS agree, and reads each file back with
+O_DIRECT until it gives the listed sha256 (--tries, default 3; --pause, default
+20 s between). The pin appears under its name only once every file is proved;
+then every file is proved once more in place and hps-pins verify must pass.
+A pin that fails is moved aside to nixos/.failed-<PIN>-<time>. A pin already
+published with the same SHA256SUMS is proved and accepted.
+  --latest   set nixos/latest to PIN afterwards (verified again)
+  --rate     curl --limit-rate (for example 40m)
+Last line:  FETCHED <PIN> files=<n> fetched=<n> reused=<n> bytes=<n> latest=<yes|no>
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (the builder's files disagree, the
+pin is published with other content), 4 not found.
+USAGE
+    return 2;
+}
+
+sub main {
+    my @argv = @_;
+    my ($from, $pin, $latest, $rate, $tries, $pause, $resources, $help);
+    GetOptionsFromArray(\@argv, 'from=s' => \$from, 'pin=s' => \$pin, 'latest' => \$latest,
+        'rate=s' => \$rate, 'tries=s' => \$tries, 'pause=s' => \$pause, 'resources=s' => \$resources,
+        'help|h' => \$help) or return usage();
+    if ($help) { usage(); return 0 }
+    return usage('unexpected arguments: ' . join(' ', @argv)) if @argv;
+    return usage('--from and --pin are required') unless defined $from && defined $pin;
+    return usage('--pause must be 0 to 600 seconds') if defined $pause && !($pause =~ /\A[0-9]+\z/ && $pause <= 600);
+    my $r = eval {
+        HPS::PinFetch->new(from => $from, rate => $rate, resources => $resources,
+            (defined $tries ? (tries => $tries) : ()), (defined $pause ? (pause => $pause) : ()))
+            ->fetch_pin($pin, latest => $latest);
+    };
+    if ($r) {
+        printf "FETCHED %s files=%d fetched=%d reused=%d bytes=%d latest=%s\n",
+            $r->{pin}, $r->{files}, $r->{fetched}, $r->{reused}, $r->{bytes}, $r->{latest} ? 'yes' : 'no';
+        return 0;
+    }
+    my $err = $@;
+    if (ref $err && $err->can('message')) {
+        print STDERR 'hps-pin-fetch: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-pin-fetch: $err";
+    return 1;
+}
+
+exit main(@ARGV);
