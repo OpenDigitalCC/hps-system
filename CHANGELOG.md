@@ -12,6 +12,14 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## repo update orders pre-release tags correctly (2026-11-12)
+
+- fix: repo update's newest-release check ranked every pre-release kind the
+  same and compared only the number, so om3 `v3.0.0-alpha111` was reported as
+  NEWER than the pinned `v3.0.0-rc62`. Within one version the order is now
+  alpha < beta < rc < final, then the number.
+- tests: `test_p3_204_repo_scripts.bats` (alpha and beta tags among the rcs).
+
 ## om3 v3.0.0-rc62 (2026-11-12)
 
 - change: om3 follows the newest release tag (ruling 2026-11-09): v3.0.0-rc62

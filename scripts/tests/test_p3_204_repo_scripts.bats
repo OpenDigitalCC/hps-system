@@ -264,7 +264,7 @@ an_update() {
 {"$D1": {"outputs": {"out": {"path": "$P2"}}, "env": {}},
  "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-om3-3.0.0-rc60-go-modules.drv": {"outputs": {"out": {"hash": "abc", "method": "nar"}}, "env": {"outputHash": "sha256-x"}}}
 EOF
-  p3_204_tags opensvc/om3 v3.0.0-rc59 v3.0.0-rc60 v3.0.0-rc62 v3.0.0-rc61 v2.1.9
+  p3_204_tags opensvc/om3 v3.0.0-rc59 v3.0.0-rc60 v3.0.0-alpha111 v3.0.0-rc62 v3.0.0-beta9 v3.0.0-rc61 v2.1.9
   p3_204_tags OpenDigitalCC/ctrl-exec-plugins v0.3.10 v0.3.11
   p3_204_tags OpenDigitalCC/ctrl-exec v0.14.6 v0.14.7
 }

@@ -421,8 +421,10 @@ job_update() {
   return "$failed"
 }
 
-# newest_tag <owner/repo>: the newest release tag (vX.Y.Z, vX.Y.Z-rcN or
-# -betaN; a final release is newer than its rcs), from GitHub's tags API.
+# newest_tag <owner/repo>: the newest release tag (vX.Y.Z, vX.Y.Z-rcN, -betaN or
+# -alphaN), from GitHub's tags API. Within one version: alpha < beta < rc <
+# final, then the number (2026-11-12: om3 v3.0.0-alpha111 was reported as
+# newer than v3.0.0-rc62).
 newest_tag() {
   local repo="$1" page tags="$TMPDIR/tags.json"
   : > "$tags"
@@ -435,7 +437,9 @@ newest_tag() {
   done
   jq -R -s -r '
     def key: capture("^v?(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)(-(?<p>[a-z]+)\\.?(?<n>[0-9]+))?$")
-      | [(.a|tonumber), (.b|tonumber), (.c|tonumber), (if .p == null then 1 else 0 end), ((.n // "0")|tonumber)];
+      | [(.a|tonumber), (.b|tonumber), (.c|tonumber),
+         (if .p == null then 3 elif .p == "rc" then 2 elif .p == "beta" then 1 else 0 end),
+         ((.n // "0")|tonumber)];
     split("\n") | map(select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z]+\\.?[0-9]+)?$")))
     | if length == 0 then empty else max_by(key) end' "$tags"
 }
