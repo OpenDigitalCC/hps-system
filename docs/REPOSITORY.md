@@ -78,8 +78,8 @@ cache (a URL has a `/`).
 - **hps-repo status** (`repo-status`): the public key, the cache (paths,
   signed, unsigned, NAR bytes), every package HPS built itself (`PACKAGE
   <name> <version> <store path> signed=<yes|no>`: a path with no upstream
-  signature whose name is HPS's own, `om3*` with its Go modules, `ctrl-exec*`,
-  `hps-*`), the pins, the last job and the `INPUT` lines of the last update.
+  signature whose name is HPS's own, `om3*` with its Go modules, `ctrl-exec-agent-*`, `hps-nagios-plugins`,
+  `hps-netboot-*`, `hps-ipxe-*`, `hps-firmware-layer-*`; the NixOS-generated files are not listed), the pins, the last job and the `INPUT` lines of the last update.
   Last line `REPO state= key= paths= signed= unsigned= packages= pins=
   last=<mode>:<id>:<result> newer=<n>`.
 - **hps-repo seed** (`repo-seed`): import a binary cache. `--from ips` (the

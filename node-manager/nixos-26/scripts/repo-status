@@ -20,8 +20,11 @@
 #   PACKAGE <name> <version> <store path> signed=<yes|no>
 #                                 every path HPS built itself (no signature of
 #                                 an upstream cache) whose name is one of
-#                                 HPS's own: om3 (and its Go modules),
-#                                 ctrl-exec*, hps-*
+#                                 HPS's own packages: om3 (and its Go
+#                                 modules), ctrl-exec-agent, the plugins
+#                                 (hps-nagios-plugins), the images
+#                                 (hps-netboot-*, hps-ipxe-*,
+#                                 hps-firmware-layer-*)
 #   pins under out/ (served on port 8090), the one in out/latest marked
 #   the last job's record, then INPUT lines from the last repo update
 #   (state/inputs.txt), then the tail of the last job's log
@@ -44,7 +47,7 @@ PUBLIC="$REPO/repo.pub"
 UNIT=hps-builder-build
 LINES=20
 # The names of HPS's own packages (the flake builds them; nixpkgs has none).
-OWN_RE='^(om3|ctrl-exec|hps-)'
+OWN_RE='^(om3-|ctrl-exec-agent-|ctrl-exec-plugins|hps-nagios-plugins|hps-netboot-|hps-ipxe-|hps-firmware-layer-)'
 
 usage() {
   cat >&2 <<'USAGE'

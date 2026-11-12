@@ -24,7 +24,7 @@ teardown() {
 
 P1=/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-glibc-2.42
 P2=/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-om3-3.0.0-rc60
-P3=/nix/store/cccccccccccccccccccccccccccccccc-ctrl-exec-0.14.7
+P3=/nix/store/cccccccccccccccccccccccccccccccc-ctrl-exec-agent-0.14.7
 D1=/nix/store/dddddddddddddddddddddddddddddddd-om3-3.0.0-rc60.drv
 
 # a_runner: HPS_BUILDER_RUN records its arguments.
@@ -337,7 +337,7 @@ EOF
   [[ "$output" == *"REPO-PUBKEY hps-repo-test-1:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="* ]]
   [[ "$output" == *"paths=4 signed=3 unsigned=1 nar_bytes=601"* ]]
   [[ "$output" == *"PACKAGE om3 3.0.0-rc60 $P2 signed=yes"* ]]
-  [[ "$output" == *"PACKAGE ctrl-exec 0.14.7 $P3 signed=no"* ]]
+  [[ "$output" == *"PACKAGE ctrl-exec-agent 0.14.7 $P3 signed=no"* ]]
   [[ "$output" == *"PACKAGE hps-netboot-node-base - /nix/store/ffffffffffffffffffffffffffffffff-hps-netboot-node-base signed=yes"* ]]
   [[ "$output" != *"PACKAGE glibc"* ]]
   [[ "$output" == *"  nixos-b (latest)"* ]]
