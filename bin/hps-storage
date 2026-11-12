@@ -9,6 +9,8 @@ use JSON::PP;
 use HPS::Registry;
 use HPS::Keysafe;
 use HPS::Storage;
+use HPS::Issues;
+use HPS::IssueHeal;
 
 # 0 ok, 1 failed, 2 usage, 3 refused (policy, node refusal), 4 not found
 # operations that take arguments, and how many
@@ -71,6 +73,24 @@ sub render_run {
         $out .= $s->{stdout} . ($s->{stdout} =~ /\n\z/ || !length $s->{stdout} ? '' : "\n");
     }
     return $out . "$r->{op} ok: host $r->{mac}, pool $r->{pool}\n";
+}
+
+# storage_back($st): after an up that worked, the mirror-leg issues with a leg
+# on one of the host's export portals are due for the healer at once
+# (HPS::IssueHeal::storage_back, IPS-34). A failure here is a warning on
+# stderr; the up stands.
+sub storage_back {
+    my ($st) = @_;
+    my $ok = eval {
+        my @portals = map { $_->{portal} } $st->exports;
+        HPS::IssueHeal->new(issues => HPS::Issues->new)->storage_back(@portals) if @portals;
+        1;
+    };
+    return 1 if $ok;
+    my $err = ref $@ ? $@->message : $@;
+    $err =~ s/\s+\z//;
+    print STDERR "hps-storage: warning: storage is up, but the healer was not told ($err)\n";
+    return 0;
 }
 
 sub main {
@@ -137,6 +157,7 @@ sub main {
         }
         my $r = $st->run($op, %opt);
         print $json ? $js->encode($r) : render_run($r);
+        storage_back($st) if $op eq 'up';
         return 0;
     };
     return $rc if defined $rc;

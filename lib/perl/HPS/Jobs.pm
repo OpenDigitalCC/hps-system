@@ -40,6 +40,7 @@ my %KINDS = (
     'storage-trim-check'   => [ \&_args_mac,     900 ],
     'storage-status'       => [ \&_args_mac,     900 ],
     'net-up'               => [ \&_args_mac,     600 ],
+    'osvc-deliver'         => [ \&_args_mac,     300 ],
     'workload-create'      => [ \&_args_wl_create,  3600 ],
     'workload-start'       => [ \&_args_wl_vm,      1800 ],
     'workload-stop'        => [ \&_args_wl_vm,      1800 ],
@@ -140,6 +141,7 @@ sub command ($kind, $args, %env) {
     return ($ced, 'approve', @a)                                       if $kind eq 'pairing-approve';
     return ($env{pins} // 'hps-pins', 'prune', @a) if $kind eq 'pins-prune';
     return ($env{node} // 'hps-node', 'net-up', $a[0], '--wait', 120) if $kind eq 'net-up';
+    return ($env{osvc} // 'hps-osvc', 'deliver', $a[0])                if $kind eq 'osvc-deliver';
     my $st = $env{storage} // 'hps-storage';
     return ($st, $a[0], 'up', '--wait', 120)                           if $kind eq 'storage-up';
     return ($st, $a[0], 'down')                                        if $kind eq 'storage-down';

@@ -12,6 +12,46 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## IPS-34 drill findings: storage back, om3 after a reboot, vms, net-up race, start noise (2026-11-12)
+
+Scale test phase 4 drills on s1 (IPS stop, pulled SCH disk, SCH power-off);
+items 1, 2, 6, 7 and 8 of IPS-34.
+
+- the healer tries at once when storage returns: a `storage-path` issue that
+  names a portal resolving (hps-issue-watch), or `hps-storage <host> up`
+  finishing (the `storage-up` job after a storage host pairs), sets
+  `heal.next_at` = now on the open or healing mirror-leg issues with a leg on
+  that portal (marker `leg=` or workload leg spec), trail `retry storage <ip>
+  back`. Before, sch-002 was back about 16:37 and the 5-minute backoff step
+  held the rejoin until 16:41:31 (issue 20261112-039). Tests: `t/228`, `t/42`.
+- new: om3 comes back on a rebooted node. `hps-osvc deliver` records the host
+  key `osvc_delivered_at` (an om3 cluster member); after every pairing the API
+  queues the new job kind `osvc-deliver <mac>` (work lane, after `net-up` and
+  `storage-up`) for a member. A host never delivered to gets nothing; pairing
+  never fails on it. Before, sch-002's `osvc_hb` stayed UNKNOWN and its om3-hb
+  issues went urgent until a hand `hps-osvc deliver`. Tests: `t/90`, `t/45`,
+  `t/207`, `test_p3_199_net_up_hook.bats`.
+- `check_vms` asks `virsh domstats --nowait` (libvirtd does not wait for a
+  guest's state-change lock, held by an earlier domstats a killed virsh left
+  behind: "cannot acquire state change lock (held by
+  monitor=remoteDispatchConnectGetAllDomainStats)" on every TCH) and leaves out
+  the labels whose values a sample lacks. Each call gets (9 - interval) / 2 s
+  (4 s), so both and the interval fit nagios-check's 10 s; a slower one is
+  "virsh domstats timed out after 4s" instead of "failed:" with nothing after
+  it. Tests: `test_p3_181_usage_checks.bats`.
+- one net-up at a time per host: `hps-node net-up` holds an flock on
+  `jobs/run/net-up-<mac>.lock` (then each refreshed host's, one at a time).
+  tch-004, 13:24: the pairing job and an operator net-up raced, "could not
+  create enp1s0.114 / vxlan1100". A second waits up to 300 s, then fails
+  saying so. Tests: `t/227`.
+- the IPS start logs "OpenSVC (om) not installed" once, at info (it was four
+  times at warning): the post-start event listener exited at once, which
+  supervisord counted as a failed start and retried three times;
+  `startsecs=0`, `startretries=0`, `autorestart=false`. Tests:
+  `test_p1_81_start_without_opensvc.bats`.
+- roll-out: IPS restart (items 1, 2, 7, 8); node image (item 6). Existing om3
+  members need one hand `hps-osvc deliver` each to record `osvc_delivered_at`.
+
 ## Issues say how they were resolved (2026-11-12)
 
 Owner: "on the issues, include the resolution action in the resolved log, so

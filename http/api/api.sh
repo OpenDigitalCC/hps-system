@@ -292,6 +292,32 @@ api_net_after_pair() {
 }
 
 #===============================================================================
+# IPS-34 hook: om3 back on a rebooted node
+#===============================================================================
+# Nodes run from RAM: the OpenSVC secret osvc-secret-set wrote is gone after a
+# reboot and opensvc-daemon stays down until it is delivered again. After
+# pairing, a host that is an om3 cluster member (host key osvc_delivered_at,
+# recorded by every successful hps-osvc deliver) gets an `osvc-deliver <mac>`
+# job. It is queued after the net and storage hooks' jobs (the work lane runs
+# oldest first). A host never delivered to is not a member: a no-op with a log
+# line, and the pairing goes on whatever happens here.
+api_osvc_after_pair() {
+  local mac="$1" id
+  if ! host_registry "$mac" get osvc_delivered_at > /dev/null 2>&1; then
+    hps_log info "$API_LOG_PREFIX osvc hook: $mac is not an om3 cluster member (never delivered); nothing to do"
+    return 0
+  fi
+  mac="${mac//[:.-]/}"
+  mac="${mac,,}"
+  if id=$(hps_job_submit osvc-deliver "$mac"); then
+    hps_log info "$API_LOG_PREFIX osvc hook: queued osvc-deliver for $mac as job $id"
+  else
+    hps_log error "$API_LOG_PREFIX osvc hook: could not queue osvc-deliver for $mac"
+  fi
+  return 0
+}
+
+#===============================================================================
 # api_pair_refusal <http code> <rc of ce_approve_pair_request>
 #===============================================================================
 # The answer to a pairing request that was not approved. The HTTP code tells
@@ -652,6 +678,7 @@ handle_system_action() {
         0)
           api_net_after_pair "$REQUEST_MAC"
           api_storage_after_pair "$REQUEST_MAC"
+          api_osvc_after_pair "$REQUEST_MAC"
           api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
           ;;
         3) api_pair_refusal 503 ;;

@@ -30,9 +30,11 @@ Usage: hps-jobs [--once] [--interval SECONDS] [--dir JOBS_DIR]
 Runs queued privileged jobs. Without --once it polls new/ until stopped.
 Kinds: pairing-window-open [seconds], pairing-window-close, pairing-list,
 pairing-approve <reqid> [--replace], storage-up|down|trim-check|status <mac>, net-up <mac>,
+osvc-deliver <mac>,
 workload-create <name> [--resume], workload-start|stop|status <name> [--vm <vm>],
 pins-prune [--keep-previous N] [--dry-run].
-Environment: HPS_JOBS_DIR, CTRL_EXEC_DISPATCHER, HPS_STORAGE_CMD, HPS_WORKLOAD_CMD, HPS_PINS_CMD, HPS_NODE_CMD.
+Environment: HPS_JOBS_DIR, CTRL_EXEC_DISPATCHER, HPS_STORAGE_CMD, HPS_WORKLOAD_CMD, HPS_PINS_CMD, HPS_NODE_CMD,
+HPS_OSVC_CMD.
 USAGE
     return 2;
 }
@@ -208,6 +210,7 @@ sub main {
         workload   => $ENV{HPS_WORKLOAD_CMD} // "$RealBin/hps-workload",
         pins       => $ENV{HPS_PINS_CMD} // "$RealBin/hps-pins",
         node       => $ENV{HPS_NODE_CMD} // "$RealBin/hps-node",
+        osvc       => $ENV{HPS_OSVC_CMD} // "$RealBin/hps-osvc",
     };
     log_line(info => 'started; queue ' . $jobs->dir);
     recover_stale($jobs);

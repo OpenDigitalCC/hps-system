@@ -146,6 +146,15 @@ first). The suffix says what the number is:
 | `zpool_io` | `ZPOOL_IO OK - read 2.0 MB/s write 3.5 MB/s (2 pools)`; `pools`, per pool `<pool>_alloc`, `_free` (B), `_rd_iops`, `_wr_iops`, `_rd_Bps`, `_wr_Bps`. No pool: `ZPOOL_IO OK - no pools` |
 | `vms` | `VMS OK - 2 running VMs (rss 1.5 GiB)`; `vms`, per running guest `<vm>_cpu_pct` (guest CPU time / interval; 100% is one full vCPU, so it can exceed 100), `_vcpus`, `_rss` (host memory the guest process holds), `_mem` (memory given to the guest), `_rd_Bps`, `_wr_Bps` (summed over its disks), `_rx_Bps`, `_tx_Bps` (summed over its NICs). No guest: `VMS OK - no running VMs | vms=0` |
 
+`vms` asks `virsh domstats --nowait`: libvirtd does not wait for a guest's
+state-change lock, which an earlier `domstats` it is still answering can hold on
+a slow (nested) host, and leaves out the values that need it. A label whose
+value a sample lacks is left out for that guest that time (rates need both
+samples, `_vcpus`, `_rss` and `_mem` the second). Each `virsh` call gets
+(9 - interval) / 2 seconds (4 s at the default interval), so both calls and the
+interval fit inside `nagios-check`'s 10 s; a slower call is
+`VMS UNKNOWN - virsh domstats timed out after 4s`.
+
 Time budget: `nagios-check` runs the checks one after another within its 50 s
 budget, 10 s at most each. The five samplers add about 5 s to a node's run (the
 `cpu`, `net`, `diskio`, `zpool_io` and `vms` waits do not overlap), well inside

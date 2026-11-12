@@ -69,7 +69,7 @@ hps_job_validate() {
         return 1
       fi
       ;;
-    storage-up | storage-down | storage-trim-check | storage-status | net-up)
+    storage-up | storage-down | storage-trim-check | storage-status | net-up | osvc-deliver)
       [[ $# -eq 1 && "$1" =~ ^[0-9a-f]{12}$ ]] \
         || { echo "$kind: needs exactly <mac> (12 lowercase hex digits)" >&2; return 1; }
       ;;

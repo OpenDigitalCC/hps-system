@@ -7,11 +7,19 @@
 # first deliver sends the secret alone, the node daemon bootstraps a CA, and
 # deliver reads it back with the read-only node script osvc-ca-export and keeps
 # it. The CA is never printed, logged or put in an argument.
+#
+# Membership (IPS-34): a deliver that succeeds records the host key
+# osvc_delivered_at (epoch). A host with it is an om3 cluster member: after it
+# pairs (every boot: nodes run from RAM) the API's pairing hook queues an
+# osvc-deliver job for it, so om3 comes back without a hand deliver. The first
+# deliver to a host stays the operator's decision.
 use strict;
 use warnings;
 use FindBin qw($RealBin);
 use lib "$RealBin/../lib/perl";
 use HPS::Keysafe;
+use HPS::Registry;
+use HPS::Log;
 
 # 0 ok, 1 failed, 2 usage, 3 refused (keysafe permissions), 4 not found
 my %EXIT = (usage => 2, refused => 3, perms => 3, notfound => 4, failed => 1);
@@ -36,6 +44,9 @@ The cluster CA: om3 nodes must share one. deliver also sends the CA kept in the 
 first deliver sends the secret alone, then reads the CA the node daemon created
 (node script osvc-ca-export) into the keysafe. A node that made its own CA earlier is
 brought into line by its next deliver (its node certificate is reissued). The CA is never printed or logged.
+A deliver that succeeds records the host key osvc_delivered_at: the host is an om3
+cluster member, and after each pairing (every boot) the IPS queues the job
+osvc-deliver for it by itself.
 status runs the read-only node script osvc-status on <host>: om3 daemon status and
 monitor JSON, then OSVC <node> peers=<n> beating=<n> stale=<list|-> frozen=<yes|no>;
 exit 0 healthy, 2 a peer stale, 1 om not answering.
@@ -72,8 +83,28 @@ sub deliver {
     print {$fh} "$ca\n" if defined $ca;
     close $fh;    # sets $? to the runner's wait status
     my $rc = $? == 0 ? 0 : ($? >> 8) || 1;
-    return $rc if $rc || defined $ca;
+    return $rc if $rc;
+    record_member($host);
+    return 0 if defined $ca;
     return capture_ca($ks, $host, @export);
+}
+
+# record_member($host): host key osvc_delivered_at = now, so the pairing hook
+# re-delivers after the host's next boot. A host the registry does not know is
+# a warning; the delivery itself succeeded.
+sub record_member {
+    my ($host) = @_;
+    my $ok = eval {
+        my $reg = HPS::Registry->new;
+        my $mac = HPS::Log->new(registry => $reg)->find_host($host);
+        $reg->host_set($mac, 'osvc_delivered_at', time);
+        1;
+    };
+    return 1 if $ok;
+    my $err = ref $@ ? $@->message : $@;
+    $err =~ s/\s+\z//;
+    print STDERR "hps-osvc: warning: delivered to $host, but osvc_delivered_at was not recorded ($err): its om3 is not re-delivered after a reboot\n";
+    return 0;
 }
 
 # The keysafe has no CA yet: read the one the node daemon created and keep it.

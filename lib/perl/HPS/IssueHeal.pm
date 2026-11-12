@@ -42,6 +42,14 @@ package HPS::IssueHeal;
 # issue is escalated to urgent once. The first attempt is FIRST_DELAY after the
 # healer first sees the issue. Every attempt and check is in the trail with the
 # node's result line. Issues that are resolved or need a human are never touched.
+#
+# Storage back (IPS-34): when a portal's storage returns - a storage-path issue
+# that names it resolves (resolved(), from hps-issue-watch) or a storage host's
+# storage-up finishes (storage_back(), from hps-storage up with the host's
+# export portals) - every open or healing mirror-leg issue with a leg on that
+# portal is due at once (heal.next_at = now; attempts unchanged), with a trail
+# entry "retry storage <portal> back". The rejoin then waits for the healer's
+# next tick, not for the rest of a backoff step of up to 15 minutes.
 use strict;
 use warnings;
 use feature qw(signatures);
@@ -91,6 +99,65 @@ sub tick ($self) {
         $n++;
     }
     return $n;
+}
+
+# resolved($rec): an issue was resolved; a storage-path issue whose fields name
+# a portal (<ip>:<port>) makes the mirror-leg issues on that portal due now.
+# Returns the ids made due.
+sub resolved ($self, $rec) {
+    return () unless ref $rec eq 'HASH' && ($rec->{kind} // '') eq 'storage-path';
+    my $portal = ($rec->{fields} // {})->{portal};
+    return () unless defined $portal && length $portal;
+    return $self->retry_portal($portal);
+}
+
+# storage_back(@portals): a storage host is up again (its storage-up finished):
+# retry_portal for each of its export portals. Returns the ids made due.
+sub storage_back ($self, @portals) {
+    my %seen;
+    return map { $self->retry_portal($_) } grep { defined && length && !$seen{ _portal_ip($_) }++ } @portals;
+}
+
+# _portal_ip($portal): the address of <ip> or <ip>:<port>.
+sub _portal_ip ($portal) { return $portal =~ s/:[0-9]+\z//r }
+
+# leg_on_portal($rec, $ip): true when the mirror-leg issue has a leg on $ip: the
+# marker's leg=<iqn>@<ip>:<port>, or a leg spec iscsi:<ip>[:<port>]:<iqn> of the
+# workload disk /dev/md/<mirror> on its host.
+sub leg_on_portal ($self, $rec, $ip) {
+    my $f = $rec->{fields} // {};
+    return 1 if defined $f->{leg} && $f->{leg} =~ /\@\Q$ip\E(?::[0-9]+)?\z/;
+    return 0 unless defined $f->{mirror};
+    my $mac = $self->find_host($f->{host} // '') // return 0;
+    my $wd = $self->workload_disk($mac, $f->{mirror}) or return 0;
+    return (grep { /\Aiscsi:\Q$ip\E:/ } @{ $wd->{specs} }) ? 1 : 0;
+}
+
+# retry_portal($portal): every open or healing mirror-leg issue with a leg on the
+# portal is due now; trail "retry storage <portal> back". An issue already due
+# is left as it is. Returns the ids made due.
+sub retry_portal ($self, $portal) {
+    my $ip = _portal_ip($portal);
+    my $issues = $self->{issues};
+    my @ids;
+    for my $rec ($issues->list) {
+        next unless $rec->{kind} eq 'mirror-leg' && ($rec->{state} eq 'open' || $rec->{state} eq 'healing');
+        next unless $self->leg_on_portal($rec, $ip);
+        my $now = $self->_now;
+        my $done;
+        $issues->update($rec->{id}, sub ($r) {
+            return unless $r->{state} eq 'open' || $r->{state} eq 'healing';
+            my $h = $r->{heal} //= { attempts => 0 };
+            return if defined $h->{next_at} && $h->{next_at} <= $now;
+            $h->{next_at} = $now;
+            $issues->trail($r, 'retry', "storage $ip back");
+            $done = 1;
+        });
+        next unless $done;
+        push @ids, $rec->{id};
+        $issues->_log('info', "hps-issue: retry $rec->{id} $rec->{key}: storage $ip back, healing now");
+    }
+    return @ids;
 }
 
 # _call($mac, $script, @args): {rc, stdout, stderr}; a runner that dies is rc 1.

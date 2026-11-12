@@ -150,6 +150,18 @@ restarts `opensvc-daemon`. Until it has arrived the unit stays down
 (`ConditionPathExists`). Run it for every node, and again on every node after a
 node is paired, because the restart is also what refreshes the node list.
 
+A deliver that works records the host key `osvc_delivered_at`: the host is an
+om3 cluster member. Nodes run from RAM, so a reboot loses the secret and om3
+stays down; after every pairing the API queues an `osvc-deliver <mac>` job
+(`hps-osvc deliver <mac>` in the job runner's work lane, after the host's
+`net-up` and `storage-up`) for a member, so om3 comes back on its own (s1:
+sch-002 after a power-off, `osvc_hb` UNKNOWN and om3-hb issues urgent until a
+hand deliver). A host never delivered to is not a member and gets no job
+("osvc hook: ... not an om3 cluster member", info); the first deliver to a
+host stays an operator step, and nothing here can fail a pairing. The other
+nodes keep the rebooted node in their node list; deliver to them again only
+when a node is new.
+
 ### The cluster CA
 
 om3 nodes authenticate each other with certificates from the cluster CA

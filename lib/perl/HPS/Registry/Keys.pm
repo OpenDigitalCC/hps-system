@@ -74,6 +74,7 @@ my @KEYS = (
     [ 'boot_mac_last', 'host', 'mac', 'ipxe_init_handler', 'The MAC the node last booted from (which port), as the host may boot from any of its macs.' ],
     [ 'storage_note', 'host', 'string', 'hps-onboard', 'Operator note about the node storage plan.' ],
     [ 'poweroff_last', 'host', 'json', 'HPS::Node', 'Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail.' ],
+    [ 'osvc_delivered_at', 'host', 'epoch', 'hps-osvc deliver', 'When the OpenSVC secret was last delivered to the node. Present means an om3 cluster member: after each pairing the API queues an osvc-deliver job for it (IPS-34).' ],
     [ 'storage_last', 'host', 'json', 'HPS::Storage', 'Outcome of the last storage operation: op, ok, at.' ],
     [ 'storage_pool', 'host', 'string', 'HPS::Storage', 'Name of the pool created on the node.' ],
     [ 'storage_created_at', 'host', 'stamp', 'HPS::Storage', 'When the pool was created.' ],

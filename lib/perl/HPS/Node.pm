@@ -9,6 +9,9 @@ package HPS::Node;
 # addresses on the storage and transit VLANs (net-vlan-address per network),
 # then, on a transit host, builds the layout's vxlan networks
 # (net-vxlan-ensure, HPS::Vxlan) and refreshes the other transit hosts' peers.
+# One net-up at a time per host: net_up holds an flock on
+# <jobs>/run/net-up-<mac>.lock (IPS-34 item 7: the pairing job and an operator
+# net-up raced and each failed to create the other's interface).
 #
 # Every collaborator is injectable (storage, runner, bmc, logger, now, sleep) so
 # the sequence is testable without a node, a BMC or a clock.
@@ -19,6 +22,9 @@ no warnings 'experimental::signatures';
 
 use POSIX qw(strftime);
 use JSON::PP;
+use Fcntl qw(:flock);
+use File::Path qw(make_path);
+use HPS::Jobs ();
 use HPS::Registry;
 use HPS::Storage;
 use HPS::ClusterConfig ();
@@ -31,7 +37,9 @@ our %CODE = (off => 0, 'no-bmc' => 0, failed => 1, forced => 6);
 
 # new(host => MAC|HOSTNAME, registry => $reg, storage => $obj (has run('down')),
 #     runner => $obj (call(mac, script, args)), bmc => $obj (run($action, $host)),
-#     logger => sub ($level, $msg), now => sub, sleep => sub ($s), poll => SECONDS)
+#     logger => sub ($level, $msg), now => sub, sleep => sub ($s), poll => SECONDS,
+#     lock_dir => DIR (net-up locks; default the jobs run/ dir),
+#     lock_wait => SECONDS (how long net_up waits for another net-up; 300))
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
     my $log = $opt{logger} // \&_default_logger;
@@ -43,6 +51,8 @@ sub new ($class, %opt) {
         sleep    => $opt{sleep} // sub ($s) { sleep $s },
         poll     => $opt{poll} // $ENV{HPS_NODE_POLL} // 5,
         bmc      => $opt{bmc} // HPS::Node::Bmc->new,
+        lock_dir => $opt{lock_dir},
+        lock_wait => $opt{lock_wait} // $ENV{HPS_NODE_LOCK_WAIT} // 300,
     }, $class;
     $self->{storage} = $opt{storage} // HPS::Storage->new(host => $opt{host}, registry => $reg, logger => $log);
     $self->{runner}  = $opt{runner}  // HPS::Storage::Runner::HpsRun->new;
@@ -273,6 +283,11 @@ sub _net_fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
 # hosts: their outcome is logged and kept per entry (rc, summary, error) and
 # never changes the result, because a host that is down gets its peers when it
 # next pairs.
+# Locks (_net_lock): this host's for its own calls, then each refreshed host's
+# for its refresh call, one at a time, so two net-ups never wait on each other
+# in a cycle. A net-up that cannot get this host's lock within lock_wait fails
+# (kind 'failed'); a refresh that cannot get its host's lock is skipped with a
+# warning.
 sub net_up ($self, %a) {
     my $plan = $self->net_plan;
     my $host = $self->{host};
@@ -287,6 +302,8 @@ sub net_up ($self, %a) {
         $plan->{result} = $result;
         return $plan;
     }
+    my $lock = $self->_net_lock($self->{mac})
+        // _net_fail('failed', "$host: another net-up for this host is still running after $self->{lock_wait}s");
     $self->_await_agent($a{wait} // 0);
     my %by = map { $_->{name} => $_ } @nets;
     for my $n (grep { !$_->{refused} } @nets) {
@@ -302,16 +319,46 @@ sub net_up ($self, %a) {
         next if $r->{rc} == 0;
         $result = $r->{rc} == 3 && $result ne 'failed' ? 'refused' : 'failed';
     }
+    close $lock;
     for my $x (@{ $plan->{refresh} }) {
         my $what = "net-up $host: refresh $x->{host} $x->{name}";
         if ($x->{refused}) {
             $self->_log('warning', "$what refused: $x->{refused}");
             next;
         }
+        my $peer = $self->_net_lock($x->{mac});
+        unless ($peer) {
+            $x->{error} = "not called: another net-up for $x->{host} is still running after $self->{lock_wait}s";
+            $self->_log('warning', "$what: $x->{error}");
+            next;
+        }
         $self->_net_call($x->{mac}, $what, $x, 'warning');
+        close $peer;
     }
     $plan->{result} = $result;
     return $plan;
+}
+
+# _net_lock($mac): an exclusive flock on <lock_dir>/net-up-<mac>.lock, waited for
+# up to lock_wait seconds (polled each second); the handle (close it, or let it
+# go out of scope, to release), or undef when the wait ran out. A lock file
+# that cannot be opened is an error: net-up does not run unlocked.
+sub _net_lock ($self, $mac) {
+    my $dir = $self->{lock_dir} //= HPS::Jobs->new(registry => $self->{registry})->sub_dir('run');
+    make_path($dir) unless -d $dir;
+    my $file = "$dir/net-up-$mac.lock";
+    my $old = umask 002;
+    my $ok = open(my $fh, '>>', $file);
+    umask $old;
+    _net_fail('failed', "cannot open the net-up lock $file: $!") unless $ok;
+    my $deadline = $self->{now}->() + $self->{lock_wait};
+    my $said;
+    until (flock($fh, LOCK_EX | LOCK_NB)) {
+        return undef if $self->{now}->() >= $deadline;
+        $self->_log('info', "net-up: waiting for another net-up on $mac to finish") unless $said++;
+        $self->{sleep}->(1);
+    }
+    return $fh;
 }
 
 # _net_call($mac, $what, \%entry, $level): one node call, rc/summary/error kept

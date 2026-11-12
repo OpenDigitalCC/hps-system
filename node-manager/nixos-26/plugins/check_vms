@@ -3,8 +3,8 @@
 # check_vms - Nagios plugin: resource use of the running libvirt guests.
 #
 # Run by nagios-check (ctrl-exec) on compute nodes. Runs
-#   virsh -c qemu:///system domstats --raw --list-running --cpu-total --balloon
-#         --vcpu --block --interface
+#   virsh -c qemu:///system domstats --raw --list-running --nowait --cpu-total
+#         --balloon --vcpu --block --interface
 # twice, INTERVAL seconds apart, and reports per running guest (name lower-cased,
 # characters outside [a-z0-9_-] become "_"):
 #   <vm>_cpu_pct   cpu.time delta / interval, in %; 100 is one full vCPU, so a
@@ -17,6 +17,14 @@
 # plus vms=<n>. A usage check: always OK when virsh answers; no running guest is
 # OK. A guest present in only one sample (started or stopped meanwhile) is left
 # out.
+#
+# --nowait: libvirtd does not wait for a guest's state-change lock (held, for
+# example, by an earlier domstats it is still answering for a caller that gave
+# up); it leaves out the values that need the lock. A label whose value a
+# sample lacks is left out for that guest (rates need both samples, the
+# vcpus/rss/mem levels the second). Each virsh call gets (9 - INTERVAL) / 2
+# seconds, so both calls and the interval fit inside nagios-check's 10 s; a
+# call that takes longer is "virsh domstats timed out after Ns".
 # Output: "VMS OK - 2 running VMs (rss 4.0 GiB) | vms=2 <vm>_cpu_pct=..% ..."
 #
 # Usage: check_vms [-i SECONDS]      (1 to 5, default 1)
@@ -44,43 +52,61 @@ while getopts "i:" opt; do
   esac
 done
 [[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
+limit=$(( (9 - interval) / 2 ))
 
-# One line per guest: name cpu_ns vcpus rss_kib mem_kib rd wr rx tx
+# One line per guest: name cpu_ns vcpus rss_kib mem_kib rd wr rx tx, "-" for a
+# value the sample did not carry. On failure: the reason, and return 1.
 sample() {
-  local raw
-  raw=$(timeout 8 "$VIRSH" -c qemu:///system domstats --raw --list-running \
-    --cpu-total --balloon --vcpu --block --interface 2>&1) || { printf "%s\n" "$raw"; return 1; }
+  local raw rc
+  raw=$(timeout "$limit" "$VIRSH" -c qemu:///system domstats --raw --list-running \
+    --nowait --cpu-total --balloon --vcpu --block --interface 2>&1)
+  rc=$?
+  if (( rc == 124 )); then
+    echo "timed out after ${limit}s"
+    return 1
+  fi
+  if (( rc != 0 )); then
+    printf 'failed: %s\n' "${raw:-exit $rc}"
+    return 1
+  fi
   printf '%s\n' "$raw" | awk '
-  function flush() {
-    if (name != "") print name, cpu + 0, vcpus + 0, rss + 0, mem + 0, rd + 0, wr + 0, rx + 0, tx + 0
-    name = ""; cpu = vcpus = rss = mem = rd = wr = rx = tx = 0
+  function flush(  i, out) {
+    if (name != "") { out = name; for (i = 2; i <= 9; i++) out = out " " v[i]; print out }
+    name = ""; for (i = 2; i <= 9; i++) v[i] = "-"
   }
+  function add(i, x) { v[i] = (v[i] == "-") ? x + 0 : v[i] + x }
+  BEGIN { flush() }
   /^Domain: / { flush(); s = $0; sub(/^Domain: *\047?/, "", s); sub(/\047? *$/, "", s); name = s; next }
   {
     line = $0; sub(/^ +/, "", line)
     split(line, kv, "=")
-    k = kv[1]; v = substr(line, length(k) + 2)
-    if (k == "cpu.time") cpu = v
-    else if (k == "vcpu.current") vcpus = v
-    else if (k == "balloon.rss") rss = v
-    else if (k == "balloon.current") mem = v
-    else if (k ~ /^block\.[0-9]+\.rd\.bytes$/) rd += v
-    else if (k ~ /^block\.[0-9]+\.wr\.bytes$/) wr += v
-    else if (k ~ /^net\.[0-9]+\.rx\.bytes$/) rx += v
-    else if (k ~ /^net\.[0-9]+\.tx\.bytes$/) tx += v
+    k = kv[1]; x = substr(line, length(k) + 2)
+    if (k == "cpu.time") v[2] = x + 0
+    else if (k == "vcpu.current") v[3] = x + 0
+    else if (k == "balloon.rss") v[4] = x + 0
+    else if (k == "balloon.current") v[5] = x + 0
+    else if (k == "block.count") { add(6, 0); add(7, 0) }
+    else if (k == "net.count") { add(8, 0); add(9, 0) }
+    else if (k ~ /^block\.[0-9]+\.rd\.bytes$/) add(6, x)
+    else if (k ~ /^block\.[0-9]+\.wr\.bytes$/) add(7, x)
+    else if (k ~ /^net\.[0-9]+\.rx\.bytes$/) add(8, x)
+    else if (k ~ /^net\.[0-9]+\.tx\.bytes$/) add(9, x)
   }
   END { flush() }'
 }
 
-a=$(sample) || unknown "virsh domstats failed: ${a//$'\n'/ }"
+a=$(sample) || unknown "virsh domstats ${a//$'\n'/ }"
 if [[ -z $a ]]; then
   echo "VMS OK - no running VMs | vms=0"
   exit 0
 fi
 "$SLEEP" "$interval"
-b=$(sample) || unknown "virsh domstats failed: ${b//$'\n'/ }"
+b=$(sample) || unknown "virsh domstats ${b//$'\n'/ }"
 
 awk -v a="$a" -v b="$b" -v iv="$interval" '
+function level(lbl, val, fmt) { if (val != "-") perf = perf sprintf(" %s_" lbl "=" fmt, name, val) }
+function delta(i) { return y[i] > x[i] ? y[i] - x[i] : 0 }
+function rate(lbl, i) { if (x[i] != "-" && y[i] != "-") perf = perf sprintf(" %s_%s=%.0f", name, lbl, delta(i) / iv) }
 BEGIN {
   na = split(a, la, "\n"); nb = split(b, lb, "\n")
   for (k = 1; k <= nb; k++) { split(lb[k], y, " "); later[y[1]] = lb[k] }
@@ -89,13 +115,14 @@ BEGIN {
     split(la[k], x, " ")
     if (!(x[1] in later)) continue
     split(later[x[1]], y, " ")
-    for (i = 2; i <= 9; i++) d[i] = y[i] - x[i]
-    for (i = 2; i <= 9; i++) if (d[i] < 0) d[i] = 0
     name = tolower(x[1]); gsub(/[^a-z0-9_-]/, "_", name)
     n++
-    rss += y[4] * 1024
-    perf = perf sprintf(" %s_cpu_pct=%.1f%% %s_vcpus=%d %s_rss=%.0fB %s_mem=%.0fB", name, d[2] / (iv * 1e9) * 100, name, y[3], name, y[4] * 1024, name, y[5] * 1024)
-    perf = perf sprintf(" %s_rd_Bps=%.0f %s_wr_Bps=%.0f %s_rx_Bps=%.0f %s_tx_Bps=%.0f", name, d[6] / iv, name, d[7] / iv, name, d[8] / iv, name, d[9] / iv)
+    if (x[2] != "-" && y[2] != "-") perf = perf sprintf(" %s_cpu_pct=%.1f%%", name, delta(2) / (iv * 1e9) * 100)
+    level("vcpus", y[3], "%d")
+    if (y[4] != "-") rss += y[4] * 1024
+    level("rss", y[4] == "-" ? "-" : y[4] * 1024, "%.0fB")
+    level("mem", y[5] == "-" ? "-" : y[5] * 1024, "%.0fB")
+    rate("rd_Bps", 6); rate("wr_Bps", 7); rate("rx_Bps", 8); rate("tx_Bps", 9)
   }
   if (n == 0) { print "VMS OK - no running VMs | vms=0"; exit 0 }
   printf "VMS OK - %d running VMs (rss %.1f GiB) | vms=%d%s\n", n, rss / 1073741824, n, perf

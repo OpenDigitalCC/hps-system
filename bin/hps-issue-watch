@@ -51,9 +51,11 @@ sub main {
     return usage("unknown command: $cmd") unless $cmd eq 'loop';
     return usage('loop takes no arguments') if @argv || $interval < 1;
     my $issues = HPS::Issues->new;
-    my $w = eval { HPS::IssueWatch->new(issues => $issues) };
-    if (!$w) { print STDERR 'hps-issue-watch: ' . (ref $@ ? $@->message : $@) . "\n"; return 1 }
+    # the healer first: a storage-path issue resolving makes the mirror-leg
+    # issues on its portal due at once (HPS::IssueHeal::resolved, IPS-34)
     my $heal = $noheal ? undef : HPS::IssueHeal->new(issues => $issues);
+    my $w = eval { HPS::IssueWatch->new(issues => $issues, ($heal ? (on_resolve => sub { $heal->resolved($_[0]) }) : ())) };
+    if (!$w) { print STDERR 'hps-issue-watch: ' . (ref $@ ? $@->message : $@) . "\n"; return 1 }
     return $w->loop(interval => $interval, max_polls => $max, ($heal ? (tick => sub { $heal->tick }) : ()));
 }
 

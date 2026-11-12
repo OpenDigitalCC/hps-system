@@ -140,10 +140,11 @@ supervisor_populate_tftp () {
   return 0
 }
 
-# Functions to run straight after supervisor has started
+# Functions to run straight after supervisor has started. The IPS image has
+# no om (the IPS never runs om3; nodes do), so that is the normal case: info.
 _supervisor_post_start () {
   if ! command -v om >/dev/null 2>&1; then
-    hps_log warn "_supervisor_post_start: OpenSVC (om) not installed, skipping osvc_configure_cluster"
+    hps_log info "_supervisor_post_start: OpenSVC (om) not installed, skipping osvc_configure_cluster"
     return 0
   fi
   osvc_configure_cluster

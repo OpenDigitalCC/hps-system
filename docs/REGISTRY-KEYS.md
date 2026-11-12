@@ -69,6 +69,7 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `boot_mac_last` | `mac` | ipxe_init_handler | The MAC the node last booted from (which port), as the host may boot from any of its macs. |
 | `storage_note` | `string` | hps-onboard | Operator note about the node storage plan. |
 | `poweroff_last` | `json` | HPS::Node | Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail. |
+| `osvc_delivered_at` | `epoch` | hps-osvc deliver | When the OpenSVC secret was last delivered to the node. Present means an om3 cluster member: after each pairing the API queues an osvc-deliver job for it (IPS-34). |
 | `storage_last` | `json` | HPS::Storage | Outcome of the last storage operation: op, ok, at. |
 | `storage_pool` | `string` | HPS::Storage | Name of the pool created on the node. |
 | `storage_created_at` | `stamp` | HPS::Storage | When the pool was created. |

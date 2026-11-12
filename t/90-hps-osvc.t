@@ -82,7 +82,30 @@ is($rc, 2, 'unknown operation');
 ($rc, $out) = hps_osvc('deliver', '"a;b"');
 is($rc, 2, 'a host with shell characters is refused');
 
-is(length($ks->cluster_secret('lenprobe', 16)), 16, 'keysafe: a 16-byte secret is created at 16 bytes');
+# IPS-34: a successful deliver records osvc_delivered_at (an om3 cluster member,
+# re-delivered after each pairing); a failed one records nothing; a host the
+# registry does not know is a warning, the delivery still counts.
+{
+    my $mac = '525400000031';
+    $reg->host_set($mac, 'HOSTNAME', 'tch-031');
+    {
+        local $ENV{FAKE_RC} = 1;
+        ($rc, $out) = hps_osvc('deliver', 'tch-031');
+        is($rc, 1, 'member: a failed deliver fails');
+        ok(!$reg->host_exists($mac, 'osvc_delivered_at'), 'member: and records nothing');
+    }
+    ($rc, $out) = hps_osvc('deliver', 'tch-031');
+    is($rc, 0, 'member: deliver by host name');
+    like($reg->host_get($mac, 'osvc_delivered_at') // '', qr/\A[0-9]{10}\z/, 'member: osvc_delivered_at is an epoch');
+    $reg->host_unset($mac, 'osvc_delivered_at');
+    ($rc, $out) = hps_osvc('deliver', '52:54:00:00:00:31');
+    ok($reg->host_exists($mac, 'osvc_delivered_at'), 'member: deliver by MAC records it too');
+    ($rc, $out) = hps_osvc('deliver', 'node01');
+    is($rc, 0, 'member: an unknown host still delivers');
+    like($out, qr/warning: delivered to node01, but osvc_delivered_at was not recorded/, 'member: with a warning');
+}
+
+is(length($ks->cluster_secret('lenprobe', 16)), 16,'keysafe: a 16-byte secret is created at 16 bytes');
 is($ks->cluster_secret('lenprobe', 16), $ks->cluster_secret('lenprobe', 16), 'keysafe: and read back the same');
 ok(!eval { $ks->cluster_secret('lenprobe', 32); 1 }, 'keysafe: a file of another length is refused, not truncated');
 is(length($ks->cluster_secret('example')), 32, 'keysafe: the default length stays 32');

@@ -120,3 +120,62 @@ kinds() {
   run hps_job_validate net-up aabbccddee01 --dry-run
   [ "$status" -eq 1 ]
 }
+
+# IPS-34 item 2: om3 back after a reboot. A host with osvc_delivered_at (an om3
+# cluster member) also gets osvc-deliver <mac>, queued after net-up and
+# storage-up; one without gets nothing, and pairing succeeds either way.
+
+# queued: the kinds in the order the runner takes them (the file names sort by
+# epoch; same second: modification time, as HPS::Jobs::pending).
+queued() {
+  local f
+  for f in $(ls -tr "$HPS_JOBS_DIR"/new/*.json 2>/dev/null); do
+    jq -r .kind "$f"
+  done | paste -sd' ' -
+}
+
+@test "7: an om3 member gets osvc-deliver <mac> after net-up and storage-up" {
+  host TYPE SCH,TCH
+  host os_id x86_64:nixos:26.05
+  host storage_state up
+  host osvc_delivered_at 1800000000
+  run call_api
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"paired": true'* ]]
+  [ "$(queued)" = "net-up storage-up osvc-deliver" ]
+  f=$(grep -l '"osvc-deliver"' "$HPS_JOBS_DIR"/new/*.json)
+  [ "$(jq -c .args "$f")" = '["aabbccddee01"]' ]
+  grep -q "osvc hook: queued osvc-deliver for aabbccddee01" "$TEST_DIR/hps.log"
+}
+
+@test "8: a host never delivered to is not an om3 member: no osvc-deliver, pairing still succeeds" {
+  host TYPE TCH
+  host os_id x86_64:nixos:26.05
+  run call_api
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"paired": true'* ]]
+  [ "$(kinds)" = "net-up" ]
+  grep -q "osvc hook: $FAKE_MAC is not an om3 cluster member" "$TEST_DIR/hps.log"
+}
+
+@test "9: a queue that cannot take the job is logged and the pairing still succeeds" {
+  host TYPE TCH
+  host os_id x86_64:nixos:26.05
+  host osvc_delivered_at 1800000000
+  export HPS_JOBS_DIR="$TEST_DIR/no-such-queue/x"
+  : > "$TEST_DIR/no-such-queue"
+  run call_api
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"paired": true'* ]]
+  grep -q "osvc hook: could not queue osvc-deliver" "$TEST_DIR/hps.log"
+}
+
+@test "10: the bash job validator takes osvc-deliver <mac> only" {
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/functions.d/jobs-functions.sh"
+  hps_job_validate osvc-deliver aabbccddee01
+  run hps_job_validate osvc-deliver
+  [ "$status" -eq 1 ]
+  run hps_job_validate osvc-deliver tch-001
+  [ "$status" -eq 1 ]
+}

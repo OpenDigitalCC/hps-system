@@ -206,7 +206,7 @@ zpool_shim() {
 virsh_shim() {
   cat > "$TEST_DIR/bin/virsh" <<EOT
 #!/bin/sh
-[ "\$*" = "-c qemu:///system domstats --raw --list-running --cpu-total --balloon --vcpu --block --interface" ] || { echo "bad args: \$*" >&2; exit 2; }
+[ "\$*" = "-c qemu:///system domstats --raw --list-running --nowait --cpu-total --balloon --vcpu --block --interface" ] || { echo "bad args: \$*" >&2; exit 2; }
 cat "$TEST_DIR/root/virsh.out"
 EOT
   chmod +x "$TEST_DIR/bin/virsh"
@@ -261,6 +261,33 @@ EOT
   run "$P/check_vms"
   [ "$status" -eq 3 ]
   [ "$output" = "VMS UNKNOWN - virsh domstats failed: error: failed to connect to the hypervisor" ]
+}
+
+@test "check_vms: a virsh call that outlives its limit is UNKNOWN 'timed out after Ns', and the limit fits nagios-check's 10 s" {
+  # timeout(1) exits 124 when it kills the command; a shim that exits 124 itself
+  # looks the same to the plugin. -i 1: (9 - 1) / 2 = 4 s; -i 5: 2 s.
+  printf '#!/bin/sh\nexit 124\n' > "$TEST_DIR/bin/virsh"
+  chmod +x "$TEST_DIR/bin/virsh"
+  export HPS_VIRSH="$TEST_DIR/bin/virsh"
+  run "$P/check_vms"
+  [ "$status" -eq 3 ]
+  [ "$output" = "VMS UNKNOWN - virsh domstats timed out after 4s" ]
+  run "$P/check_vms" -i 5
+  [ "$output" = "VMS UNKNOWN - virsh domstats timed out after 2s" ]
+  printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/bin/virsh"
+  run "$P/check_vms"
+  [ "$output" = "VMS UNKNOWN - virsh domstats failed: exit 1" ]
+}
+
+@test "check_vms: values --nowait left out of a sample drop only those labels; a guest with no disk or NIC reports 0" {
+  virsh_shim
+  # first sample: libvirtd skipped balloon and block (state-change lock busy)
+  printf "Domain: 'web'\n  cpu.time=1000000000\n  vcpu.current=2\n  net.count=1\n  net.0.rx.bytes=100\n  net.0.tx.bytes=100\n\n" > "$TEST_DIR/root/virsh.out"
+  { dom web 1500000000 1024 2048 2 10 20 0 0 300 200; printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n"; } > "$TEST_DIR/second/virsh.out"
+  printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n" >> "$TEST_DIR/root/virsh.out"
+  run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB) | vms=2 web_cpu_pct=50.0% web_vcpus=2 web_rss=1048576B web_mem=2097152B web_rx_Bps=200 web_tx_Bps=100 bare_cpu_pct=0.0% bare_rd_Bps=0 bare_wr_Bps=0 bare_rx_Bps=0 bare_tx_Bps=0" ]
 }
 
 # ---- all plugins -----------------------------------------------------------

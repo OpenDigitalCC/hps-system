@@ -59,7 +59,7 @@ sub fresh {
         [ 'pairing-approve', 'deadbeef' ], [ 'pairing-approve', 'deadbeef', '--replace' ],
         [ 'storage-up', '525400000001' ], [ 'storage-down', '525400000001' ],
         [ 'storage-trim-check', '525400000001' ], [ 'storage-status', '525400000001' ],
-        [ 'net-up', '525400000001' ],
+        [ 'net-up', '525400000001' ], [ 'osvc-deliver', '525400000001' ],
       ) {
         is(HPS::Jobs::validate(@$ok), undef, "allowed: @$ok");
     }
@@ -71,6 +71,7 @@ sub fresh {
         [ 'storage-up' ], [ 'storage-up', '52:54:00:00:00:01' ], [ 'storage-up', '52540000000' ],
         [ 'storage-up', '52540000000G' ], [ 'storage-up', '525400000001', 'x' ], [ 'storage-status', "525400000001\n" ],
         [ 'net-up' ], [ 'net-up', 'sch-001' ], [ 'net-up', '525400000001', '--dry-run' ],
+        [ 'osvc-deliver' ], [ 'osvc-deliver', 'sch-001' ], [ 'osvc-deliver', '525400000001', '--dry-run' ],
       ) {
         my $why = HPS::Jobs::validate(@$bad);
         ok(defined $why, "refused: " . join(' ', map { length $_ > 20 ? substr($_, 0, 20) . '...' : $_ } @$bad));
@@ -80,7 +81,7 @@ sub fresh {
     eval { $j->submit('storage-up', 'bad') };
     like($@, qr/storage-up: needs exactly <mac>/, 'submit refuses a bad argument');
     is(nfiles($j->sub_dir('new')), 0, 'nothing was queued');
-    is_deeply([ HPS::Jobs::kinds() ], [ sort qw(pairing-window-open pairing-window-close pairing-list pairing-approve storage-up storage-down storage-trim-check storage-status net-up workload-create workload-start workload-stop workload-status pins-prune) ], 'the kind list is the allowlist');
+    is_deeply([ HPS::Jobs::kinds() ], [ sort qw(pairing-window-open pairing-window-close pairing-list pairing-approve storage-up storage-down storage-trim-check storage-status net-up osvc-deliver workload-create workload-start workload-stop workload-status pins-prune) ], 'the kind list is the allowlist');
 }
 
 # --- the command table: argument lists, never a shell string
@@ -96,6 +97,8 @@ sub fresh {
     is_deeply([ HPS::Jobs::command('storage-status', ['525400000001'], storage => 'hs') ], [qw(hs 525400000001 status)], 'status');
     is_deeply([ HPS::Jobs::command('net-up', ['525400000001'], node => 'hn') ], [ 'hn', 'net-up', '525400000001', '--wait', 120 ], 'net-up waits 120 for the agent');
     is(HPS::Jobs::timeout_for('net-up'), 600, 'net-up times out after 600 s');
+    is_deeply([ HPS::Jobs::command('osvc-deliver', ['525400000001'], osvc => 'ho') ], [qw(ho deliver 525400000001)], 'osvc-deliver: hps-osvc deliver <mac>');
+    is(HPS::Jobs::timeout_for('osvc-deliver'), 300, 'osvc-deliver times out after 300 s');
     eval { HPS::Jobs::command('rm', []) };
     like($@, qr/no command for kind/, 'no command for an unknown kind');
 }

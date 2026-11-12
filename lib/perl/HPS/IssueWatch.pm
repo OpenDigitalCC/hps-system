@@ -178,7 +178,9 @@ sub match ($rules, $rec, $local = 0) {
 #=== the watcher ==================================================================
 
 # new(issues => HPS::Issues, rules => parsed, log_dir, state_file, now => sub,
-#     logger => sub ($level, $msg), catchup, max_read)
+#     logger => sub ($level, $msg), catchup, max_read,
+#     on_resolve => sub ($record): called after a rule or marker resolved an
+#     issue (hps-issue-watch: HPS::IssueHeal::resolved, IPS-34))
 sub new ($class, %o) {
     my $issues = $o{issues} // HPS::Issues->new;
     return bless {
@@ -189,6 +191,7 @@ sub new ($class, %o) {
         now        => $o{now} // sub { time },
         logger     => $o{logger} // sub ($l, $m) { $issues->_log($l, $m) },
         catchup    => $o{catchup} // CATCHUP,
+        on_resolve => $o{on_resolve},
         max_read   => $o{max_read} // MAX_READ,
         pos        => {},      # ip => {file, offset}
         counts     => {},      # after=N/S: "<rule n>|<key>" => [epochs]
@@ -342,7 +345,7 @@ sub _act ($self, $a, $rec) {
             $self->{pending}{$key} = { due => $self->{now}->() + $s, detail => $detail, resolution => $res } if $issues->find_open($key);
             return;
         }
-        $issues->resolve_key($key, $detail, resolution => $res);
+        $self->_resolved($issues->resolve_key($key, $detail, resolution => $res));
         return;
     }
     delete $self->{pending}{$key};
@@ -362,6 +365,15 @@ sub _act ($self, $a, $rec) {
     return;
 }
 
+# _resolved($rec): on_resolve for a record a resolve returned (undef: none was open).
+# Its failure is logged; the resolve stands.
+sub _resolved ($self, $rec) {
+    return unless $rec && $self->{on_resolve};
+    eval { $self->{on_resolve}->($rec); 1 }
+        or $self->_log('err', "hps-issue: after resolving $rec->{id}: " . (ref $@ ? $@->message : $@ =~ s/\s+\z//r));
+    return;
+}
+
 # settle(): the held-back resolves (settle=S) whose time has come.
 sub settle ($self) {
     my $now = $self->{now}->();
@@ -369,7 +381,7 @@ sub settle ($self) {
         my $p = $self->{pending}{$key};
         next if $p->{due} > $now;
         delete $self->{pending}{$key};
-        eval { $self->{issues}->resolve_key($key, $p->{detail}, resolution => $p->{resolution}); 1 }
+        eval { $self->_resolved($self->{issues}->resolve_key($key, $p->{detail}, resolution => $p->{resolution})); 1 }
             or $self->_log('err', "hps-issue: resolve of $key failed: " . (ref $@ ? $@->message : $@ =~ s/\s+\z//r));
     }
     return;

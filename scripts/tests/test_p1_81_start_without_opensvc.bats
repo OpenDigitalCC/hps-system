@@ -45,7 +45,16 @@ teardown() {
   [ "$status" -eq 0 ]
   PATH="$ORIG_PATH"
   if grep -qx osvc_configure "$CALLS"; then return 1; fi
-  grep -q 'warn.*not installed' "$TEST_DIR/hps.log"
+  grep -q '^info .*not installed' "$TEST_DIR/hps.log"
+  [ "$(grep -c 'not installed' "$TEST_DIR/hps.log")" -eq 1 ]
+}
+
+@test "the post-start listener runs once per supervisord start: no quick-exit retries, no restart" {
+  local f="$ROOT/lib/functions.d/configure-supervisor.sh" block
+  block=$(sed -n '/^\[eventlistener:post_start_config\]/,/^EOF/p' "$f")
+  [[ "$block" == *$'\nstartsecs=0\n'* ]]
+  [[ "$block" == *$'\nstartretries=0\n'* ]]
+  [[ "$block" == *$'\nautorestart=false\n'* ]]
 }
 
 @test "_supervisor_post_start still configures OpenSVC and reports its failure when om exists" {

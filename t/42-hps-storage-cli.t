@@ -178,6 +178,28 @@ like($out, qr/== 1\. storage-trim-check lab \(exit 0\)\nnode says hi/, 'call out
 unlike(join('', calls()), qr/--input/, 'a call without input does not use --input');
 like(join('', calls()), qr/^--json $mac storage-trim-check lab$/m, 'a call without input still asks for --json');
 
+# --- up that worked: the mirror-leg issues on the host's export portals are
+# due for the healer at once (IPS-34 item 1)
+{
+    require HPS::Issues;
+    $f->{reg}->host_set($mac, 'storage_exports', [ { zvol => 'lab/v1', iqn => 'iqn.2026-01.hps.lab:v1', initiator => 'iqn.x:i', portal => '192.0.2.10' } ]);
+    my $is = HPS::Issues->new(registry => $f->{reg}, logger => sub { });
+    my ($on)  = $is->open_issue(kind => 'mirror-leg', key_fields => [qw(host mirror)],
+        fields => { host => 'tch-009', mirror => 'm-on', leg => 'iqn.2026-01.hps.lab:v1@192.0.2.10:3260' });
+    my ($off) = $is->open_issue(kind => 'mirror-leg', key_fields => [qw(host mirror)],
+        fields => { host => 'tch-009', mirror => 'm-off', leg => 'iqn.2026-01.hps.lab:v2@192.0.2.99:3260' });
+    my $later = time + 900;
+    $is->update($_->{id}, sub { $_[0]{heal} = { attempts => 4, next_at => $later } }) for $on, $off;
+    reset_shim();
+    ($rc, $out) = cli($mac, 'up');
+    is($rc, 0, 'up: 0');
+    cmp_ok($is->get($on->{id})->{heal}{next_at}, '<=', time, 'up: the mirror-leg issue on its portal is due now');
+    is($is->get($on->{id})->{trail}[-1]{detail}, 'storage 192.0.2.10 back', 'with the retry in its trail');
+    is($is->get($off->{id})->{heal}{next_at}, $later, 'one on another portal keeps its wait');
+    unlike($out, qr/healer was not told/, 'no warning');
+    $f->{reg}->host_unset($mac, 'storage_exports');
+}
+
 # --- forget-key
 ($rc, $out) = cli($mac, 'forget-key');
 is($rc, 3, 'forget-key while a pool is recorded: refused');

@@ -188,8 +188,18 @@ that joins is added to every peer list at its pairing; one that leaves (is
 forgotten, or loses TYPE TCH) is dropped at the next pairing of any TCH, or at
 once with `hps-node net-up` on any TCH. A TCH that is only down stays a peer. A refresh that fails (a host down) is logged and listed (`refresh`
 lines, `--json` key `refresh`) and does not change the exit status: that host
-gets its peers when it pairs. Scale test s1, TCHs at 10.11.2.12-15, VNI 1100
-(storage lines left out):
+gets its peers when it pairs.
+
+One net-up at a time per host: `net-up` holds an `flock` on
+`<cluster>/jobs/run/net-up-<mac>.lock` for the host's own calls, then takes
+each refreshed host's lock in turn for its refresh call (never two at once, so
+two net-ups cannot wait on each other). A second net-up of the same host (the
+pairing job and an operator call: s1, tch-004, "could not create enp1s0.114 /
+vxlan1100") waits for the first, up to 300 s (`HPS_NODE_LOCK_WAIT`), then
+fails with "another net-up for this host is still running"; a refresh whose
+host is busy that long is skipped with a warning. `--dry-run` takes no lock.
+
+Scale test s1, TCHs at 10.11.2.12-15, VNI 1100 (storage lines left out):
 
     $ hps-node net-up tch-001 --dry-run
     transit (vlan 112): net-vlan-address boot 112 10.11.2.12/24 --mtu 9000

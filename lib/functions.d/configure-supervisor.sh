@@ -428,13 +428,18 @@ EOF
 )" || return 3
 
   # --- Event listener to run post_start ---
+  # The command runs once and exits. startsecs=0 counts that as a start, not as
+  # "exited too quickly" (which supervisord retries startretries times: four
+  # runs per IPS start); autorestart=false keeps a failing run from looping.
   _supervisor_append_once "eventlistener:post_start_config" "$(cat <<EOF
 [eventlistener:post_start_config]
 command=/bin/bash -c 'source ${HPS_SYSTEM_BASE}/lib/functions.sh && _supervisor_post_start'
 events=PROCESS_STATE_RUNNING
 buffer_size=100
 autostart=true
-autorestart=unexpected
+startsecs=0
+startretries=0
+autorestart=false
 stdout_logfile=syslog
 stderr_logfile=syslog
 environment=$(_get_hps_environment)

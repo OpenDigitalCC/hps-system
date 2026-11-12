@@ -19,7 +19,7 @@ sub slurp { open(my $fh, '<:raw', $_[0]) or return ''; local $/; my $t = <$fh>; 
 is(HPS::Jobs::lane_of($_), 'pairing', "$_ runs in the pairing lane")
     for qw(pairing-list pairing-approve pairing-window-open pairing-window-close);
 is(HPS::Jobs::lane_of($_), 'work', "$_ runs in the work lane")
-    for qw(storage-up net-up workload-start pins-prune);
+    for qw(storage-up net-up osvc-deliver workload-start pins-prune);
 is(HPS::Jobs::lane_of('pairing-bogus'), 'work', 'an unknown pairing- name is not a pairing kind');
 is(HPS::Jobs::lane_of(undef), 'work', 'an unreadable kind goes to the work lane');
 

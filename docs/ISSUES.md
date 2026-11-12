@@ -63,7 +63,7 @@ sequence from 001 each day).
 
 Trail events: `opened`, `reoccurred`, `seen`, `escalated`, `heal` (an attempt
 and the node's result line), `check` (a status check), `healing`, `open` (back
-to open after a failed heal), `needs-human`, `retry` (`retry by operator <who>`), `note`, `resolved` (by the log
+to open after a failed heal), `needs-human`, `retry` (`retry by operator <who>`, or `storage <ip> back`, below), `note`, `resolved` (by the log
 line, `mirror-status clean`, `zpool status: ...`, or the operator). An entry equal to the one
 before it (same event and detail) counts up (`count`, `last_at`) instead of
 adding a line; repeats of an open are kept for the first 5 and then only
@@ -225,7 +225,17 @@ hps-monitor's OK line.
 
 Timing (both kinds): the first attempt 30 s after the healer first sees the issue; after a
 failed attempt 60 s, 2 min, 5 min, then every 15 min. Reaching 15 min makes
-the issue urgent (once). Issues that are `resolved` or `needs-human` are never
+the issue urgent (once).
+
+Storage back: a mirror-leg issue whose leg's storage host returns does not wait
+out its backoff step (s1 drill, issue 20261112-039: sch-002 back about 16:37,
+the 5-minute step held the rejoin until 16:41:31). When a `storage-path` issue
+that names a portal resolves, or `hps-storage <host> up` (the `storage-up` job
+after a storage host pairs) finishes, every `open` or `healing` mirror-leg
+issue with a leg on that portal (the marker's `leg=<iqn>@<ip>:<port>`, or a
+leg spec `iscsi:<ip>:...` of its workload disk) gets `heal.next_at` = now, its
+attempts unchanged, and the trail entry `retry storage <ip> back`; the healer
+tries at its next tick (2 s). `needs-human` issues are not touched. Issues that are `resolved` or `needs-human` are never
 touched; a human resolves them (`hps-issues resolve <id> --by ...`) or the
 node's resolve marker does. An issue filed by hand is healed the same way.
 
