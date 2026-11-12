@@ -82,6 +82,15 @@ capabilities and removals are called out explicitly.
 - tests: `t/198-vlan-host-address.t`, `t/199-net-up.t`, `t/45-jobs.t`,
   `test_p3_198_net_vlan_address.bats`, `test_p3_199_net_up_hook.bats`.
 
+## om3 membership through the operator API (2026-11-12)
+
+- new: `hps-osvc status <host>` runs the read-only node script `osvc-status`
+  and passes its output and exit through (0 healthy, 2 a peer stale, 1 om not
+  answering). `hps-osvc` is an ips-admin tool, so an operator can now check a
+  cluster's om3 membership through its own operator API. Before, only the IPS
+  itself could run `osvc-status`.
+- tests: `t/90-hps-osvc.t`.
+
 ## A thin compute host caches workload images in RAM (2026-11-12)
 
 - fix: a VM whose legs are all remote, on a compute host with no pool of its

@@ -53,6 +53,28 @@ unlike($out, qr/\Q$hex\E/, 'dry run does not print the secret');
     is($rc, 4, 'the runner exit status is passed through');
 }
 
+# status: the read-only node script, output and exit passed through (scale test,
+# 2026-11-12: om3 membership had no operator view).
+{
+    my $st = "$base/status-run.sh";
+    open(my $fh, '>', $st) or die $!;
+    print $fh "#!/bin/sh\necho \"\$*\" > '$base/status-args'\necho 'OSVC tch-001 peers=5 beating=5 stale=- frozen=no'\nexit \${FAKE_RC:-0}\n";
+    close $fh;
+    chmod 0755, $st;
+    local $ENV{HPS_OSVC_RUN} = $st;
+    ($rc, $out) = hps_osvc('status', 'tch-001');
+    is($rc, 0, 'status: exit 0 when healthy');
+    is(slurp("$base/status-args"), "tch-001 osvc-status\n", 'status: the runner gets the host and osvc-status, no --input');
+    like($out, qr/^OSVC tch-001 peers=5 beating=5/m, 'status: the summary line is printed');
+    local $ENV{FAKE_RC} = 2;
+    ($rc, $out) = hps_osvc('status', 'tch-001');
+    is($rc, 2, 'status: a stale peer (2) is passed through');
+    ($rc, $out) = hps_osvc('status');
+    is($rc, 2, 'status: host required');
+    ($rc, $out) = hps_osvc('status', 'tch-001', '--dry-run');
+    is($rc, 2, 'status: --dry-run is refused (deliver only)');
+}
+
 ($rc, $out) = hps_osvc('deliver');
 is($rc, 2, 'host required');
 ($rc, $out) = hps_osvc('frobnicate', 'node01');

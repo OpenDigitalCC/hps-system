@@ -22,6 +22,7 @@ sub usage {
     print STDERR <<'USAGE';
 Usage:
   hps-osvc deliver <host> [--dry-run]
+  hps-osvc status <host>
   hps-osvc ca-forget
 <host> is a MAC (any format) or a registry HOSTNAME. deliver sends the cluster's
 OpenSVC secret (keysafe purpose 'opensvc-cluster', 16 random bytes sent as 32 hex characters, created on first use) as confidential
@@ -35,6 +36,9 @@ The cluster CA: om3 nodes must share one. deliver also sends the CA kept in the 
 first deliver sends the secret alone, then reads the CA the node daemon created
 (node script osvc-ca-export) into the keysafe. A node that made its own CA earlier is
 brought into line by its next deliver (its node certificate is reissued). The CA is never printed or logged.
+status runs the read-only node script osvc-status on <host>: om3 daemon status and
+monitor JSON, then OSVC <node> peers=<n> beating=<n> stale=<list|-> frozen=<yes|no>;
+exit 0 healthy, 2 a peer stale, 1 om not answering.
 ca-forget deletes the stored CA, for a deliberate re-bootstrap: the next deliver
 captures a new one.
 Exit: 0 ok, 1 failed (also: secret delivered but the CA could not be read), 2 usage,
@@ -94,6 +98,15 @@ sub capture_ca {
     return 0;
 }
 
+# status: the node's om3 membership (the read-only node script osvc-status);
+# its output and exit (0 healthy, 2 a peer stale, 1 om failed) pass through.
+sub status {
+    my ($host) = @_;
+    my @cmd = (runner(), $host, 'osvc-status');
+    system(@cmd);
+    return $? == 0 ? 0 : ($? >> 8) || 1;
+}
+
 sub ca_forget {
     my $ks = HPS::Keysafe->new;
     if ($ks->delete_secret('opensvc-ca')) {
@@ -110,15 +123,15 @@ sub main {
     my $dry = 0;
     @argv = grep { $_ eq '--dry-run' ? do { $dry = 1; 0 } : 1 } @argv;
     my $op   = shift @argv // return usage('operation required');
-    return usage("unknown operation '$op'") unless $op eq 'deliver' || $op eq 'ca-forget';
+    return usage("unknown operation '$op'") unless $op eq 'deliver' || $op eq 'ca-forget' || $op eq 'status';
     my $host;
-    if ($op eq 'deliver') {
+    if ($op eq 'deliver' || $op eq 'status') {
         $host = shift @argv // return usage('host required');
         return usage('host must be a MAC or a hostname') unless $host =~ /^[A-Za-z0-9][A-Za-z0-9:.-]*$/;
     }
     return usage('too many arguments') if @argv;
     return usage('--dry-run applies to deliver only') if $dry && $op ne 'deliver';
-    my $rc = eval { $op eq 'deliver' ? deliver($host, $dry) : ca_forget() };
+    my $rc = eval { $op eq 'deliver' ? deliver($host, $dry) : $op eq 'status' ? status($host) : ca_forget() };
     return $rc if defined $rc;
     my $err = $@;
     if (ref $err && $err->isa('HPS::Keysafe::Error')) {
