@@ -163,10 +163,13 @@ ALL_PROFILES="audit node-base node-converged node-cnh node-builder"
   [ "$output" -eq 7 ]
 }
 
-@test "without a flake.lock the lock file is not written; with one it is left alone" {
-  run bash "$BUILD" --out "$OUT" --cache "$CACHE" --date 20261109
+@test "the lock file is never written, with or without a committed flake.lock" {
+  mkdir -p "$TEST_DIR/nolock"
+  cp "$SRC/flake.nix" "$TEST_DIR/nolock/"
+  run bash "$BUILD" --src "$TEST_DIR/nolock" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
   grep -q -- '--no-write-lock-file' "$NIX_LOG"
+  [[ "$output" == *"no flake.lock in"* ]]
 
   mkdir -p "$TEST_DIR/src"
   cp "$SRC/flake.nix" "$TEST_DIR/src/"
@@ -174,7 +177,8 @@ ALL_PROFILES="audit node-base node-converged node-cnh node-builder"
   : > "$NIX_LOG"
   run bash "$BUILD" --src "$TEST_DIR/src" --out "$OUT" --cache "$CACHE" --date 20261109
   [ "$status" -eq 0 ]
-  ! grep -q -- '--no-write-lock-file' "$NIX_LOG"
+  grep -q -- '--no-write-lock-file' "$NIX_LOG"
+  [[ "$output" != *"no flake.lock in"* ]]
 }
 
 @test "a second run produces the same tree" {

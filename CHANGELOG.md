@@ -12,6 +12,19 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## flake.lock committed: builds are reproducible from the repository (2026-11-12)
+
+- new: `flake.lock`. nixpkgs is locked at `ac588ef1c914` (2026-11-08), the
+  revision every pin so far was built from. om3-src is at v3.0.0-rc60
+  (`4ff6def`), ctrl-exec-plugins at v0.3.11 (`b30aafe`), and ctrl-exec at
+  github main `3d307e6` (the lab builds with its local checkout through
+  `CTRL_EXEC_FLAKE`). A build from the site repository with no upstream no
+  longer depends on whatever revision a fetcher cache resolved `nixos-26.05`
+  to.
+- change: `nix/build.sh` always passes `--no-write-lock-file`, so a build never
+  rewrites the committed lock, even with an `--override-input`.
+- tests: `test_p1_40_build_sh.bats`.
+
 ## Site repository, stage 1: on the builder's disk, signed (2026-11-12)
 
 - new: the site repository (docs/REPOSITORY.md, plans/ips-repository.md),

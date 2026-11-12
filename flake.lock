@@ -1,0 +1,84 @@
+{
+  "nodes": {
+    "ctrl-exec": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1794405242,
+        "narHash": "sha256-SRyMW2K97VfAnk13ho31hpJku6Pc1zvpkLGBuzsb0Ec=",
+        "owner": "OpenDigitalCC",
+        "repo": "ctrl-exec",
+        "rev": "3d307e6246a30834505572ea28fe3a1e9a368716",
+        "type": "github"
+      },
+      "original": {
+        "owner": "OpenDigitalCC",
+        "repo": "ctrl-exec",
+        "type": "github"
+      }
+    },
+    "ctrl-exec-plugins": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794323944,
+        "narHash": "sha256-kDd9R6baGUn6GSRBa+u1qwwq5aWu7PPl9D+ma7c7Bes=",
+        "owner": "OpenDigitalCC",
+        "repo": "ctrl-exec-plugins",
+        "rev": "b30aafeb774990afef709f9c48a033d43951d2d9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "OpenDigitalCC",
+        "ref": "v0.3.11",
+        "repo": "ctrl-exec-plugins",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1794165970,
+        "narHash": "sha256-XuAV2cUwaod3Bt4XFVqiXz3v1w2ex16W6Sv4S7EWres=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ac588ef1c914865dad517b337ea0eb9694a4021c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-26.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "om3-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794294026,
+        "narHash": "sha256-WSgGJj6zLznKrPE2P3kwhL77QyTLD9RRHCoELCIYMlM=",
+        "owner": "opensvc",
+        "repo": "om3",
+        "rev": "4ff6def4972f1975c8eff458765f9cb9b6049717",
+        "type": "github"
+      },
+      "original": {
+        "owner": "opensvc",
+        "ref": "v3.0.0-rc60",
+        "repo": "om3",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "ctrl-exec": "ctrl-exec",
+        "ctrl-exec-plugins": "ctrl-exec-plugins",
+        "nixpkgs": "nixpkgs",
+        "om3-src": "om3-src"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

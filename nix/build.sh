@@ -106,9 +106,11 @@ parse_args() {
 
 # Flags every nix build/flake call gets.
 build_flags() {
+  # A build never rewrites the committed lock (an --override-input below would
+  # otherwise ask to); with no lock, inputs resolve to their newest revisions.
+  FLAKE_FLAGS+=(--no-write-lock-file)
   if [[ ! -f "$SRC/flake.lock" ]]; then
     log "no flake.lock in $SRC: inputs resolve to their newest revisions (run 'nix flake lock' and commit it)"
-    FLAKE_FLAGS+=(--no-write-lock-file)
   fi
   if [[ -n "${CTRL_EXEC_FLAKE:-}" ]]; then
     FLAKE_FLAGS+=(--override-input ctrl-exec "$CTRL_EXEC_FLAKE")
