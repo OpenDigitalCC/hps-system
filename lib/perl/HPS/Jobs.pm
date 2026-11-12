@@ -5,7 +5,7 @@ package HPS::Jobs;
 # fixed command table and writes <id>.result.json into done/ or failed/.
 #
 #   jobs/new/<epoch>-<pid>-<id>.json   {id, kind, args, requested_by, requested_at}
-#   jobs/run/                          the one job being executed
+#   jobs/run/                          the jobs being executed (one per lane, lane_of)
 #   jobs/{done,failed}/<id>.result.json  {id, kind, exit, stdout, stderr, finished_at, ...}
 #
 # This module has both sides: submit/wait/result for any caller, and the
@@ -116,6 +116,17 @@ sub validate ($kind, @args) {
 }
 
 sub timeout_for ($kind) { return $KINDS{$kind} ? $KINDS{$kind}[1] : 60 }
+
+# lane_of($kind): the runner lane a kind runs in. 'pairing' (pairing-*) runs
+# beside 'work' (everything else), one job at a time in each lane, so a node's
+# pairing approval never waits behind a storage-up, net-up or workload job
+# (incident 2026-11-12: sch-001's storage-up held the approval of five nodes).
+# An unknown or unreadable kind is 'work' (the runner refuses it there at once).
+sub lane_of ($kind) {
+    return (defined $kind && $kind =~ /\Apairing-/ && $KINDS{$kind}) ? 'pairing' : 'work';
+}
+
+sub lanes { return qw(pairing work) }
 
 # command($kind, \@args, %env): the argv for the kind (never a shell string).
 # env: dispatcher (CLI name/path), storage (hps-storage path), workload (hps-workload path),
@@ -248,6 +259,15 @@ sub pending ($self) {
     closedir $dh;
     my %key = map { my ($epoch) = $_ =~ $FILE_RE; ($_ => [ $epoch, (Time::HiRes::stat("$new/$_"))[9] // 0 ]) } @f;
     return sort { $key{$a}[0] <=> $key{$b}[0] || $key{$a}[1] <=> $key{$b}[1] || $a cmp $b } @f;
+}
+
+# peek_kind($name): the kind named in new/<name>, read without claiming it;
+# undef when the file is gone or is not a JSON object with a kind.
+sub peek_kind ($self, $name) {
+    my $text = _slurp($self->sub_dir('new') . "/$name");
+    return undef unless defined $text;
+    my $job = eval { decode_json($text) };
+    return (ref $job eq 'HASH' && defined $job->{kind} && !ref $job->{kind}) ? $job->{kind} : undef;
 }
 
 # claim($name): move new/<name> to run/ and parse it. Returns

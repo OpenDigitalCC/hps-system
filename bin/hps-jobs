@@ -2,7 +2,10 @@
 # hps-jobs: the IPS root job runner (ADR 0006). Takes job files that the web
 # user wrote into <cluster>/jobs/new/, runs each from a fixed command table
 # (an argument list, never a shell) and writes the result into done/ or failed/.
-# One job at a time. Runs under supervisor as root (program:hps-jobs).
+# Two lanes, one job at a time in each (HPS::Jobs::lane_of): 'pairing' (the
+# pairing-* kinds) and 'work' (everything else, oldest first as before). A
+# pairing approval therefore never waits behind a long storage-up, net-up or
+# workload job. Runs under supervisor as root (program:hps-jobs).
 use strict;
 use warnings;
 use FindBin qw($RealBin);
@@ -43,44 +46,62 @@ sub read_capped {
     return $text;
 }
 
-# run_argv(\@argv, $timeout, $workdir, $id): fork/exec with stdout and stderr in
-# files (a daemonising child cannot hold the runner on a pipe). Returns
-# ($exit, $stdout, $stderr).
-sub run_argv {
+# start_argv(\@argv, $timeout, $workdir, $id): fork/exec with stdout and stderr
+# in files (a daemonising child cannot hold the runner on a pipe). Returns a
+# handle for poll_argv; a failed fork is a handle that is already finished.
+sub start_argv {
     my ($argv, $timeout, $dir, $id) = @_;
-    my ($outf, $errf) = ("$dir/.$id.out", "$dir/.$id.err");
+    my $h = { outf => "$dir/.$id.out", errf => "$dir/.$id.err", timeout => $timeout, end => time + $timeout };
     my $pid = fork();
-    return (127, '', "fork failed: $!\n") unless defined $pid;
+    unless (defined $pid) {
+        $h->{done} = [ 127, '', "fork failed: $!\n" ];
+        return $h;
+    }
     if (!$pid) {
         open(STDIN,  '<', '/dev/null') or exit 126;
-        open(STDOUT, '>', $outf)       or exit 126;
-        open(STDERR, '>', $errf)       or exit 126;
+        open(STDOUT, '>', $h->{outf})  or exit 126;
+        open(STDERR, '>', $h->{errf})  or exit 126;
         { exec { $argv->[0] } @$argv; }
         print STDERR "cannot run $argv->[0]: $!\n";
         exit 127;
     }
-    my $end = time + $timeout;
-    my ($status, $timed_out) = (undef, 0);
-    while (1) {
-        my $w = waitpid($pid, WNOHANG);
-        if ($w == $pid) { $status = $?; last }
-        if ($w < 0)     { $status = 255 << 8; last }
-        if (time >= $end) {
-            $timed_out = 1;
-            kill 'TERM', $pid;
-            sleep 2;
-            kill 'KILL', $pid if waitpid($pid, WNOHANG) == 0;
-            waitpid($pid, 0);
-            last;
-        }
-        sleep 0.1;
+    $h->{pid} = $pid;
+    return $h;
+}
+
+# poll_argv($h): undef while the command runs; then [$exit, $stdout, $stderr]
+# (124 when it outlived its timeout and was killed).
+sub poll_argv {
+    my ($h) = @_;
+    return $h->{done} if $h->{done};
+    my ($status, $timed_out);
+    my $w = waitpid($h->{pid}, WNOHANG);
+    if    ($w == $h->{pid}) { $status = $? }
+    elsif ($w < 0)          { $status = 255 << 8 }
+    elsif (time >= $h->{end}) {
+        $timed_out = 1;
+        kill 'TERM', $h->{pid};
+        sleep 2;
+        kill 'KILL', $h->{pid} if waitpid($h->{pid}, WNOHANG) == 0;
+        waitpid($h->{pid}, 0);
     }
+    else { return undef }
     my $exit = $timed_out ? 124 : ($status & 127) ? 128 + ($status & 127) : $status >> 8;
-    my $out  = read_capped($outf, $HPS::Jobs::OUTPUT_CAP);
-    my $err  = read_capped($errf, $HPS::Jobs::OUTPUT_CAP);
-    $err .= "timed out after ${timeout}s\n" if $timed_out;
-    unlink $outf, $errf;
-    return ($exit, $out, $err);
+    my $out  = read_capped($h->{outf}, $HPS::Jobs::OUTPUT_CAP);
+    my $err  = read_capped($h->{errf}, $HPS::Jobs::OUTPUT_CAP);
+    $err .= "timed out after $h->{timeout}s\n" if $timed_out;
+    unlink $h->{outf}, $h->{errf};
+    $h->{done} = [ $exit, $out, $err ];
+    return $h->{done};
+}
+
+# run_argv(\@argv, $timeout, $workdir, $id): start_argv and wait for it.
+# Returns ($exit, $stdout, $stderr).
+sub run_argv {
+    my $h = start_argv(@_);
+    my $r;
+    sleep 0.1 until ($r = poll_argv($h));
+    return @$r;
 }
 
 # dispatcher_supports_replace: the usage text lists approve --replace (0.14.3+).
@@ -90,7 +111,8 @@ sub dispatcher_supports_replace {
     return ("$out$err" =~ /--replace/) ? 1 : 0;
 }
 
-sub execute_job {
+# start_job: the job's command, started (a handle for poll_argv).
+sub start_job {
     my ($jobs, $job, $env) = @_;
     my @args = @{ $job->{args} };
     if ($job->{kind} eq 'pairing-approve' && @args == 2 && !dispatcher_supports_replace($env->{dispatcher}, $jobs->sub_dir('run'))) {
@@ -98,29 +120,60 @@ sub execute_job {
         pop @args;
     }
     my @argv = HPS::Jobs::command($job->{kind}, \@args, %$env);
-    return run_argv(\@argv, HPS::Jobs::timeout_for($job->{kind}), $jobs->sub_dir('run'), $job->{id});
+    return start_argv(\@argv, HPS::Jobs::timeout_for($job->{kind}), $jobs->sub_dir('run'), $job->{id});
 }
 
-sub process_one {
-    my ($jobs, $name, $env) = @_;
+# take_one($jobs, $name, $env, $lane): claim new/<name> and start it. Returns
+# ($entry, $taken): $entry the running {job, h, t0, lane}, undef when nothing
+# runs; $taken false only when the file could not be claimed (a refused job is
+# taken and finished at once).
+sub take_one {
+    my ($jobs, $name, $env, $lane) = @_;
     my ($job, $problem) = $jobs->claim($name);
     unless ($job) {
         log_line(error => "cannot take $name: $problem");
-        return;
+        return (undef, 0);
     }
     if (defined $problem) {
         log_line(error => "job $job->{id}: refused: $problem");
         $jobs->finish($job, exit => 2, stdout => '', stderr => "refused: $problem\n");
-        return;
+        return (undef, 1);
     }
-    log_line(info => "job $job->{id}: start kind=$job->{kind} args=[" . join(' ', @{ $job->{args} }) . "] requested_by=" . ($job->{requested_by} // '?'));
-    my $t0 = time;
-    my ($exit, $out, $err) = eval { execute_job($jobs, $job, $env) };
-    ($exit, $out, $err) = (127, '', "runner error: $@") unless defined $exit;
-    my $dur = sprintf('%.1f', time - $t0);
-    my $dest = $jobs->finish($job, exit => $exit, stdout => $out, stderr => $err, duration => $dur);
-    log_line(info => "job $job->{id}: end kind=$job->{kind} exit=$exit duration=${dur}s result=$dest");
-    return;
+    log_line(info => "job $job->{id}: start lane=$lane kind=$job->{kind} args=[" . join(' ', @{ $job->{args} }) . "] requested_by=" . ($job->{requested_by} // '?'));
+    my $h = eval { start_job($jobs, $job, $env) } // { done => [ 127, '', "runner error: $@" ] };
+    return ({ job => $job, h => $h, t0 => time, lane => $lane }, 1);
+}
+
+# reap($jobs, $running): finish the entries whose command has ended; returns
+# the lanes that are still busy.
+sub reap {
+    my ($jobs, $running) = @_;
+    for my $lane (sort keys %$running) {
+        my $e = $running->{$lane};
+        my $r = poll_argv($e->{h}) or next;
+        my ($exit, $out, $err) = @$r;
+        my $dur  = sprintf('%.1f', time - $e->{t0});
+        my $dest = $jobs->finish($e->{job}, exit => $exit, stdout => $out, stderr => $err, duration => $dur);
+        log_line(info => "job $e->{job}{id}: end lane=$lane kind=$e->{job}{kind} exit=$exit duration=${dur}s result=$dest");
+        delete $running->{$lane};
+    }
+    return keys %$running;
+}
+
+# schedule($jobs, $env, $running): start the oldest pending job of every idle
+# lane. Returns the number of jobs taken (started, or refused at once).
+sub schedule {
+    my ($jobs, $env, $running) = @_;
+    my $n = 0;
+    for my $name ($jobs->pending) {
+        my $lane = HPS::Jobs::lane_of($jobs->peek_kind($name));
+        next if $running->{$lane};
+        my ($e, $taken) = take_one($jobs, $name, $env, $lane);
+        $n++ if $taken;
+        $running->{$lane} = $e if $e;
+        last if keys %$running == @{ [ HPS::Jobs::lanes() ] };
+    }
+    return $n;
 }
 
 # recover_stale: a job left in run/ by a dead runner is failed, never re-run.
@@ -161,18 +214,26 @@ sub main {
     my $stop = 0;
     $SIG{TERM} = $SIG{INT} = sub { $stop = 1 };
     my $last_prune = 0;
-    while (!$stop) {
-        for my $name ($jobs->pending) {
-            last if $stop;
-            process_one($jobs, $name, $env);
+    my %running;    # lane => {job, h, t0, lane}
+    while (1) {
+        reap($jobs, \%running);
+        my $started = $stop ? 0 : schedule($jobs, $env, \%running);
+        my @busy = keys %running;
+        # Stopping: no new job is taken; a running one is waited for.
+        last if $stop && !@busy;
+        if ($once) {
+            last if !@busy && !$started;
+            sleep 0.05;
+            next;
         }
-        last if $once;
         if (time - $last_prune > 3600) {
             my $n = $jobs->prune(7);
             log_line(info => "pruned $n old result file(s)") if $n;
             $last_prune = time;
         }
-        sleep $interval;
+        # While a job runs, look at the queue (and the job) often: a pairing
+        # job queued behind it in another lane starts at once.
+        sleep(@busy ? ($interval < 0.1 ? $interval : 0.1) : $interval);
     }
     log_line(info => 'stopped');
     return 0;

@@ -73,15 +73,23 @@ dispatcher's usage text and drops it for a dispatcher that lacks it.
 ### The runner
 
 `bin/hps-jobs` runs under supervisor as root (`program:hps-jobs`, logging to
-syslog). It polls `new/` every 0.5 s and runs one job at a time, oldest first. It
-logs the start and end of every job (id, kind, exit, duration). A job found in
+syslog). It polls `new/` every 0.5 s (every 0.1 s while a job runs) and runs
+jobs in two lanes, one job at a time in each, oldest first within a lane: the
+pairing lane (`pairing-window-open`, `pairing-window-close`, `pairing-list`,
+`pairing-approve`; `HPS::Jobs::lane_of`) and the work lane (every other kind).
+The work lane keeps its order (a `net-up` queued before a `storage-up` runs
+first). It logs the start and end of every job (id, lane, kind, exit, duration). A job found in
 `run/` at start was interrupted; it is moved to `failed/` with exit 125 and a
 note, and is not run again. A job that outlives its limit (60 s for the
 dispatcher kinds, 15 min for storage) is stopped and fails with exit 124.
 
-One job at a time means a long `storage-up` delays a pairing approval behind it.
-Callers wait a bounded time (15 s for an approval, 5 s for the window) and report
-the timeout; the job still runs when the runner reaches it.
+A pairing approval never waits behind a long `storage-up`, `net-up` or
+workload job (until 2026-11-12 there was one lane: sch-001's 30 s `storage-up`
+held the approval of five nodes past their windows). Callers wait a bounded
+time and report the timeout: one approval waits at most
+`CTRL_EXEC_PAIR_REQUEST_TIMEOUT` (300 s, the node's request-pairing timeout,
+`HPS_PAIR_TIMEOUT` in `hps-pair`) for its pairing jobs in total, the window
+open and close 5 s; the job still runs when the runner reaches it.
 
 ### Callers
 

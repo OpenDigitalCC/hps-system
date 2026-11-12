@@ -72,18 +72,21 @@ sub calls { return split /\n/, slurp("$_[0]/calls.log") }
         status => $j->submit('storage-status', '525400000001'),
     );
     my $log = run_once($root, $j);
-    is_deeply([ grep { !/--help/ } calls($root) ], [
+    # The two lanes run side by side, so only the order within a lane is fixed.
+    is_deeply([ grep { /^ced / && !/--help/ } calls($root) ], [
         'ced pairing-mode start --timeout 300', 'ced pairing-mode start --timeout 90', 'ced pairing-mode stop',
         'ced list-requests', 'ced approve ab12', 'ced approve ab12 --replace',
+    ], 'each pairing kind ran its command, oldest job first');
+    is_deeply([ grep { /^storage / } calls($root) ], [
         'storage 525400000001 up --wait 120', 'storage 525400000001 down',
         'storage 525400000001 trim-check', 'storage 525400000001 status',
-    ], 'each kind ran its command, oldest job first');
+    ], 'each storage kind ran its command, oldest job first');
     is(nfiles($j->sub_dir('done')), 10, 'ten results in done/');
     is(nfiles($j->sub_dir('failed')), 0, 'none in failed/');
     is(nfiles($j->sub_dir('new')) + nfiles($j->sub_dir('run')), 0, 'new/ and run/ are empty');
     is($j->result($id{up})->{stdout}, "storage said: 525400000001 up --wait 120\n", 'stdout is in the result');
-    like($log, qr/job $id{up}: start kind=storage-up args=\[525400000001\] requested_by=\d+\//, 'the start of a job is logged with its id, kind and requester');
-    like($log, qr/job $id{up}: end kind=storage-up exit=0 duration=[\d.]+s result=done/, 'the end is logged with exit and duration');
+    like($log, qr/job $id{up}: start lane=work kind=storage-up args=\[525400000001\] requested_by=\d+\//, 'the start of a job is logged with its id, kind and requester');
+    like($log, qr/job $id{up}: end lane=work kind=storage-up exit=0 duration=[\d.]+s result=done/, 'the end is logged with exit and duration');
 }
 
 # --- --replace follows what the dispatcher supports
