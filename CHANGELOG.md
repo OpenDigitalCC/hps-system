@@ -12,6 +12,37 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Image builder on a cluster node; published files proved on disk (2026-11-12)
+
+- new: Nix profile `node-builder` (`nix/modules/profiles/builder.nix`, role
+  `BLD`), booted for host profile `BUILDER`; built by default by
+  `nix/build.sh`. The node base without om3; a build store of its own on a
+  local disk (`/var/lib/hps-builder/root/nix`, used in a private mount
+  namespace with the disk store at `/nix`); `hps-builder-http` (darkhttpd,
+  read-only, port 8090) serves its outputs. docs/BUILDER.md.
+- new: node scripts `builder-disk-prepare <device>` (ext4 labelled
+  `hps-builder`, blank devices only, never reformats), `builder-build
+  <source-sha256> [--profiles] [--input NAME=SHA256]` (fetches and checks the
+  source tarball from the IPS, starts the transient unit `hps-builder-build`
+  running `hps-builder-run`) and `builder-status`; boot unit
+  `hps-builder-mount`.
+- new: cluster key `egress_proxy` (`http://<host>:<port>`) becomes `hps.proxy=`
+  on the `node-builder` command line only; the builder's one way out.
+- new: role type `BLD` (`hps-onboard assign --type BLD`, OS seed
+  `hps_types`).
+- new: `hps-cnh-publish --source-only` writes the hps-system tarball alone and
+  prints `SOURCE <sha256> <url>`; `hps-pin-fetch --from <builder> --pin <pin>
+  [--latest]` (`HPS::PinFetch`) pulls a pin from a builder, checks that
+  SHA256SUMS, boot.json and ipxe.json agree, reads every file back with
+  O_DIRECT until it gives the listed hash, proves it again in place and
+  requires `hps-pins verify`; a pin that never proves is moved aside, never
+  published.
+- changed: `nix/build.sh` reads every store original and every published copy
+  with O_DIRECT, writes a copy again when they differ (3 tries), and records
+  that proved hash in boot.json, ipxe.json and SHA256SUMS instead of hashing
+  the copy once more (IPS-33 #3, #3b; the first build with it, 2026-11-12,
+  re-copied an initrd whose first copy gave an I/O error on read-back).
+
 ## VXLAN workload networks over the transit VLAN (2026-11-12)
 
 - new: layout kind `vxlan`, `{"kind": "vxlan", "vni": 1-16777215, "over":

@@ -77,14 +77,14 @@ nix_code() {
 
 @test "the flake builds node-cnh from the profile and build.sh publishes it by default" {
   grep -qF 'node-cnh = [ ./nix/modules/profiles/container-host.nix ];' "$ROOT/flake.nix"
-  grep -q '^PROFILES="audit node-base node-converged node-cnh"$' "$ROOT/nix/build.sh"
+  grep -qE '^PROFILES="audit node-base node-converged node-cnh( [a-z-]+)*"$' "$ROOT/nix/build.sh"
 }
 
 @test "host profile CONTAINER_HOST boots image node-cnh" {
   source "$ROOT/lib/functions.d/nixos-boot-functions.sh"
   [ "$(nixos_image_profile CONTAINER_HOST)" = "node-cnh" ]
   [ "$(nixos_image_profile CONVERGED)" = "node-converged" ]
-  grep -q 'known: CONVERGED, CONTAINER_HOST, DEFAULT' "$ROOT/lib/functions.d/nixos-boot-functions.sh"
+  grep -q 'known: CONVERGED, CONTAINER_HOST, BUILDER, DEFAULT' "$ROOT/lib/functions.d/nixos-boot-functions.sh"
 }
 
 @test "the registry role list takes CNH (alone, not mixed up with others)" {
@@ -94,11 +94,11 @@ nix_code() {
       $o->_validate_args({ type => $t, profile => "CONTAINER_HOST", os => "x86_64:nixos:26.05", pin => "p1" }) or die;
     }
     eval { $o->_validate_args({ type => "CNX", profile => "CONTAINER_HOST", os => "x86_64:nixos:26.05", pin => "p1" }) };
-    die "CNX accepted" unless $@ && $@->message =~ /SCH, TCH, DRH, CNH/;
+    die "CNX accepted" unless $@ && $@->message =~ /SCH, TCH, DRH, CNH, BLD/;
     print "ok\n";'
   [ "$status" -eq 0 ]
   [ "$output" = ok ]
-  grep -q 'hps_types=SCH,TCH,DRH,CNH' "$ROOT/lib/functions.d/os-functions.sh"
+  grep -q 'hps_types=SCH,TCH,DRH,CNH,BLD' "$ROOT/lib/functions.d/os-functions.sh"
 }
 
 @test "every CNH script and boot script: executable, env shebang, set -euo pipefail, shellcheck clean, no sourcing" {

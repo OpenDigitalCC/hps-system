@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# builder-status - the builder's disk, its current or last build and its pins.
+#
+# ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
+# Read-only: it writes nothing.
+#
+# Usage: builder-status [--log N]
+#
+#   --log N   print the last N lines of the last build's log (default 20,
+#             0 for none, at most 2000)
+#
+# Prints the disk (device, use), the build unit's state, the last build record
+# (/var/lib/hps-builder/state/last.json), the pins under out/ with the one in
+# out/latest, and the tail of the last build's log.
+#
+# Last line: BUILDER state=<idle|running|nodisk> last=<id|none>
+#            result=<ok|failed|running|none> pin=<pin|-> seconds=<n|->
+# Exit: 0, 2 usage.
+#
+# Overrides for tests: HPS_BUILDER_ROOT (prefix of /var/lib/hps-builder).
+
+set -euo pipefail
+
+: "${HPS_BUILDER_ROOT:=}"
+
+MNT="$HPS_BUILDER_ROOT/var/lib/hps-builder"
+UNIT=hps-builder-build
+LINES=20
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: builder-status [--log N]
+Exit: 0, 2 usage.
+USAGE
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+main() {
+  local src unit state="idle" last="none" result="none" pin="-" seconds="-" rec p latest=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --log)
+        [[ $# -ge 2 && "$2" =~ ^[0-9]{1,4}$ && "$2" -le 2000 ]] || { usage; exit 2; }
+        LINES=$2
+        shift 2
+        ;;
+      *) usage; exit 2 ;;
+    esac
+  done
+  src=$(run findmnt -n -o SOURCE --mountpoint "$MNT" || true)
+  if [[ -z "$src" ]]; then
+    echo "disk: none mounted at $MNT (builder-disk-prepare <device>)"
+    state=nodisk
+  else
+    echo "disk: $src at $MNT"
+    run df -h --output=size,used,avail,pcent "$MNT" | sed 's/^/  /'
+  fi
+  unit=$(run systemctl show -p ActiveState --value "$UNIT.service" || true)
+  echo "unit: $UNIT ${unit:-unknown}"
+  case "$unit" in
+    active | activating | deactivating) state=running ;;
+  esac
+  rec="$MNT/state/last.json"
+  if [[ -f "$rec" ]]; then
+    echo "last build:"
+    jq -r 'to_entries[] | "  \(.key): \(.value // "-")"' "$rec"
+    last=$(jq -r '.id // "none"' "$rec")
+    result=$(jq -r '.state // "none"' "$rec")
+    pin=$(jq -r '.pin // "-"' "$rec")
+    seconds=$(jq -r '.seconds // "-"' "$rec")
+    # A record left "running" by a build that is gone (a reboot mid-build).
+    if [[ "$result" == running && "$state" != running ]]; then
+      result=failed
+      echo "  (the record says running but no build runs: interrupted)"
+    fi
+  fi
+  if [[ -d "$MNT/out" ]]; then
+    [[ -f "$MNT/out/latest" ]] && latest=$(cat "$MNT/out/latest")
+    echo "pins:"
+    for p in "$MNT"/out/nixos-*; do
+      [[ -d "$p" ]] || continue
+      p=${p##*/}
+      if [[ "$p" == "$latest" ]]; then
+        echo "  $p (latest)"
+      else
+        echo "  $p"
+      fi
+    done
+  fi
+  if [[ "$LINES" -gt 0 && "$last" != none && -f "$MNT/state/build-$last.log" ]]; then
+    echo "log (last $LINES lines of build-$last.log):"
+    tail -n "$LINES" "$MNT/state/build-$last.log" | sed 's/^/  /'
+  fi
+  printf 'BUILDER state=%s last=%s result=%s pin=%s seconds=%s\n' "$state" "$last" "$result" "$pin" "$seconds"
+}
+
+main "$@"

@@ -177,6 +177,18 @@ nixos_boot_lines() {
   if [[ "$bridge" =~ ^br-[a-z0-9-]{1,12}$ ]]; then
     args="${args} hps.bridge=${bridge}"
   fi
+  # Builder image only: the cluster key egress_proxy (http://<host>:<port>)
+  # becomes hps.proxy=, the one way out the builder uses (docs/BUILDER.md).
+  # A value of another shape is logged and left out.
+  if [[ "$profile" == node-builder && -n "$cluster" ]]; then
+    local proxy
+    proxy="$(cluster_registry "$cluster" get egress_proxy 2>/dev/null)" || proxy=""
+    if [[ "$proxy" =~ ^http://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}$ ]]; then
+      args="${args} hps.proxy=${proxy}"
+    elif [[ -n "$proxy" ]]; then
+      hps_log warn "[$mac] cluster key egress_proxy '${proxy}' is not http://<host>:<port>: left off the command line"
+    fi
+  fi
   # Audit image only: the cluster key held_reboot_after_audit=false (IPS-14)
   # keeps it up after the audit (default: it reboots into the hold loop).
   if [[ "$profile" == audit && -n "$cluster" ]]; then
@@ -481,6 +493,7 @@ nixos_image_profile() {
   case "${1:-}" in
     CONVERGED) echo node-converged ;;
     CONTAINER_HOST) echo node-cnh ;;
+    BUILDER)   echo node-builder ;;
     DEFAULT)   echo node-base ;;
     *)         return 1 ;;
   esac
@@ -493,7 +506,7 @@ ipxe_boot_nixos() {
   local host_profile image
   host_profile="$(host_registry "$mac" get HOST_PROFILE 2>/dev/null)" || host_profile=""
   image="$(nixos_image_profile "$host_profile")" || {
-    cgi_auto_fail "No NixOS image profile for host profile '${host_profile}' (known: CONVERGED, CONTAINER_HOST, DEFAULT)"
+    cgi_auto_fail "No NixOS image profile for host profile '${host_profile}' (known: CONVERGED, CONTAINER_HOST, BUILDER, DEFAULT)"
     return 1
   }
   hps_log info "[$mac] NixOS network boot: host profile ${host_profile} -> image ${image}"

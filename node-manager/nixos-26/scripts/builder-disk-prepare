@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+#
+# builder-disk-prepare - give an image builder its persistent disk.
+#
+# ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
+#
+# Usage: builder-disk-prepare <device>
+#
+#   <device>  /dev/disk/by-id/<id>, /dev/vd<x>, /dev/sd<x> (whole disks) or
+#             /dev/md/<name>; anything else is refused.
+#
+# The device is probed with `blkid -p` (filesystems, RAID members, partition
+# tables, ZFS labels):
+#
+#   no signature at all       an ext4 filesystem labelled hps-builder is made
+#                             on it (the only mkfs in the builder path)
+#   ext4 labelled hps-builder already prepared: mounted, never formatted again
+#   anything else             refused (exit 3), nothing is written
+#
+# Then the filesystem is mounted at /var/lib/hps-builder, its directories are
+# made (root: the build store, out: published pins, cache: the file binary
+# cache, src and inputs: fetched sources, state: build records and logs, tmp:
+# build directories) and hps-builder-http (the read-only server of out/) is
+# started. After a reboot the boot unit hps-builder-mount mounts the same disk
+# by its label; it never formats.
+#
+# Idempotent: run again on a prepared and mounted disk, it changes nothing. A
+# mount point that already holds files, or another device, is refused.
+#
+# Last line: BUILDER-DISK <device> formatted=<yes|no> mount=<dir>
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
+#
+# Overrides for tests: HPS_DEV (device root, regular files allowed when it is
+# not /dev), HPS_BUILDER_ROOT (prefix of the mount point).
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+: "${HPS_BUILDER_ROOT:=}"
+
+LABEL=hps-builder
+DEV=""
+MNT="$HPS_BUILDER_ROOT/var/lib/hps-builder"
+DIRS="root out cache src inputs state tmp"
+SIG_TYPE=""
+SIG_LABEL=""
+SIG_OTHER=""
+
+log() {
+  printf '[builder-disk-prepare] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: builder-disk-prepare <device>
+  <device>: /dev/disk/by-id/<id>, /dev/vd<x>, /dev/sd<x> or /dev/md/<name>
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+check_device() {
+  local rest
+  [[ "$DEV" != *..* && "$DEV" != *//* ]] || refuse "device '$DEV' contains '..' or '//'"
+  [[ "$DEV" == "$HPS_DEV"/* ]] || refuse "device '$DEV' is not under $HPS_DEV"
+  rest=${DEV#"$HPS_DEV"/}
+  if [[ "$rest" =~ ^(vd|sd)[a-z]{1,3}$ ]]; then
+    :
+  elif [[ "$rest" =~ ^md/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]]; then
+    :
+  elif [[ "$rest" =~ ^disk/by-id/[A-Za-z0-9_][A-Za-z0-9_.:+@-]{0,127}$ ]]; then
+    :
+  else
+    refuse "device '$DEV' is not /dev/disk/by-id/<id>, /dev/vd<x>, /dev/sd<x> or /dev/md/<name>"
+  fi
+  if [[ -b "$DEV" ]]; then
+    return 0
+  fi
+  if [[ "$HPS_DEV" != /dev && -f "$DEV" ]]; then
+    return 0
+  fi
+  refuse "device '$DEV' does not exist or is not a block device"
+}
+
+# probe: fill SIG_TYPE, SIG_LABEL and SIG_OTHER. Returns 0 when a signature
+# was found, 1 when the device is blank. blkid -p exits 2 for "nothing found"
+# and 8 for an ambivalent result (several signatures), which counts as found.
+probe() {
+  local out rc line
+  SIG_TYPE=""
+  SIG_LABEL=""
+  SIG_OTHER=""
+  set +e
+  out=$(run blkid -p -o export -- "$DEV")
+  rc=$?
+  set -e
+  case "$rc" in
+    0) ;;
+    2) return 1 ;;
+    8)
+      SIG_OTHER="ambivalent (several signatures)"
+      return 0
+      ;;
+    *)
+      log "blkid -p exited $rc on $DEV"
+      exit 1
+      ;;
+  esac
+  while IFS= read -r line; do
+    case "$line" in
+      TYPE=*) SIG_TYPE=${line#TYPE=} ;;
+      LABEL=*) SIG_LABEL=${line#LABEL=} ;;
+      PTTYPE=*) SIG_OTHER="${SIG_OTHER:+$SIG_OTHER }partition table ${line#PTTYPE=}" ;;
+    esac
+  done <<< "$out"
+  if [[ -z "$SIG_TYPE" && -z "$SIG_OTHER" ]]; then
+    SIG_OTHER="an unnamed signature"
+  fi
+  return 0
+}
+
+is_prepared() {
+  [[ "$SIG_TYPE" == ext4 && "$SIG_LABEL" == "$LABEL" && -z "$SIG_OTHER" ]]
+}
+
+# mounted_source <dir>: the device mounted exactly at <dir>, or nothing.
+mounted_source() {
+  local src
+  src=$(run findmnt -n -o SOURCE --mountpoint "$1" || true)
+  printf '%s' "$src"
+}
+
+dir_has_files() {
+  [[ -d "$1" ]] || return 1
+  [[ -n "$(find "$1" -mindepth 1 ! -type d -print -quit)" ]]
+}
+
+same_device() {
+  local a b
+  a=$(readlink -f -- "$1")
+  b=$(readlink -f -- "$2")
+  [[ "$a" == "$b" ]]
+}
+
+# Refusals that need no change: checked before any format, so a refused run
+# writes nothing.
+precheck_mount() {
+  local src
+  src=$(mounted_source "$MNT")
+  if [[ -n "$src" ]]; then
+    same_device "$src" "$DEV" || refuse "$MNT is already mounted from $src, not $DEV"
+  elif dir_has_files "$MNT"; then
+    refuse "$MNT already holds files (a build in RAM): they would be hidden by the mount; reboot the builder, then run this first"
+  fi
+}
+
+mount_disk() {
+  local src d
+  src=$(mounted_source "$MNT")
+  if [[ -n "$src" ]]; then
+    log "$MNT is already mounted from $DEV"
+  else
+    run mkdir -p -- "$MNT"
+    run mount -t ext4 -o noatime -- "$DEV" "$MNT"
+  fi
+  for d in $DIRS; do
+    run mkdir -p -- "$MNT/$d"
+  done
+  run chmod 0755 -- "$MNT" "$MNT/out"
+}
+
+main() {
+  local formatted=no
+  if [[ $# -ne 1 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  DEV=$1
+  check_device
+  precheck_mount
+  if probe; then
+    if is_prepared; then
+      log "$DEV already carries an ext4 filesystem labelled $LABEL: not formatting"
+    else
+      refuse "$DEV carries a signature (type '${SIG_TYPE:-none}', label '${SIG_LABEL:-none}'${SIG_OTHER:+, $SIG_OTHER}); only a blank device or one labelled $LABEL is used"
+    fi
+  else
+    log "$DEV carries no signature: making an ext4 filesystem labelled $LABEL"
+    run mkfs.ext4 -q -L "$LABEL" -m 0 -- "$DEV" < /dev/null
+    formatted=yes
+    probe || {
+      log "no filesystem found on $DEV after mkfs"
+      exit 1
+    }
+    is_prepared || {
+      log "$DEV after mkfs: type '$SIG_TYPE' label '$SIG_LABEL', expected ext4 $LABEL"
+      exit 1
+    }
+  fi
+  mount_disk
+  run systemctl start hps-builder-http.service || log "hps-builder-http did not start (systemctl status hps-builder-http)"
+  printf 'BUILDER-DISK %s formatted=%s mount=%s\n' "$DEV" "$formatted" "$MNT"
+}
+
+main "$@"

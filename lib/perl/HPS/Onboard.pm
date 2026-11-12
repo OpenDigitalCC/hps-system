@@ -17,8 +17,8 @@ package HPS::Onboard::Error {
     sub message ($self) { return $self->{message} }
 }
 
-# CNH: container host (CS-3.11).
-my %TYPES = map { $_ => 1 } qw(SCH TCH DRH CNH);
+# CNH: container host (CS-3.11). BLD: image builder (docs/BUILDER.md).
+my %TYPES = map { $_ => 1 } qw(SCH TCH DRH CNH BLD);
 
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
@@ -160,7 +160,7 @@ sub _validate_args ($self, $a) {
     my @t = split /,/, $type, -1;
     my %seen;
     for my $t (@t) {
-        _fail('usage', "type '$type' must be a comma list of SCH, TCH, DRH, CNH")
+        _fail('usage', "type '$type' must be a comma list of SCH, TCH, DRH, CNH, BLD")
             unless $TYPES{$t} && !$seen{$t}++;
     }
     my $profile = $a->{profile};

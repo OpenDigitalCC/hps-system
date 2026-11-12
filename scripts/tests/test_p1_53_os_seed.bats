@@ -22,7 +22,7 @@ teardown() {
 @test "creates the entry with the manifest boot key" {
   run os_seed_nixos
   [ "$status" -eq 0 ]
-  [ "$(jq -r . "$OSDIR/hps_types.json")" = "SCH,TCH,DRH,CNH" ]
+  [ "$(jq -r . "$OSDIR/hps_types.json")" = "SCH,TCH,DRH,CNH,BLD" ]
   [ "$(jq -r . "$OSDIR/arch.json")" = "x86_64" ]
   [ "$(jq -r . "$OSDIR/name.json")" = "nixos" ]
   [ "$(jq -r . "$OSDIR/version.json")" = "26.05" ]

@@ -203,7 +203,7 @@ layer_name() {
   jq -e 'has("firmware_layer") | not' "$f"
   # the other keys are as before
   jq -e '.initrd == "initrd" and (.sha256.initrd | length == 64)' "$f"
-  for p in node-base node-converged node-cnh; do
+  for p in node-base node-converged node-cnh node-builder; do
     jq -e 'has("extra_initrds") | not' "$OUT/$PIN/$p/boot.json"
   done
 }
@@ -212,7 +212,7 @@ layer_name() {
   build_pin 20261109
   grep -q "  ../firmware/$(layer_name 1)\$" "$OUT/$PIN/SHA256SUMS"
   run grep -c . "$OUT/$PIN/SHA256SUMS"
-  [ "$output" = 12 ]
+  [ "$output" = 14 ]
   cd "$OUT/$PIN"
   run sha256sum --check --quiet SHA256SUMS
   [ "$status" -eq 0 ]
@@ -250,7 +250,7 @@ layer_name() {
 
 @test "without a layer the pin is computed as before (old builds keep their pin names)" {
   FAKE_NO_LAYER=1 build_pin 20261109
-  suffix="$(for p in audit node-base node-converged node-cnh; do
+  suffix="$(for p in audit node-base node-converged node-cnh node-builder; do
     printf '%s /nix/store/aaaa-nixos-system-%s-1/init\n' "$p" "$p"
   done | sha256sum | cut -c1-7)"
   [ "$PIN" = "nixos-26.05-20261109-0123456-$suffix" ]

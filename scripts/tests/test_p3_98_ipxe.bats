@@ -214,7 +214,7 @@ SHIM
   [ "$status" -eq 0 ]
   run "$PINS" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"audit,node-base,node-cnh,node-converged"* ]]
+  [[ "$output" == *"audit,node-base,node-builder,node-cnh,node-converged"* ]]
   [[ "$output" != *"ipxe"* ]]
 }
 

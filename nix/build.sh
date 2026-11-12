@@ -3,7 +3,7 @@
 # build.sh - build the HPS netboot artefact sets and publish them for the IPS.
 #
 # Runs INSIDE the builder container (lab/builder/compose.yml). For each profile
-# (audit, node-base, node-converged, node-cnh by default):
+# (audit, node-base, node-converged, node-cnh, node-builder by default):
 #   nix build <src>#<profile>          -> bzImage, initrd, boot.json (store)
 # then computes the pin  nixos-<ver>-<yyyymmdd>-<nixpkgs short rev>-<content7>  and writes
 #   <out>/<pin>/<profile>/{bzImage,initrd,boot.json}
@@ -14,6 +14,12 @@
 # out of the store, plus ipxe {version}; <pin>/SHA256SUMS lists every profile's
 # two files and the three iPXE binaries. ipxe.json carries version, files,
 # sha256 and size of the iPXE binaries (built by `nix build <src>#ipxe`).
+#
+# Every published file is proved on disk (IPS-33 #3, #3b): the store original
+# and the copy are both read with O_DIRECT (dd iflag=direct, past the page
+# cache) and must agree; a copy that reads back differently is written again
+# (HPS_BUILD_COPY_TRIES, default 3). boot.json, ipxe.json and SHA256SUMS
+# record that proved hash, never one more read of the copy.
 #
 # Firmware layer: a profile whose store boot.json names firmware_layer (the
 # audit image: firmware.cpio) has it published ONCE per store path, shared by
@@ -42,7 +48,7 @@ SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SRC=$(cd "$SELF_DIR/.." && pwd)
 OUT=""
 CACHE=""
-PROFILES="audit node-base node-converged node-cnh"
+PROFILES="audit node-base node-converged node-cnh node-builder"
 IPXE_FILES="snponly.efi ipxe.efi undionly.kpxe"
 IPXE_VERSION=""
 NO_CACHE=0
@@ -184,15 +190,15 @@ publish_firmware_layer() {
   name="$store.cpio"
   dest="$OUT/firmware/$name"
   run mkdir -p "$OUT/firmware"
-  if [[ -f "$dest" ]] && cmp -s "$real" "$dest"; then
+  if [[ -f "$dest" ]] && [[ "$(direct_sha256 "$dest")" == "$(direct_sha256 "$real")" ]]; then
     log "firmware layer unchanged: $dest"
     run touch "$dest"
+    PUB_SHA=$(direct_sha256 "$real")
   else
-    run install -m 0644 "$real" "$OUT/firmware/.$name.tmp"
-    run mv -f "$OUT/firmware/.$name.tmp" "$dest"
+    publish_file "$real" "$dest" || return 1
   fi
   FW_REL="firmware/$name"
-  FW_SHA=$(file_sha256 "$dest")
+  FW_SHA=$PUB_SHA
   FW_SIZE=$(file_size "$dest")
 }
 
@@ -212,17 +218,16 @@ publish_profile() {
       '[{path: $path, sha256: $sha, size: $size}]')
   fi
   run mkdir -p "$dest"
-  run install -m 0644 "$link/bzImage" "$dest/bzImage.tmp"
-  run install -m 0644 "$link/initrd" "$dest/initrd.tmp"
-  run mv -f "$dest/bzImage.tmp" "$dest/bzImage"
-  run mv -f "$dest/initrd.tmp" "$dest/initrd"
-  # Hash and size come from the published files, after the move (IPS-05): what
-  # the IPS serves is checked against what was written here. boot.json goes
-  # last, so a pin without one is visibly incomplete.
+  # Hash and size are of the published files, proved on disk after the move
+  # (IPS-05, IPS-33 #3): what the IPS serves is checked against what was
+  # written here. boot.json goes last, so a pin without one is visibly
+  # incomplete.
   local bz_sha bz_size rd_sha rd_size
-  bz_sha=$(file_sha256 "$dest/bzImage")
+  publish_file "$link/bzImage" "$dest/bzImage" || return 1
+  bz_sha=$PUB_SHA
+  publish_file "$link/initrd" "$dest/initrd" || return 1
+  rd_sha=$PUB_SHA
   bz_size=$(file_size "$dest/bzImage")
-  rd_sha=$(file_sha256 "$dest/initrd")
   rd_size=$(file_size "$dest/initrd")
   log "+ jq add built_at/pin/sha256/size -> $dest/boot.json"
   jq --arg built_at "$built_at" --arg pin "$pin" --arg profile "$profile" \
@@ -254,9 +259,8 @@ publish_ipxe() {
   [[ -f "$link/ipxe.json" ]] || { echo "build.sh: ipxe output lacks ipxe.json" >&2; return 1; }
   run mkdir -p "$dest"
   for f in $IPXE_FILES; do
-    run install -m 0644 "$link/$f" "$dest/$f.tmp"
-    run mv -f "$dest/$f.tmp" "$dest/$f"
-    sha=$(file_sha256 "$dest/$f")
+    publish_file "$link/$f" "$dest/$f" || return 1
+    sha=$PUB_SHA
     size=$(file_size "$dest/$f")
     sha_json=$(jq -c --arg k "$f" --arg v "$sha" '.[$k] = $v' <<< "$sha_json")
     size_json=$(jq -c --arg k "$f" --argjson v "$size" '.[$k] = $v' <<< "$size_json")
@@ -295,20 +299,86 @@ file_size() {
   stat -c %s "$1"
 }
 
+# direct_sha256 <file>: the sha256 of what the disk holds, read with O_DIRECT
+# (dd iflag=direct): a buffered read may come from the page cache. On the busy
+# network-backed lab disk, published files read back with zeroed runs and
+# other hashes than build.sh had taken from the cache (IPS-33 #3).
+direct_sha256() {
+  dd if="$1" iflag=direct bs=4M status=none | sha256sum | cut -d' ' -f1
+}
+
+# publish_file <source> <dest>: copy a store file into place and prove it.
+# The source (a store file, through its link) is read with O_DIRECT; the copy
+# is written as <dest>.tmp, read back with O_DIRECT and compared; a copy that
+# differs is written again, up to HPS_BUILD_COPY_TRIES (default 3) times with
+# HPS_BUILD_COPY_PAUSE (default 10) seconds between. Then it is renamed into
+# place and read back once more. Sets PUB_SHA, the proved hash.
+publish_file() {
+  local src="$1" dest="$2" want got try tries pause
+  tries="${HPS_BUILD_COPY_TRIES:-3}"
+  pause="${HPS_BUILD_COPY_PAUSE:-10}"
+  want=$(direct_sha256 "$(readlink -f "$src")") || {
+    echo "build.sh: cannot read $src with O_DIRECT" >&2
+    return 1
+  }
+  for ((try = 1; try <= tries; try++)); do
+    run install -m 0644 "$src" "$dest.tmp"
+    # A failed sync (an I/O error, seen 2026-11-12) is logged; the O_DIRECT
+    # read-back below decides.
+    run sync -f "$dest.tmp" || log "sync of $dest.tmp failed"
+    got=$(direct_sha256 "$dest.tmp") || got=unreadable
+    if [[ "$got" == "$want" ]]; then
+      break
+    fi
+    log "copy $dest.tmp reads back ${got:0:12}, store ${want:0:12} (try $try of $tries)"
+    rm -f -- "$dest.tmp"
+    if ((try == tries)); then
+      echo "build.sh: $dest: the copy never read back as the store original ($want) after $tries tries" >&2
+      return 1
+    fi
+    sleep "$pause"
+  done
+  run mv -f "$dest.tmp" "$dest"
+  got=$(direct_sha256 "$dest") || got=unreadable
+  if [[ "$got" != "$want" ]]; then
+    echo "build.sh: $dest reads back $got after the rename, store original $want" >&2
+    return 1
+  fi
+  PUB_SHA=$want
+}
+
+# recorded_sha256 <dir> <file>: the hash <dir>/boot.json (or ipxe.json) holds
+# for <file>; fails when there is none.
+recorded_sha256() {
+  local dir="$1" f="$2" json sha
+  json="$dir/boot.json"
+  [[ -f "$json" ]] || json="$dir/ipxe.json"
+  sha=$(jq -r --arg f "$f" '.sha256[$f] // empty' "$json")
+  if [[ ! "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "build.sh: $json records no sha256 for $f" >&2
+    return 1
+  fi
+  printf '%s\n' "$sha"
+}
+
 # write_sums <pin>: <pin>/SHA256SUMS over every profile's bzImage and initrd,
 # in the sha256sum -c format with paths relative to the pin directory.
+# The hashes are the ones boot.json and ipxe.json recorded on publishing,
+# proved on disk then (IPS-33 #3b: a fresh read of the copy here once gave a
+# hash of a bad read).
 write_sums() {
   local pin="$1"
   local dir="$OUT/$pin"
-  local profile f
+  local profile f sha
   log "+ write $dir/SHA256SUMS"
   : > "$dir/SHA256SUMS.tmp"
   local -A layers=()
   for profile in $(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
     [[ -f "$dir/$profile/bzImage" && -f "$dir/$profile/initrd" ]] || continue
-    printf '%s  %s/bzImage\n' "$(file_sha256 "$dir/$profile/bzImage")" "$profile" >> "$dir/SHA256SUMS.tmp"
-    printf '%s  %s/initrd\n' "$(file_sha256 "$dir/$profile/initrd")" "$profile" >> "$dir/SHA256SUMS.tmp"
-    [[ -f "$dir/$profile/boot.json" ]] || continue
+    sha=$(recorded_sha256 "$dir/$profile" bzImage) || return 1
+    printf '%s  %s/bzImage\n' "$sha" "$profile" >> "$dir/SHA256SUMS.tmp"
+    sha=$(recorded_sha256 "$dir/$profile" initrd) || return 1
+    printf '%s  %s/initrd\n' "$sha" "$profile" >> "$dir/SHA256SUMS.tmp"
     while IFS=$'\t' read -r f sha; do
       [[ -n "$f" ]] && layers["$f"]="$sha"
     done < <(jq -r '.extra_initrds[]? | [.path, .sha256] | @tsv' "$dir/$profile/boot.json")
@@ -320,7 +390,8 @@ write_sums() {
   done
   for f in $IPXE_FILES; do
     [[ -f "$dir/ipxe/$f" ]] || continue
-    printf '%s  ipxe/%s\n' "$(file_sha256 "$dir/ipxe/$f")" "$f" >> "$dir/SHA256SUMS.tmp"
+    sha=$(recorded_sha256 "$dir/ipxe" "$f") || return 1
+    printf '%s  ipxe/%s\n' "$sha" "$f" >> "$dir/SHA256SUMS.tmp"
   done
   run mv -f "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS"
 }

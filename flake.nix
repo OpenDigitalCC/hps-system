@@ -61,6 +61,8 @@
         node-converged = [ ./nix/modules/profiles/converged.nix ];
         # CS-3.11: the container host (role CNH), metal and guest alike.
         node-cnh = [ ./nix/modules/profiles/container-host.nix ];
+        # The image builder (role BLD, docs/BUILDER.md).
+        node-builder = [ ./nix/modules/profiles/builder.nix ];
       };
 
       # The platform is set once, in hps-common.nix (nixpkgs.hostPlatform).

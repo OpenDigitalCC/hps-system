@@ -22,7 +22,7 @@
     type = lib.types.str;
     default = "";
     example = "SCH,TCH";
-    description = "HPS roles this profile carries (comma list of SCH, TCH, DRH, CNH); recorded in /etc/hps/roles.";
+    description = "HPS roles this profile carries (comma list of SCH, TCH, DRH, CNH, BLD); recorded in /etc/hps/roles.";
   };
 
   config = {
