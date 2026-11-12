@@ -27,7 +27,7 @@
 # or kept (transfer error, resumed next run) and the run exits 1 after trying
 # the rest; run it again to resume.
 #
-# Paths are limited to hps-system.tar.gz and srv/hps-resources/{nixos,packages}/
+# Paths are limited to hps-system.tar.gz and srv/hps-resources/{nixos,packages,images}/
 # ...; urls to a plain relative path. Anything else refuses the whole manifest
 # before the first download.
 #
@@ -150,7 +150,7 @@ fetch_manifest() {
 valid_path() {
   local p=$1 seg
   [[ "$p" == hps-system.tar.gz ]] && return 0
-  [[ "$p" =~ ^srv/hps-resources/(nixos|packages)/[A-Za-z0-9_.+/-]+$ ]] || return 1
+  [[ "$p" =~ ^srv/hps-resources/(nixos|packages|images)/[A-Za-z0-9_.+/-]+$ ]] || return 1
   [[ "$p" != */ && "$p" != *//* ]] || return 1
   for seg in ${p//\// }; do
     [[ "$seg" != . && "$seg" != .. ]] || return 1
@@ -179,7 +179,7 @@ read_manifest() {
     || refuse "a manifest entry lacks path, url, sha256 or size"
   rows=$(run jq -r '.files[] | [.path, .url, .sha256, (.size | tostring)] | @tsv' "$MANIFEST")
   while IFS=$'\t' read -r path url sha size; do
-    valid_path "$path" || refuse "manifest path '$path' is outside hps-system.tar.gz and srv/hps-resources/{nixos,packages}/"
+    valid_path "$path" || refuse "manifest path '$path' is outside hps-system.tar.gz and srv/hps-resources/{nixos,packages,images}/"
     valid_url "$url" || refuse "manifest url '$url' is not a plain relative path"
     [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "manifest sha256 of '$path' is not 64 hex digits"
     [[ "$size" =~ ^[0-9]+$ ]] || refuse "manifest size of '$path' is not a whole number"

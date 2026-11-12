@@ -15,14 +15,16 @@ sub usage {
     print STDERR "hps-cnh-publish: $msg\n" if $msg;
     print STDERR <<'USAGE';
 Usage:
-  hps-cnh-publish --pin PIN [--pin PIN ...] [--package packages/REL ...]
+  hps-cnh-publish --pin PIN [--pin PIN ...] [--package packages/REL ...] [--image NAME ...]
                   [--resources DIR] [--system DIR]
 Writes into <resources>/packages/cnh/ (served as http://<ips>/packages/cnh/):
   hps-system-<sha16>.tar.gz   the hps-system tree (default /srv/hps-system)
   manifest-<sha256>.json      the files a CNH copies into /var/lib/hps-ips:
                               the tarball, every file of each PIN (verified
-                              first) and each --package (default
-                              packages/ctrl-exec/ctrl-exec-latest.tar.gz)
+                              first), each --package (default
+                              packages/ctrl-exec/ctrl-exec-latest.tar.gz and
+                              ctrl-exec-api-plugins-latest.deb) and each
+                              --image (images/NAME.qcow2 and NAME.sha256)
   latest                      the newest manifest's sha256
 Prints the manifest sha256 last:  MANIFEST <sha256> <url path> files=<n>
 On the CNH:  cnh-ips-bootstrap http://<this ips> <sha256>
@@ -34,15 +36,15 @@ USAGE
 
 sub main {
     my @argv = @_;
-    my (@pins, @packages, $resources, $system, $help);
-    GetOptionsFromArray(\@argv, 'pin=s' => \@pins, 'package=s' => \@packages,
+    my (@pins, @packages, @images, $resources, $system, $help);
+    GetOptionsFromArray(\@argv, 'pin=s' => \@pins, 'package=s' => \@packages, 'image=s' => \@images,
         'resources=s' => \$resources, 'system=s' => \$system, 'help|h' => \$help) or return usage();
     if ($help) { usage(); return 0 }
     return usage('unexpected arguments: ' . join(' ', @argv)) if @argv;
     return usage('at least one --pin is required') unless @pins;
     my $r = eval {
         HPS::CnhPublish->new(resources => $resources, system => $system)
-            ->publish(pins => \@pins, packages => \@packages);
+            ->publish(pins => \@pins, packages => \@packages, images => \@images);
     };
     if ($r) {
         print "manifest: $r->{manifest}\n";

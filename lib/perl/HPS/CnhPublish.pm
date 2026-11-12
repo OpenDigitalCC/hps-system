@@ -46,7 +46,10 @@ package HPS::CnhPublish::Error {
 
 our $SCHEMA = 'hps-cnh-manifest/1';
 my $PIN_RE  = qr/^[a-z0-9][a-z0-9.-]+\z/;
-my $DEFAULT_PACKAGE = 'packages/ctrl-exec/ctrl-exec-latest.tar.gz';
+# The dispatcher tarball, and the API plugins (ctrl-exec-cli): hps-run sends
+# every node call through the CLI, so without it an inner IPS runs no node
+# script (IPS-31 #1, 2026-11-11).
+my @DEFAULT_PACKAGES = ('packages/ctrl-exec/ctrl-exec-latest.tar.gz', 'packages/ctrl-exec/ctrl-exec-api-plugins-latest.deb');
 
 sub new ($class, %opt) {
     my $self = {
@@ -149,6 +152,23 @@ sub package_entry ($self, $rel) {
     return _entry("srv/hps-resources/$rel", $rel, $f);
 }
 
+# image_entries($name): a catalogue image (<resources>/images/<name>.qcow2 and
+# its .sha256), so an inner IPS can run disk-boot workloads (scale test probes,
+# 2026-11-12). The image itself must not be a symlink.
+sub image_entries ($self, $name) {
+    _fail('usage', "image '" . ($name // '') . "' must match ^[a-z0-9][a-z0-9._-]{0,63}\$")
+        unless defined $name && $name =~ /\A[a-z0-9][a-z0-9._-]{0,63}\z/ && $name !~ /\.\./;
+    my @e;
+    for my $ext (qw(qcow2 sha256)) {
+        my $rel = "images/$name.$ext";
+        my $f   = "$self->{resources}/$rel";
+        _fail('refused', "image file $rel is a symlink") if -l $f;
+        _fail('notfound', "image file $rel not found under $self->{resources}") unless -f $f;
+        push @e, _entry("srv/hps-resources/$rel", $rel, $f);
+    }
+    return @e;
+}
+
 sub _commit ($self) {
     my $sys = $self->{system};
     return 'unknown' unless -e "$sys/.git";
@@ -188,9 +208,9 @@ sub system_tarball ($self) {
     return { path => 'hps-system.tar.gz', url => "packages/cnh/$name", sha256 => $sha, size => -s "$out/$name" };
 }
 
-# publish(pins => [...], packages => [...]): writes the tarball and the
-# manifest; returns {sha256, manifest, url, files}. packages defaults to the
-# ctrl-exec tarball the IPS installs its dispatcher from.
+# publish(pins => [...], packages => [...], images => [...]): writes the tarball
+# and the manifest; returns {sha256, manifest, url, files}. packages defaults to
+# the ctrl-exec tarball and the ctrl-exec API plugins package.
 sub publish ($self, %o) {
     my @pins = @{ $o{pins} // [] };
     _fail('usage', 'at least one pin is required') unless @pins;
@@ -199,7 +219,7 @@ sub publish ($self, %o) {
         _fail('usage', "pin $p given twice") if $seen{$p}++;
     }
     my @packages = @{ $o{packages} // [] };
-    @packages = ($DEFAULT_PACKAGE) unless @packages;
+    @packages = @DEFAULT_PACKAGES unless @packages;
     # Every input is checked before anything is written.
     my (@files, %path);
     # A firmware layer two pins share is listed once.
@@ -208,6 +228,11 @@ sub publish ($self, %o) {
     for my $rel (@packages) {
         _fail('usage', "package $rel given twice") if $pk{$rel}++;
         push @files, $self->package_entry($rel);
+    }
+    my %im;
+    for my $name (@{ $o{images} // [] }) {
+        _fail('usage', "image $name given twice") if $im{$name}++;
+        push @files, $self->image_entries($name);
     }
     unshift @files, $self->system_tarball;
     my $doc = {

@@ -47,6 +47,7 @@ sub make_world {
     spit("$res/nixos/latest", "$pin\n");
     make_path("$res/packages/ctrl-exec");
     spit("$res/packages/ctrl-exec/ctrl-exec-latest.tar.gz", 'ctrl-exec-tarball');
+    spit("$res/packages/ctrl-exec/ctrl-exec-api-plugins-latest.deb", 'ce-api-plugins-deb');
     make_path("$sys/scripts", "$sys/lib", "$sys/.git", "$sys/tmp", "$sys/log");
     spit("$sys/scripts/run-hps.sh", "#!/bin/bash\necho run\n");
     chmod 0755, "$sys/scripts/run-hps.sh";
@@ -106,6 +107,9 @@ sub tar_list {
     ok($ce, 'the ctrl-exec package is listed by default');
     is($ce->{url}, 'packages/ctrl-exec/ctrl-exec-latest.tar.gz', 'package url');
     is($ce->{sha256}, sha('ctrl-exec-tarball'), 'package sha256');
+    my $pl = $byp{'srv/hps-resources/packages/ctrl-exec/ctrl-exec-api-plugins-latest.deb'};
+    ok($pl, 'the ctrl-exec API plugins package (ctrl-exec-cli) is listed by default (IPS-31 #1)');
+    is($pl && $pl->{sha256}, sha('ce-api-plugins-deb'), 'plugins package sha256');
 
     my @members = tar_list($tb);
     ok((grep { $_ eq './scripts/run-hps.sh' } @members), 'tarball holds scripts/run-hps.sh');
@@ -173,6 +177,37 @@ sub tar_list {
     undef $err;
     eval { $p->publish(pins => [$pin], packages => ['packages/x.tar.gz']); 1 } or $err = $@;
     ok(ref $err && $err->kind eq 'notfound', 'a tree without scripts/run-hps.sh is refused');
+}
+
+# --- catalogue images (an inner IPS's disk-boot workloads, 2026-11-12)
+{
+    my ($res, $sys, $pin) = make_world();
+    make_path("$res/images");
+    spit("$res/images/probe-os.qcow2", 'qcow2-bytes');
+    spit("$res/images/probe-os.sha256", "abc  probe-os.qcow2\n");
+    my $p = publisher($res, $sys);
+    my $r = $p->publish(pins => [$pin], images => ['probe-os']);
+    my $m = decode_json(slurp($r->{manifest}));
+    my %byp = map { $_->{path} => $_ } @{ $m->{files} };
+    for my $ext (qw(qcow2 sha256)) {
+        my $e = $byp{"srv/hps-resources/images/probe-os.$ext"};
+        ok($e, "image file probe-os.$ext listed");
+        is($e && $e->{url}, "images/probe-os.$ext", "image $ext url under /images/");
+    }
+    my $err;
+    eval { $p->publish(pins => [$pin], images => ['absent']); 1 } or $err = $@;
+    ok(ref $err && $err->kind eq 'notfound', 'a missing image is not found');
+    undef $err;
+    eval { $p->publish(pins => [$pin], images => ['../etc']); 1 } or $err = $@;
+    ok(ref $err && $err->kind eq 'usage', 'a bad image name is a usage error');
+    undef $err;
+    eval { $p->publish(pins => [$pin], images => [ 'probe-os', 'probe-os' ]); 1 } or $err = $@;
+    ok(ref $err && $err->kind eq 'usage', 'an image given twice is a usage error');
+    symlink("$res/images/probe-os.qcow2", "$res/images/linked.qcow2");
+    spit("$res/images/linked.sha256", "x\n");
+    undef $err;
+    eval { $p->publish(pins => [$pin], images => ['linked']); 1 } or $err = $@;
+    ok(ref $err && $err->kind eq 'refused', 'a symlinked image is refused');
 }
 
 # The CLI: exit codes and the MANIFEST line.

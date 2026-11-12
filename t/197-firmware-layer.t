@@ -219,6 +219,7 @@ sub fails { my ($r) = @_; return [ map { "$_->{file}: $_->{reason}" } @{ $r->{fa
     spit("$sys/scripts/run-hps.sh", "#!/bin/bash\n");
     make_path("$res/packages/ctrl-exec");
     spit("$res/packages/ctrl-exec/ctrl-exec-latest.tar.gz", 'tarball');
+    spit("$res/packages/ctrl-exec/ctrl-exec-api-plugins-latest.deb", 'plugins');
     $c = HPS::CnhPublish->new(resources => $res, system => $sys, registry => $reg, now => sub { $NOW });
     my $m = $c->publish(pins => [qw(pin-d pin-f pin-g)]);
     my $doc = decode_json(do { open(my $fh, '<', $m->{manifest}) or die; local $/; <$fh> });

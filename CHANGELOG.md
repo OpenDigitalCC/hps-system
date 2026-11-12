@@ -82,6 +82,19 @@ capabilities and removals are called out explicitly.
 - tests: `t/198-vlan-host-address.t`, `t/199-net-up.t`, `t/45-jobs.t`,
   `test_p3_198_net_vlan_address.bats`, `test_p3_199_net_up_hook.bats`.
 
+## Images and ctrl-exec-cli reach an inner IPS (2026-11-12)
+
+- new: `hps-cnh-publish --image NAME` adds a catalogue image
+  (`images/NAME.qcow2` and `NAME.sha256`) to the container host manifest, and
+  `cnh-ips-bootstrap` accepts `srv/hps-resources/images/` paths. An inner IPS
+  can then run disk-boot workloads (the scale test's probes). A symlinked or
+  missing image is refused.
+- change: the manifest's default packages are the ctrl-exec tarball and the
+  ctrl-exec API plugins package (`ctrl-exec-cli`). `hps-run` sends every node
+  call through that CLI, so an inner IPS without it ran no node script at all
+  (IPS-31 #1).
+- tests: `t/171-cnh-publish.t`, `test_p3_174_cnh_ips_bootstrap.bats`.
+
 ## Storage networks on any VLAN (2026-11-11)
 
 - change: `network_storage_base_vlan` takes 2 to 4094 (was 31 to 99), in

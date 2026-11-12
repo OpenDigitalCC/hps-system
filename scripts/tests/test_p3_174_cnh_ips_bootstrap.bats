@@ -230,3 +230,23 @@ raw_manifest() {
   run bash "$S/cnh-ips-bootstrap" "$BASE" ABC
   [ "$status" -eq 3 ]
 }
+
+@test "a catalogue image (srv/hps-resources/images/) is fetched and placed (scale test probes, 2026-11-12)" {
+  mkdir -p "$STATE/www/images"
+  printf 'qcow2-bytes' > "$STATE/www/images/probe-os.qcow2"
+  printf 'abc  probe-os.qcow2\n' > "$STATE/www/images/probe-os.sha256"
+  publish "$(entry srv/hps-resources/images/probe-os.qcow2 images/probe-os.qcow2)" \
+    "$(entry srv/hps-resources/images/probe-os.sha256 images/probe-os.sha256)"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$I/srv/hps-resources/images/probe-os.qcow2")" = "qcow2-bytes" ]
+  [ -s "$I/srv/hps-resources/images/probe-os.sha256" ]
+}
+
+@test "images/ entries are limited like the others: no climbing out" {
+  mkdir -p "$STATE/www/images"
+  printf 'x' > "$STATE/www/images/a.qcow2"
+  publish '{"path":"srv/hps-resources/images/../../../x","url":"images/a.qcow2","sha256":"'"$(printf 'a%.0s' {1..64})"'","size":1}'
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 3 ]
+}

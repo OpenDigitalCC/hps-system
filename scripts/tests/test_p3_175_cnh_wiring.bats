@@ -160,6 +160,7 @@ nix_code() {
   mkdir -p "$sys/scripts" "$res/packages/ctrl-exec"
   printf '#!/bin/bash\n' > "$sys/scripts/run-hps.sh"
   printf 'ctrl-exec' > "$res/packages/ctrl-exec/ctrl-exec-latest.tar.gz"
+  printf 'ce-api-plugins' > "$res/packages/ctrl-exec/ctrl-exec-api-plugins-latest.deb"
   for p in node-base node-cnh; do
     mkdir -p "$res/nixos/$pin/$p"
     printf 'k-%s' "$p" > "$res/nixos/$pin/$p/bzImage"
@@ -179,7 +180,7 @@ nix_code() {
   p3_171_mount "$I" "$HPS_CNH_ROOT/var/lib/containers/hps-ips"
   run bash "$SD/cnh-ips-bootstrap" http://10.99.1.1 "$msum"
   [ "$status" -eq 0 ]
-  [[ "${lines[-1]}" == "BOOTSTRAP $msum files=8 fetched=8 present=0 replaced=0" ]]
+  [[ "${lines[-1]}" == "BOOTSTRAP $msum files=9 fetched=9 present=0 replaced=0" ]]
   for f in node-base/bzImage node-cnh/initrd node-cnh/boot.json; do
     cmp "$res/nixos/$pin/$f" "$I/srv/hps-resources/nixos/$pin/$f"
   done
