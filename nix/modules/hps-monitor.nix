@@ -26,7 +26,7 @@ let
   # when one is missing), plus check_mem from the input and check_zpool.
   plugins = pkgs.runCommand "hps-nagios-plugins" { nativeBuildInputs = [ pkgs.bash ]; } ''
     mkdir -p "$out"
-    for p in check_disk check_load check_swap check_procs; do
+    for p in check_disk check_load check_procs; do
       f=$(find ${pkgs.monitoring-plugins} \( -type f -o -type l \) -name "$p" | head -n 1)
       test -n "$f" || { echo "$p not found in monitoring-plugins" >&2; exit 1; }
       cp -L "$f" "$out/$p"
@@ -44,7 +44,7 @@ let
   # plugins are installed only where the role is, so the closure of a node does
   # not carry libvirt or ZFS for them.
   pluginSrcDir = ../../node-manager/nixos-26/plugins;
-  toolPath = lib.makeBinPath [ pkgs.coreutils pkgs.gawk ];
+  toolPath = lib.makeBinPath [ pkgs.coreutils pkgs.gawk pkgs.jq ];
   usagePlugin = name: extra: ''
     install -m 0755 ${pluginSrcDir + "/${name}"} "$out/${name}"
     patchShebangs "$out/${name}"
@@ -56,16 +56,20 @@ let
       (usagePlugin "check_net" "")
       (usagePlugin "check_diskio" "")
       (usagePlugin "check_fs" "")
+      (usagePlugin "check_swap_use" "")
     ]
     ++ lib.optional isStorage (usagePlugin "check_zpool_io"
       "--replace-fail 'HPS_ZPOOL:-zpool}' 'HPS_ZPOOL:-${config.boot.zfs.package}/bin/zpool}'")
     ++ lib.optional isCompute (usagePlugin "check_vms"
       "--replace-fail 'HPS_VIRSH:-virsh}' 'HPS_VIRSH:-${config.virtualisation.libvirtd.package}/bin/virsh}'")
+    ++ lib.optional hasOsvc (usagePlugin "check_osvc_hb"
+      "--replace-fail 'HPS_OM:-om}' 'HPS_OM:-${pkgs.om3}/bin/om}'")
   );
 
   isStorage = lib.hasInfix "SCH" config.hps.roles;
   isCompute = lib.hasInfix "TCH" config.hps.roles;
-  hasSwap = config.swapDevices != [ ] || config.zramSwap.enable;
+  # om3 runs here (hps-opensvc.nix sets this): the osvc_hb check
+  hasOsvc = config.hps.monitor.osvc;
   isCnh = lib.hasInfix "CNH" config.hps.roles;
   isBuilder = lib.hasInfix "BLD" config.hps.roles;
 
@@ -98,6 +102,9 @@ let
     "disk_root = check_disk -w 20% -c 10% -p /"
     "load = check_load -r -w 1.5,1.2,1 -c 3,2.5,2"
     "mem = check_mem -w 10 -c 5"
+    # swap space and swap traffic; a node with no swap (the usual RAM-booted
+    # node) is OK "no swap configured", swap_total=0
+    "swap = check_swap_use -w 50 -c 80"
     # -k: user-space processes only; a 48-thread host has hundreds of kernel
     # threads (lab DL360: 747 processes in all, WARNING at the old 400)
     "procs = check_procs -k -w 1000 -c 2000"
@@ -108,7 +115,7 @@ let
     "diskio = check_diskio"
   ]
   ++ diskLines
-  ++ lib.optional hasSwap "swap = check_swap -w 30% -c 10%"
+  ++ lib.optional hasOsvc "osvc_hb = check_osvc_hb"
   ++ lib.optionals isStorage [
     # check_disk with no path finds no disk on a RAM-booted node ("No disks
     # were found", UNKNOWN on the lab DL360); pool health is check_zpool's,
@@ -121,13 +128,22 @@ let
   ++ lib.optional isCompute "vms = check_vms") + "\n";
 in
 {
-  services.ctrl-exec-agent.scripts.nagios-check = {
-    source = nagiosCheck;
-    options.profile = "node";
+  options.hps.monitor.osvc = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    internal = true;
+    description = "om3 runs on this node (set by hps-opensvc.nix): the osvc_hb check is offered.";
   };
 
-  environment.etc."nagios-checks/checks.conf" = {
-    text = checksConf;
-    mode = "0644";
+  config = {
+    services.ctrl-exec-agent.scripts.nagios-check = {
+      source = nagiosCheck;
+      options.profile = "node";
+    };
+
+    environment.etc."nagios-checks/checks.conf" = {
+      text = checksConf;
+      mode = "0644";
+    };
   };
 }

@@ -83,6 +83,8 @@ in
       storage-zvol-list.options.profile = "node";
       storage-status.source = mkScript "storage-status" (scriptsDir + "/storage-status");
       storage-status.options.profile = "node";
+      storage-vdev-online.source = mkScript "storage-vdev-online" (scriptsDir + "/storage-vdev-online");
+      storage-vdev-online.options.profile = "node";
       # CS-3.1
       net-bridge-ensure.source = mkScript "net-bridge-ensure" (scriptsDir + "/net-bridge-ensure");
       net-bridge-ensure.options.profile = "node";

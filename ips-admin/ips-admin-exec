@@ -18,7 +18,7 @@
 #      most 64 arguments;
 #   3. a few tools are narrowed to their safe subcommands (hps-bmc: status,
 #      list, set, select; hps-monitor: run; hps-log: host, ips; hps-metrics:
-#      last, series; hps-issues: list, show, open, resolve, note);
+#      last, series; hps-issues: list, show, open, resolve, note, retry);
 #   4. the tool runs from an empty private directory, as root (the agent's
 #      user), with the HPS paths from hps.conf. Its stdin is /dev/null, except
 #      for the three input=raw scripts (hps-bmc-credential,
@@ -127,8 +127,8 @@ case "$TOOL" in
   hps-issues)
     BIN=hps-issues
     case "${1:-}" in
-      list | show | open | resolve | note) ;;
-      *) refuse "hps-issues: only list, show, open, resolve and note are open to ips-admin" ;;
+      list | show | open | resolve | note | retry) ;;
+      *) refuse "hps-issues: only list, show, open, resolve, note and retry are open to ips-admin" ;;
     esac ;;
   ips-syslog-forward)
     BIN=hps-syslog-forward ;;

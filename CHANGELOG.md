@@ -12,6 +12,66 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Pool disks, om3 heartbeat and swap in the issue register and monitor (2026-11-12)
+
+s1 drill: a disk of s1-sch-001's three-way mirror was hot-unplugged for two
+minutes and returned. The pool went DEGRADED and kept serving, but no issue was
+opened, and the returned disk stayed REMOVED: storage hosts run no ZED, so
+nothing onlines it.
+
+- new: node script `storage-vdev-online <pool> <vdev>` (allowlisted, profile
+  node): once `/dev/disk/by-id/<vdev>` exists again and the vdev is REMOVED,
+  OFFLINE, FAULTED or UNAVAIL, `zpool online` then `zpool clear`; reports
+  `POOL <pool> <health>` and `VDEV <pool> <vdev> <state> resilver=<yes|no>`.
+  ONLINE is a no-op; the disk still away is exit 3 "not present"; never
+  `zpool replace` or anything destructive. Operator verb
+  `hps-storage <host> vdev-online <pool> <vdev>` (through ips-admin and
+  `hps-op`). Tests: `test_p3_252_storage_vdev_online.bats`, `t/226-zfs-vdev.t`.
+- new issue kinds: `zfs-vdev` from the kernel's `zio pool=<p>
+  vdev=/dev/disk/by-id/<disk>-partN error=` lines (keyed host, pool, vdev; the
+  flood adds to one issue), healed by `storage-vdev-online` (backoff while the
+  disk is away, healing while it resilvers, resolved "by zpool status" when
+  ONLINE with no resilver); `zfs-pool` from hps-monitor's zpool WARNING (warning)
+  and CRITICAL (urgent) lines, resolved by its OK line or with the pool's last
+  zfs-vdev issue once the pool is ONLINE. hps-issue-watch now also follows the
+  IPS's own `ips/hps/<date>.log`, for rules marked `from=ips` only (no marker
+  is read there).
+- new issue kind `om3-hb` (owner: "should we have a status check on om3 hb as
+  well?"): om3's `begin a send error period for node <peer>` opens it, keyed by
+  host and peer; `end a send error period` resolves it after `settle=30` (an end
+  followed at once by a begin, when only the error changed, does not); urgent
+  when still open after 10 minutes (`urgent_after=600`). New rule options
+  `settle=S`, `urgent_after=S`, `from=ips`.
+- new node checks: `osvc_hb` (`check_osvc_hb`: `om daemon status`, read as
+  `osvc-status` reads it; WARNING a stale peer, CRITICAL below quorum, UNKNOWN
+  om absent or down) on nodes that run om3; `swap` (`check_swap_use`, every
+  node, replacing monitoring-plugins' `check_swap`, which ran only where swap
+  was configured): used %, totals and swap-in/out rates; no swap is OK
+  `swap_total=0`; WARNING at 50% or on swap-in, CRITICAL at 80%. hps-metrics
+  shows `util.swap` (used %) and `raw.swap_total_bytes`, `raw.swap_in_Bps`,
+  `raw.swap_out_Bps` (the browser's names), outside the compound
+  (text marks it `swap*`; JSON `in_compound`). Needs the node image rebuild.
+  Tests: `test_p3_253_swap_osvc_hb_checks.bats`, `t/213-hps-metrics.t`.
+- fix (s1 drill, sch-002 off): the healer treated every `mirror-rejoin` exit 3
+  as needs-human; only a `DIVERGED` line is a human decision now, other
+  refusals (`UNREADABLE ...` while the leg's target is down) are retried with
+  the backoff.
+- fix: the kernel `md/raid1:mdN: Disk failure` rule is gone: it opened a
+  second issue (`mirror-leg:<host>:md127`) beside the mdadm marker's, whose
+  healer "rejoined" the healthy leg and went to needs-human. The healer only
+  rejoins legs that are not active members; none is a failed attempt, retried.
+- fix: the watcher acts only on its own cluster's hosts: a line whose host is
+  not a registry host sending from one of its own addresses (or the IPS)
+  opens nothing. The lab IPS receives s1's forwarded syslog and had opened
+  issues for `s1` and `tch-002`.
+- fix: the `storage-path` resolve rule never matched a real line: iscsid repeats
+  its name in the message, and the login line is `ConnectionN:M to [...] through
+  [...] is operational now`. Tests: `t/223-issue-watch.t`, `t/224-issue-heal.t`.
+- new: `hps-issues retry <id>` (through ips-admin and `hps-op`): an issue that needs
+  a human (or is open or healing) back to open with its heal backoff reset, the
+  trail saying `retry by operator <who>`; refused for a resolved issue. Test:
+  `t/222-issues.t`.
+
 ## Resource isolation: the host first, then limits per VM (2026-11-12)
 
 Owner: "can we set some limits inside the vm's so that they dont interfere

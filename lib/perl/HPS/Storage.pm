@@ -32,6 +32,8 @@ my $DS_RE   = qr{^([a-z][a-z0-9_.-]*)/enc/(?:vm/)?([A-Za-z0-9_-]+)$};    # <pool
 my $SIZE_RE = qr/^[1-9][0-9]*[KMGT]$/;
 # A pool disk: a /dev/disk/by-id name, with or without that directory.
 my $DISK_RE = qr{^(?:/dev/disk/by-id/)?[A-Za-z0-9][A-Za-z0-9_.:+-]*$};
+# A leaf vdev as zpool status names it: a by-id name without the directory.
+my $VDEV_RE = qr{^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,127}$};
 my $KEY     = 'enc';    # the keysafe name of <pool>/enc's key
 
 my %OPS = (
@@ -39,6 +41,7 @@ my %OPS = (
     'destroy' => '_steps_destroy', 'trim-check' => '_steps_trim', 'status' => '_steps_status',
     'zvol-create' => '_steps_zvol_create', 'zvol-destroy' => '_steps_zvol_destroy', 'zvol-grow' => '_steps_zvol_grow',
     'zvol-list' => '_steps_zvol_list', 'export' => '_steps_export', 'unexport' => '_steps_unexport',
+    'vdev-online' => '_steps_vdev_online',
 );
 
 sub _fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
@@ -336,6 +339,17 @@ sub _steps_unexport ($self, %a) {
     });
 }
 
+# A returned disk back into the pool (storage-vdev-online: zpool online and
+# clear; never replace). The pool is the host's (or the one named).
+sub _steps_vdev_online ($self, %a) {
+    my $pool = $self->pool(%a);
+    my $vdev = $a{vdev};
+    _fail('usage', 'a vdev (its /dev/disk/by-id name, as zpool status shows it) is required') unless defined $vdev && length $vdev;
+    $vdev =~ s{^/dev/disk/by-id/}{};
+    _fail('usage', "vdev '$vdev' is not a /dev/disk/by-id name") unless $vdev =~ $VDEV_RE && $vdev !~ /\.\./;
+    return _step('storage-vdev-online', [ $pool, $vdev ]);
+}
+
 # What the registry says after a successful op.
 sub _post ($self, $op, $pool, $results) {
     if ($op eq 'up' || $op eq 'create') {
@@ -581,6 +595,7 @@ C<export DATASET --iqn --initiator [--portal]> (portal defaults to the host's
 registry C<IP>; recorded in C<storage_exports> after the node did it) and
 C<unexport IQN> (removes the entry). A zvol is C<POOL/enc/NAME> or, for a guest disk, C<POOL/enc/vm/NAME>
 (zvol-create makes the C<POOL/enc/vm> dataset when absent).
+C<vdev-online VDEV> (pool => POOL): one C<storage-vdev-online POOL VDEV> call: a returned disk (REMOVED, OFFLINE, FAULTED or UNAVAIL, its by-id device present again) is onlined and cleared, never replaced; exit 3 with "not present" while the disk is still away.
 
 =head1 REGISTRY KEYS (per host)
 

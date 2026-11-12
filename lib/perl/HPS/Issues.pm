@@ -254,8 +254,10 @@ sub trail ($self, $rec, $event, $detail = '') {
 
 #--- verbs ---------------------------------------------------------------------------------
 
-# open_issue(kind, fields => {..}, key_fields => [..], severity, summary, detail, by):
-# ($record, $is_new). The detail goes in the trail (the log line, or "by <who>").
+# open_issue(kind, fields => {..}, key_fields => [..], severity, summary, detail, by,
+# urgent_after => S): ($record, $is_new). The detail goes in the trail (the log
+# line, or "by <who>"). urgent_after: a new issue records urgent_at (epoch,
+# now + S); hps-issue-watch makes it urgent once that passes while unresolved.
 sub open_issue ($self, %a) {
     my $kind   = check_kind($a{kind});
     my $fields = check_fields($a{fields} // {});
@@ -286,6 +288,7 @@ sub open_issue ($self, %a) {
             opened_at => iso($now), resolved_at => undef, summary => $summary,
             fields => $fields, seen => 1, last_seen_at => iso($now), trail => [],
             ($prev ? (previous => $prev->{id}) : ()),
+            ($a{urgent_after} ? (urgent_at => $now + $a{urgent_after}) : ()),
         };
         $self->trail($rec, 'opened', $detail);
         $self->trail($rec, 'reoccurred', "previous issue $prev->{id} (resolved $prev->{resolved_at})") if $prev;
@@ -323,6 +326,20 @@ sub resolve ($self, $id, $by) {
 sub resolve_key ($self, $key, $by) {
     my $rec = $self->find_open($key) or return undef;
     return $self->resolve($rec->{id}, $by);
+}
+
+# retry($id, $who): an unresolved issue (needs-human, or open or healing) back
+# to open with its heal backoff reset: no attempts counted, the next attempt at
+# once (the healer's next tick). Refused (refused) when it is resolved.
+sub retry ($self, $id, $who) {
+    my $rec = $self->update($id, sub ($rec) {
+        _fail(refused => "issue $id is resolved ($rec->{resolved_at}): open a new one") if $rec->{state} eq 'resolved';
+        $self->trail($rec, 'retry', 'retry by operator ' . clean_text($who));
+        $self->set_state($rec, 'open', 'back to open for a retry') if $rec->{state} ne 'open';
+        $rec->{heal} = { attempts => 0, next_at => $self->now };
+    });
+    $self->_log('notice', "hps-issue: retry $id by $who");
+    return $rec;
 }
 
 # note($id, $text): a note in the trail.

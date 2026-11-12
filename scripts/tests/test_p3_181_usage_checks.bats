@@ -267,7 +267,7 @@ EOT
 
 @test "the usage plugins are executable, shellcheck clean, reject a bad interval and carry the PATH placeholder" {
   local p
-  for p in check_cpu check_net check_diskio check_zpool_io check_vms; do
+  for p in check_cpu check_net check_diskio check_zpool_io check_vms check_swap_use; do
     [ -x "$P/$p" ]
     run shellcheck -s bash -S warning "$P/$p"
     [ "$status" -eq 0 ]
@@ -309,10 +309,10 @@ EOT
 
 @test "wiring: the plugins are installed from node-manager with a tool PATH and absolute zpool/virsh paths" {
   grep -qF 'pluginSrcDir = ../../node-manager/nixos-26/plugins;' "$MOD"
-  grep -qF 'lib.makeBinPath [ pkgs.coreutils pkgs.gawk ]' "$MOD"
+  grep -qF 'lib.makeBinPath [ pkgs.coreutils pkgs.gawk pkgs.jq ]' "$MOD"
   grep -qF -e "--replace-fail '# @HPS_PATH@'" "$MOD"
   local p
-  for p in check_cpu check_net check_diskio check_zpool_io check_vms; do
+  for p in check_cpu check_net check_diskio check_zpool_io check_vms check_swap_use check_osvc_hb; do
     grep -qF "\"$p\"" "$MOD"
     [ -f "$P/$p" ]
   done

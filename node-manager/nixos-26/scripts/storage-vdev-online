@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# storage-vdev-online - bring a returned disk of a ZFS pool back online.
+#
+# ctrl-exec allowlisted node script (nix/modules/hps-ctrl-exec.nix). One action,
+# a straight sequence of standard commands, every command logged to stderr as
+# "+ <command>" before it runs, no library sourcing.
+#
+# Usage: storage-vdev-online <pool> <vdev>
+#
+#   <pool>  ^[a-z][a-z0-9_.-]*$, an imported pool
+#   <vdev>  the leaf vdev as zpool status names it: a /dev/disk/by-id name,
+#           without the directory (^[A-Za-z0-9][A-Za-z0-9_.:+-]*$, at most 128)
+#
+# Nodes run no ZED, so nothing onlines a disk that went away and came back (a
+# hot-unplug, a cable, a controller reset): ZFS keeps it REMOVED. When the
+# device node /dev/disk/by-id/<vdev> exists again and the vdev is REMOVED,
+# OFFLINE, FAULTED or UNAVAIL this runs `zpool online <pool> <vdev>` then
+# `zpool clear <pool> <vdev>` (ZFS resilvers what it missed) and reports the
+# result. An ONLINE vdev is reported and left alone. It NEVER replaces, detaches,
+# removes, labels or creates anything.
+#
+# Output (stdout), always the last two lines once the vdev is found:
+#   POOL <pool> <health>
+#   VDEV <pool> <vdev> <state> resilver=<yes|no>
+#
+# Exit: 0 the vdev is ONLINE (it was, or it is now); 2 usage; 3 refused: a bad
+# name, the pool not imported, no such vdev in the pool, a state online does not
+# apply to (DEGRADED: too many errors, a human decision), or the device not
+# present ("not present: ..." on stderr; the disk is still away, ask again
+# later); 1 a command failed or the vdev did not come ONLINE.
+
+set -euo pipefail
+
+POOL=""
+VDEV=""
+BYID=/dev/disk/by-id
+
+log() {
+  printf '[storage-vdev-online] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-vdev-online <pool> <vdev>
+Exit: 0 ONLINE, 2 usage, 3 refused (incl. not present), 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  if [[ $# -ne 2 || "$1" == -* || "$2" == -* ]]; then
+    usage
+    exit 2
+  fi
+  POOL=$1
+  VDEV=$2
+  if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
+    refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
+  fi
+  if [[ ${#VDEV} -gt 128 || ! "$VDEV" =~ ^[A-Za-z0-9][A-Za-z0-9_.:+-]*$ || "$VDEV" == *..* ]]; then
+    refuse "vdev '$VDEV' is not a /dev/disk/by-id name (^[A-Za-z0-9][A-Za-z0-9_.:+-]*\$, no directory)"
+  fi
+}
+
+# vdev_state <zpool status text>: the STATE column of the vdev's line, or empty.
+vdev_state() {
+  awk -v v="$VDEV" '$1 == v { print $2; exit }' <<< "$1"
+}
+
+# resilvering <zpool status text>: yes or no.
+resilvering() {
+  if grep -q 'resilver in progress' <<< "$1"; then
+    printf 'yes\n'
+  else
+    printf 'no\n'
+  fi
+}
+
+report() {
+  local status=$1 state health
+  state=$(vdev_state "$status")
+  health=$(run zpool list -H -o health "$POOL" 2> /dev/null || printf 'unknown')
+  printf 'POOL %s %s\n' "$POOL" "$health"
+  printf 'VDEV %s %s %s resilver=%s\n' "$POOL" "$VDEV" "${state:-unknown}" "$(resilvering "$status")"
+}
+
+main() {
+  parse_args "$@"
+  if ! zpool list -H -o name "$POOL" > /dev/null 2>&1; then
+    refuse "pool '$POOL' is not imported"
+  fi
+  local status state
+  status=$(run zpool status "$POOL")
+  state=$(vdev_state "$status")
+  if [[ -z "$state" ]]; then
+    refuse "'$VDEV' is not a vdev of pool '$POOL' (zpool status lists no such line)"
+  fi
+  case "$state" in
+    ONLINE)
+      log "$VDEV is ONLINE in $POOL; nothing to do"
+      report "$status"
+      exit 0 ;;
+    REMOVED | OFFLINE | FAULTED | UNAVAIL) ;;
+    *)
+      report "$status"
+      refuse "$VDEV is $state in $POOL: online does not apply (a human decision)" ;;
+  esac
+  printf '+ readlink -e %s\n' "$BYID/$VDEV" >&2
+  if ! readlink -e "$BYID/$VDEV" > /dev/null 2>&1; then
+    report "$status"
+    log "not present: $BYID/$VDEV does not exist ($VDEV is $state); ask again when the disk is back"
+    exit 3
+  fi
+  run zpool online "$POOL" "$VDEV"
+  run zpool clear "$POOL" "$VDEV"
+  status=$(run zpool status "$POOL")
+  state=$(vdev_state "$status")
+  report "$status"
+  if [[ "$state" != ONLINE ]]; then
+    log "$VDEV is ${state:-unknown} after zpool online"
+    exit 1
+  fi
+}
+
+main "$@"

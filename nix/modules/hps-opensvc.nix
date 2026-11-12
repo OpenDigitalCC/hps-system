@@ -16,6 +16,10 @@
 {
   environment.systemPackages = [ pkgs.om3 ];
 
+  # hps-monitor.nix (imported by hps-node.nix wherever this module is) then
+  # offers the osvc_hb check (check_osvc_hb: om daemon status).
+  hps.monitor.osvc = true;
+
   environment.etc."hps/hps-osvc-config" = {
     source = ../../node-manager/nixos-26/boot/hps-osvc-config.sh;
     mode = "0755";

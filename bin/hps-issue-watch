@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 # hps-issue-watch: follows the nodes' syslog on the IPS, opens and resolves
-# issues by the trigger rules, and heals mirror-leg issues (docs/ISSUES.md).
+# issues by the trigger rules, and heals mirror-leg and zfs-vdev issues
+# (docs/ISSUES.md).
 # `loop` runs under supervisor (program:hps-issue-watch).
 use strict;
 use warnings;
@@ -21,8 +22,8 @@ Usage:
   hps-issue-watch loop [--interval S] [--no-heal] [--max-polls N]
   hps-issue-watch check-rules [FILE]
 loop: every S seconds (default 2) reads the new lines of <log>/<sender ip>/
-  <date>.log, applies the rules, then runs the healer over the due mirror-leg
-  issues (--no-heal: record only). Starts at the end of every file unless its
+  <date>.log and <log>/ips/hps/<date>.log, applies the rules, then runs the
+  healer over the due mirror-leg and zfs-vdev issues (--no-heal: record only). Starts at the end of every file unless its
   state file (<issues dir>/.watch-state.json) is less than 300 s old.
 check-rules: parses the rules file (default lib/hps-issue-rules.conf, or
   HPS_ISSUE_RULES) and prints the rule count, or the first bad line.

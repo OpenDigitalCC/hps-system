@@ -52,7 +52,7 @@ teardown() {
 
 @test "the plugin directory holds monitoring-plugins' checks, check_mem from the input and check_zpool" {
   grep -q '${pkgs.monitoring-plugins}' "$MOD"
-  grep -q 'check_disk check_load check_swap check_procs' "$MOD"
+  grep -q 'for p in check_disk check_load check_procs; do' "$MOD"
   grep -q '${pluginSrc}/plugins/check_mem' "$MOD"
   grep -q 'node-manager/nixos-26/plugins/check_zpool' "$MOD"
 }
@@ -63,13 +63,21 @@ teardown() {
   grep -qF '"plugin_dir = ${plugins}"' "$MOD"
 }
 
-@test "the check set: root, load, mem, procs everywhere; swap only with swap; disk and zpool on storage nodes; thresholds as the plugin example" {
+@test "the check set: root, load, mem, procs, swap everywhere; disk and zpool on storage nodes; osvc_hb where om3 runs; thresholds as the plugin example" {
   grep -qF '"disk_root = check_disk -w 20% -c 10% -p /"' "$MOD"
   grep -qF '"load = check_load -r -w 1.5,1.2,1 -c 3,2.5,2"' "$MOD"
   grep -qF '"mem = check_mem -w 10 -c 5"' "$MOD"
   grep -qF '"procs = check_procs -k -w 1000 -c 2000"' "$MOD"
-  grep -qF 'lib.optional hasSwap "swap = check_swap -w 30% -c 10%"' "$MOD"
-  grep -qF 'hasSwap = config.swapDevices != [ ] || config.zramSwap.enable;' "$MOD"
+  grep -qF '"swap = check_swap_use -w 50 -c 80"' "$MOD"
+  grep -qF '(usagePlugin "check_swap_use" "")' "$MOD"
+  run ! grep -q 'hasSwap' "$MOD"
+  grep -qF 'lib.optional hasOsvc "osvc_hb = check_osvc_hb"' "$MOD"
+  grep -qF 'hasOsvc = config.hps.monitor.osvc;' "$MOD"
+  grep -qF "lib.optional hasOsvc (usagePlugin \"check_osvc_hb\"" "$MOD"
+  grep -qF "'HPS_OM:-\${pkgs.om3}/bin/om}'" "$MOD"
+  grep -qF 'options.hps.monitor.osvc = lib.mkOption {' "$MOD"
+  grep -qx '  hps.monitor.osvc = true;' "$ROOT/nix/modules/hps-opensvc.nix"
+  grep -qF 'pkgs.jq' "$MOD"
   run ! grep -q '"disk = check_disk' "$MOD"
   grep -qF '"zpool = check_zpool"' "$MOD"
   grep -qF 'isStorage = lib.hasInfix "SCH" config.hps.roles;' "$MOD"

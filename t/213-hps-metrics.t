@@ -59,6 +59,14 @@ is_deeply(util('check=cpu state=UNKNOWN CPU UNKNOWN - no data'), {}, 'a check wi
 
 is(HPS::Metrics::compound({ cpu => 10, mem => 38, load => 12.8, disk => 3, pool => 9 }), 38, 'compound = the max');
 is(HPS::Metrics::compound({ cpu => 10, diskio => 100 }), 10, 'compound: diskio is not in it');
+my ($su, $swr) = HPS::Metrics::utilisation(HPS::Metrics::parse_message('hps-monitor: host=a.hps.test check=swap state=OK SWAP OK - 3.1% used (32.0 MiB of 1.0 GiB), in 0.0 KiB/s out 10.0 KiB/s | used_pct=3.1%;50;80;0;100 swap_total=1073741824B swap_used=33554432B swap_free=1040187392B swap_in_Bps=0 swap_out_Bps=10240'));
+is_deeply($su, { swap => 3.1 }, 'swap = used_pct');
+is_deeply($swr, { swap_total_bytes => 1073741824, swap_in_Bps => 0, swap_out_Bps => 10240 }, 'swap: raw swap_total_bytes, swap_in_Bps, swap_out_Bps (the browser\'s names)');
+my ($nsu, $nsr) = HPS::Metrics::utilisation(HPS::Metrics::parse_message('hps-monitor: host=a.hps.test check=swap state=OK SWAP OK - no swap configured | used_pct=0%;50;80;0;100 swap_total=0B swap_used=0B swap_free=0B swap_in_Bps=0 swap_out_Bps=0'));
+is_deeply($nsu, { swap => 0 }, 'no swap configured: 0');
+is_deeply($nsr, { swap_total_bytes => 0, swap_in_Bps => 0, swap_out_Bps => 0 }, 'no swap configured: swap_total_bytes 0');
+is(HPS::Metrics::compound({ cpu => 10, swap => 95 }), 10, 'compound: swap is not in it');
+ok(!(grep { $_ eq 'swap' } @HPS::Metrics::COMPOUND) && (grep { $_ eq 'swap' } @HPS::Metrics::RESOURCES), 'swap is a resource outside the compound');
 is(HPS::Metrics::compound({}), undef, 'compound: nothing known');
 is(HPS::Metrics::level(69.9), 'ok', 'level: below 70 ok');
 is(HPS::Metrics::level(70), 'warning', 'level: 70 warning');
@@ -106,6 +114,7 @@ my @lines = (
     ev($t2, 'host=sch-001.hps.test check=cpu state=OK CPU OK | busy=10%'),
     ev($t2, 'host=sch-001.hps.test check=mem state=OK MEM OK | available_pct=70%'),
     ev($t2, 'host=sch-001.hps.test check=disk_srv state=OK DISK OK | srv_used_pct=55% srv_inode_pct=2%'),
+    ev($t2, 'host=sch-001.hps.test check=swap state=WARNING SWAP WARNING - 95.0% used (1.9 GiB of 2.0 GiB), in 48.0 KiB/s out 12.0 KiB/s | used_pct=95.0%;50;80;0;100 swap_total=2147483648B swap_used=2040109466B swap_free=107374182B swap_in_Bps=49152 swap_out_Bps=12288'),
     ev($t2, 'host=sch-001.hps.test checks=3 worst=OK duration=1.0'),
     ev($t2 + 1, 'host=tch-001.hps.test state=UNREACHABLE hps-run exit 4: timed out'),
     ev($t2 + 2, 'host=ips.hps.test check=disk_log state=WARNING DISK WARNING | used_pct=86% inode_pct=34%'),
@@ -129,12 +138,12 @@ is_deeply([ sort keys %by ], [qw(gone-001.hps.test ips.hps.test sch-001.hps.test
     'latest: own hosts only (the s1 lines forwarded from an inner IPS are left out; bld-001 is older than the window)');
 my $s = $by{'sch-001.hps.test'};
 is($s->{mac}, 'aabbccddee01', 'latest: the host\'s MAC from the registry');
-is_deeply([ map { "$_->{check}=$_->{state}" } @{ $s->{checks} } ], [qw(cpu=OK mem=OK disk_srv=OK)],
+is_deeply([ map { "$_->{check}=$_->{state}" } @{ $s->{checks} } ], [qw(cpu=OK mem=OK disk_srv=OK swap=WARNING)],
     'latest: the checks of the newest run, in their order (vms of an older run is not carried over)');
 is($s->{checks}[0]{perf}{busy}, 10, 'latest: perfdata values');
 is($s->{worst}, 'OK', 'latest: the newest summary\'s worst');
-is_deeply($s->{util}, { cpu => 10, mem => 30, disk => 55 }, 'latest: utilisation of the newest run');
-is($s->{compound}, 55, 'latest: compound = the max');
+is_deeply($s->{util}, { cpu => 10, mem => 30, disk => 55, swap => 95 }, 'latest: utilisation of the newest run');
+is($s->{compound}, 55, 'latest: compound = the max (swap 95 is not in it)');
 is($s->{level}, 'ok', 'latest: its level');
 is($s->{time}, strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $t2), 'latest: the time of the newest line');
 my $tc = $by{'tch-001.hps.test'};
@@ -222,8 +231,17 @@ is_deeply($empty->latest('all')->{hosts}, [], 'no source: no hosts');
     ($rc, $out) = $run->('series', 'sch-001', '--hours', '1');
     is($rc, 0, 'cli: text series');
     like($out, qr/^# source metrics\.log/, 'cli: text names the source');
-    ($rc) = $run->('last', 'all');
+    ($rc, $out) = $run->('last', 'all');
     is($rc, 0, 'cli: last all');
+    like($out, qr/ swap\* 95%/, 'cli: swap shown, marked as outside the compound');
+    like($out, qr/^# \* not in the compound$/m, 'cli: the mark explained');
+    ($rc, $out) = $run->('last', 'sch-001', '--json');
+    $d = eval { decode_json($out) };
+    is($d->{hosts}[0]{util}{swap}, 95, 'cli: last --json has swap in util');
+    is($d->{hosts}[0]{raw}{swap_in_Bps}, 49152, 'and raw.swap_in_Bps');
+    is($d->{hosts}[0]{raw}{swap_total_bytes}, 2147483648, 'and raw.swap_total_bytes');
+    is_deeply($d->{in_compound}, [qw(cpu mem load disk pool)], 'last --json names the resources in the compound');
+    cmp_ok($d->{hosts}[0]{compound}, '<', 95, 'swap at 95% does not raise the compound');
     ($rc) = $run->('last');
     is($rc, 2, 'cli: no target is usage');
     ($rc) = $run->('last', 'all', '--hours', '2');

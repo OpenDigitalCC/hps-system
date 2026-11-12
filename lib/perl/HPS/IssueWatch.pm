@@ -10,13 +10,27 @@ package HPS::IssueWatch;
 #       kind is keyed (fields comma-separated, e.g. host,mirror) and its default
 #       severity. A marker of a kind with no marker rule is keyed by host,
 #       severity warning. A marker's own severity=urgent|warning wins.
-#   open <kind> <severity> <key fields> [after=N/S] <regex>
-#   resolve <kind> - <key fields> <regex>
+#   open <kind> <severity> <key fields> [from=ips] [after=N/S] [urgent_after=S] <regex>
+#   resolve <kind> - <key fields> [from=ips] [settle=S] <regex>
 #       a Perl regex matched against "<tag>: <message>" of a line; its named
 #       captures, plus host (the line's host, short name), are the fields.
 #       after=N/S: open only at the Nth match of the same key within S seconds.
+#       settle=S (resolve rules): the resolve is held S seconds; an open of
+#       the same key meanwhile cancels it. urgent_after=S (open rules): a new
+#       issue becomes urgent when still unresolved S seconds after it opened.
+#       from=ips: a rule for the IPS's own hps lines (ips/hps/<date>.log, where
+#       hps-monitor's results are filed), and only for them. Node lines go
+#       through the other rules and the markers; the IPS's lines through the
+#       from=ips rules only (never a marker).
 #
-# Following: the newest file of each sender directory, from a byte offset. The
+# Only the hosts of this cluster count: an action whose host (short name) is
+# neither the IPS itself nor a host of the registry sending from one of its own
+# addresses is dropped (the IPS may receive another cluster's forwarded
+# syslog, from that cluster's IPS); the first such line of a host is logged,
+# then once an hour (known_host).
+#
+# Following: the newest file of each sender directory and of ips/hps, from a
+# byte offset. The
 # offsets are saved in a state file (<issues dir>/.watch-state.json) after each
 # poll that read something. On start a state file younger than `catchup`
 # seconds (default 300) is resumed, so a restart misses nothing it had not
@@ -32,6 +46,7 @@ use feature qw(signatures);
 no warnings 'experimental::signatures';
 
 use Fcntl qw(SEEK_SET);
+use Sys::Hostname ();
 use FindBin ();
 use JSON::PP ();
 use HPS::Log ();
@@ -42,6 +57,8 @@ use constant CATCHUP  => 300;
 use constant MAX_READ => 4 * 1024 * 1024;
 
 my $IP_RE  = qr/\A[0-9]{1,3}(?:\.[0-9]{1,3}){3}\z/;
+my $LOCAL  = 'ips/hps';    # the IPS's own hps lines: the only local directory followed
+my $DIR_RE = qr/\A(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|ips\/hps)\z/;
 my $DAY_RE = qr/\A([0-9]{4})-([0-9]{2})-([0-9]{2})\.log\z/;
 
 #=== rules =====================================================================
@@ -73,17 +90,31 @@ sub parse_rules ($text, $where = 'rules') {
             $marker{$kind} = { severity => $sev, key_fields => \@kf };
             next;
         }
-        my ($an, $as);
-        if (defined $rest && $rest =~ s/\Aafter=([0-9]+)\/([0-9]+)\s+//) {
+        my ($an, $as, $from, $settle, $urgent);
+        while (defined $rest && $rest =~ s/\A(after|from|settle|urgent_after)=(\S+)\s+//) {
+            my ($opt, $v) = ($1, $2);
+            if ($opt eq 'from') {
+                $bad->("from=$v: the only source is from=ips") unless $v eq 'ips';
+                $from = $v;
+                next;
+            }
+            if ($opt eq 'settle' || $opt eq 'urgent_after') {
+                $bad->("$opt=S needs S >= 1 seconds") unless $v =~ /\A[0-9]+\z/ && $v >= 1;
+                $bad->('settle= is for resolve rules') if $opt eq 'settle' && $action ne 'resolve';
+                $bad->('urgent_after= is for open rules') if $opt eq 'urgent_after' && $action ne 'open';
+                if ($opt eq 'settle') { $settle = $v + 0 } else { $urgent = $v + 0 }
+                next;
+            }
+            $bad->('after=N/S needs N >= 1 and S >= 1') unless $v =~ /\A([0-9]+)\/([0-9]+)\z/ && $1 >= 1 && $2 >= 1;
             ($an, $as) = ($1 + 0, $2 + 0);
-            $bad->('after=N/S needs N >= 1 and S >= 1') unless $an >= 1 && $as >= 1;
             $bad->('after= is for open rules') unless $action eq 'open';
         }
         $bad->('the rule has no regex') unless defined $rest && length $rest;
         my $re = eval { qr/$rest/ };
         $bad->("the regex does not compile: " . ($@ =~ s/ at \S+ line \d+.*//sr)) unless $re;
         push @rules, { action => $action, kind => $kind, severity => ($sev eq '-' ? undef : $sev),
-            key_fields => \@kf, re => $re, after_n => $an, after_s => $as, n => $n };
+            key_fields => \@kf, re => $re, after_n => $an, after_s => $as, from => $from,
+            settle => $settle, urgent_after => $urgent, n => $n };
     }
     return { marker => \%marker, rules => \@rules };
 }
@@ -109,12 +140,13 @@ sub marker_keys ($rules, $kind) {
 
 # match($rules, $rec): the actions a parsed line asks for, each
 # {action, kind, severity, key_fields, fields} or {action => 'bad', reason}.
-# $rec is HPS::Log::parse_syslog's {host, tag, message}.
-sub match ($rules, $rec) {
+# $rec is HPS::Log::parse_syslog's {host, tag, message}; $local: the line is the
+# IPS's own (ips/hps): only the from=ips rules, no marker.
+sub match ($rules, $rec, $local = 0) {
     my $host = HPS::Registry::short_name($rec->{host} // '');
     my $msg  = $rec->{message} // '';
     my @out;
-    if ($msg =~ /\bHPS-ISSUE (open|resolve)(?: (.*))?\z/) {
+    if (!$local && $msg =~ /\bHPS-ISSUE (open|resolve)(?: (.*))?\z/) {
         my ($action, $rest) = ($1, $2 // '');
         my %f;
         for my $tok (split /\s+/, $rest) {
@@ -133,6 +165,7 @@ sub match ($rules, $rec) {
     }
     my $text = length($rec->{tag} // '') ? "$rec->{tag}: $msg" : $msg;
     for my $r (@{ $rules->{rules} }) {
+        next if ($r->{from} ? 1 : 0) != ($local ? 1 : 0);
         next unless $text =~ $r->{re};
         my %f = %+;
         $f{host} //= $host;
@@ -159,6 +192,10 @@ sub new ($class, %o) {
         max_read   => $o{max_read} // MAX_READ,
         pos        => {},      # ip => {file, offset}
         counts     => {},      # after=N/S: "<rule n>|<key>" => [epochs]
+        hosts      => {},      # "<short name>|<from>" => {ok, at, said}: is it a host of this cluster
+        pending    => {},      # settle=S: key => {due, detail}: resolves held back
+        next_urgent => 0,      # when the urgent_at of the issues is looked at next
+        ips_names  => $o{ips_names} // [ 'ips', HPS::Registry::short_name(Sys::Hostname::hostname()) ],
         started    => 0,
     }, $class;
 }
@@ -171,6 +208,7 @@ sub _dirs ($self) {
     opendir(my $dh, $self->{log_dir}) or return ();
     my @d = sort grep { $_ =~ $IP_RE && -d "$self->{log_dir}/$_" } readdir $dh;
     closedir $dh;
+    push @d, $LOCAL if -d "$self->{log_dir}/$LOCAL";
     return @d;
 }
 
@@ -197,7 +235,7 @@ sub start ($self) {
     if ($fresh) {
         for my $ip (keys %{ $st->{files} }) {
             my $p = $st->{files}{$ip};
-            next unless $ip =~ $IP_RE && ref $p eq 'HASH' && defined $p->{file} && $p->{file} =~ $DAY_RE
+            next unless $ip =~ $DIR_RE && ref $p eq 'HASH' && defined $p->{file} && $p->{file} =~ $DAY_RE
                 && defined $p->{offset} && $p->{offset} =~ /\A[0-9]+\z/;
             $pos{$ip} = { file => $p->{file}, offset => $p->{offset} + 0 };
         }
@@ -262,7 +300,7 @@ sub poll ($self) {
             my $off = $file eq $p->{file} ? $p->{offset} : 0;
             my ($new, @l) = $self->_read_new($ip, $file, $off);
             my ($y, $m) = $file =~ $DAY_RE;
-            for my $l (@l) { $self->line($l, $y, $m) }
+            for my $l (@l) { $self->line($l, $y, $m, $ip eq $LOCAL) }
             $lines += @l;
             $p->{file} = $file;
             $p->{offset} = $new;
@@ -270,14 +308,17 @@ sub poll ($self) {
         }
     }
     $self->save if $lines;
+    $self->settle;
+    $self->escalate;
     return $lines;
 }
 
-# line($text, $year, $month): one syslog line through the rules.
-sub line ($self, $text, $y = undef, $m = undef) {
+# line($text, $year, $month, $local): one syslog line through the rules ($local:
+# a line of the IPS's own ips/hps file).
+sub line ($self, $text, $y = undef, $m = undef, $local = 0) {
     my @t = gmtime $self->{now}->();
     my $rec = HPS::Log::parse_syslog($text, $y // $t[5] + 1900, $m // $t[4] + 1) or return;
-    for my $a (match($self->{rules}, $rec)) {
+    for my $a (match($self->{rules}, $rec, $local)) {
         my $ok = eval { $self->_act($a, $rec); 1 };
         $self->_log('warning', 'hps-issue: ignored a line from ' . ($rec->{host} // '?') . ': '
             . ($ok ? $a->{reason} : ref $@ ? $@->message : $@ =~ s/\s+\z//r)) if !$ok || $a->{action} eq 'bad';
@@ -289,12 +330,19 @@ sub _act ($self, $a, $rec) {
     return if $a->{action} eq 'bad';
     my $issues = $self->{issues};
     my $fields = HPS::Issues::check_fields($a->{fields});
+    return unless $self->known_host($fields->{host}, $rec->{from});
     my $key = HPS::Issues::make_key($a->{kind}, $fields, @{ $a->{key_fields} });
     my $detail = 'log ' . ($rec->{host} // '?') . ' ' . ($rec->{tag} // '') . ': ' . ($rec->{message} // '');
     if ($a->{action} eq 'resolve') {
+        if (my $s = $a->{rule} && $a->{rule}{settle}) {
+            # held back: an open of the same key within S seconds cancels it
+            $self->{pending}{$key} = { due => $self->{now}->() + $s, detail => $detail } if $issues->find_open($key);
+            return;
+        }
         $issues->resolve_key($key, $detail);
         return;
     }
+    delete $self->{pending}{$key};
     if (my $r = $a->{rule}) {
         if ($r->{after_n} && $r->{after_n} > 1) {
             my $now = $self->{now}->();
@@ -306,8 +354,73 @@ sub _act ($self, $a, $rec) {
     }
     my $summary = join ' ', $a->{kind}, map { "$_=$fields->{$_}" } sort keys %$fields;
     $issues->open_issue(kind => $a->{kind}, fields => $fields, key_fields => $a->{key_fields},
-        severity => $a->{severity}, summary => $summary, detail => $detail);
+        severity => $a->{severity}, summary => $summary, detail => $detail,
+        urgent_after => $a->{rule} && $a->{rule}{urgent_after});
     return;
+}
+
+# settle(): the held-back resolves (settle=S) whose time has come.
+sub settle ($self) {
+    my $now = $self->{now}->();
+    for my $key (sort keys %{ $self->{pending} }) {
+        my $p = $self->{pending}{$key};
+        next if $p->{due} > $now;
+        delete $self->{pending}{$key};
+        eval { $self->{issues}->resolve_key($key, $p->{detail}); 1 }
+            or $self->_log('err', "hps-issue: resolve of $key failed: " . (ref $@ ? $@->message : $@ =~ s/\s+\z//r));
+    }
+    return;
+}
+
+# escalate(): every 30 s, an unresolved warning issue past its urgent_at
+# (urgent_after=S of the rule that opened it) becomes urgent, once.
+sub escalate ($self) {
+    my $now = $self->{now}->();
+    return if $now < $self->{next_urgent};
+    $self->{next_urgent} = $now + 30;
+    my $issues = $self->{issues};
+    for my $r ($issues->list) {
+        next unless defined $r->{urgent_at} && $r->{urgent_at} <= $now && $r->{severity} ne 'urgent';
+        $issues->update($r->{id}, sub ($rec) {
+            return if $rec->{state} eq 'resolved' || $rec->{severity} eq 'urgent';
+            $rec->{severity} = 'urgent';
+            $issues->trail($rec, 'escalated', 'still unresolved at its urgent_after deadline');
+        });
+        $self->_log('err', "hps-issue: escalated $r->{id} $r->{key}: still unresolved, now urgent");
+    }
+    return;
+}
+
+# known_host($short, $from): true when the line is of this cluster: $short is
+# the IPS itself, or a host of the registry that sends from $from (the line's
+# source address: one of the host's addresses, HPS::Log host_addresses, as
+# hps-log reads it). A line of the IPS's own file (from 127.0.0.1) needs only
+# the host. Another cluster's syslog forwarded to this IPS comes from that
+# cluster's IPS: its host names may even be names of this cluster, its source
+# address is not theirs. Remembered for 60 s; refused hosts are logged once an
+# hour.
+sub known_host ($self, $host, $from = undef) {
+    return 0 unless defined $host && length $host;
+    $from //= '';
+    my $now = $self->{now}->();
+    my $ck = "$host|$from";
+    my $c = $self->{hosts}{$ck};
+    if (!$c || $c->{at} <= $now - 60) {
+        my $ok = 0;
+        if (grep { $_ eq $host } @{ $self->{ips_names} }) {
+            $ok = 1;
+        } else {
+            my $log = HPS::Log->new(registry => $self->{issues}->registry);
+            my $mac = eval { $log->find_host($host) };
+            $ok = 1 if defined $mac && ($from =~ /\A127\./ || grep { $_ eq $from } $log->host_addresses($mac));
+        }
+        $c = $self->{hosts}{$ck} = { ok => $ok, at => $now, said => $c ? $c->{said} : undef };
+    }
+    if (!$c->{ok} && (!defined $c->{said} || $c->{said} <= $now - 3600)) {
+        $c->{said} = $now;
+        $self->_log('notice', "hps-issue: ignoring lines of host $host from $from: not a host of this cluster at that address (forwarded syslog?)");
+    }
+    return $c->{ok};
 }
 
 # loop(%o): poll every `interval` seconds until stop; $o{tick} is called after

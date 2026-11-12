@@ -34,12 +34,12 @@ gate() {
   [ -x "$ROOT/ips-admin/hps-issues" ]
   grep -qxF 'exec "${0%/*}/ips-admin-exec" hps-issues "$@"' "$ROOT/ips-admin/hps-issues"
   grep -q 'hps-issues' "$ROOT/bin/hps-op"
-  grep -q '^| `hps-issues` | `bin/hps-issues` | `list`, `show`, `open`, `resolve`, `note`' "$ROOT/docs/OPERATOR.md"
+  grep -q '^| `hps-issues` | `bin/hps-issues` | `list`, `show`, `open`, `resolve`, `note`, `retry`' "$ROOT/docs/OPERATOR.md"
   [ -x "$ROOT/bin/hps-issues" ]
   [ -x "$ROOT/bin/hps-issue-watch" ]
 }
 
-@test "the ips-admin gate: the five hps-issues verbs pass with their options and words" {
+@test "the ips-admin gate: the six hps-issues verbs pass with their options and words" {
   gate list --all --json
   [ "$status" -eq 0 ]
   [[ "$output" == *"tool=hps-issues args=list --all --json"* ]]
@@ -54,6 +54,9 @@ gate() {
   [ "$status" -eq 0 ]
   gate note 20261112-001 looking at it
   [ "$status" -eq 0 ]
+  gate retry 20261112-001
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-issues args=retry 20261112-001"* ]]
 }
 
 @test "the ips-admin gate: any other hps-issues verb, a space or a path is refused" {
@@ -61,7 +64,7 @@ gate() {
   [ "$status" -eq 2 ]
   gate watch
   [ "$status" -eq 2 ]
-  [[ "$output" == *"only list, show, open, resolve and note"* ]]
+  [[ "$output" == *"only list, show, open, resolve, note and retry"* ]]
   gate --json list
   [ "$status" -eq 2 ]
   gate show ../../etc/passwd
@@ -88,7 +91,7 @@ gate() {
 @test "the shipped rules parse, and the tools pass perl -c" {
   run perl -I "$ROOT/lib/perl" "$ROOT/bin/hps-issue-watch" check-rules "$ROOT/lib/hps-issue-rules.conf"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"1 marker rule(s), 3 line rule(s)"* ]]
+  [[ "$output" == *"1 marker rule(s), 8 line rule(s)"* ]]
   run perl -I "$ROOT/lib/perl" -c "$ROOT/bin/hps-issues"
   [ "$status" -eq 0 ]
   run perl -I "$ROOT/lib/perl" -c "$ROOT/bin/hps-issue-watch"

@@ -12,7 +12,7 @@ use HPS::Storage;
 
 # 0 ok, 1 failed, 2 usage, 3 refused (policy, node refusal), 4 not found
 # operations that take arguments, and how many
-my %ZVOL_OPS = ('zvol-create' => 2, 'zvol-grow' => 2, 'zvol-destroy' => 1, 'zvol-list' => 0, 'export' => 1, 'unexport' => 1);
+my %ZVOL_OPS = ('zvol-create' => 2, 'zvol-grow' => 2, 'zvol-destroy' => 1, 'zvol-list' => 0, 'export' => 1, 'unexport' => 1, 'vdev-online' => 2);
 my %EXIT = (
     usage => 2, refused => 3, perms => 3,
     malformed => 3, notfound => 4, failed => 1,
@@ -33,6 +33,7 @@ Usage:
   hps-storage <host> zvol-list [--json]
   hps-storage <host> export <pool>/enc/[vm/]<name> --iqn <iqn> --initiator <iqn> [--portal <ip>] [--dry-run] [--json]
   hps-storage <host> unexport <iqn> [--dry-run] [--json]
+  hps-storage <host> vdev-online <pool> <vdev> [--dry-run] [--json]
   hps-storage <host> forget-key [--yes] [--dry-run] [--json]
 <host> is a MAC (any format) or a registry HOSTNAME. The pool is named after
 the active cluster; any other name needs --allow-any-pool-name.
@@ -43,6 +44,9 @@ like 1G (K, M, G, T). zvol-grow takes the new size of the whole zvol and only
 grows it; a running guest sees it after vm-disk-resize (docs/WORKLOADS.md).
 export records the target in the host's storage_exports (portal defaults to
 the host's registry IP); up exports every recorded target again.
+vdev-online brings a returned pool disk back (zpool online, zpool clear; never
+replace): <vdev> is its /dev/disk/by-id name as zpool status shows it. While
+the disk is still away it is refused (exit 3, "not present").
 --dry-run prints the node calls and redacted inputs and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
@@ -91,6 +95,7 @@ sub main {
         my $n = $ZVOL_OPS{$op};
         return usage("$op needs $n argument" . ($n == 1 ? '' : 's')) unless @argv == $n;
         if ($op eq 'unexport') { $opt{iqn} = shift @argv }
+        elsif ($op eq 'vdev-online') { $pool = shift @argv; $opt{vdev} = shift @argv }
         elsif ($n) { $opt{dataset} = shift @argv }
         $opt{size} = shift @argv if $op eq 'zvol-create' || $op eq 'zvol-grow';
     }

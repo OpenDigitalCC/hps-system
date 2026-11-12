@@ -36,6 +36,13 @@ input documents and changes nothing; all are idempotent):
 - `destroy <pool>`: one `storage-pool-destroy <pool>` call, no input; the
   `storage_*` registry keys are cleared. The key is not deleted.
 - `trim-check`, `status` (read-only `storage-status`; see the amendment below).
+- `vdev-online <pool> <vdev>` (amendment 2026-11-12): one `storage-vdev-online`
+  call. Storage hosts run no ZED, so a pool disk that went away and came back
+  stays REMOVED; the script runs `zpool online` and `zpool clear` once the
+  by-id device is present again, never `zpool replace`, and reports
+  `POOL <pool> <health>` and `VDEV <pool> <vdev> <state> resilver=<yes|no>`
+  (exit 3 "not present" while the disk is away). The IPS's issue healer calls
+  it for zfs-vdev issues (docs/ISSUES.md).
 - `forget-key`: the only way a key leaves the keysafe. Refused while the
   registry still records a pool unless `--yes`.
 

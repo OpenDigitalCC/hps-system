@@ -18,7 +18,7 @@ our $MAC = '525400000001';
 our $NOW = 1_800_000_000;
 
 package FakeCE {
-    sub new { my ($c, %o) = @_; return bless { calls => [], rc => $o{rc} || {}, out => $o{out} || {} }, $c }
+    sub new { my ($c, %o) = @_; return bless { calls => [], rc => $o{rc} || {}, out => $o{out} || {}, err => $o{err} || {} }, $c }
     sub call {
         my ($self, %c) = @_;
         push @{ $self->{calls} }, { %c };
@@ -27,7 +27,9 @@ package FakeCE {
         $rc //= 0;
         my $out = $self->{out}{ $c{script} };
         $out = shift @$out if ref $out eq 'ARRAY';    # one answer per call, in order
-        return { rc => $rc, stdout => $out // "out of $c{script}\n", stderr => $rc ? "boom from $c{script}\n" : '' };
+        my $err = $self->{err}{ $c{script} };
+        $err = shift @$err if ref $err eq 'ARRAY';
+        return { rc => $rc, stdout => $out // "out of $c{script}\n", stderr => $err // ($rc ? "boom from $c{script}\n" : '') };
     }
     sub calls { return @{ $_[0]{calls} } }
     sub scripts { return map { $_->{script} } @{ $_[0]{calls} } }

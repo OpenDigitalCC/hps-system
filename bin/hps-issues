@@ -25,6 +25,7 @@ Usage:
   hps-issues resolve <id> --by TEXT [words...]
   hps-issues resolve --kind K --key-field k=v... --by TEXT [words...]
   hps-issues note <id> TEXT [words...]
+  hps-issues retry <id>
 list: the issues not resolved (open, healing, needs-human); --all every one.
 show: one issue with its trail.
 open: files an issue (or adds to the unresolved one of the same key). The key is
@@ -34,11 +35,14 @@ open: files an issue (or adds to the unresolved one of the same key). The key is
   hps-issue-watch as one it found itself.
 resolve: by id, or the unresolved issue of a key; --by says what resolved it.
 note: adds a note to the trail.
+retry: an issue that needs a human (or is open or healing) back to open with
+  its heal backoff reset: the healer tries again at its next tick. Refused for
+  a resolved issue.
 Words after the options are joined to the summary, the --by text or the note
 with spaces (the ips-admin gate passes no space inside one argument). A text
 that looks like a secret is refused: the register is plain JSON.
 Environment: HPS_CONFIG_BASE (the registry), HPS_ISSUE_RULES (the rules file).
-Exit: 0 ok, 1 failed, 2 usage, 3 refused (already resolved), 4 no such issue.
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (already resolved; retry of a resolved issue), 4 no such issue.
 USAGE
     return 2;
 }
@@ -149,6 +153,11 @@ sub main {
             HPS::Issues::_fail(usage => 'note needs an issue id and a text') unless defined $id && @argv;
             my $r = $is->note($id, HPS::Issues::caller_text('the note', text(@argv)), $who);
             return $o{json} ? $r : "noted on $r->{id}\n";
+        }
+        if ($cmd eq 'retry') {
+            HPS::Issues::_fail(usage => 'retry takes one issue id') unless @argv == 1;
+            my $r = $is->retry($argv[0], $who);
+            return $o{json} ? $r : "retry $r->{id} $r->{key}: open, the healer tries again at its next tick\n";
         }
         HPS::Issues::_fail(usage => "unknown command '$cmd'");
     };

@@ -26,6 +26,11 @@ package HPS::Metrics;
 #            not in the compound: busy is the share of time a request was in
 #            flight, not of the device's capacity (an SSD or a pool member is
 #            often 100% busy far below its throughput)
+#   swap   = used_pct                                  (check swap): shown, but
+#            not in the compound: swap in use is not by itself pressure (pages
+#            parked there long ago); the swap check's own state carries the
+#            swap-in rate. A node with no swap reports 0 (swap_total=0). Raw:
+#            swap_total_bytes, swap_in_Bps, swap_out_Bps (bytes, bytes/s)
 #   net    = throughput is recorded (raw net_rx_Bps, net_tx_Bps) but no link
 #            capacity is known anywhere (the audit's speed is null), so net has
 #            no utilisation and stays out of the compound
@@ -60,10 +65,10 @@ use constant WARN_PCT       => 70;
 use constant CRIT_PCT       => 90;
 
 our @COMPOUND   = qw(cpu mem load disk pool);            # in the compound, in this order
-our @RESOURCES  = (@COMPOUND, 'diskio');                # every utilisation
-our @RAW        = qw(cpu_busy_pct mem_available_pct load1 net_rx_Bps net_tx_Bps diskio_rd_Bps diskio_wr_Bps);
+our @RESOURCES  = (@COMPOUND, 'diskio', 'swap');        # every utilisation; diskio and swap are not in the compound
+our @RAW        = qw(cpu_busy_pct mem_available_pct load1 net_rx_Bps net_tx_Bps diskio_rd_Bps diskio_wr_Bps swap_total_bytes swap_in_Bps swap_out_Bps);
 our %RAW_UNIT   = (cpu_busy_pct => '%', mem_available_pct => '%', load1 => '', net_rx_Bps => 'B/s',
-                   net_tx_Bps => 'B/s', diskio_rd_Bps => 'B/s', diskio_wr_Bps => 'B/s');
+                   net_tx_Bps => 'B/s', diskio_rd_Bps => 'B/s', diskio_wr_Bps => 'B/s', swap_total_bytes => 'B', swap_in_Bps => 'B/s', swap_out_Bps => 'B/s');
 
 {
     package HPS::Metrics::Error;
@@ -157,6 +162,11 @@ sub utilisation ($r) {
         my ($rd, $wr) = (0, 0);
         for my $l (keys %$p) { $rd += $p->{$l}{value} if $l =~ /_rd_Bps\z/; $wr += $p->{$l}{value} if $l =~ /_wr_Bps\z/ }
         @raw{qw(diskio_rd_Bps diskio_wr_Bps)} = ($rd, $wr);
+    }
+    elsif ($c eq 'swap' && $p->{used_pct}) {
+        $u{swap} = _pct($p->{used_pct}{value});
+        $raw{swap_total_bytes} = $p->{swap_total}{value} if $p->{swap_total};
+        $raw{$_} = $p->{$_}{value} for grep { $p->{$_} } qw(swap_in_Bps swap_out_Bps);
     }
     elsif ($c eq 'net') {
         # the busiest interface each way (a bridge and its port carry the same bytes)
@@ -302,7 +312,7 @@ sub _iso ($e) { return strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $e) }
 
 # latest($name): {target, source, now, window, hosts => [{host, name, mac, ips?,
 # time, epoch, worst, checks => [{check, state, text, epoch, perf}], util,
-# compound, level, unreachable?, unreachable_at?}], truncated}. A host's checks
+# compound, level, unreachable?, unreachable_at?}], in_compound, truncated}. A host's checks
 # are those of its newest complete run (the lines before its newest summary
 # line); a newer UNREACHABLE or PAIR_FAILED line is given as unreachable.
 sub latest ($self, $name) {
@@ -367,6 +377,7 @@ sub latest ($self, $name) {
         newest    => $newest,
         window    => $window,
         hosts     => \@hosts,
+        in_compound => [@COMPOUND],
         truncated => $self->{truncated} ? JSON::PP::true() : JSON::PP::false(),
     };
 }

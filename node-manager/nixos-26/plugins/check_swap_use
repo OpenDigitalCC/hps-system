@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# check_swap_use - Nagios plugin: swap space and swap traffic.
+#
+# Run by nagios-check (ctrl-exec) on every node as the check "swap". Reads
+# SwapTotal and SwapFree of /proc/meminfo, and pswpin and pswpout of
+# /proc/vmstat twice, INTERVAL seconds apart: bytes swapped in and out per
+# second over the interval (pages x the page size, getconf PAGESIZE, else 4096).
+#   OK        no swap configured (the usual RAM-booted node: swap_total=0), or
+#             used below -w and nothing swapped in during the sample
+#   WARNING   used at -w percent or more, or pages swapped in during the sample
+#             (memory pressure: something needed what was swapped out)
+#   CRITICAL  used at -c percent or more
+#   UNKNOWN   /proc/meminfo or /proc/vmstat unreadable
+# Output: "SWAP OK - 3.1% used (32.0 MiB of 1.0 GiB), in 0.0 KiB/s out 0.0 KiB/s |
+#          used_pct=3.1%;50;80;0;100 swap_total=<B> swap_used=<B>
+#          swap_free=<B> swap_in_Bps=<B/s> swap_out_Bps=<B/s>"
+#
+# Usage: check_swap_use [-i SECONDS] [-w USED%] [-c USED%]
+#   -i  sample interval, 1 to 5 seconds (default 1); -w 50 and -c 80 by default
+# Environment (tests): HPS_PROC (default /proc), HPS_SLEEP (default sleep),
+#   HPS_PAGESIZE (default getconf PAGESIZE, else 4096).
+# Exit: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+PROC=${HPS_PROC:-/proc}
+SLEEP=${HPS_SLEEP:-sleep}
+interval=1
+warn=50
+crit=80
+
+unknown() {
+  echo "SWAP UNKNOWN - $1"
+  exit 3
+}
+
+while getopts "i:w:c:" opt; do
+  case $opt in
+    i) interval=$OPTARG ;;
+    w) warn=$OPTARG ;;
+    c) crit=$OPTARG ;;
+    *) unknown "usage: check_swap_use [-i SECONDS] [-w USED%] [-c USED%]" ;;
+  esac
+done
+[[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
+if ! [[ $warn =~ ^[0-9]{1,3}$ && $crit =~ ^[0-9]{1,3}$ && $warn -lt $crit && $crit -le 100 ]]; then
+  unknown "-w and -c must be percentages with -w below -c"
+fi
+
+[[ -r $PROC/meminfo ]] || unknown "cannot read $PROC/meminfo"
+[[ -r $PROC/vmstat ]] || unknown "cannot read $PROC/vmstat"
+
+# "<pswpin> <pswpout>" of /proc/vmstat
+counters() {
+  awk '$1 == "pswpin" { i = $2 } $1 == "pswpout" { o = $2 } END { print i + 0, o + 0 }' "$PROC/vmstat"
+}
+
+page=${HPS_PAGESIZE:-$(getconf PAGESIZE 2> /dev/null || echo 4096)}
+[[ $page =~ ^[0-9]+$ && $page -gt 0 ]] || page=4096
+
+mem=$(awk '$1 == "SwapTotal:" { t = $2 } $1 == "SwapFree:" { f = $2 } END { print t + 0, f + 0 }' "$PROC/meminfo")
+a=$(counters)
+"$SLEEP" "$interval"
+b=$(counters)
+
+awk -v m="$mem" -v a="$a" -v b="$b" -v iv="$interval" -v w="$warn" -v c="$crit" -v pg="$page" '
+function hr(x) {
+  if (x >= 1024 ^ 3) return sprintf("%.1f GiB", x / 1024 ^ 3)
+  return sprintf("%.1f MiB", x / 1024 ^ 2)
+}
+BEGIN {
+  split(m, s, " "); split(a, x, " "); split(b, y, " ")
+  total = s[1] * 1024; free = s[2] * 1024
+  if (free > total) free = total
+  used = total - free
+  rin = (y[1] - x[1]) * pg / iv; rout = (y[2] - x[2]) * pg / iv
+  if (rin < 0) rin = 0
+  if (rout < 0) rout = 0
+  if (total == 0) {
+    printf "SWAP OK - no swap configured | used_pct=0%%;%s;%s;0;100 swap_total=0B swap_used=0B swap_free=0B swap_in_Bps=%d swap_out_Bps=%d\n", w, c, rin, rout
+    exit 0
+  }
+  pct = 100 * used / total
+  state = "OK"; code = 0; why = ""
+  if (rin > 0) { state = "WARNING"; code = 1; why = ", swapping in (memory pressure)" }
+  if (pct >= w) { state = "WARNING"; code = 1 }
+  if (pct >= c) { state = "CRITICAL"; code = 2 }
+  printf "SWAP %s - %.1f%% used (%s of %s), in %.1f KiB/s out %.1f KiB/s%s | used_pct=%.1f%%;%s;%s;0;100 swap_total=%dB swap_used=%dB swap_free=%dB swap_in_Bps=%d swap_out_Bps=%d\n", state, pct, hr(used), hr(total), rin / 1024, rout / 1024, why, pct, w, c, total, used, free, rin, rout
+  exit code
+}'

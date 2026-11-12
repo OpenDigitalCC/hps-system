@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# check_osvc_hb - Nagios plugin: the OpenSVC (om3) heartbeat of this node.
+#
+# Run by nagios-check (ctrl-exec) as the check "osvc_hb" on nodes that run om3.
+# Reads `om daemon status --format json`, the same source and the same reading
+# as the osvc-status node script (hps-osvc status): the peers are the keys of
+# .cluster.node.<this node>.daemon.heartbeat.streams[].peers (older releases:
+# .daemon.heartbeat.streams); a peer is beating when any stream sees it
+# beating, stale otherwise. This node counts as one of the cluster's nodes.
+#   OK        every peer beating (or no peer: a one-node cluster)
+#   WARNING   a peer is stale
+#   CRITICAL  the beating nodes (the beating peers and this one) are below a
+#             quorum of (peers + 1) / 2 + 1
+#   UNKNOWN   om is not installed, or the daemon is not running or answering
+# Output: "OSVC_HB OK - 4 of 4 peers beating | peers=4 beating=4 stale=0"; a
+#         stale peer is named: "OSVC_HB WARNING - 3 of 4 peers beating; stale: tch-004 | ..."
+#
+# Usage: check_osvc_hb
+# Environment (tests): HPS_OM (the om command, default om).
+# Exit: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+OM=${HPS_OM:-om}
+
+unknown() {
+  echo "OSVC_HB UNKNOWN - $1"
+  exit 3
+}
+
+[[ $# -eq 0 ]] || unknown "usage: check_osvc_hb (no arguments)"
+command -v "$OM" > /dev/null 2>&1 || unknown "om is not installed"
+command -v jq > /dev/null 2>&1 || unknown "jq is not installed"
+
+rc=0
+out=$(timeout 8 "$OM" daemon status --format json 2>&1) || rc=$?
+if [[ $rc -ne 0 ]]; then
+  unknown "om daemon status failed (exit $rc): the daemon is not running or not answering"
+fi
+
+# "<peers> <beating> <stale list or ->"
+if ! summary=$(printf '%s' "$out" | jq -r '
+    (.daemon.nodename // "") as $me
+    | ((.cluster.node[$me].daemon.heartbeat.streams // .daemon.heartbeat.streams) // []) as $streams
+    | [$streams[]? | (.peers // {}) | to_entries[]] as $p
+    | ($p | map(.key) | unique) as $peers
+    | [$peers[] as $n | select(([$p[] | select(.key == $n) | .value.is_beating] | any) | not) | $n] as $stale
+    | "\($peers | length) \(($peers | length) - ($stale | length)) \(if ($stale | length) == 0 then "-" else ($stale | join(",")) end)"' 2> /dev/null); then
+  unknown "om daemon status gave no readable JSON"
+fi
+read -r peers beating stale <<< "$summary"
+[[ $peers =~ ^[0-9]+$ && $beating =~ ^[0-9]+$ ]] || unknown "om daemon status gave no readable JSON"
+
+nstale=$((peers - beating))
+quorum=$(((peers + 1) / 2 + 1))
+perf="peers=$peers beating=$beating stale=$nstale"
+if [[ $((beating + 1)) -lt $quorum ]]; then
+  echo "OSVC_HB CRITICAL - $beating of $peers peers beating, below quorum ($((beating + 1)) of $((peers + 1)) nodes, $quorum needed); stale: ${stale//,/ } | $perf"
+  exit 2
+fi
+if [[ $nstale -gt 0 ]]; then
+  echo "OSVC_HB WARNING - $beating of $peers peers beating; stale: ${stale//,/ } | $perf"
+  exit 1
+fi
+echo "OSVC_HB OK - $beating of $peers peers beating | $perf"
+exit 0

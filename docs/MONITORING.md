@@ -12,10 +12,10 @@ beyond the log.
   (release tag in `flake.nix`), allowlisted as the node script `nagios-check`
   under profile `node`. It reads no input; its arguments are check names.
   `nix/modules/hps-monitor.nix` installs it, a directory of plugins
-  (`check_disk`, `check_load`, `check_swap`, `check_procs` from
+  (`check_disk`, `check_load`, `check_procs` from
   monitoring-plugins, `check_mem` from the plugin repository, and HPS's own
-  `check_zpool`, `check_fs` and usage checks `check_cpu`, `check_net`,
-  `check_diskio`, `check_zpool_io` and `check_vms`) and
+  `check_zpool`, `check_fs`, `check_swap_use`, `check_osvc_hb` and usage checks
+  `check_cpu`, `check_net`, `check_diskio`, `check_zpool_io` and `check_vms`) and
   `/etc/nagios-checks/checks.conf`.
 - On the IPS: `bin/hps-monitor`, supervisor program `hps-monitor` running
   `hps-monitor loop`. It calls `scripts/hps-run.sh --json <fqdn> nagios-check --all`
@@ -44,7 +44,8 @@ The IPS sends the script name and `--all` and nothing else.
 | `load` | `check_load -r -w 1.5,1.2,1 -c 3,2.5,2` | every node |
 | `mem` | `check_mem -w 10 -c 5` | every node |
 | `procs` | `check_procs -k -w 1000 -c 2000` (user-space processes; kernel threads left out) | every node |
-| `swap` | `check_swap -w 30% -c 10%` | only a node with swap configured |
+| `swap` | `check_swap_use -w 50 -c 80` (swap space and traffic, see below) | every node |
+| `osvc_hb` | `check_osvc_hb` (the OpenSVC heartbeat, see below) | nodes that run om3 (converged, container hosts) |
 | `zpool` | `check_zpool` (pool health; DEGRADED is WARNING, FAULTED and worse CRITICAL; capacity as perfdata) | storage nodes |
 | `zpool_io` | `check_zpool_io` (pool I/O and capacity in bytes, see below) | storage nodes |
 | `zpool_cap` | `check_zpool -m cap -w 80 -c 90` (how full each pool is, see below) | storage nodes |
@@ -154,6 +155,29 @@ puts coreutils and awk on its `PATH` and, for `zpool_io` and `vms`, the
 absolute store path of `zpool` and `virsh` (libvirt is on compute nodes with the
 compute profile).
 
+### swap and osvc_hb
+
+- `swap` (`check_swap_use`): `SwapTotal` and `SwapFree` of `/proc/meminfo`, and
+  `pswpin` and `pswpout` of `/proc/vmstat` sampled twice one second apart.
+  A RAM-booted node usually has no swap: `SWAP OK - no swap configured`,
+  `swap_total=0` (never WARNING or UNKNOWN for that). WARNING at 50% used or
+  when pages were swapped in during the sample (memory pressure), CRITICAL at
+  80% used; graded on the node (the IPS does not grade it again: the cluster
+  keys `monitor_disk_*_pct` are for filesystems and pools). Perfdata:
+  `used_pct`, `swap_total`, `swap_used`, `swap_free` (B), `swap_in_Bps`,
+  `swap_out_Bps` (bytes per second: pages x the page size). Example: `SWAP OK -
+  3.1% used (32.0 MiB of 1.0 GiB), in 0.0 KiB/s out 0.0 KiB/s`. A node may have
+  swap (the lab DL360 has 4 GiB) or not.
+- `osvc_hb` (`check_osvc_hb`): `om daemon status --format json`, read as the
+  `osvc-status` node script reads it (`hps-osvc status`): a peer is beating when
+  any heartbeat stream sees it beating, stale otherwise. OK when every peer
+  beats (or there is none); WARNING when a peer is stale; CRITICAL when the
+  beating nodes (beating peers and this node) are fewer than a quorum of
+  (peers + 1) / 2 + 1; UNKNOWN when `om` is not installed or the daemon does not
+  answer (8 s). Perfdata `peers`, `beating`, `stale`. Example: `OSVC_HB WARNING
+  - 3 of 4 peers beating; stale: tch-004`. The issue register opens `om3-hb`
+  issues from om3's own send error lines (docs/ISSUES.md).
+
 ## Log lines
 
 Every line goes to syslog (tag `hps`, facility `local0`; OK is `info`, WARNING
@@ -217,10 +241,14 @@ Utilisation, in percent:
 | disk | the worst `*used_pct` or `*inode_pct` of the `disk_*` checks; `disk_root` (plain `check_disk`) gives free space and free inodes in its text: 100 - the lower |
 | pool | the worst `<pool>_cap` (check `zpool` or `zpool_cap`) |
 | diskio | the busiest device's `<dev>_busy`: shown, not in the compound (time with a request in flight, not a share of capacity) |
+| swap | `used_pct` (check `swap`; 0 on a node with no swap): shown, not in the compound (swap in use is not pressure by itself; the check's state carries the swap-in rate). Raw: `swap_total_bytes`, `swap_in_Bps`, `swap_out_Bps` (bytes, bytes per second) |
 | net | none: no link capacity is recorded (the audit's speed is null); the busiest interface's rx and tx bytes per second are given as raw series |
 
 The **compound** is the max of cpu, mem, load, disk and pool: anything high
-makes it high. Levels: ok below 70, warning below 90, critical from 90.
+makes it high. Levels: ok below 70, warning below 90, critical from 90. The text
+output marks a resource outside the compound with `*` (`diskio*`, `swap*`); the
+JSON of both `last` and `series` lists the resources that are in it
+(`in_compound`).
 
 Source: `<log>/metrics.log` when it exists (the lab's collector,
 `lab/syslog-lab.pl`), else `<log>/ips/hps/<date>.log`, which every IPS writes

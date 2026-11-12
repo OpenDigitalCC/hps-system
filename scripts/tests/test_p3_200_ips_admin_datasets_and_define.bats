@@ -135,3 +135,16 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"tool=hps-workload args=grow-disk s1-ips s1-ips d0 64G"* ]]
 }
+
+@test "hps-storage vdev-online passes the gate with a pool and a plain by-id name; a path to the disk does not" {
+  run "$W/hps-storage" sch-001 vdev-online s1 virtio-s1-sch-001-d3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-storage args=sch-001 vdev-online s1 virtio-s1-sch-001-d3"* ]]
+  run "$W/hps-storage" sch-001 vdev-online s1 ata-Samsung_SSD_860_EVO_1TB_S3Z9NB0K
+  [ "$status" -eq 0 ]
+  for a in /dev/disk/by-id/virtio-s1-sch-001-d3 ../virtio-x 'virtio-x;id' 'virtio x' virtio..x; do
+    run "$W/hps-storage" sch-001 vdev-online s1 "$a"
+    [ "$status" -eq 2 ] || { echo "accepted: [$a]"; false; }
+    [[ "$output" != *"tool="* ]]
+  done
+}

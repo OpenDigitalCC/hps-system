@@ -88,7 +88,7 @@ executor.
 | `hps-repo` | `bin/hps-repo` | - (`seed` from the IPS's own cache only: a URL has a `/`; `--profiles a,b`) |
 | `hps-log` | `bin/hps-log` | `host`, `ips` (read-only: the newest syslog lines of a host or of the IPS, secret lines redacted; `--min-level warning` (or `error`) for the warnings and errors only; docs/LOGGING.md) |
 | `hps-metrics` | `bin/hps-metrics` | `last`, `series` (read-only: hps-monitor's latest result and utilisation series per host; docs/MONITORING.md) |
-| `hps-issues` | `bin/hps-issues` | `list`, `show`, `open`, `resolve`, `note` (the issue register: what the IPS found wrong, what it healed, what needs a human; texts as words after the options; docs/ISSUES.md) |
+| `hps-issues` | `bin/hps-issues` | `list`, `show`, `open`, `resolve`, `note`, `retry` (the issue register: what the IPS found wrong, what it healed, what needs a human; texts as words after the options; docs/ISSUES.md) |
 
 `ips-admin-exec` passes the arguments through (the tools validate their own)
 but only as conservative tokens: 1 to 256 characters of `A-Z a-z 0-9 _ . , :
@@ -233,6 +233,7 @@ hps-op --cred FILE hps-storage sch-001 export c1/enc/vm/probe-a \
   --iqn iqn.2026-01.example.c1:probe-a --initiator iqn.2026-01.example.c1:tch-001 \
   --portal 192.0.2.10
 hps-op --cred FILE hps-storage sch-001 unexport iqn.2026-01.example.c1:probe-a
+hps-op --cred FILE hps-storage sch-001 vdev-online c1 virtio-c1-sch-001-d3
 hps-op --cred FILE hps-storage sch-001 zvol-destroy c1/enc/vm/probe-a
 ```
 

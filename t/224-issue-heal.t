@@ -60,8 +60,15 @@ is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], status_out('degrad
     'missing legs: the leg whose device mdadm does not list as a member');
 is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], status_out('degraded', '')) ], [$REMOTE],
     'a leg with no device is missing');
-is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], status_out('degraded', '/dev/zd0')) ], [ $LOCAL, $REMOTE ],
-    'none told apart: every leg (a member is a no-op for mirror-rejoin)');
+is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], status_out('degraded', '/dev/zd0')) ], [],
+    'every leg an active member: none (an active member is never rejoined)');
+is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], status_out('degraded'), "iqn.x:other\@192.0.2.9") ], [$REMOTE],
+    'a hint that names no missing leg: the missing legs');
+my $both = status_out('degraded') =~ s{active sync   /dev/zd0}{removed}r;
+is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], $both, 'iqn.2026-01.lab.nas:hpslab-t0-root@192.0.2.50') ], [$REMOTE],
+    'of several missing legs, the hinted one');
+is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], status_out('degraded', '/dev/zd0'), 'iqn.2026-01.lab.nas:hpslab-t0-root@192.0.2.50') ], [],
+    'a hint naming an active member is not followed (s1 drill: the healthy leg was "rejoined")');
 is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], '', 'iqn.2026-01.lab.nas:hpslab-t0-root@192.0.2.50') ], [$REMOTE],
     'the marker\'s leg hint names the leg');
 is_deeply([ HPS::IssueHeal::missing_legs([ $LOCAL, $REMOTE ], '', 'iqn.2026-01.lab.nas:hpslab-t0-root@192.0.2.50:3260') ], [$REMOTE],
@@ -127,6 +134,33 @@ is(scalar(grep { $_->{event} eq 'escalated' } @{ $r->{trail} }), 1, 'once');
 like($r->{heal}{last_result}, qr/\Afailed: degraded; mirror-rejoin .* exit 1: boom from mirror-rejoin/, 'the last result is kept');
 $is->resolve($id, 'test');
 
+#--- exit 3 that is not DIVERGED: retried (s1 drill, 20261112-002: sch-002 was off) ---
+$id = open_leg();
+($h, $ce) = healer(out => { 'mirror-status' => status_out('degraded'), 'mirror-rejoin' => '' },
+    rc => { 'mirror-rejoin' => 3 },
+    err => { 'mirror-rejoin' => "+ mdadm --examine /dev/sdb\n[mirror-rejoin] refused: UNREADABLE t0-app-root: no md superblock on $REMOTE (/dev/sdb)\n" });
+$h->tick;
+$now += 30;
+$h->tick;
+$r = $is->get($id);
+is($r->{state}, 'open', 'mirror-rejoin exit 3 UNREADABLE (the leg\'s target down): a failed attempt, still open');
+is($r->{severity}, 'warning', 'not escalated');
+is($r->{heal}{next_at}, $now + 60, 'retried after the backoff');
+like($r->{heal}{last_result}, qr/\Afailed: .*refused: UNREADABLE t0-app-root/, 'the refusal recorded');
+$is->resolve($id, 'test');
+
+#--- every leg an active member: nothing rejoined, retried, never needs-human ----
+$id = open_leg(fields => { leg => 'iqn.2026-01.lab.nas:hpslab-t0-root@192.0.2.50' });
+($h, $ce) = healer(out => { 'mirror-status' => status_out('degraded', '/dev/zd0') });
+$h->tick;
+$now += 30;
+$h->tick;
+$r = $is->get($id);
+is($r->{state}, 'open', 'mirror degraded with every leg an active member: a failed attempt, not needs-human');
+is_deeply([ $ce->scripts ], ['mirror-status'], 'no mirror-rejoin of an active member');
+like($r->{heal}{last_result}, qr/every leg of t0-app-root is an active member: nothing to rejoin/, 'saying so');
+$is->resolve($id, 'test');
+
 #--- exit 3: needs-human -------------------------------------------------------------------
 $id = open_leg();
 ($h, $ce) = healer(out => { 'mirror-status' => status_out('degraded'), 'mirror-rejoin' => "DIVERGED t0-app-root legA events=10 time=1 legB events=12 time=2\n" },
@@ -135,7 +169,7 @@ $h->tick;
 $now += 30;
 $h->tick;
 $r = $is->get($id);
-is($r->{state}, 'needs-human', 'mirror-rejoin exit 3: needs-human');
+is($r->{state}, 'needs-human', 'mirror-rejoin exit 3 with a DIVERGED line: needs-human');
 is($r->{severity}, 'urgent', 'urgent');
 like($r->{heal}{last_result}, qr/DIVERGED t0-app-root/, 'the DIVERGED line recorded');
 ok(!defined $r->{heal}{next_at}, 'no next attempt');

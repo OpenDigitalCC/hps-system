@@ -32,7 +32,9 @@ series: one host's utilisation per bucket of S seconds over the last N hours
 Utilisation (%): cpu = busy; mem = 100 - available; load = load1 per core x 100,
 capped at 100; disk = the worst disk_* used (space or inodes); pool = the worst
 zpool capacity; diskio = the busiest device's busy % (time with I/O in
-flight, not a share of capacity: shown, not in the compound). net is shown as
+flight, not a share of capacity: shown, not in the compound); swap = swap used %
+(0 with no swap; shown, not in the compound). A resource marked * is not in the
+compound. net is shown as
 throughput only (no link capacity is known) and is not in the compound.
 compound = the max of cpu, mem, load, disk and pool.
 Source: <log>/metrics.log when it exists (the lab collector; lines of hosts
@@ -53,12 +55,19 @@ sub render_last {
     for my $h (@{ $r->{hosts} }) {
         $out .= sprintf("%s (%s) %s %s compound %s%%", $h->{host}, $h->{mac} // ($h->{ips} ? 'IPS' : 'no MAC'), $h->{time}, $h->{worst},
             defined $h->{compound} ? sprintf('%.1f', $h->{compound}) : '-');
-        $out .= join('', map { defined $h->{util}{$_} ? " $_ $h->{util}{$_}%" : '' } @HPS::Metrics::RESOURCES) . "\n";
+        $out .= join('', map { defined $h->{util}{$_} ? ' ' . label($_) . " $h->{util}{$_}%" : '' } @HPS::Metrics::RESOURCES) . "\n";
         $out .= "  unreachable $h->{unreachable_at}: $h->{unreachable}\n" if $h->{unreachable};
         $out .= sprintf("  %-15s %-8s %s\n", $_->{check}, $_->{state}, $_->{text}) for @{ $h->{checks} };
     }
+    $out .= "# * not in the compound\n" if grep { my $x = $_; grep { label($_) =~ /\*\z/ } keys %{ $x->{util} } } @{ $r->{hosts} };
     $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
     return $out;
+}
+
+# label($resource): its name, with * when it is not in the compound.
+sub label {
+    my ($res) = @_;
+    return (grep { $_ eq $res } @HPS::Metrics::COMPOUND) ? $res : "$res*";
 }
 
 sub render_series {
@@ -74,12 +83,13 @@ sub render_series {
         return $out;
     }
     my @res = grep { $r->{util}{$_} } @HPS::Metrics::RESOURCES;
-    $out .= sprintf("%-17s %8s %s\n", 'time', 'compound', join(' ', map { sprintf('%6s', $_) } @res));
+    $out .= sprintf("%-17s %8s %s\n", 'time', 'compound', join(' ', map { sprintf('%6s', label($_)) } @res));
     for my $i (0 .. $#{ $r->{t} }) {
         next unless defined $r->{compound}[$i];
         $out .= sprintf("%-17s %8s %s\n", strftime('%m-%d %H:%M', gmtime $r->{t}[$i]), fmt($r->{compound}[$i]),
             join(' ', map { sprintf('%6s', fmt($r->{util}{$_}[$i])) } @res));
     }
+    $out .= "# * not in the compound\n" if grep { label($_) =~ /\*\z/ } @res;
     $out .= "# no data in the window\n" unless $r->{lines};
     $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
     return $out;

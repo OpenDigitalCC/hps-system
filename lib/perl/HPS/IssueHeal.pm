@@ -1,7 +1,10 @@
 package HPS::IssueHeal;
-# The self-healing of mirror-leg issues (docs/ISSUES.md), run by hps-issue-watch
-# after every poll (tick). For each open or healing mirror-leg issue whose time
-# has come, through the runner (scripts/hps-run.sh, as HPS::Workload):
+# The self-healing of mirror-leg and zfs-vdev issues (docs/ISSUES.md), run by
+# hps-issue-watch after every poll (tick). For each open or healing issue of
+# those kinds whose time has come, through the runner (scripts/hps-run.sh, as
+# HPS::Workload).
+#
+# mirror-leg:
 #   1. mirror-status <mirror> on the issue's host (every non-clean mirror of
 #      that host when the issue names no mirror, as the kernel fallback rule):
 #        clean     -> resolved "by mirror-status clean"
@@ -10,14 +13,31 @@ package HPS::IssueHeal;
 #        exit 3    -> the host does not know the mirror: needs-human
 #   2. degraded: the workload record (cluster key workload_<name>) whose VM on
 #      that host has the disk /dev/md/<mirror> gives the leg specs; the legs to
-#      bring back are the one the marker named (leg=<iqn>@<portal>), else the
-#      ones mirror-status does not show as members, else every leg (a leg that
-#      is a member is a no-op for mirror-rejoin);
+#      bring back are those mirror-status does not show as active members (the
+#      one the marker named, leg=<iqn>@<portal>, when it is one of them); none
+#      is a failed attempt (an active member is never "rejoined");
 #      mirror-rejoin <mirror> --leg <spec> for each:
-#        all exit 0 -> healing (resync from the bitmap); checked in CHECK_DELAY
-#        any exit 3 -> needs-human, severity urgent, no more attempts
-#                      (DIVERGED, or another refusal: a human decision)
-#        otherwise  -> a failed attempt
+#        all exit 0      -> healing (resync from the bitmap); checked in CHECK_DELAY
+#        a DIVERGED line -> needs-human, severity urgent, no more attempts
+#                           (exit 3 with "DIVERGED ...": a human decision)
+#        otherwise       -> a failed attempt (another exit 3 refusal, such as
+#                           UNREADABLE while the leg's target is down, is retried)
+#
+# zfs-vdev (a pool disk the kernel reported I/O errors on; fields host, pool,
+# vdev): storage-vdev-online <pool> <vdev> on the host. Its last lines are
+# "POOL <pool> <health>" and "VDEV <pool> <vdev> <state> resilver=<yes|no>":
+#        exit 0, ONLINE, resilver=no  -> resolved "by zpool status ..."; and when
+#                                        the POOL line says ONLINE and no other
+#                                        zfs-vdev issue of that host and pool is
+#                                        unresolved, the zfs-pool issue of that
+#                                        host and pool is resolved too
+#        exit 0, ONLINE, resilver=yes -> healing; checked in CHECK_DELAY
+#        exit 3 "not present"         -> the disk is still away: a failed attempt
+#        any other exit 3             -> needs-human (no such vdev or pool, a
+#                                        state online does not apply to)
+#        otherwise                    -> a failed attempt
+# zfs-pool issues are not healed themselves (see above, and the monitor's OK).
+#
 # A failed attempt waits by the backoff (DELAYS, then the cap); at the cap the
 # issue is escalated to urgent once. The first attempt is FIRST_DELAY after the
 # healer first sees the issue. Every attempt and check is in the trail with the
@@ -44,7 +64,7 @@ sub new ($class, %o) {
         $runner = HPS::Storage::Runner::HpsRun->new;
     }
     return bless { issues => $issues, runner => $runner, now => $o{now} // sub { time },
-        kinds => { 'mirror-leg' => 1 } }, $class;
+        kinds => { 'mirror-leg' => 1, 'zfs-vdev' => 1 } }, $class;
 }
 
 sub _now ($self) { return $self->{now}->() }
@@ -120,15 +140,12 @@ sub workload_disk ($self, $mac, $mirror) {
     return undef;
 }
 
-# missing_legs(\@specs, $status_stdout, $hint): the specs to rejoin.
+# missing_legs(\@specs, $status_stdout, $hint): the specs to rejoin: the legs
+# mirror-status does not show as active members (no device recorded, or its
+# device on no mdadm line except a faulty or removed one). Of those, the one the
+# marker named ($hint, <iqn>@<portal>) when it is among them. An active member
+# is never returned: rejoining it is a no-op that leaves the mirror degraded.
 sub missing_legs ($specs, $stdout, $hint = undef) {
-    if (defined $hint && $hint =~ /\A(.+)@(.+)\z/) {
-        my ($iqn, $portal) = ($1, $2);
-        (my $ip = $portal) =~ s/:3260\z//;    # the marker writes <ip>:3260, a spec may hold the bare ip
-        my @m = grep { $_ eq "iscsi:$portal:$iqn" || $_ eq "iscsi:$ip:$iqn" } @$specs;
-        @m = grep { /:\Q$iqn\E\z/ } @$specs unless @m;
-        return @m if @m;
-    }
     my %dev;
     my @other;
     for my $l (split /\n/, $stdout // '') {
@@ -139,7 +156,14 @@ sub missing_legs ($specs, $stdout, $hint = undef) {
         my $d = $dev{$_} // '';
         !length($d) || !grep { index($_, $d) >= 0 && !/faulty|removed/i } @other;
     } @$specs;
-    return @miss ? @miss : @$specs;
+    if (defined $hint && $hint =~ /\A(.+)@(.+)\z/) {
+        my ($iqn, $portal) = ($1, $2);
+        (my $ip = $portal) =~ s/:3260\z//;    # the marker writes <ip>:3260, a spec may hold the bare ip
+        my @m = grep { $_ eq "iscsi:$portal:$iqn" || $_ eq "iscsi:$ip:$iqn" } @miss;
+        @m = grep { /:\Q$iqn\E\z/ } @miss unless @m;
+        return @m if @m;
+    }
+    return @miss;
 }
 
 # _mirror($mac, $host, $mirror, $hint): {outcome => clean|healing|failed|human, detail, attempted}
@@ -150,30 +174,62 @@ sub _mirror ($self, $mac, $host, $mirror, $hint) {
     return { outcome => 'failed', detail => "mirror-status $mirror exit $st->{rc}: $line" } if $st->{rc} != 0;
     my ($state) = ($st->{stdout} // '') =~ /^MIRROR \Q$mirror\E (\S+)\s*$/m;
     $state //= 'unknown';
-    return { outcome => 'clean', detail => "mirror-status clean ($mirror)" } if $state eq 'clean';
+    return { outcome => 'clean', detail => "mirror-status clean ($mirror)", by => 'mirror-status clean' } if $state eq 'clean';
     return { outcome => 'healing', detail => "mirror-status: $mirror resyncing" } if $state eq 'resyncing';
     return { outcome => 'failed', detail => "mirror-status: $mirror absent (not assembled on $host)" } if $state eq 'absent';
     my $wd = $self->workload_disk($mac, $mirror)
         or return { outcome => 'human', detail => "no workload record has a VM on $host with the mirror $mirror: nothing to rejoin from" };
+    return { outcome => 'human', detail => "workload $wd->{workload} VM $wd->{vm}: no leg specs for $mirror" } unless @{ $wd->{specs} };
     my @legs = missing_legs($wd->{specs}, $st->{stdout}, $hint);
-    return { outcome => 'human', detail => "workload $wd->{workload} VM $wd->{vm}: no leg specs for $mirror" } unless @legs;
+    return { outcome => 'failed', detail => "$state; every leg of $mirror is an active member: nothing to rejoin (checked again later)" }
+        unless @legs;
     my (@d, %o);
     for my $spec (@legs) {
         my $r = $self->_call($mac, 'mirror-rejoin', $mirror, '--leg', $spec);
         my $l = result_line($r);
         push @d, "mirror-rejoin $mirror --leg $spec exit $r->{rc}" . (length $l ? ": $l" : '');
-        $o{ $r->{rc} == 0 ? 'ok' : $r->{rc} == 3 ? 'human' : 'failed' }++;
+        # Only DIVERGED is a human decision; every other refusal (UNREADABLE
+        # while the leg's target is down, ...) is retried by the backoff.
+        $o{ $r->{rc} == 0 ? 'ok' : ($r->{rc} == 3 && $l =~ /\ADIVERGED /) ? 'human' : 'failed' }++;
     }
     my $outcome = $o{human} ? 'human' : $o{failed} ? 'failed' : 'healing';
     return { outcome => $outcome, detail => "$state; " . join('; ', @d), attempted => 1 };
 }
 
-# attempt($rec): the combined outcome over the issue's mirror(s).
+# attempt($rec): the outcome {outcome, detail, attempted, by} of one heal.
 sub attempt ($self, $rec) {
     my $f = $rec->{fields} // {};
     my $host = $f->{host} // '';
     my $mac = $self->find_host($host);
     return { outcome => 'human', detail => "host '$host' is not in the registry" } unless defined $mac;
+    return $self->_vdev($mac, $host, $f) if $rec->{kind} eq 'zfs-vdev';
+    return $self->_mirrors($mac, $host, $f);
+}
+
+# _vdev($mac, $host, \%fields): one storage-vdev-online of the issue's vdev.
+sub _vdev ($self, $mac, $host, $f) {
+    my ($pool, $vdev) = ($f->{pool}, $f->{vdev});
+    return { outcome => 'human', detail => 'the issue names no pool and vdev' } unless defined $pool && defined $vdev;
+    my $r = $self->_call($mac, 'storage-vdev-online', $pool, $vdev);
+    my $out = $r->{stdout} // '';
+    my ($vstate, $resilver) = $out =~ /^VDEV \S+ \S+ (\S+) resilver=(yes|no)\s*$/m;
+    my ($health) = $out =~ /^POOL \S+ (\S+)\s*$/m;
+    my $did = ($r->{stderr} // '') =~ /^\+ zpool online /m ? 1 : 0;
+    my $line = result_line($r);
+    my $d = "storage-vdev-online $pool $vdev exit $r->{rc}" . (defined $vstate ? ": $vdev $vstate resilver=$resilver" : length $line ? ": $line" : '');
+    if ($r->{rc} == 3) {
+        return { outcome => 'failed', detail => "$d (not present: the disk is still away)", attempted => 1 }
+            if ($r->{stderr} // '') =~ /\bnot present: /;
+        return { outcome => 'human', detail => "$d; " . $line, attempted => 1 };
+    }
+    return { outcome => 'failed', detail => $d, attempted => 1 } if $r->{rc} != 0 || !defined $vstate || $vstate ne 'ONLINE';
+    return { outcome => 'healing', detail => "$d (resilvering)", attempted => $did } if $resilver eq 'yes';
+    return { outcome => 'clean', detail => $d, attempted => $did, pool_health => $health // 'unknown',
+        by => "zpool status: $vdev ONLINE, no resilver" };
+}
+
+# _mirrors($mac, $host, \%fields): the combined outcome over the issue's mirror(s).
+sub _mirrors ($self, $mac, $host, $f) {
     my @mirrors;
     if (defined $f->{mirror}) {
         @mirrors = ($f->{mirror});
@@ -183,13 +239,13 @@ sub attempt ($self, $rec) {
         my %s = ($st->{stdout} // '') =~ /^MIRROR (\S+) (\S+)\s*$/mg;
         # absent: not assembled (a stopped VM), nothing of a running array to heal
         @mirrors = sort grep { $s{$_} ne 'clean' && $s{$_} ne 'absent' } keys %s;
-        return { outcome => 'clean', detail => "mirror-status clean (every mirror on $host)" } unless @mirrors;
+        return { outcome => 'clean', detail => "mirror-status clean (every mirror on $host)", by => 'mirror-status clean' } unless @mirrors;
     }
     my @r = map { $self->_mirror($mac, $host, $_, $f->{leg}) } @mirrors;
     my %o = map { $_->{outcome} => 1 } @r;
     my $outcome = $o{human} ? 'human' : $o{failed} ? 'failed' : $o{healing} ? 'healing' : 'clean';
     return { outcome => $outcome, detail => join(' | ', map { $_->{detail} } @r),
-        attempted => (grep { $_->{attempted} } @r) ? 1 : 0 };
+        attempted => (grep { $_->{attempted} } @r) ? 1 : 0, by => 'mirror-status clean' };
 }
 
 # heal($rec): one attempt or check, its result in the trail.
@@ -233,12 +289,29 @@ sub heal ($self, $rec) {
             }
         }
     });
-    $issues->resolve($rec->{id}, 'mirror-status clean') if $resolved;
+    if ($resolved) {
+        $issues->resolve($rec->{id}, $res->{by} // 'heal');
+        $self->_pool_resolved($rec, $res) if $rec->{kind} eq 'zfs-vdev';
+    }
     my $after = $issues->get($rec->{id});
     $issues->_log($after->{state} eq 'needs-human' ? 'err' : 'info',
         "hps-issue: heal $rec->{id} $res->{outcome}: " . HPS::Issues::clean_text($res->{detail}))
         unless $res->{outcome} eq 'healing' && !$res->{attempted};
     return $res;
+}
+
+# _pool_resolved($rec, $res): after a zfs-vdev issue resolved, the zfs-pool issue
+# of its host and pool resolves too when the pool is ONLINE and no other zfs-vdev
+# issue of that host and pool is unresolved.
+sub _pool_resolved ($self, $rec, $res) {
+    my $f = $rec->{fields};
+    return unless ($res->{pool_health} // '') eq 'ONLINE';
+    my $issues = $self->{issues};
+    my $pool = $issues->find_open(join ':', 'zfs-pool', $f->{host}, $f->{pool}) or return;
+    return if grep { $_->{kind} eq 'zfs-vdev' && ($_->{fields}{host} // '') eq $f->{host}
+        && ($_->{fields}{pool} // '') eq $f->{pool} } $issues->list;
+    $issues->resolve($pool->{id}, "zpool status: pool $f->{pool} ONLINE (issue $rec->{id} healed)");
+    return;
 }
 
 1;
