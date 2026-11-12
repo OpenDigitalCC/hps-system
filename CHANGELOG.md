@@ -12,6 +12,12 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## om3 v3.0.0-rc62 (2026-11-12)
+
+- change: om3 follows the newest release tag (ruling 2026-11-09): v3.0.0-rc62
+  (e29c763) replaces rc60. The vendorHash is unchanged; the Go module set is
+  the same.
+
 ## flake.lock committed: builds are reproducible from the repository (2026-11-12)
 
 - new: `flake.lock`. nixpkgs is locked at `ac588ef1c914` (2026-11-08), the

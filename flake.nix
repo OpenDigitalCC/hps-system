@@ -27,7 +27,7 @@
     # OpenSVC v3 (om3), pinned to the newest release tag (owner ruling
     # 2026-11-09: a current OpenSVC, bumped as releases land). Not in nixpkgs.
     om3-src = {
-      url = "github:opensvc/om3/v3.0.0-rc60"; # 4ff6def4972f1975c8eff458765f9cb9b6049717
+      url = "github:opensvc/om3/v3.0.0-rc62"; # e29c763a7fdd45b4259e344479fb16285ce0d7f3
       flake = false;
     };
     # ctrl-exec agent plugins (nagios-check, check_mem): the node resource
@@ -50,7 +50,7 @@
       om3Overlay = final: _prev: {
         om3 = final.callPackage ./nix/pkgs/om3.nix {
           src = om3-src;
-          version = "3.0.0-rc60";
+          version = "3.0.0-rc62";
         };
       };
 

@@ -56,16 +56,16 @@
     "om3-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1794294026,
-        "narHash": "sha256-WSgGJj6zLznKrPE2P3kwhL77QyTLD9RRHCoELCIYMlM=",
+        "lastModified": 1794401548,
+        "narHash": "sha256-mGDWG0JMXSO9JbBCdz1/NmDz7A2B8wptRmDuv1WbSXw=",
         "owner": "opensvc",
         "repo": "om3",
-        "rev": "4ff6def4972f1975c8eff458765f9cb9b6049717",
+        "rev": "e29c763a7fdd45b4259e344479fb16285ce0d7f3",
         "type": "github"
       },
       "original": {
         "owner": "opensvc",
-        "ref": "v3.0.0-rc60",
+        "ref": "v3.0.0-rc62",
         "repo": "om3",
         "type": "github"
       }
