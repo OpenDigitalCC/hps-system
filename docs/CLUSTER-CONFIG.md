@@ -253,6 +253,7 @@ keys may be empty.
 | `ips_admin_read_timeout` | operator | Seconds to wait for the IPS's own ips-admin agent to answer, so long jobs (publish, storage) return their output (60-3600; needs ctrl-exec 0.14.7; `docs/OPERATOR.md`) | `int:60..3600` | `900` | no |
 | `syslog_forward_host` | operator | Collector to forward every syslog message to over TCP 514 (empty: no forwarding; set by `ips-syslog-forward`) | `ip` | (empty) | no |
 | `syslog_forward_prefix` | operator | Host name prefix of the forwarded messages (`<prefix>.<hostname>`) | `regex:[a-z0-9][a-z0-9-]{0,31}` | (empty) | no |
+| `egress_proxy` | operator | HTTP proxy the image builder reaches the internet through, `http://<host>:<port>` (empty: none; `docs/BUILDER.md`) | `regex:http://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}` | (empty) | no |
 
 ## Exit codes
 

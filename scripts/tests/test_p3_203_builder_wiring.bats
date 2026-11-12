@@ -273,3 +273,20 @@ EOF
   [[ "$sums" != *'file_sha256'* ]]
   [[ "$sums" != *'direct_sha256'* ]]
 }
+
+@test "egress_proxy is a catalogued cluster key that takes http://<host>:<port> only" {
+  run perl -I"$ROOT/lib/perl" -MHPS::ClusterConfig -e '
+    my $q = HPS::ClusterConfig::question("egress_proxy") or die "not catalogued\n";
+    for my $ok ("http://10.0.0.2:3128", "http://proxy.lab:8080", "") {
+      my $e = HPS::ClusterConfig::validate_value($q, $ok); die "refused $ok: $e\n" if defined $e;
+    }
+    for my $bad ("https://x:1", "http://x", "http://x:1/p", "x:3128") {
+      die "accepted $bad\n" unless defined HPS::ClusterConfig::validate_value($q, $bad);
+    }
+    print "ok\n";'
+  [ "$status" -eq 0 ]
+  [ "$output" = ok ]
+  grep -q "'egress_proxy', 'cluster'" "$ROOT/lib/perl/HPS/Registry/Keys.pm"
+  grep -q '^| `egress_proxy` |' "$ROOT/docs/REGISTRY-KEYS.md"
+  grep -q '^| `egress_proxy` |' "$ROOT/docs/CLUSTER-CONFIG.md"
+}

@@ -169,6 +169,10 @@ my @CATALOGUE = (
         prompt => 'Collector to forward every syslog message to over TCP 514 (empty: no forwarding)', rule => 'ip', default => ''),
     _q(key => 'syslog_forward_prefix', group => 'operator', menu => 0,
         prompt => 'Host name prefix of the forwarded messages (<prefix>.<hostname>)', rule => 'regex:[a-z0-9][a-z0-9-]{0,31}', default => ''),
+    # Image builder (docs/BUILDER.md): its one way out, passed as hps.proxy=.
+    _q(key => 'egress_proxy', group => 'operator', menu => 0,
+        prompt => 'HTTP proxy the image builder reaches the internet through, http://<host>:<port> (empty: none)',
+        rule => 'regex:http://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}', default => ''),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

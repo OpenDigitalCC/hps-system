@@ -129,7 +129,7 @@ build_pin() {
   build_pin 20261109
   [ -f "$OUT/$PIN/SHA256SUMS" ]
   run grep -c . "$OUT/$PIN/SHA256SUMS"
-  [ "$output" = 11 ]
+  [ "$output" = 13 ]
   grep -q '  audit/initrd$' "$OUT/$PIN/SHA256SUMS"
   cd "$OUT/$PIN"
   run sha256sum --check --quiet SHA256SUMS
@@ -193,7 +193,7 @@ build_pin() {
   reg_set 525400000001 system_pin "$first"
   run "$PINS" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$first"*"audit,node-base,node-cnh,node-converged"*"525400000001"* ]]
+  [[ "$output" == *"$first"*"audit,node-base,node-builder,node-cnh,node-converged"*"525400000001"* ]]
   [[ "$output" == *"$PIN"*"[latest]"* ]]
   run "$PINS" list --json
   [ "$status" -eq 0 ]
