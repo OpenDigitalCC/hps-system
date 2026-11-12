@@ -155,6 +155,9 @@ in
       # Scale test phase 2: a host address on a storage or transit VLAN (hps-node net-up).
       net-vlan-address.source = mkScript "net-vlan-address" (scriptsDir + "/net-vlan-address");
       net-vlan-address.options.profile = "node";
+      # VXLAN workload networks over the transit VLAN (hps-node net-up, hps-workload).
+      net-vxlan-ensure.source = mkScript "net-vxlan-ensure" (scriptsDir + "/net-vxlan-ensure");
+      net-vxlan-ensure.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

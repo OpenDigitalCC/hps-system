@@ -27,6 +27,7 @@ setup() {
   "fab":   {"kind": "fabric", "purpose": "emulated-switch", "bridge": "br-fab"},
   "fab2":  {"kind": "fabric", "purpose": "emulated-switch", "bridge": "br-fab2", "mtu": 1600},
   "odoo":  {"cidr": "10.40.0.0/24", "vlan": 40, "bridge": "br-odoo", "purpose": "workload"},
+  "client": {"kind": "vxlan", "vni": 1100, "over": "transit", "bridge": "br-client", "purpose": "workload"},
   "bad1":  {"kind": "fabric", "purpose": "workload", "bridge": "br-bad1"},
   "bad2":  {"kind": "fabric", "purpose": "emulated-switch", "bridge": "br-bad2", "vlan": 5},
   "bad3":  {"kind": "fabric", "purpose": "emulated-switch", "bridge": "br-bad3", "uplink": "boot"},
@@ -272,4 +273,14 @@ changes() {
   attach '["bad1"]'
   run "$SCRIPT"
   [[ "$output" == *"purpose emulated-switch"* ]]
+}
+
+@test "a vxlan network is skipped: net-vxlan-ensure builds it, nothing is made here" {
+  attach '["client","odoo"]'
+  run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"network client: vxlan, skipped (net-vxlan-ensure builds bridge br-client)"* ]]
+  [ ! -e "$T/links/br-client" ]
+  [ ! -e "$T/net/05-hps-br-client.network" ]
+  [ "$(cat "$T/links/eth0.40/master")" = "br-odoo" ]
 }

@@ -25,6 +25,11 @@
 #                     --vlan-pvid / --vlan-tagged, applied by vm-start). No
 #                     vlan, nic or uplink is allowed on it.
 #
+#   vxlan network     {"kind": "vxlan", ...}: not built here. It is the workload
+#                     layer's network over the transit VLAN and needs its peers
+#                     from the IPS: net-vxlan-ensure builds it (hps-node net-up,
+#                     hps-workload). Listed and skipped.
+#
 #   uplink "boot"    (purpose provisioning) the bridge hps-net builds on the boot
 #                     NIC itself (host key boot_bridge). Only checked: it must
 #                     exist and be a bridge; its members, address and the
@@ -199,8 +204,11 @@ check_net() {
   kind=$(net_field "$name" kind)
   mtu=$(net_field "$name" mtu)
   [[ "$bridge" =~ ^[a-z][a-z0-9-]{0,14}$ ]] || refuse "network '$name': bridge '$bridge' is not a valid interface name"
+  if [[ "$kind" == "vxlan" ]]; then
+    return 0
+  fi
   if [[ -n "$kind" ]]; then
-    [[ "$kind" == "fabric" ]] || refuse "network '$name': kind '$kind' is not fabric"
+    [[ "$kind" == "fabric" ]] || refuse "network '$name': kind '$kind' is not fabric or vxlan"
     [[ "$purpose" == "emulated-switch" ]] || refuse "network '$name': a fabric network has purpose emulated-switch"
     [[ -z "$vlan" && -z "$nic" && -z "$uplink" ]] || refuse "network '$name': a fabric network takes no vlan, nic or uplink"
     if [[ -n "$mtu" ]]; then
@@ -269,7 +277,7 @@ Unmanaged=yes
 
 write_unmanaged_for() {
   local name="$1" bridge vlan nic names
-  if [[ -n "$(net_field "$name" uplink)" ]]; then
+  if [[ -n "$(net_field "$name" uplink)" || "$(net_field "$name" kind)" == "vxlan" ]]; then
     return 0
   fi
   bridge=$(net_field "$name" bridge)
@@ -387,6 +395,10 @@ check_boot_bridge() {
 ensure_net() {
   local name="$1" bridge vlan nic mtu
   bridge=$(net_field "$name" bridge)
+  if [[ "$(net_field "$name" kind)" == "vxlan" ]]; then
+    printf 'network %s: vxlan, skipped (net-vxlan-ensure builds bridge %s)\n' "$name" "$bridge"
+    return 0
+  fi
   if [[ -n "$(net_field "$name" kind)" ]]; then
     mtu=$(net_field "$name" mtu)
     ensure_fabric "$bridge" "${mtu:-9000}"
