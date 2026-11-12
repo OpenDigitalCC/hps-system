@@ -6,6 +6,9 @@
 #   blkid.<dev name>    the device carries a signature
 #   sessions            logged-in iSCSI sessions (one line each)
 #   nolun               a login does not make the by-path device appear
+#   records             node records (one "<iqn> <portal>" line each)
+# FAKE_LOGOUT_RC / FAKE_DELETE_RC: exit of iscsiadm --logout / -o delete when
+# there is something to log out / delete (21 = nothing there, as open-iscsi).
 
 P3_LOC_SPEC="local:lab/enc/vm/vm1-disk0"
 P3_REM_SPEC="iscsi:10.99.1.2:iqn.2026-01.hps.example:vm1-disk0"
@@ -91,7 +94,24 @@ case "$2" in
   discovery) echo "$6:3260,1 iqn.fake"; exit 0 ;;
   node)
     iqn="$4"; ip="$6"
+    case "$7" in
+      -o)
+        case "$8" in
+          update) exit 0 ;;
+          delete)
+            grep -qxF "$iqn $ip" "$STATE/records" 2> /dev/null || exit 21
+            grep -vxF "$iqn $ip" "$STATE/records" > "$STATE/records.tmp" || true
+            mv "$STATE/records.tmp" "$STATE/records"
+            exit "${FAKE_DELETE_RC:-0}" ;;
+        esac ;;
+      --logout)
+        grep -qF " $iqn " "$STATE/sessions" 2> /dev/null || exit 21
+        grep -vF " $iqn " "$STATE/sessions" > "$STATE/sessions.tmp" || true
+        mv "$STATE/sessions.tmp" "$STATE/sessions"
+        exit "${FAKE_LOGOUT_RC:-0}" ;;
+    esac
     echo "tcp: [1] $ip:3260,1 $iqn (non-flash)" >> "$STATE/sessions"
+    echo "$iqn $ip" >> "$STATE/records"
     [[ -e "$STATE/nolun" ]] || touch "$HPS_DEV/disk/by-path/ip-$ip:3260-iscsi-$iqn-lun-0"
     exit "${FAKE_LOGIN_RC:-0}" ;;
 esac

@@ -88,7 +88,7 @@ p3_degraded() {
   p3_sb "$REMDEV" "$P3_UUID" 55 "$P3_T1" 1 AA
   run --separate-stderr bash "$S/mirror-rejoin" vm1-disk0 --leg "$P3_REM_SPEC"
   [ "$status" -eq 0 ]
-  grep -qxF "mdadm /dev/md/vm1-disk0 --re-add $REMDEV" "$SHIM_LOG"
+  grep -qxF "mdadm /dev/md/vm1-disk0 --re-add --failfast $REMDEV" "$SHIM_LOG"
   run ! grep -E -- '--add|--force|--create|--assemble' "$SHIM_LOG"
   [[ "$stderr" == *"resync of $P3_REM_SPEC from the bitmap started"* ]]
   [ "$(jq -r '.legs[1].dev' "$HPS_MIRROR_DIR/vm1-disk0.json")" = "$REMDEV" ]

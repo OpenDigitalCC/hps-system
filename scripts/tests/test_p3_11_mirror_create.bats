@@ -51,7 +51,7 @@ create() {
 @test "clean devices, no approval: exact mdadm --create, local first, --write-mostly then the remote" {
   create
   [ "$status" -eq 0 ]
-  grep -qxF "mdadm --create /dev/md/vm1-disk0 --run --level=1 --raid-devices=2 --metadata=1.2 --bitmap=internal --name=vm1-disk0 $LOCDEV --write-mostly $REMDEV" "$SHIM_LOG"
+  grep -qxF "mdadm --create /dev/md/vm1-disk0 --run --level=1 --raid-devices=2 --metadata=1.2 --bitmap=internal --name=vm1-disk0 --failfast $LOCDEV --write-mostly $REMDEV" "$SHIM_LOG"
   grep -qxF 'mdadm --detail /dev/md/vm1-disk0' "$SHIM_LOG"
   run ! grep -E 'wipefs|--zero-superblock|--force|--assume-clean' "$SHIM_LOG"
 }

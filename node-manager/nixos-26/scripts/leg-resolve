@@ -13,6 +13,13 @@
 #
 # Prints the device path on stdout (nothing else on stdout); the log goes to
 # stderr. Test hooks: HPS_DEV (default /dev), HPS_LEG_TIMEOUT (default 30 s).
+#
+# Fail fast, not stall (owner ruling 2026-11-12: "apps can handle outage, not a
+# blocking delay"). Before every login the node record gets the ISCSI_TIMEOUTS
+# below, so a dead storage host turns into failed I/O within ~15 s (md then
+# fails that leg and the mirror runs on the other) instead of I/O queued for
+# open-iscsi's default 120 s. The compute profile sets the same values as the
+# iscsid.conf defaults; this is the per-record guarantee.
 # Exit: 0 resolved, 2 usage, 3 refused (bad spec, no such zvol, LUN did not
 # appear), 1 a command failed.
 
@@ -22,6 +29,21 @@ set -euo pipefail
 : "${HPS_LEG_TIMEOUT:=30}"
 
 SPEC=""
+
+# The session timeouts written to the node record before each login (seconds).
+#   replacement_timeout  how long I/O is queued while a lost session is being
+#                        re-established before it fails up to md (default 120)
+#   noop_out_interval    how often a NOP-Out ping checks the connection
+#   noop_out_timeout     how long a ping may go unanswered before the connection
+#                        is declared dead and recovery (the timer above) starts
+#   login_timeout        how long one login attempt may take
+# A lost leg is therefore detected within ~10 s and failed within ~15 s more.
+ISCSI_TIMEOUTS=(
+  "node.session.timeo.replacement_timeout=15"
+  "node.conn[0].timeo.noop_out_interval=5"
+  "node.conn[0].timeo.noop_out_timeout=5"
+  "node.conn[0].timeo.login_timeout=15"
+)
 
 log() {
   printf '[leg-resolve] %s\n' "$*" >&2
@@ -76,6 +98,15 @@ session_present() {
   grep -qF -- "$iqn" <<< "$sessions"
 }
 
+# set_timeouts <ip> <iqn>: write ISCSI_TIMEOUTS into the node record (made by
+# the discovery) so the login that follows uses them.
+set_timeouts() {
+  local ip=$1 iqn=$2 kv
+  for kv in "${ISCSI_TIMEOUTS[@]}"; do
+    run iscsiadm -m node -T "$iqn" -p "$ip" -o update -n "${kv%%=*}" -v "${kv#*=}" >&2
+  done
+}
+
 ensure_session() {
   local ip=$1 iqn=$2
   if session_present "$iqn"; then
@@ -83,6 +114,7 @@ ensure_session() {
     return 0
   fi
   run iscsiadm -m discovery -t sendtargets -p "$ip" >&2
+  set_timeouts "$ip" "$iqn"
   run iscsiadm -m node -T "$iqn" -p "$ip" --login >&2
   run udevadm settle --timeout=10 >&2
 }

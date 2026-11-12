@@ -16,10 +16,14 @@
 # with --wipe those devices (only they) are announced ("WILL WIPE: ...") and
 # wiped (mdadm --zero-superblock, wipefs -a). Then:
 #   mdadm --create /dev/md/<name> --run --level=1 --raid-devices=2 --metadata=1.2
-#         --bitmap=internal --name=<name> <other-leg> --write-mostly <remote-leg>
-# (the write-mostly leg is listed last so the flag covers it alone) and
+#         --bitmap=internal --name=<name> --failfast <other-leg> --write-mostly <remote-leg>
+# (--failfast covers both legs; the write-mostly leg is listed last so that flag
+# covers it alone) and
 # mdadm --detail. It returns once the array exists; the first resync runs on in
-# the kernel. A mirror that already exists with exactly these members is left
+# the kernel. failfast (kept in the 1.2 superblock, so every later assembly has
+# it): md fails a leg on its first I/O error instead of retrying, and never
+# fails the last working leg, so a lost iSCSI leg is an outage of that leg,
+# not a stall of the guest (owner ruling 2026-11-12). A mirror that already exists with exactly these members is left
 # as it is (exit 0). The sidecar /run/hps/mirrors/<name>.json records the legs.
 # Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
 
@@ -232,10 +236,10 @@ create_array() {
     second=$REMOTE_INDEX
     first=$((1 - REMOTE_INDEX))
     run mdadm --create "/dev/md/$NAME" --run --level=1 --raid-devices=2 --metadata=1.2 \
-      --bitmap=internal --name="$NAME" "${DEVS[$first]}" --write-mostly "${DEVS[$second]}"
+      --bitmap=internal --name="$NAME" --failfast "${DEVS[$first]}" --write-mostly "${DEVS[$second]}"
   else
     run mdadm --create "/dev/md/$NAME" --run --level=1 --raid-devices=2 --metadata=1.2 \
-      --bitmap=internal --name="$NAME" "${DEVS[0]}" "${DEVS[1]}"
+      --bitmap=internal --name="$NAME" --failfast "${DEVS[0]}" "${DEVS[1]}"
   fi
 }
 

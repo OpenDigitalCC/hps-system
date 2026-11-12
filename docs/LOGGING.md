@@ -29,6 +29,10 @@ node by source address: `$HPS_LOG/$NODE_IP/<date>.log`, where
 `$NODE_IP` is the address the message came from. Line format:
 `<timestamp> <source ip> [<hostname>] <tag> <message>`.
 
+Compute nodes also write one line per mirror-leg failure and recovery with
+tag `hps-issue` (`HPS-ISSUE open|resolve kind=mirror-leg ...`, from the
+mdadm monitor; format in `docs/WORKLOADS.md` "Losing a leg").
+
 ## Watching
 
 Operator watching a netboot (one node):

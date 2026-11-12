@@ -261,6 +261,66 @@ The rule works within one compute host. Across hosts (a nested TCH on one
 host using a nested SCH on another) the order of the hosts' own shutdowns is
 the operator's: power the consumers' hosts off first.
 
+## Losing a leg: an outage, not a stall
+
+Owner ruling 2026-11-12: a storage host that does not answer for 15 seconds
+is an outage of that leg. Guests (and the applications in them) handle a
+failed or degraded disk; they do not handle I/O that blocks for minutes.
+open-iscsi's default queues I/O for 120 s (`replacement_timeout`) before md
+sees an error, so a lost leg stalled every guest on it for about two minutes.
+
+Initiator timeouts
+:   Before each leg login `leg-resolve` writes four values into the node
+    record (`iscsiadm -m node -T <iqn> -p <portal> -o update -n <key> -v
+    <value>`; the constants `ISCSI_TIMEOUTS` at the top of the script):
+    `node.session.timeo.replacement_timeout=15`,
+    `node.conn[0].timeo.noop_out_interval=5`,
+    `node.conn[0].timeo.noop_out_timeout=5`,
+    `node.conn[0].timeo.login_timeout=15`. A dead connection is noticed by
+    the NOP-Out ping within about 10 s, and I/O fails up to md 15 s later.
+    The compute profile appends the same four lines to `iscsid.conf`
+    (`services.openiscsi.extraConfig`), so every record discovery creates
+    starts with them. `iscsi-login-test` logs in through `leg-resolve` and
+    gets the same values.
+
+md failfast
+:   `mirror-create` puts both legs in with `--failfast` (kept in the 1.2
+    superblock); `mirror-assemble` sets it on every member after assembly
+    through sysfs (`echo failfast > /sys/block/<mdX>/md/dev-<member>/state`;
+    `mdadm --assemble` has no per-device flag), which also covers mirrors made
+    before this change; `mirror-rejoin` re-adds with `--re-add --failfast`.
+    With failfast md fails a leg on its first I/O error instead of retrying.
+    md never fails the last working leg. `--write-mostly` on the remote leg is
+    unchanged.
+
+Logout on stop
+:   `mirror-stop`, after `mdadm --stop` (or when the mirror is not assembled),
+    logs out each `iscsi:` leg in the sidecar and deletes its node record
+    (`--logout`, then `-o delete`; exit 21, nothing there, is fine). A local
+    leg is untouched. A logout that fails keeps the sidecar and exits 1, so a
+    second `mirror-stop` retries it. `mirror-detach-leg` logs out the leg it
+    detached the same way; `mirror-rejoin` logs it in again through
+    `leg-resolve`. Before this, a destroyed workload's initiator retried its
+    targets forever (each storage host logged about 70 "iSCSI Login
+    negotiation failed" / "Unable to locate Target IQN" lines).
+
+Issue markers
+:   The mdadm monitor's `PROGRAM` is `hps-md-event` (`/etc/hps/hps-md-event`
+    on compute nodes; not a ctrl-exec script, only mdadm runs it). It writes
+    one syslog line with tag `hps-issue`, which the node forwards to the IPS
+    (`docs/LOGGING.md`):
+
+        HPS-ISSUE open kind=mirror-leg host=<host> mirror=<name> component=<dev> event=<Event> [leg=<iqn>@<portal>]
+        HPS-ISSUE resolve kind=mirror-leg host=<host> mirror=<name> event=<Event>
+
+    `open` on `Fail`, `FailSpare` and `DegradedArray` (`component=-` when
+    mdadm names no device, as for `DegradedArray`); `leg=` when the component
+    is the disk of an iSCSI session (`iscsiadm -m session -P3`), left out
+    otherwise. `resolve` on `RebuildFinished`, `RecoveryFinished` or
+    `SpareActive` when `/sys/block/<mdX>/md/degraded` reads 0. `<host>` is
+    the short hostname, `<name>` the mirror (`/dev/md/<name>`). Other events
+    get no marker; mdadm logs them itself.
+
 ## Registry
 
 Cluster key `workload_<name>`:

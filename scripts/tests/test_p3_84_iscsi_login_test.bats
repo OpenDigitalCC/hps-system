@@ -40,6 +40,7 @@ case "$2" in
         [[ "${FAKE_LOGOUT_RC:-0}" -eq 0 ]] || exit "$FAKE_LOGOUT_RC"
         rm -f "$STATE/sessions" "$HPS_DEV/disk/by-path/ip-$ip:3260-iscsi-$iqn-lun-0" ;;
       -o)
+        [[ "$8" == update ]] && exit 0
         [[ -e "$STATE/record" ]] || exit 21
         rm -f "$STATE/record" ;;
     esac

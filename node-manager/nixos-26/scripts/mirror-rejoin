@@ -11,8 +11,9 @@
 # divergence rule of mirror-assemble; a diverged pair is refused (exit 3, prints
 # the DIVERGED line, changes nothing): that is a human decision (phase 4 adds the
 # ZFS-snapshot rollback path). Otherwise
-#   mdadm /dev/md/<name> --re-add <dev>
-# resyncs from the write-intent bitmap only. If the re-add is not possible this
+#   mdadm /dev/md/<name> --re-add --failfast <dev>
+# resyncs from the write-intent bitmap only (--failfast as at create: md fails
+# the leg on its first I/O error rather than retrying). If the re-add is not possible this
 # script never falls back to --add (a full resync is a human decision): exit 1.
 # Exit: 0 done, 2 usage, 3 refused, 1 a command failed.
 
@@ -274,7 +275,7 @@ main() {
   read_sb "$RET_IDX" "$dev" "$RETURNING"
   read_sb "$OTHER_IDX" "${DEVS[$OTHER_IDX]}" "${LEGS[$OTHER_IDX]}"
   check_consistent "${LEGS[0]}" "${LEGS[1]}"
-  if ! run mdadm "/dev/md/$NAME" --re-add "$dev"; then
+  if ! run mdadm "/dev/md/$NAME" --re-add --failfast "$dev"; then
     log "re-add of $RETURNING failed (no usable bitmap?); a full --add is a human decision"
     exit 1
   fi

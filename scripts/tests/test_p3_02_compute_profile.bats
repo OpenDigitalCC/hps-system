@@ -95,7 +95,7 @@ setup() {
 
 @test "mdadm: swraid on, no monitor mail, no udev auto-assembly, no degraded last-resort timer" {
   grep -q 'boot.swraid = {' "$COMPUTE"
-  grep -q 'PROGRAM ${pkgs.coreutils}/bin/true' "$COMPUTE"
+  grep -q 'PROGRAM /etc/hps/hps-md-event' "$COMPUTE"
   run ! grep -E '^[^#]*MAILADDR' "$COMPUTE"
   grep -q 'AUTO -all' "$COMPUTE"
   grep -q '"mdadm-last-resort@.timer"' "$COMPUTE"

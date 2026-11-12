@@ -10,7 +10,16 @@
 # the device in its block list (virsh list --name; virsh domblklist; a running
 # VM holds the device open without showing in holders or mounts). When virsh is
 # not on PATH the libvirt check is skipped and logged. Otherwise mdadm --stop
-# /dev/md/<name> and the sidecar is removed. Not assembled: nothing to stop, the sidecar is removed, exit 0.
+# /dev/md/<name>. Then every iscsi: leg of the mirror (from the sidecar) is
+# logged out and its node record deleted:
+#   iscsiadm -m node -T <iqn> -p <portal> --logout
+#   iscsiadm -m node -T <iqn> -p <portal> -o delete
+# so the initiator does not retry a target that is gone (a local leg is left
+# alone; no session or no record is fine). Then the sidecar is removed. Not
+# assembled: nothing to stop; the iscsi: legs are logged out the same way and
+# the sidecar is removed, exit 0. A logout that fails keeps the sidecar (so a
+# second mirror-stop retries it) and exits 1. No sidecar: no leg is known, none
+# is logged out.
 # Exit: 0 done, 2 usage, 3 refused (in use), 1 a command failed.
 
 set -euo pipefail
@@ -119,6 +128,70 @@ array_present() {
   mdadm --detail "/dev/md/$NAME" > /dev/null 2>&1
 }
 
+# --- iSCSI leg logout (the same in mirror-stop and mirror-detach-leg) ---
+
+# iscsiadm_tolerant <args...>: logged iscsiadm; exit 21 (no matching session or
+# node record) is success: there was nothing to log out or delete.
+iscsiadm_tolerant() {
+  local rc=0
+  printf '+ iscsiadm %s\n' "$*" >&2
+  iscsiadm "$@" >&2 || rc=$?
+  case $rc in
+    0) ;;
+    21) log "nothing to do for: iscsiadm $* (no matching session or record)" ;;
+    *)
+      log "iscsiadm $* failed (exit $rc)"
+      return 1
+      ;;
+  esac
+}
+
+# leg_logout <spec>: an iscsi:<portal>:<iqn> leg's session is logged out and its
+# node record deleted, so the initiator stops retrying a target that is going
+# away (after a destroy the storage host logged ~70 failed logins per target).
+# A local: leg is untouched. Returns 1 when iscsiadm failed.
+leg_logout() {
+  local spec=$1 rest ip iqn rc=0
+  case "$spec" in
+    iscsi:*) ;;
+    *) return 0 ;;
+  esac
+  rest=${spec#iscsi:}
+  ip=${rest%%:*}
+  iqn=${rest#*:}
+  if [[ ! "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ || ! "$iqn" =~ ^iqn\.[0-9]{4}-[0-9]{2}\.[a-z0-9.-]+(:[A-Za-z0-9._:-]+)?$ ]]; then
+    log "leg spec '$spec' is not iscsi:<portal-ip>:<iqn>; not logged out"
+    return 1
+  fi
+  iscsiadm_tolerant -m node -T "$iqn" -p "$ip" --logout || rc=1
+  iscsiadm_tolerant -m node -T "$iqn" -p "$ip" -o delete || rc=1
+  return "$rc"
+}
+
+# logout_legs: leg_logout for both legs in the sidecar; 1 when one failed.
+logout_legs() {
+  local side spec rc=0
+  side=$(sidecar_path)
+  if [[ ! -r "$side" ]]; then
+    log "no sidecar $side; no iSCSI leg known to log out"
+    return 0
+  fi
+  while IFS= read -r spec; do
+    leg_logout "$spec" || rc=1
+  done < <(jq -r '.legs[].spec' "$side")
+  return "$rc"
+}
+
+# remove_sidecar: after every leg is logged out; a failed logout keeps it.
+remove_sidecar() {
+  if ! logout_legs; then
+    log "an iSCSI leg of $NAME was not logged out; the sidecar is kept so mirror-stop can be run again"
+    exit 1
+  fi
+  printf '+ rm -f %s\n' "$(sidecar_path)" >&2
+  rm -f -- "$(sidecar_path)"
+}
+
 parse_args() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
   case "$1" in
@@ -164,13 +237,12 @@ main() {
   parse_args "$@"
   if ! array_present; then
     log "/dev/md/$NAME is not assembled; nothing to stop"
-    rm -f -- "$(sidecar_path)"
+    remove_sidecar
     return 0
   fi
   check_not_in_use
   run mdadm --stop "/dev/md/$NAME"
-  printf '+ rm -f %s\n' "$(sidecar_path)" >&2
-  rm -f -- "$(sidecar_path)"
+  remove_sidecar
   log "mirror $NAME stopped"
 }
 

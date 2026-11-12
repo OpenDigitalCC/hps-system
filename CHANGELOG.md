@@ -12,6 +12,34 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Mirror legs fail fast: an outage, not a stall (2026-11-12)
+
+Owner ruling: "i dont expect network timeouts of 15s - that then should
+justify outage, rather than stall ... because apps can handle outage, not a
+blocking delay". HPS ran open-iscsi's defaults, so I/O to a lost iSCSI leg
+was queued for 120 s (`replacement_timeout`) before md failed the leg, and
+every guest on the mirror blocked that long. And `mirror-stop` never logged
+out, so after a workload destroy the initiator retried the gone targets
+forever (about 70 failed logins per storage host).
+
+- `leg-resolve` writes the session timeouts into the node record before every
+  login (`ISCSI_TIMEOUTS`, one place): `replacement_timeout=15`,
+  `noop_out_interval=5`, `noop_out_timeout=5`, `login_timeout=15`. The
+  compute profile appends the same to `iscsid.conf`
+  (`services.openiscsi.extraConfig`).
+- md failfast: `mirror-create --failfast` on both legs, `mirror-assemble` sets
+  it per member through sysfs after assembly (older mirrors too),
+  `mirror-rejoin --re-add --failfast`. `--write-mostly` unchanged.
+- `mirror-stop` logs out each `iscsi:` leg of the mirror and deletes its node
+  record (also when the mirror is not assembled); `mirror-detach-leg` does the
+  same for the detached leg. A local leg is untouched; no session is fine.
+- new: `hps-md-event`, the mdadm monitor's `PROGRAM` on compute nodes (was
+  coreutils `true`): one `logger -t hps-issue` line, `HPS-ISSUE open
+  kind=mirror-leg ...` on Fail / FailSpare / DegradedArray and `HPS-ISSUE
+  resolve kind=mirror-leg ...` when the mirror is clean again, for the IPS
+  issue watcher (`docs/WORKLOADS.md` "Losing a leg").
+- Needs a compute (TCH) node image rebuild and a reboot of the compute nodes.
+
 ## Guest seed: cloud-init NoCloud for workload VMs (2026-11-12)
 
 The scale test's probe guests (Debian generic cloud image) booted with no

@@ -21,7 +21,13 @@
 #  - mdadm, with the udev auto-assembly and the degraded "last resort" timer
 #    OFF. HPS assembles every mirror explicitly (mirror-assemble) and a degraded
 #    assembly needs an explicit --peer-gone (the missing leg's owner is gone), so
-#    the kernel/udev must never start a half mirror on its own. No monitor mail.
+#    the kernel/udev must never start a half mirror on its own. No monitor mail:
+#    the monitor's PROGRAM is hps-md-event, which writes one HPS-ISSUE syslog
+#    line when a mirror leg fails and when the mirror is whole again.
+#  - fail fast, not stall (owner ruling 2026-11-12): iSCSI sessions give up on
+#    a lost storage host after 15 s (iscsid.conf below, and leg-resolve sets the
+#    same on every node record) and md fails that leg (failfast) so the guest
+#    runs on the other leg instead of blocking for open-iscsi's 120 s default.
 #  - bridges for the workload networks are NOT declared here: the layout lives in
 #    the registry and net-bridge-ensure builds them at boot (hps-node-init).
 #    Only the kernel modules are loaded here.
@@ -29,6 +35,15 @@
 # Nothing here holds a secret, a pool name, a disk or an address.
 { config, lib, pkgs, ... }:
 
+let
+  # mdadm runs PROGRAM with no PATH of ours; the wrapper gives the event script
+  # exactly the tools it calls. mdadm.conf names /etc/hps/hps-md-event (not the
+  # store path), so the initrd copy of mdadm.conf pulls nothing in.
+  mdEvent = pkgs.writeShellScript "hps-md-event" ''
+    export PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.gnused pkgs.util-linux pkgs.mdadm pkgs.openiscsi ]}
+    exec ${pkgs.bash}/bin/bash ${../../../node-manager/nixos-26/boot/hps-md-event.sh} "$@"
+  '';
+in
 {
   imports = [ ./compute-apparmor.nix ];
 
@@ -139,6 +154,17 @@
     # Placeholder so the option is defined; never used: initiatorname.iscsi is
     # replaced by the runtime file below.
     name = lib.mkDefault "iqn.2026-11.hps:unset";
+    # Appended to the package's iscsid.conf (a later line wins), so every node
+    # record discovery creates starts with these. Owner ruling 2026-11-12: a
+    # lost storage host is an outage after 15 s, never a 120 s blocking stall.
+    # The same four values are written per record by leg-resolve before each
+    # login (ISCSI_TIMEOUTS there); keep the two in step.
+    extraConfig = ''
+      node.session.timeo.replacement_timeout = 15
+      node.conn[0].timeo.noop_out_interval = 5
+      node.conn[0].timeo.noop_out_timeout = 5
+      node.conn[0].timeo.login_timeout = 15
+    '';
   };
 
   environment.etc."iscsi/initiatorname.iscsi".source =
@@ -192,15 +218,20 @@
   # ---- mdadm ----------------------------------------------------------------
   boot.swraid = {
     enable = true;
-    # PROGRAM (a no-op) satisfies the module's "MAILADDR or PROGRAM" check, so
-    # the monitor never mails and never crashes. AUTO -all: no incremental
+    # PROGRAM satisfies the module's "MAILADDR or PROGRAM" check, so the monitor
+    # never mails and never crashes; it is hps-md-event (below), which logs one
+    # "HPS-ISSUE open|resolve kind=mirror-leg ..." line (tag hps-issue) on a
+    # leg failure and on the mirror being whole again. AUTO -all: no incremental
     # (udev) assembly of any metadata type; explicit `mdadm --assemble` with
     # named devices, which is what HPS runs, is not affected by AUTO.
     mdadmConf = ''
-      PROGRAM ${pkgs.coreutils}/bin/true
+      PROGRAM /etc/hps/hps-md-event
       AUTO -all
     '';
   };
+
+  # Not a ctrl-exec script: only mdadm --monitor runs it (docs/WORKLOADS.md).
+  environment.etc."hps/hps-md-event".source = mdEvent;
 
   # The degraded-start timer would force a half mirror active after a delay.
   systemd.suppressedSystemUnits = [

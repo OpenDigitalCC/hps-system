@@ -16,8 +16,16 @@
 # One leg missing (device absent, LUN not coming up): refused unless the caller
 # declares the missing leg's owner gone with --peer-gone; then
 #   mdadm --assemble --run /dev/md/<name> <present-dev>   (degraded; never --force)
+# After assembly every member is set failfast through sysfs
+#   echo failfast > /sys/block/<mdX>/md/dev-<member>/state
+# (mdadm --assemble has no per-device flag; a mirror made by mirror-create
+# already carries failfast in its superblock, this also covers older mirrors).
+# failfast: md fails a leg on its first I/O error instead of retrying, never the
+# last working leg (owner ruling 2026-11-12: a lost leg is an outage, not a
+# stall). A member the kernel refuses the flag for is logged, not fatal.
 # An array that is already assembled is left alone (exit 0). Writes the sidecar
-# /run/hps/mirrors/<name>.json.
+# /run/hps/mirrors/<name>.json. Test hooks: HPS_DEV (default /dev, for
+# /dev/md/<name>), HPS_SYS (default /sys).
 #
 # Divergence rule (all values from `mdadm --examine` of each leg):
 #   Events, Update Time, Device Role ("Active device N" = slot N), Array State
@@ -53,6 +61,8 @@ USAGE
 # --- shared helpers (copied into each mirror script; no runtime sourcing) ---
 
 : "${HPS_MIRROR_DIR:=/run/hps/mirrors}"
+: "${HPS_DEV:=/dev}"
+: "${HPS_SYS:=/sys}"
 : "${HPS_LEG_RESOLVE:=$(dirname "$0")/leg-resolve}"
 
 # run <command...>: log then execute.
@@ -296,6 +306,28 @@ assemble_degraded() {
   run mdadm --assemble --run "/dev/md/$NAME" "${DEVS[$present]}"
 }
 
+# set_failfast: every member of the assembled array gets the failfast flag
+# (sysfs dev-*/state). Logged; a refusal is a warning, the array is up.
+set_failfast() {
+  local real md state n=0
+  real=$(readlink -f -- "$HPS_DEV/md/$NAME" 2> /dev/null || true)
+  md=${real##*/}
+  if [[ -z "$md" || ! -d "$HPS_SYS/block/$md/md" ]]; then
+    log "WARNING: no sysfs md directory for $NAME ($real); failfast not set"
+    return 0
+  fi
+  for state in "$HPS_SYS/block/$md/md"/dev-*/state; do
+    [[ -e "$state" ]] || continue
+    printf '+ echo failfast > %s\n' "$state" >&2
+    if printf 'failfast\n' > "$state" 2> /dev/null; then
+      n=$((n + 1))
+    else
+      log "WARNING: the kernel refused failfast on ${state%/state}"
+    fi
+  done
+  log "failfast set on $n member(s) of $NAME"
+}
+
 main() {
   parse_args "$@"
   if array_present; then
@@ -314,6 +346,7 @@ main() {
   else
     assemble_degraded
   fi
+  set_failfast
   sidecar_write
   run mdadm --detail "/dev/md/$NAME"
   log "mirror $NAME assembled"
