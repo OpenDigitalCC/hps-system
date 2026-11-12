@@ -1,0 +1,93 @@
+#!/usr/bin/env perl
+# hps-log: read the newest syslog lines of a host, or of the IPS itself, from the
+# IPS's log tree (docs/LOGGING.md). Read-only; an ips-admin tool, so it works
+# through hps-op.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::Log;
+
+my %EXIT = (usage => 2, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-log: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--json]
+  hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--json]
+host: the newest lines the IPS received from the host, from every address the
+  registry knows for it (its IP, and the addresses its stored audit recorded),
+  merged by time.
+ips: the IPS's own lines: ips/<date>.log, ips/hps/<date>.log and the
+  events.log lines of host "ips" (hps-monitor's per-check results left out).
+  --lines N        how many lines, newest last (default 50, at most 500)
+  --since MINUTES  only lines of the last MINUTES (1 to 43200)
+  --grep WORD      only lines that contain WORD (case-insensitive; one word of
+                   A-Z a-z 0-9 _ . , : = @ + -), matched after redaction
+  --json           {target, host, mac, addresses, sources, lines:[{time, epoch,
+                   host, tag, message, level, source}], count, redacted, truncated}
+A line that names a secret (a word matching the cluster-config secret-name
+rule: secret, passw, token, credential, psk, private, key), or holds a PEM
+marker, an operator token or 64 hex digits, is shown as [redacted].
+level is error, warning or info, read from the text. Environment: HPS_LOG
+(the log tree, default /srv/hps-log), HPS_CONFIG_BASE (the registry).
+Exit: 0 ok, 1 failed, 2 usage, 4 no such host.
+USAGE
+    return 2;
+}
+
+sub render {
+    my ($r) = @_;
+    my $out = '';
+    if ($r->{target} eq 'host') {
+        $out .= sprintf("# %s (%s) addresses: %s\n", $r->{host} || '-', $r->{mac},
+            @{ $r->{addresses} } ? join(' ', @{ $r->{addresses} }) : 'none');
+    }
+    $out .= "# no log lines\n" unless @{ $r->{lines} };
+    for my $l (@{ $r->{lines} }) {
+        $out .= sprintf("%s %-7s %s %s: %s\n", $l->{time}, $l->{level}, $l->{host}, $l->{tag}, $l->{message});
+    }
+    $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
+    return $out;
+}
+
+sub main {
+    my @argv = @_;
+    my %o;
+    my $cmd = shift @argv;
+    return usage() if !defined $cmd || $cmd eq '--help' || $cmd eq '-h';
+    GetOptionsFromArray(\@argv, 'lines=s' => \$o{lines}, 'since=s' => \$o{since},
+        'grep=s' => \$o{grep}, 'json' => \$o{json}) or return usage();
+    my $json = delete $o{json};
+    my %opt = map { defined $o{$_} ? ($_ => $o{$_}) : () } keys %o;
+    my $r = eval {
+        my $log = HPS::Log->new;
+        if ($cmd eq 'host') {
+            HPS::Log::_fail(usage => 'host needs one MAC or host name') unless @argv == 1;
+            $log->host_log($argv[0], %opt);
+        } elsif ($cmd eq 'ips') {
+            HPS::Log::_fail(usage => 'ips takes no arguments') if @argv;
+            $log->ips_log(%opt);
+        } else {
+            HPS::Log::_fail(usage => "unknown command '$cmd'");
+        }
+    };
+    if (!$r) {
+        my $err = $@;
+        if (ref $err && $err->isa('HPS::Log::Error')) {
+            return usage($err->message) if $err->kind eq 'usage';
+            print STDERR 'hps-log: ' . $err->message . "\n";
+            return $EXIT{ $err->kind } // 1;
+        }
+        print STDERR "hps-log: $err";
+        return 1;
+    }
+    print $json ? JSON::PP->new->canonical->encode($r) . "\n" : render($r);
+    return 0;
+}
+
+exit main(@ARGV);

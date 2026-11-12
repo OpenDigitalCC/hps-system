@@ -19,7 +19,7 @@ Usage:
 Runs the ips-admin script <tool> (hps-onboard, hps-cluster-config,
 hps-cluster-config-apply, hps-bmc, hps-bmc-credential, hps-node, hps-storage,
 hps-workload, hps-workload-define, hps-pins, hps-ips-check, hps-osvc, hps-monitor, ips-syslog-forward,
-hps-repo)
+hps-repo, hps-log)
 on the IPS's own agent, with <args> passed through, and prints its stdout and
 stderr; the exit status is the tool's.
   --cred FILE   the credential from `hps-operator issue` on that IPS (mode 0600

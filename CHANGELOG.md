@@ -41,6 +41,22 @@ impossible and nothing in HPS could free space or grow the disk.
   `test_p3_200_ips_admin_datasets_and_define.bats`, the wiring tests, and
   `t/206-disk-grow.t`.
 
+## hps-log: read a host's or the IPS's recent syslog (2026-11-12)
+
+- new: `hps-log host <mac|hostname>` and `hps-log ips` (`--lines N` up to
+  500, `--since MINUTES`, `--grep WORD`, `--json`), an ips-admin tool, so it
+  works through `hps-op`. A host's lines come from every address the registry
+  knows for it (its `IP` and the addresses its stored audit recorded), merged
+  by time, newest last; each line has a level (error, warning, info) read from
+  its text. Read-only.
+- security: a line that may carry a secret is printed as `[redacted]`: any
+  word matching the cluster-config secret-name rule, a PEM marker, an operator
+  token or 64 hex digits; `--grep` matches after redaction
+  (`docs/LOGGING.md`).
+- tests: `t/206-hps-log.t` (temp log tree and registry),
+  `test_p3_206_hps_log_wiring.bats` (allowlist, wrapper, gate: `host` and
+  `ips` only).
+
 ## repo update orders pre-release tags correctly (2026-11-12)
 
 - fix: repo update's newest-release check ranked every pre-release kind the

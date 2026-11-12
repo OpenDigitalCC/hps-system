@@ -41,3 +41,43 @@ Operator watching the IPS services (all of them, today):
 
 (`tail` over several files prints a header when the file changes. The
 date in the path rolls at midnight: restart the `tail`.)
+
+## Reading a host's log: hps-log
+
+`hps-log` reads the newest lines of one host, or of the IPS itself, from
+this tree. It is read-only and an ips-admin tool, so an operator runs it
+through `hps-op` (`docs/OPERATOR.md`); the cluster browser's "Recent log"
+group calls it.
+
+    hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--json]
+    hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--json]
+
+- `host`: a MAC in any form, a registry `HOSTNAME` or an FQDN. A node is
+  filed by the address it sent from, so its lines are read from every
+  address the registry knows for it: its current `IP`, then each IPv4
+  address its stored audit recorded (the audit boot's DHCP address). The
+  directories are merged by time.
+- `ips`: `ips/<date>.log` (rsyslogd, OpenSVC, the auth hook),
+  `ips/hps/<date>.log` (`hps_log`) and, where the lab collector writes it,
+  the `events.log` lines of host `ips`. hps-monitor's per-check results are
+  left out (a line per check per node every tick; `metrics.log` keeps them).
+- `--lines` 1 to 500, default 50, newest last; `--since` 1 to 43200 minutes;
+  `--grep` one word, case-insensitive. A call reads at most 64 MiB of log
+  (`truncated` says when it stopped there).
+- `level` (error, warning, info) is read from the text: the files keep no
+  syslog priority. "No space left", "failed", "refused", `state=CRITICAL` are
+  errors; "warning", "degraded", "timed out" warnings; a count ("0 failed",
+  "fail=0") is neither.
+
+### Redaction
+
+A line is never printed when it may carry a secret; its message becomes
+`[redacted]` (its time and tag stay). The rule: any word of the line (runs
+of `A-Z a-z 0-9 _`) matches the cluster-config secret-name rule
+(`HPS::ClusterConfig::secret_name_re`: `secret`, `passw`, `token`,
+`credential`, `psk`, `private`, or `key` as a whole word or a `_key_`
+part), or the line holds a PEM marker (`-----BEGIN ...-----`), an operator
+token (`hpsop_...`) or 64 hex digits in a row (a raw key). `--grep` matches
+after redaction, so it cannot be used to probe a withheld line. The rule is
+deliberately wide: kernel lines such as "Key type asymmetric registered"
+are withheld too.

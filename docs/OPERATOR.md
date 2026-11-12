@@ -86,6 +86,7 @@ executor.
 | `hps-monitor` | `bin/hps-monitor run` | `run` |
 | `ips-syslog-forward` | `bin/hps-syslog-forward` | `<ipv4> <prefix>`, `off`, `show` |
 | `hps-repo` | `bin/hps-repo` | - (`seed` from the IPS's own cache only: a URL has a `/`; `--profiles a,b`) |
+| `hps-log` | `bin/hps-log` | `host`, `ips` (read-only: the newest syslog lines of a host or of the IPS, secret lines redacted; docs/LOGGING.md) |
 
 `ips-admin-exec` passes the arguments through (the tools validate their own)
 but only as conservative tokens: 1 to 256 characters of `A-Z a-z 0-9 _ . , :
