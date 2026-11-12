@@ -1,0 +1,107 @@
+#!/usr/bin/env perl
+# hps-repo: the operator verbs of the site repository (HPS::Repo,
+# docs/REPOSITORY.md). IPS tool and ips-admin script.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::Repo;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-repo: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-repo status [--log N] [--json]
+  hps-repo update [--source SHA256] [--profiles a,b] [--input NAME=SHA256]... [--wait SECONDS]
+  hps-repo build  [--source SHA256] [--profiles a,b] [--input NAME=SHA256]... [--wait SECONDS]
+  hps-repo seed   [--from ips|http://<host>[:port]/<path>] [--paths FILE] [--wait SECONDS]
+The site repository is on the host named by the cluster key repo_host (refused
+when unset); the node scripts run there through the dispatcher.
+  status  the repository: its public key (stored as the cluster key
+          repo_nix_pubkey when that is empty; a different key is reported and
+          exits 3), its cache (paths, signed, unsigned), the packages HPS built,
+          the pins, the last job, inputs with newer releases
+  update  fill the repository from upstream through the site's egress for the
+          source tree (default: this IPS's own, published now with
+          hps-cnh-publish --source-only): every path the builds would fetch and
+          every fixed-output input (sources, Go modules); no image is built
+  build   build the pins from the repository and the builder's store alone
+          (and upstream too when the cluster key repo_upstream is true); what
+          the build fetched or produced is signed into the repository
+  seed    import a binary cache into the repository: --from ips (default) is
+          this IPS's /nix-cache/ (its store paths listed from
+          <resources>/nix-cache); another cache needs --paths FILE
+  --input NAME=SHA256   ctrl-exec or ctrl-exec-plugins from packages/builder/
+  --wait SECONDS        poll status until the job ends (default: start it and
+                        return; follow it with hps-repo status)
+Last line: REPO-STARTED mode=<verb> id=<id> host=<host>, then with --wait
+REPO-DONE mode=<verb> id=<id> result=<ok|failed>; status prints REPO ... last.
+Exit: 0 ok, 1 failed, 2 usage, 3 refused, 4 not found.
+USAGE
+    return 2;
+}
+
+sub run_verb {
+    my ($verb, @argv) = @_;
+    my ($log, $json, $source, $profiles, @inputs, $wait, $from, $paths);
+    GetOptionsFromArray(\@argv, 'log=s' => \$log, 'json' => \$json, 'source=s' => \$source,
+        'profiles=s' => \$profiles, 'input=s' => \@inputs, 'wait=s' => \$wait,
+        'from=s' => \$from, 'paths=s' => \$paths) or return usage();
+    return usage('unexpected arguments: ' . join(' ', @argv)) if @argv;
+    return usage('--wait must be 1 to 86400 seconds') if defined $wait && !($wait =~ /\A[0-9]+\z/ && $wait >= 1 && $wait <= 86400);
+    my $repo = HPS::Repo->new;
+    if ($verb eq 'status') {
+        return usage('status takes --log and --json only') if grep {defined} $source, $profiles, $wait, $from, $paths or @inputs;
+        my $s = $repo->status(log => $log // 20);
+        if ($json) {
+            print JSON::PP->new->canonical->pretty->encode({ %{ $s->{fields} }, pubkey => $s->{pubkey},
+                key_state => $s->{key_state}, repo_nix_pubkey => $s->{stored} });
+        } else {
+            print $s->{output};
+            print "repo_nix_pubkey: " . ($s->{stored} // '(unset)') . " ($s->{key_state})\n";
+        }
+        if ($s->{key_state} eq 'mismatch') {
+            print STDERR "hps-repo: the repository's key ($s->{pubkey}) is not the cluster key repo_nix_pubkey ($s->{stored}): "
+                . "a new repository or a replaced disk. Check it, then clear repo_nix_pubkey to store the new key.\n";
+            return 3;
+        }
+        return 0;
+    }
+    if ($verb eq 'seed') {
+        return usage('seed takes --from, --paths and --wait') if grep {defined} $source, $profiles, $log, $json or @inputs;
+    } else {
+        return usage("$verb takes --source, --profiles, --input and --wait") if grep {defined} $from, $paths, $log, $json;
+    }
+    my $j = $repo->start($verb, source => $source, profiles => $profiles, inputs => \@inputs, from => $from, paths => $paths);
+    my @shown = grep { /started|refused/ } split /\n/, ($j->{output} // '');
+    print "$_\n" for @shown;
+    print "REPO-STARTED mode=$verb id=$j->{id} host=$j->{host}\n";
+    return 0 unless defined $wait;
+    my $w = $repo->wait_job($verb, $j->{id}, timeout => $wait, log => 40);
+    print $w->{status}{output} if $w->{result} ne 'ok';
+    print "REPO-DONE mode=$verb id=$j->{id} result=$w->{result}\n";
+    return $w->{result} eq 'ok' ? 0 : 1;
+}
+
+sub main {
+    my @argv = @_;
+    my $verb = shift @argv // return usage('a verb is required');
+    if ($verb eq '--help' || $verb eq '-h' || $verb eq 'help') { usage(); return 0 }
+    return usage("unknown verb '$verb'") unless $verb =~ /\A(?:status|update|build|seed)\z/;
+    my $rc = eval { run_verb($verb, @argv) };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->can('message')) {
+        print STDERR 'hps-repo: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-repo: $err";
+    return 1;
+}
+
+exit main(@ARGV);

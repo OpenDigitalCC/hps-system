@@ -12,6 +12,33 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Site repository, stage 1: on the builder's disk, signed (2026-11-12)
+
+- new: the site repository (docs/REPOSITORY.md, plans/ips-repository.md),
+  for now the builder's disk: a signed Nix binary cache in
+  `/var/lib/hps-builder/repo/nix-cache` (zstd), served read-only on port 8091
+  by `hps-repo-http` with its public key `repo.pub`; pins stay in `out/` on
+  8090. The signing key is made on the node at first use and stays in
+  `/var/lib/hps-builder/keys` (never served).
+- new: node scripts `repo-seed <ips|url> <paths-sha256>` (import a binary
+  cache: NARs checked against their narinfo hashes on import, re-hashed with
+  `nix store verify --no-trust`, then signed; `--no-check-sigs` for this
+  import only), `repo-update <source-sha256>` (through the egress proxy:
+  substitute what the builds would fetch, build only the fixed-output inputs,
+  name the hosts of a failed fetch, report pinned inputs with a newer release
+  tag) and `repo-status` (key, cache counts, the packages HPS built with their
+  signature, pins, last job, newer inputs).
+- changed: `builder-build` builds from the repository and the local store
+  alone, with no proxy, unless `--upstream`; whatever the build fetched or
+  produced is signed into the repository, after a failed build too.
+  `hps-builder-run` takes `--mode build|update|seed`; `nix/build.sh` appends
+  `BUILD_CACHE_PARAMS` to its cache URL.
+- new: IPS tool and ips-admin script `hps-repo status|seed|update|build`
+  (`HPS::Repo`), on the host of the cluster key `repo_host` (refused when
+  unset); status stores the repository key as `repo_nix_pubkey` when empty
+  and refuses a different one; `repo_upstream` (default false) lets repo build
+  use upstream.
+
 ## Image builder on a cluster node; published files proved on disk (2026-11-12)
 
 - new: Nix profile `node-builder` (`nix/modules/profiles/builder.nix`, role

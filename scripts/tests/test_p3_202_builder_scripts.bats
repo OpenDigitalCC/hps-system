@@ -165,11 +165,11 @@ SHIM
   a_runner
   run bash "$S/builder-build" "$SUM"
   [ "$status" -eq 0 ]
-  [[ "${lines[-1]}" =~ ^BUILDER-BUILD\ started\ id=[0-9]{8}T[0-9]{6}Z\ source=${SUM:0:16}\ unit=hps-builder-build\ log=$MNT/state/build-[0-9T]+Z\.log$ ]]
+  [[ "${lines[-1]}" =~ ^BUILDER-BUILD\ started\ id=[0-9]{8}T[0-9]{6}Z\ source=${SUM:0:16}\ upstream=no\ unit=hps-builder-build\ log=$MNT/state/build-[0-9T]+Z\.log$ ]]
   grep -qE "^curl .*--noproxy \* .*http://10\.99\.1\.1/packages/cnh/hps-system-${SUM:0:16}\.tar\.gz$" "$SHIM_LOG"
   [ -f "$MNT/src/${SUM:0:16}/flake.nix" ]
   [ "$(cat "$MNT/src/${SUM:0:16}/.sha256")" = "$SUM" ]
-  grep -qE "^systemd-run --quiet --collect --unit hps-builder-build --description HPS image build [0-9T]+Z --setenv PATH=.* -- $HPS_BUILDER_RUN --id [0-9T]+Z --src $MNT/src/${SUM:0:16}$" "$SHIM_LOG"
+  grep -qE "^systemd-run --quiet --collect --unit hps-builder-build --description HPS image build [0-9T]+Z --setenv PATH=.* -- $HPS_BUILDER_RUN --id [0-9T]+Z --mode build --src $MNT/src/${SUM:0:16}$" "$SHIM_LOG"
   # an unpacked source is used again, not fetched twice
   : > "$SHIM_LOG"
   run bash "$S/builder-build" "$SUM" --profiles "node-base node-builder"
@@ -259,7 +259,15 @@ EOF
 echo "nix $*" >> "$SHIM_LOG"
 exit "${FAKE_COPY_RC:-0}"
 SHIM
-  chmod +x "$TEST_DIR/bin/nix"
+  cat > "$TEST_DIR/bin/nix-store" <<'SHIM'
+#!/usr/bin/env bash
+echo "nix-store $*" >> "$SHIM_LOG"
+if [[ "$1" == --generate-binary-cache-key ]]; then
+  echo "$2:c2VjcmV0" > "$3"
+  echo "$2:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" > "$4"
+fi
+SHIM
+  chmod +x "$TEST_DIR/bin/nix" "$TEST_DIR/bin/nix-store"
   export HPS_BUILDER_NO_NS=1
   export HPS_BUILDER_SYSTEM="$TEST_DIR/system"
 }
@@ -268,27 +276,29 @@ SHIM
   p3_202_prepared
   a_build_tree
   echo "BOOT_IMAGE=bzImage hps.ips=10.99.1.1 hps.proxy=http://10.99.1.2:3128 hps.profile=node-builder" > "$HPS_CMDLINE"
-  run bash "$B/hps-builder-run.sh" --id 20261112T070000Z --src "$MNT/src/s1" --profiles "node-base" --input "ctrl-exec=$MNT/inputs/ce"
+  run bash "$B/hps-builder-run.sh" --id 20261112T070000Z --src "$MNT/src/s1" --profiles "node-base" --input "ctrl-exec=$MNT/inputs/ce" --upstream
   [ "$status" -eq 0 ]
   grep -qxF "nix --extra-experimental-features nix-command flakes copy --no-check-sigs --to local?root=$MNT/root $TEST_DIR/system" "$SHIM_LOG"
-  grep -qxF "build.sh --src $MNT/src/s1 --out $MNT/out --cache $MNT/cache --profiles node-base" "$SHIM_LOG"
+  grep -qxF "build.sh --src $MNT/src/s1 --out $MNT/out --cache $MNT/repo/nix-cache --profiles node-base" "$SHIM_LOG"
   grep -qxF "env https_proxy=http://10.99.1.2:3128 no_proxy=10.99.1.1,localhost,127.0.0.1 NIX_REMOTE=local CTRL_EXEC_FLAKE=path:$MNT/inputs/ce TMPDIR=$MNT/tmp/20261112T070000Z" "$SHIM_LOG"
   jq -e '.id == "20261112T070000Z" and .state == "ok" and .rc == 0 and .pin == "nixos-26.05-20261112-0123456-abcdef0" and (.seconds | type == "number") and .finished_at != null' "$MNT/state/last.json"
   cmp "$MNT/state/last.json" "$MNT/state/20261112T070000Z.json"
-  grep -q 'build 20261112T070000Z ok: pin nixos-26.05-20261112-0123456-abcdef0' "$MNT/state/build-20261112T070000Z.log"
+  grep -q 'job 20261112T070000Z (build) ok: pin nixos-26.05-20261112-0123456-abcdef0' "$MNT/state/build-20261112T070000Z.log"
   grep -q 'egress through http://10.99.1.2:3128' "$MNT/state/build-20261112T070000Z.log"
   grep -q '^+ bash .*/nix/build.sh' "$MNT/state/build-20261112T070000Z.log"
   [ ! -e "$MNT/tmp/20261112T070000Z" ]
 }
 
-@test "run: a failing build is recorded failed with its exit status; without hps.proxy no proxy is set" {
+@test "run: a failing build is recorded failed with its exit status; without --upstream no proxy is set" {
   p3_202_prepared
   a_build_tree
   FAKE_BUILD_RC=4 run bash "$B/hps-builder-run.sh" --id 20261112T070000Z --src "$MNT/src/s1"
   [ "$status" -eq 4 ]
   jq -e '.state == "failed" and .rc == 4 and .pin == null' "$MNT/state/last.json"
-  grep -q 'no hps.proxy= on the kernel command line' "$MNT/state/build-20261112T070000Z.log"
+  grep -q 'no upstream: no proxy set' "$MNT/state/build-20261112T070000Z.log"
   grep -q '^env https_proxy= ' "$SHIM_LOG"
+  FAKE_BUILD_RC=4 run bash "$B/hps-builder-run.sh" --id 20261112T070001Z --src "$MNT/src/s1" --upstream
+  grep -q 'no hps.proxy= on the kernel command line' "$MNT/state/build-20261112T070001Z.log"
 }
 
 @test "run: a failed closure copy fails the build before build.sh" {

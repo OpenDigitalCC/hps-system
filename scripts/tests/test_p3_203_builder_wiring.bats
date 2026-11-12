@@ -13,7 +13,7 @@ SD="$ROOT/node-manager/nixos-26/scripts"
 BD="$ROOT/node-manager/nixos-26/boot"
 BLD="$ROOT/nix/modules/profiles/builder.nix"
 CTRL="$ROOT/nix/modules/hps-ctrl-exec.nix"
-SCRIPTS="builder-disk-prepare builder-build builder-status"
+SCRIPTS="builder-disk-prepare builder-build builder-status repo-seed repo-update repo-status"
 BOOT="hps-builder-mount.sh hps-builder-run.sh"
 
 nix_code() {
@@ -34,7 +34,7 @@ nix_code() {
     run ! grep -q "$s" "$CTRL"
     run ! grep -q "$s" "$ROOT/nix/modules/profiles/container-host.nix"
   done
-  [ "$(grep -cE '^      [a-z-]+\.source = ' "$BLD")" -eq 3 ]
+  [ "$(grep -cE '^      [a-z-]+\.source = ' "$BLD")" -eq 6 ]
 }
 
 @test "the boot units: hps-builder-mount before the server; the server reads out/ only, when the disk is mounted, on the opened port" {
@@ -50,7 +50,7 @@ nix_code() {
   [[ "$hblock" == *'ReadOnlyPaths = [ "/var/lib/hps-builder/out" ];'* ]]
   [[ "$hblock" == *'darkhttpd /var/lib/hps-builder/out --port ${toString httpPort} --no-listing'* ]]
   grep -q '^  httpPort = 8090;' "$BLD"
-  grep -q 'networking.firewall.allowedTCPPorts = \[ httpPort \];' "$BLD"
+  grep -q 'networking.firewall.allowedTCPPorts = \[ httpPort repoPort \];' "$BLD"
 }
 
 @test "the tools the scripts and the runner call are on the system path" {
@@ -138,7 +138,8 @@ boot_setup() {
     run ! grep -nE 'password|PRIVATE KEY|secret=' "$f"
     # the loopback address in no_proxy is no lab address
     run ! bash -c "grep -v 127.0.0.1 '$f' | grep -nE '(^|[^0-9.])[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}([^0-9]|\$)'"
-    run ! grep -nEi '[a-z0-9-]+\.(com|net|org|io|eu|uk|lan|local|internal)([^a-z]|$)' "$f"
+    # the one public name: GitHub's API, for the release check of repo update
+    run ! bash -c "grep -v 'https://api.github.com' '$f' | grep -nEi '[a-z0-9-]+\.(com|net|org|io|eu|uk|lan|local|internal)([^a-z]|\$)'"
   done
 }
 
@@ -150,12 +151,16 @@ boot_setup() {
       *) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E 'mkfs'" ;;
     esac
     case "$s" in
-      builder-build) nix_code "$SD/$s" | grep -E '(^|[ (])curl ' | grep -q -- "--noproxy '\*'" ;;
+      builder-build | repo-update | repo-seed) nix_code "$SD/$s" | grep -E '(^|[ (])curl ' | grep -q -- "--noproxy '\*'" ;;
       *) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])curl '" ;;
     esac
     run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])(zpool|zfs|mdadm|wipefs|dd|sgdisk|parted)[ ]'"
   done
-  run ! bash -c "grep -v '^[[:space:]]*#' '$BD/hps-builder-run.sh' | grep -E '(^|[ (])(mkfs|curl|zpool|mdadm|wipefs)[ .]'"
+  run ! bash -c "grep -v '^[[:space:]]*#' '$BD/hps-builder-run.sh' | grep -E '(^|[ (])(mkfs|zpool|mdadm|wipefs)[ .]'"
+  # the runner's one curl: GitHub's tags API over https, for repo update
+  [ "$(nix_code "$BD/hps-builder-run.sh" | grep -cE '(^|[ (])curl ')" -eq 1 ]
+  nix_code "$BD/hps-builder-run.sh" | grep -A1 -E '(^|[ (])curl ' | grep -q '"$HPS_GITHUB_API/repos/'
+  nix_code "$BD/hps-builder-run.sh" | grep -E '(^|[ (])curl ' | grep -q -- '--proto =https'
   # the build runs only through the transient unit
   nix_code "$SD/builder-build" | grep -q 'run systemd-run --quiet --collect --unit "\$UNIT"'
 }

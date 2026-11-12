@@ -26,6 +26,12 @@
 #  - hps-builder-http: darkhttpd serving /var/lib/hps-builder/out read-only on
 #    port 8090 (GET only, no listing), from which the IPS pulls a pin with
 #    hps-pin-fetch
+#  - the site repository (docs/REPOSITORY.md), on the same disk for now: a
+#    signed Nix binary cache in /var/lib/hps-builder/repo/nix-cache (the key
+#    made on this node at first use; the secret in /var/lib/hps-builder/keys,
+#    never served) and the public key repo/repo.pub, served read-only on port
+#    8091 by hps-repo-http; the pins are out/ on 8090. Builds substitute from
+#    it and write back to it (repo build, repo update, repo seed)
 #  - the builder node scripts, allowlisted here and so ONLY on this image
 #
 # Nothing here holds a secret, an image name, a disk, an interface or an address.
@@ -42,6 +48,7 @@ let
     text = builtins.readFile file;
   };
   httpPort = 8090;
+  repoPort = 8091;
 in
 {
   imports = [ ../hps-node.nix ];
@@ -98,10 +105,45 @@ in
       PrivateTmp = true;
       NoNewPrivileges = true;
       ReadOnlyPaths = [ "/var/lib/hps-builder/out" ];
+      InaccessiblePaths = [ "-/var/lib/hps-builder/keys" ];
       ExecStart = "${pkgs.darkhttpd}/bin/darkhttpd /var/lib/hps-builder/out --port ${toString httpPort} --no-listing --no-server-id";
     };
   };
-  networking.firewall.allowedTCPPorts = [ httpPort ];
+
+  # ---- the site repository, read-only over HTTP --------------------------------
+  # /nix-cache/ (the signed binary cache) and /repo.pub. The signing key is
+  # outside the served tree and hidden from the server.
+  systemd.services.hps-repo-http = {
+    description = "HPS: serve the site repository read-only (darkhttpd)";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "network-online.target" "hps-builder-mount.service" ];
+    wants = [ "network-online.target" ];
+    unitConfig = {
+      ConditionPathIsMountPoint = "/var/lib/hps-builder";
+      ConditionPathIsDirectory = "/var/lib/hps-builder/repo";
+      RequiresMountsFor = "/var/lib/hps-builder";
+    };
+    serviceConfig = {
+      Type = "simple";
+      Restart = "on-failure";
+      RestartSec = 10;
+      DynamicUser = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+      ReadOnlyPaths = [ "/var/lib/hps-builder/repo" ];
+      InaccessiblePaths = [ "-/var/lib/hps-builder/keys" ];
+      ExecStart = "${pkgs.darkhttpd}/bin/darkhttpd /var/lib/hps-builder/repo --port ${toString repoPort} --no-listing --no-server-id";
+    };
+  };
+  # The repository directory appears with the first job; start the server then.
+  systemd.paths.hps-repo-http = {
+    description = "HPS: start hps-repo-http when the site repository appears";
+    wantedBy = [ "multi-user.target" ];
+    pathConfig.PathExists = "/var/lib/hps-builder/repo/nix-cache/nix-cache-info";
+  };
+  networking.firewall.allowedTCPPorts = [ httpPort repoPort ];
 
   # ---- builder node scripts, this image only ---------------------------------
   services.ctrl-exec-agent.scripts = {
@@ -111,6 +153,12 @@ in
       builder-build.options.profile = "node";
       builder-status.source = mkScript "builder-status" (scriptsDir + "/builder-status");
       builder-status.options.profile = "node";
+      repo-seed.source = mkScript "repo-seed" (scriptsDir + "/repo-seed");
+      repo-seed.options.profile = "node";
+      repo-update.source = mkScript "repo-update" (scriptsDir + "/repo-update");
+      repo-update.options.profile = "node";
+      repo-status.source = mkScript "repo-status" (scriptsDir + "/repo-status");
+      repo-status.options.profile = "node";
   };
 
   # What the scripts and the runner call, on the agent's scriptPath (the
@@ -126,6 +174,7 @@ in
     findutils
     gnused
     gnugrep
+    gawk # repo-status, the runner: narinfo tables
     darkhttpd
   ];
 }

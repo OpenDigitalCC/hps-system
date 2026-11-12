@@ -70,7 +70,7 @@ BIN=""
 INPUT=0
 PREFIX=()
 case "$TOOL" in
-  hps-onboard | hps-cluster-config | hps-node | hps-storage | hps-workload | hps-pins | hps-ips-check | hps-osvc)
+  hps-onboard | hps-cluster-config | hps-node | hps-storage | hps-workload | hps-pins | hps-ips-check | hps-osvc | hps-repo)
     BIN="$TOOL" ;;
   hps-bmc)
     BIN=hps-bmc

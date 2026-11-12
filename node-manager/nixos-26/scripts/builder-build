@@ -4,7 +4,7 @@
 #
 # ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
 #
-# Usage: builder-build <source-sha256> [--profiles "a b ..."] [--input NAME=SHA256 ...]
+# Usage: builder-build <source-sha256> [--profiles "a b ..."] [--input NAME=SHA256 ...] [--upstream]
 #
 #   <source-sha256>  the sha256 of an hps-system tarball the IPS serves as
 #                    http://<hps.ips>/packages/cnh/hps-system-<first 16>.tar.gz
@@ -14,15 +14,20 @@
 #                    http://<hps.ips>/packages/builder/<NAME>-<first 16>.tar.gz;
 #                    NAME is ctrl-exec or ctrl-exec-plugins (build.sh's
 #                    CTRL_EXEC_FLAKE and CTRL_EXEC_PLUGINS_FLAKE)
+#   --upstream       also substitute from the system's caches (the NixOS cache)
+#                    through the egress proxy; without it the build uses the
+#                    site repository and the local store only (repo build,
+#                    docs/REPOSITORY.md). hps-repo passes it when the cluster
+#                    key repo_upstream is true.
 #
 # Each tarball is fetched straight from the IPS (never through the proxy),
 # checked against its sha256 and unpacked under /var/lib/hps-builder/src or
 # inputs; one already unpacked from the same sha256 is used again. Then the
 # build is started as the transient unit hps-builder-build (systemd-run, full
-# root), which runs /etc/hps/hps-builder-run: it returns at once. Follow it
+# root), which runs /etc/hps/hps-builder-run --mode build: it returns at once. Follow it
 # with builder-status. One build at a time: a running build refuses another.
 #
-# Last line: BUILDER-BUILD started id=<id> source=<sha16> unit=hps-builder-build log=<file>
+# Last line: BUILDER-BUILD started id=<id> source=<sha16> upstream=<yes|no> unit=hps-builder-build log=<file>
 # Exit: 0 started, 2 usage, 3 refused (no disk, busy, no IPS address, a sum
 # that does not match), 1 a command failed.
 #
@@ -41,6 +46,7 @@ UNIT=hps-builder-build
 SOURCE=""
 PROFILES=""
 INPUTS=()
+UPSTREAM=0
 IPS=""
 
 log() {
@@ -60,7 +66,7 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: builder-build <source-sha256> [--profiles "a b ..."] [--input NAME=SHA256 ...]
+Usage: builder-build <source-sha256> [--profiles "a b ..."] [--input NAME=SHA256 ...] [--upstream]
   NAME: ctrl-exec or ctrl-exec-plugins
 Exit: 0 started, 2 usage, 3 refused, 1 failed.
 USAGE
@@ -96,6 +102,10 @@ parse_args() {
         [[ $# -ge 2 ]] || { usage; exit 2; }
         INPUTS+=("$2")
         shift 2
+        ;;
+      --upstream)
+        UPSTREAM=1
+        shift
         ;;
       *)
         usage
@@ -170,7 +180,8 @@ main() {
   run mkdir -p -- "$MNT/src" "$MNT/inputs" "$MNT/state"
   fetch_tree "http://$IPS/packages/cnh/hps-system-${SOURCE:0:16}.tar.gz" "$SOURCE" "$src"
   [[ -f "$src/flake.nix" && -f "$src/nix/build.sh" ]] || refuse "the source $SOURCE holds no flake.nix and nix/build.sh"
-  args=(--id "$id" --src "$src")
+  args=(--id "$id" --mode build --src "$src")
+  [[ $UPSTREAM -eq 0 ]] || args+=(--upstream)
   [[ -z "$PROFILES" ]] || args+=(--profiles "$PROFILES")
   for i in "${INPUTS[@]}"; do
     name=${i%%=*}
@@ -183,7 +194,7 @@ main() {
   # holds no bash or nix; the agent's script path (the system profile) does.
   run systemd-run --quiet --collect --unit "$UNIT" --description "HPS image build $id" \
     --setenv "PATH=$PATH" -- "$HPS_BUILDER_RUN" "${args[@]}"
-  printf 'BUILDER-BUILD started id=%s source=%s unit=%s log=%s\n' "$id" "${SOURCE:0:16}" "$UNIT" "$log_file"
+  printf 'BUILDER-BUILD started id=%s source=%s upstream=%s unit=%s log=%s\n' "$id" "${SOURCE:0:16}" "$( [[ $UPSTREAM -eq 1 ]] && echo yes || echo no)" "$UNIT" "$log_file"
 }
 
 main "$@"

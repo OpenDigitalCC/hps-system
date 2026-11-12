@@ -254,6 +254,9 @@ keys may be empty.
 | `syslog_forward_host` | operator | Collector to forward every syslog message to over TCP 514 (empty: no forwarding; set by `ips-syslog-forward`) | `ip` | (empty) | no |
 | `syslog_forward_prefix` | operator | Host name prefix of the forwarded messages (`<prefix>.<hostname>`) | `regex:[a-z0-9][a-z0-9-]{0,31}` | (empty) | no |
 | `egress_proxy` | operator | HTTP proxy the image builder reaches the internet through, `http://<host>:<port>` (empty: none; `docs/BUILDER.md`) | `regex:http://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}` | (empty) | no |
+| `repo_host` | operator | The host that holds the site repository, its registry HOSTNAME or MAC (empty: none, `hps-repo` refuses; `docs/REPOSITORY.md`) | `regex:[A-Za-z0-9][A-Za-z0-9.:-]{0,62}` | (empty) | no |
+| `repo_nix_pubkey` | operator | The site repository's Nix cache public key, `<name>:<base64>` (`hps-repo status` stores it when empty) | `regex:[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[A-Za-z0-9+/]{43}=` | (empty) | no |
+| `repo_upstream` | operator | Whether repo build may also substitute from upstream caches through `egress_proxy` (false: the repository alone) | `bool` | `false` | no |
 
 ## Exit codes
 

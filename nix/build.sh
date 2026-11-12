@@ -36,7 +36,10 @@
 #            [--date YYYYMMDD]
 # Environment: CTRL_EXEC_FLAKE=<flakeref> overrides the ctrl-exec input
 # (--override-input ctrl-exec <flakeref>); CTRL_EXEC_PLUGINS_FLAKE the same for
-# the ctrl-exec-plugins input; BUILD_DATE as --date.
+# the ctrl-exec-plugins input; BUILD_DATE as --date; BUILD_CACHE_PARAMS is
+# appended to the cache URL (file://<cache>?<params>), so the builder signs and
+# compresses what it copies into its site repository (docs/REPOSITORY.md:
+# compression=zstd&secret-key=<file>).
 #
 # --no-cache proves the rebuild route: no substituters, and --rebuild on the
 # artefact derivation. A full from-source proof also needs a fresh /nix store
@@ -396,13 +399,18 @@ write_sums() {
   run mv -f "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS"
 }
 
+# cache_url: file://<cache>, with BUILD_CACHE_PARAMS as its query when set.
+cache_url() {
+  printf 'file://%s%s\n' "$CACHE" "${BUILD_CACHE_PARAMS:+?$BUILD_CACHE_PARAMS}"
+}
+
 cache_profile() {
   local link="$1"
   local toplevel
   toplevel=$(jq -r '.init' "$link/boot.json")
   toplevel="${toplevel%/init}"
   run mkdir -p "$CACHE"
-  run nix "${NIX_FLAGS[@]}" copy --to "file://$CACHE" "$toplevel"
+  run nix "${NIX_FLAGS[@]}" copy --to "$(cache_url)" "$toplevel"
 }
 
 WORK=""
@@ -454,7 +462,7 @@ main() {
     cache_profile "$link"
   done
   run mkdir -p "$CACHE"
-  run nix "${NIX_FLAGS[@]}" copy --to "file://$CACHE" "$(readlink -f "$WORK/result-ipxe")"
+  run nix "${NIX_FLAGS[@]}" copy --to "$(cache_url)" "$(readlink -f "$WORK/result-ipxe")"
   write_sums "$pin"
 
   printf '%s\n' "$pin" > "$OUT/latest.tmp"

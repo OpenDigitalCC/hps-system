@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#
+# repo-update - fill the site repository from upstream for one source tree
+# (repo update, docs/REPOSITORY.md). The repository lives on the builder disk.
+#
+# ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
+#
+# Usage: repo-update <source-sha256> [--profiles "a b ..."] [--input NAME=SHA256 ...]
+#
+#   <source-sha256>  the sha256 of an hps-system tarball the IPS serves as
+#                    http://<hps.ips>/packages/cnh/hps-system-<first 16>.tar.gz
+#   --profiles       the profiles to fill for (default: the source's build.sh list)
+#   --input NAME=SHA a flake input from http://<hps.ips>/packages/builder/<NAME>-<first 16>.tar.gz
+#                    (ctrl-exec or ctrl-exec-plugins), as builder-build
+#
+# The tarballs are fetched and checked as builder-build does. Then the job is
+# started as the transient unit hps-builder-build, which runs
+# /etc/hps/hps-builder-run --mode update: through the egress proxy it
+# substitutes every path the builds would fetch and builds every fixed-output
+# derivation they would build (sources, Go modules), builds no image, signs
+# all of it into the repository cache and reports each pinned GitHub input
+# with a newer release tag. It returns at once; follow it with repo-status.
+#
+# Last line: REPO-UPDATE started id=<id> source=<sha16> unit=hps-builder-build log=<file>
+# Exit: 0 started, 2 usage, 3 refused (no disk, busy, no IPS address, a sum
+# that does not match), 1 a command failed.
+#
+# Overrides for tests: HPS_BUILDER_ROOT (prefix of /var/lib/hps-builder),
+# HPS_CMDLINE (file read instead of /proc/cmdline), HPS_BUILDER_RUN (the
+# runner path).
+
+set -euo pipefail
+
+: "${HPS_BUILDER_ROOT:=}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_BUILDER_RUN:=/etc/hps/hps-builder-run}"
+
+MNT="$HPS_BUILDER_ROOT/var/lib/hps-builder"
+UNIT=hps-builder-build
+SOURCE=""
+PROFILES=""
+INPUTS=()
+IPS=""
+
+log() {
+  printf '[repo-update] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: repo-update <source-sha256> [--profiles "a b ..."] [--input NAME=SHA256 ...]
+  NAME: ctrl-exec or ctrl-exec-plugins
+Exit: 0 started, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+parse_args() {
+  if [[ $# -lt 1 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  SOURCE=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --profiles)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        PROFILES=$2
+        shift 2
+        ;;
+      --input)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        INPUTS+=("$2")
+        shift 2
+        ;;
+      *)
+        usage
+        exit 2
+        ;;
+    esac
+  done
+}
+
+check_args() {
+  local p i name
+  [[ "$SOURCE" =~ ^[0-9a-f]{64}$ ]] || refuse "source sha256 is not 64 lowercase hex digits"
+  if [[ -n "$PROFILES" ]]; then
+    for p in $PROFILES; do
+      [[ "$p" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || refuse "profile '$p' is not a plain profile name"
+    done
+  fi
+  for i in "${INPUTS[@]}"; do
+    [[ "$i" =~ ^(ctrl-exec|ctrl-exec-plugins)=[0-9a-f]{64}$ ]] || refuse "input '$i' is not ctrl-exec=<sha256> or ctrl-exec-plugins=<sha256>"
+  done
+  for name in ctrl-exec ctrl-exec-plugins; do
+    [[ $(printf '%s\n' "${INPUTS[@]}" | grep -c "^$name=") -le 1 ]] || refuse "input $name given twice"
+  done
+  IPS=$(cmdline_value hps.ips || true)
+  [[ "$IPS" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || refuse "no hps.ips=<address> on the kernel command line: the IPS address is unknown"
+  [[ -n "$(run findmnt -n -o SOURCE --mountpoint "$MNT" || true)" ]] || refuse "$MNT is not mounted: run builder-disk-prepare <device> first"
+}
+
+check_idle() {
+  local state
+  state=$(run systemctl show -p ActiveState --value "$UNIT.service" || true)
+  case "$state" in
+    active | activating | deactivating | reloading) refuse "a job is running ($UNIT is $state): see repo-status" ;;
+  esac
+}
+
+# fetch_tree <url> <sha256> <dir>: <dir> holds the unpacked tarball. A dir
+# with a .sha256 file naming <sha256> is complete and used again.
+fetch_tree() {
+  local url="$1" sum="$2" dir="$3" part got
+  if [[ -f "$dir/.sha256" && "$(cat "$dir/.sha256")" == "$sum" ]]; then
+    log "$dir is unpacked from $sum already"
+    return 0
+  fi
+  part="$dir.part.tar.gz"
+  run rm -rf -- "$dir" "$dir.unpack" "$part"
+  if ! run curl --fail --silent --show-error --noproxy '*' --proto =http --max-redirs 0 --output "$part" "$url"; then
+    run rm -f -- "$part"
+    log "fetch of $url failed"
+    exit 1
+  fi
+  got=$(run sha256sum -- "$part" | cut -d' ' -f1)
+  if [[ "$got" != "$sum" ]]; then
+    run rm -f -- "$part"
+    refuse "$url has sha256 $got, not $sum"
+  fi
+  run mkdir -p -- "$dir.unpack"
+  run tar -xzf "$part" -C "$dir.unpack" --no-same-owner
+  printf '%s\n' "$sum" > "$dir.unpack/.sha256"
+  run mv -- "$dir.unpack" "$dir"
+  run rm -f -- "$part"
+}
+
+main() {
+  local id src log_file i name sum
+  local -a args=()
+  parse_args "$@"
+  check_args
+  check_idle
+  id=$(date -u +%Y%m%dT%H%M%SZ)
+  src="$MNT/src/${SOURCE:0:16}"
+  run mkdir -p -- "$MNT/src" "$MNT/inputs" "$MNT/state"
+  fetch_tree "http://$IPS/packages/cnh/hps-system-${SOURCE:0:16}.tar.gz" "$SOURCE" "$src"
+  [[ -f "$src/flake.nix" && -f "$src/nix/build.sh" ]] || refuse "the source $SOURCE holds no flake.nix and nix/build.sh"
+  args=(--id "$id" --mode update --src "$src")
+  [[ -z "$PROFILES" ]] || args+=(--profiles "$PROFILES")
+  for i in "${INPUTS[@]}"; do
+    name=${i%%=*}
+    sum=${i#*=}
+    fetch_tree "http://$IPS/packages/builder/$name-${sum:0:16}.tar.gz" "$sum" "$MNT/inputs/$name-${sum:0:16}"
+    args+=(--input "$name=$MNT/inputs/$name-${sum:0:16}")
+  done
+  log_file="$MNT/state/build-$id.log"
+  # PATH: the transient unit would get systemd's default, which on NixOS
+  # holds no bash or nix; the agent's script path (the system profile) does.
+  run systemd-run --quiet --collect --unit "$UNIT" --description "HPS repo update $id" \
+    --setenv "PATH=$PATH" -- "$HPS_BUILDER_RUN" "${args[@]}"
+  printf 'REPO-UPDATE started id=%s source=%s unit=%s log=%s\n' "$id" "${SOURCE:0:16}" "$UNIT" "$log_file"
+}
+
+main "$@"

@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+#
+# repo-seed - import a Nix binary cache into the site repository (repo seed,
+# docs/REPOSITORY.md). The repository lives on the builder disk.
+#
+# ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
+#
+# Usage: repo-seed <from> <paths-sha256>
+#
+#   <from>          ips (the IPS's own cache, http://<hps.ips>/nix-cache), or
+#                   http://<host>[:port]/<path> of another binary cache
+#   <paths-sha256>  the sha256 of the list of store paths to import, one per
+#                   line, which the IPS serves as
+#                   http://<hps.ips>/packages/repo/seed-<first 16>.txt
+#                   (hps-repo seed writes it)
+#
+# The list is fetched straight from the IPS (never through a proxy), checked
+# against its sha256 and line by line (/nix/store/<hash>-<name> only). Then the
+# job is started as the transient unit hps-builder-build, which runs
+# /etc/hps/hps-builder-run --mode seed: nix copy --no-check-sigs of every
+# listed path (each NAR checked against its narinfo NarHash and NarSize on
+# import), nix store verify --no-trust (every imported path hashed again),
+# then every path signed into the repository cache with the repository key.
+# It returns at once; follow it with repo-status.
+#
+# Last line: REPO-SEED started id=<id> from=<url> paths=<n> unit=hps-builder-build log=<file>
+# Exit: 0 started, 2 usage, 3 refused (no disk, busy, no IPS address, a sum
+# that does not match, a bad list), 1 a command failed.
+#
+# Overrides for tests: HPS_BUILDER_ROOT (prefix of /var/lib/hps-builder),
+# HPS_CMDLINE (file read instead of /proc/cmdline), HPS_BUILDER_RUN (the
+# runner path).
+
+set -euo pipefail
+
+: "${HPS_BUILDER_ROOT:=}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_BUILDER_RUN:=/etc/hps/hps-builder-run}"
+
+MNT="$HPS_BUILDER_ROOT/var/lib/hps-builder"
+UNIT=hps-builder-build
+FROM=""
+SUM=""
+IPS=""
+
+log() {
+  printf '[repo-seed] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: repo-seed <ips|http://host[:port]/path> <paths-sha256>
+Exit: 0 started, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+check_args() {
+  IPS=$(cmdline_value hps.ips || true)
+  [[ "$IPS" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || refuse "no hps.ips=<address> on the kernel command line: the IPS address is unknown"
+  if [[ "$FROM" == ips ]]; then
+    FROM="http://$IPS/nix-cache"
+  fi
+  [[ "$FROM" =~ ^http://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)*/?$ && "$FROM" != *..* ]] ||
+    refuse "from '$FROM' is not ips or http://<host>[:port]/<path>"
+  [[ "$SUM" =~ ^[0-9a-f]{64}$ ]] || refuse "paths sha256 is not 64 lowercase hex digits"
+  [[ -n "$(run findmnt -n -o SOURCE --mountpoint "$MNT" || true)" ]] || refuse "$MNT is not mounted: run builder-disk-prepare <device> first"
+}
+
+check_idle() {
+  local state
+  state=$(run systemctl show -p ActiveState --value "$UNIT.service" || true)
+  case "$state" in
+    active | activating | deactivating | reloading) refuse "a job is running ($UNIT is $state): see repo-status" ;;
+  esac
+}
+
+# fetch_list <file>: the path list, checked against SUM and line by line.
+fetch_list() {
+  local file="$1" url got bad
+  url="http://$IPS/packages/repo/seed-${SUM:0:16}.txt"
+  run rm -f -- "$file.part"
+  if ! run curl --fail --silent --show-error --noproxy '*' --proto =http --max-redirs 0 --output "$file.part" "$url"; then
+    run rm -f -- "$file.part"
+    log "fetch of $url failed"
+    exit 1
+  fi
+  got=$(run sha256sum -- "$file.part" | cut -d' ' -f1)
+  if [[ "$got" != "$SUM" ]]; then
+    run rm -f -- "$file.part"
+    refuse "$url has sha256 $got, not $SUM"
+  fi
+  bad=$(grep -cvE '^/nix/store/[0-9a-df-np-sv-z]{32}-[A-Za-z0-9+._?=-]+$' "$file.part" || true)
+  if [[ "$bad" -ne 0 || ! -s "$file.part" ]]; then
+    run rm -f -- "$file.part"
+    refuse "$url holds $bad line(s) that are not a store path (or none at all)"
+  fi
+  run mv -f -- "$file.part" "$file"
+}
+
+main() {
+  local id list n
+  if [[ $# -ne 2 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  FROM=$1
+  SUM=$2
+  check_args
+  check_idle
+  id=$(date -u +%Y%m%dT%H%M%SZ)
+  run mkdir -p -- "$MNT/state"
+  list="$MNT/state/seed-${SUM:0:16}.txt"
+  fetch_list "$list"
+  n=$(wc -l < "$list")
+  # PATH: the transient unit would get systemd's default, which on NixOS
+  # holds no bash or nix; the agent's script path (the system profile) does.
+  run systemd-run --quiet --collect --unit "$UNIT" --description "HPS repo seed $id" \
+    --setenv "PATH=$PATH" -- "$HPS_BUILDER_RUN" --id "$id" --mode seed --from "$FROM" --paths "$list"
+  printf 'REPO-SEED started id=%s from=%s paths=%s unit=%s log=%s\n' "$id" "$FROM" "$n" "$UNIT" "$MNT/state/build-$id.log"
+}
+
+main "$@"

@@ -173,6 +173,16 @@ my @CATALOGUE = (
     _q(key => 'egress_proxy', group => 'operator', menu => 0,
         prompt => 'HTTP proxy the image builder reaches the internet through, http://<host>:<port> (empty: none)',
         rule => 'regex:http://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}', default => ''),
+    # The site repository (docs/REPOSITORY.md): hps-repo drives it.
+    _q(key => 'repo_host', group => 'operator', menu => 0,
+        prompt => 'The host that holds the site repository (its registry HOSTNAME or MAC; empty: none, hps-repo refuses)',
+        rule => 'regex:[A-Za-z0-9][A-Za-z0-9.:-]{0,62}', default => ''),
+    _q(key => 'repo_nix_pubkey', group => 'operator', menu => 0,
+        prompt => 'The site repository\'s Nix cache public key, <name>:<base64> (hps-repo status stores it when empty)',
+        rule => 'regex:[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[A-Za-z0-9+/]{43}=', default => ''),
+    _q(key => 'repo_upstream', group => 'operator', menu => 0,
+        prompt => 'Whether repo build may also substitute from upstream caches through egress_proxy (false: the repository alone)',
+        rule => 'bool', default => 'false'),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

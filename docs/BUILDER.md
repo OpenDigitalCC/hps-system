@@ -2,18 +2,20 @@
 
 A cluster node that builds the HPS netboot artefact sets (`nix/build.sh`) on
 its own local disk, so builds leave the development host and its shared disk.
-The IPS stays in control: it serves the builder the source, and it pulls each
-finished pin, proving every file on its own disk before publishing it.
+
+The builder's disk also holds the **site repository** (`docs/REPOSITORY.md`):
+the signed Nix binary cache builds substitute from and write back to, so a
+node can be built with no upstream.
 
 | what | value |
 | --- | --- |
 | host profile (`HOST_PROFILE`) | `BUILDER`, booting image `node-builder` |
 | registry role (`TYPE`) | `BLD` (`hps-onboard assign --type BLD`) |
 | Nix profile | `nix/modules/profiles/builder.nix` |
-| node scripts | `builder-disk-prepare`, `builder-build`, `builder-status` (profile `node`, this image only) |
-| boot units | `hps-builder-mount` (mount the disk by label), `hps-builder-http` (serve `out/`) |
+| node scripts | `builder-disk-prepare`, `builder-build`, `builder-status`, and the repository's `repo-seed`, `repo-update`, `repo-status` (profile `node`, this image only) |
+| boot units | `hps-builder-mount` (mount the disk by label), `hps-builder-http` (serve `out/` on 8090), `hps-repo-http` (serve `repo/` on 8091) |
 | build runner | `/etc/hps/hps-builder-run`, started by `builder-build` as the transient unit `hps-builder-build` |
-| IPS tools | `hps-cnh-publish --source-only` (the source tarball), `hps-pin-fetch` (pull a pin) |
+| IPS tools | `hps-cnh-publish --source-only` (the source tarball), `hps-pin-fetch` (pull a pin), `hps-repo` (the repository verbs) |
 | cluster key | `egress_proxy` (`http://<host>:<port>`), passed as `hps.proxy=` |
 
 ## The disk and the store
@@ -27,7 +29,9 @@ never formats:
 ```
 /var/lib/hps-builder/root/nix   the build store (store URI local?root=.../root)
 /var/lib/hps-builder/out        published pins, as build.sh --out writes them
-/var/lib/hps-builder/cache      the file binary cache (build.sh --cache)
+/var/lib/hps-builder/repo       the site repository: nix-cache/ (signed), repo.pub
+/var/lib/hps-builder/keys       the repository signing key (0700; never served)
+/var/lib/hps-builder/cache      the unsigned file cache of builds before the repository (no longer written)
 /var/lib/hps-builder/src        unpacked sources, one per sha256
 /var/lib/hps-builder/inputs     unpacked flake inputs (ctrl-exec, ctrl-exec-plugins)
 /var/lib/hps-builder/state      <id>.json, last.json, build-<id>.log
@@ -51,7 +55,9 @@ ctrl-exec call.
 ## Egress
 
 The builder reaches the internet only through the proxy the IPS names on its
-kernel command line: the cluster key `egress_proxy` becomes `hps.proxy=` on
+kernel command line, and only for `repo-update` and a build with `--upstream`
+(cluster key `repo_upstream`); a plain build uses the site repository alone
+and sets no proxy (`docs/REPOSITORY.md`). The proxy: the cluster key `egress_proxy` becomes `hps.proxy=` on
 the `node-builder` image only (a value that is not `http://<host>:<port>` is
 logged and left out). `hps-builder-run` sets `https_proxy` (and `http_proxy`)
 from it for nix and the build; `no_proxy` holds the IPS address. Fetches from
@@ -68,7 +74,7 @@ modules (not in the NixOS cache), `proxy.golang.org` and `sum.golang.org`.
 # IPS: the source tarball (no manifest; latest untouched)
 hps-cnh-publish --source-only                         # SOURCE <sha256> packages/cnh/hps-system-<sha16>.tar.gz
 # builder: fetch, check, unpack, start
-builder-build <sha256> [--profiles "a b"] [--input ctrl-exec=<sha256>] [--input ctrl-exec-plugins=<sha256>]
+builder-build <sha256> [--profiles "a b"] [--input ctrl-exec=<sha256>] [--input ctrl-exec-plugins=<sha256>] [--upstream]
 builder-status [--log N]                              # ... BUILDER state=idle last=<id> result=ok pin=<pin> seconds=<n>
 # IPS: pull the pin, proved on disk
 hps-pin-fetch --from http://<builder>:8090 --pin <pin> [--latest] [--rate 40m]
@@ -77,7 +83,11 @@ hps-pin-fetch --from http://<builder>:8090 --pin <pin> [--latest] [--rate 40m]
 `builder-build` fetches `http://<hps.ips>/packages/cnh/hps-system-<sha16>.tar.gz`
 (and each `--input` from `packages/builder/<name>-<sha16>.tar.gz`), refuses a
 tarball whose sha256 is not the one given, unpacks it and starts the unit;
-one build at a time. The source's own `nix/build.sh` builds it.
+one job at a time. The source's own `nix/build.sh` builds it, with the site
+repository as its substituter and its cache (`--cache <repo>/nix-cache`,
+signed); then everything in the store is signed into the repository.
+`hps-repo build` on the IPS is the same call, through the cluster key
+`repo_host`.
 
 ## Publishing: the IPS pulls
 

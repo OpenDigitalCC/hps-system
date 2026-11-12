@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# repo-status - the site repository on this builder: its signing key, its
+# Nix cache, the packages HPS built, the pins, the last job and the inputs
+# with newer releases (docs/REPOSITORY.md).
+#
+# ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
+# Read-only: it writes nothing.
+#
+# Usage: repo-status [--log N]
+#
+#   --log N   print the last N lines of the last job's log (default 20,
+#             0 for none, at most 2000)
+#
+# Prints:
+#   REPO-PUBKEY <name>:<base64>   the repository's public key (hps-repo
+#                                 status stores it as the cluster key
+#                                 repo_nix_pubkey); absent until the first job
+#   cache: paths, signed by the repository key, unsigned, NAR bytes
+#   PACKAGE <name> <version> <store path> signed=<yes|no>
+#                                 every path HPS built itself (no signature of
+#                                 an upstream cache) whose name is one of
+#                                 HPS's own: om3 (and its Go modules),
+#                                 ctrl-exec*, hps-*
+#   pins under out/ (served on port 8090), the one in out/latest marked
+#   the last job's record, then INPUT lines from the last repo update
+#   (state/inputs.txt), then the tail of the last job's log
+#
+# Last line: REPO state=<idle|running|nodisk> key=<yes|no> paths=<n>
+#            signed=<n> unsigned=<n> packages=<n> pins=<n>
+#            last=<mode>:<id>:<result>|none newer=<n>
+# Exit: 0, 2 usage.
+#
+# Overrides for tests: HPS_BUILDER_ROOT (prefix of /var/lib/hps-builder).
+
+set -euo pipefail
+
+: "${HPS_BUILDER_ROOT:=}"
+
+MNT="$HPS_BUILDER_ROOT/var/lib/hps-builder"
+REPO="$MNT/repo"
+CACHE_DIR="$REPO/nix-cache"
+PUBLIC="$REPO/repo.pub"
+UNIT=hps-builder-build
+LINES=20
+# The names of HPS's own packages (the flake builds them; nixpkgs has none).
+OWN_RE='^(om3|ctrl-exec|hps-)'
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: repo-status [--log N]
+Exit: 0, 2 usage.
+USAGE
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# narinfo_table <key name>: one line per narinfo:
+#   <store path> <signed by key 0|1> <signed by another key 0|1> <FileSize>
+narinfo_table() {
+  find "$CACHE_DIR" -maxdepth 1 -name '*.narinfo' -print0 |
+    xargs -0 -r awk -v k="Sig: $1:" '
+      function out() { if (p != "") print p, s, o, (z == "" ? 0 : z) }
+      FNR == 1 { out(); p = ""; s = 0; o = 0; z = "" }
+      /^StorePath: / { p = $2 }
+      /^FileSize: / { z = $2 }
+      /^Sig: / { if (k != "Sig: :" && index($0, k) == 1) s = 1; else o = 1 }
+      END { out() }'
+}
+
+main() {
+  local src unit state="idle" last="none" key=no name="" pub="" rec latest="" p
+  local paths=0 signed=0 unsigned=0 bytes=0 packages=0 pins=0 newer=0 tab
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --log)
+        [[ $# -ge 2 && "$2" =~ ^[0-9]{1,4}$ && "$2" -le 2000 ]] || { usage; exit 2; }
+        LINES=$2
+        shift 2
+        ;;
+      *) usage; exit 2 ;;
+    esac
+  done
+  src=$(run findmnt -n -o SOURCE --mountpoint "$MNT" || true)
+  if [[ -z "$src" ]]; then
+    echo "disk: none mounted at $MNT (builder-disk-prepare <device>)"
+    state=nodisk
+  else
+    echo "repository: $REPO on $src (the site repository role of this builder)"
+  fi
+  unit=$(run systemctl show -p ActiveState --value "$UNIT.service" || true)
+  echo "unit: $UNIT ${unit:-unknown}"
+  case "$unit" in
+    active | activating | deactivating) state=running ;;
+  esac
+  if [[ -s "$PUBLIC" ]]; then
+    pub=$(head -1 "$PUBLIC")
+    name=${pub%%:*}
+    key=yes
+    echo "REPO-PUBKEY $pub"
+  else
+    echo "key: none yet (made at the first seed, update or build)"
+  fi
+  if [[ -d "$CACHE_DIR" ]]; then
+    tab=$(narinfo_table "$name")
+    if [[ -n "$tab" ]]; then
+      paths=$(printf '%s\n' "$tab" | wc -l)
+      signed=$(printf '%s\n' "$tab" | awk '$2 == 1' | wc -l)
+      bytes=$(printf '%s\n' "$tab" | awk '{ n += $4 } END { printf "%d", n }')
+    fi
+    unsigned=$((paths - signed))
+    echo "cache: $CACHE_DIR paths=$paths signed=$signed unsigned=$unsigned nar_bytes=$bytes (served on port 8091 as /nix-cache/)"
+    echo "packages built by HPS (no upstream signature):"
+    while read -r p s o _; do
+      [[ -n "$p" && "$o" == 0 ]] || continue
+      local base=${p#/nix/store/*-} pname version
+      [[ "$base" =~ $OWN_RE ]] || continue
+      pname=$(printf '%s\n' "$base" | sed -E 's/-[0-9].*$//')
+      version=${base#"$pname"}
+      version=${version#-}
+      echo "PACKAGE $pname ${version:--} $p signed=$([[ "$s" == 1 ]] && echo yes || echo no)"
+      packages=$((packages + 1))
+    done < <(printf '%s\n' "$tab" | sort)
+  else
+    echo "cache: none yet ($CACHE_DIR)"
+  fi
+  if [[ -d "$MNT/out" ]]; then
+    [[ -f "$MNT/out/latest" ]] && latest=$(cat "$MNT/out/latest")
+    echo "pins (served on port 8090):"
+    for p in "$MNT"/out/nixos-*; do
+      [[ -d "$p" ]] || continue
+      p=${p##*/}
+      pins=$((pins + 1))
+      if [[ "$p" == "$latest" ]]; then
+        echo "  $p (latest)"
+      else
+        echo "  $p"
+      fi
+    done
+  fi
+  rec="$MNT/state/last.json"
+  local id="" mode result
+  if [[ -f "$rec" ]]; then
+    echo "last job:"
+    jq -r 'to_entries[] | "  \(.key): \(.value // "-")"' "$rec"
+    id=$(jq -r '.id // "none"' "$rec")
+    mode=$(jq -r '.mode // "build"' "$rec")
+    result=$(jq -r '.state // "none"' "$rec")
+    if [[ "$result" == running && "$state" != running ]]; then
+      result=failed
+      echo "  (the record says running but no job runs: interrupted)"
+    fi
+    last="$mode:$id:$result"
+  fi
+  if [[ -f "$MNT/state/inputs.txt" ]]; then
+    echo "inputs (at the last repo update):"
+    cat "$MNT/state/inputs.txt"
+    newer=$(grep -c ' NEWER$' "$MNT/state/inputs.txt" || true)
+  fi
+  if [[ "$LINES" -gt 0 && -n "$id" && -f "$MNT/state/build-$id.log" ]]; then
+    echo "log (last $LINES lines of build-$id.log):"
+    tail -n "$LINES" "$MNT/state/build-$id.log" | sed 's/^/  /'
+  fi
+  printf 'REPO state=%s key=%s paths=%s signed=%s unsigned=%s packages=%s pins=%s last=%s newer=%s\n' \
+    "$state" "$key" "$paths" "$signed" "$unsigned" "$packages" "$pins" "$last" "$newer"
+}
+
+main "$@"
