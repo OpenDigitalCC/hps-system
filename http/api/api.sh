@@ -53,6 +53,7 @@ api_response() {
     403) echo "Status: 403 Forbidden" ;;
     404) echo "Status: 404 Not Found" ;;
     405) echo "Status: 405 Method Not Allowed" ;;
+    410) echo "Status: 410 Gone" ;;
     413) echo "Status: 413 Request Entity Too Large" ;;
     500) echo "Status: 500 Internal Server Error" ;;
     503) echo "Status: 503 Service Unavailable" ;;
@@ -288,6 +289,36 @@ api_net_after_pair() {
     hps_log error "$API_LOG_PREFIX net hook: could not queue net-up for $mac"
   fi
   return 0
+}
+
+#===============================================================================
+# api_pair_refusal <http code> <rc of ce_approve_pair_request>
+#===============================================================================
+# The answer to a pairing request that was not approved. The HTTP code tells
+# the node what to do (node-manager/nixos-26/boot/hps-pair.sh acts on it):
+#   503  not yet: retry within the window (reason pending, unknown_request,
+#        no_request)
+#   410  outside the window: reboot into netboot (reason outside_window)
+#   403  refused: stop (reason refused, reboots_exhausted)
+# The body: {error, code, reason, details, window_left, last_boot_at, timestamp}
+# (window_left: seconds left in the node's pairing window, 0 when none).
+api_pair_refusal() {
+  local code="$1" json level=error
+  json=$(jq -n --arg code "$code" --arg reason "${CE_PAIR_REASON:-refused}" \
+    --arg details "${CE_PAIR_DETAIL:-}" --arg left "${CE_PAIR_WINDOW_LEFT:-0}" \
+    --arg boot "${CE_PAIR_LAST_BOOT_AT:-}" \
+    '{
+      error: "Pairing request not approved",
+      code: ($code | tonumber),
+      reason: $reason,
+      details: (if $details != "" then $details else null end),
+      window_left: ($left | tonumber? // 0),
+      last_boot_at: ($boot | tonumber? // null),
+      timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")
+    }')
+  api_response "$code" "$json"
+  [[ "$code" == 503 ]] && level=warn
+  hps_log "$level" "$API_LOG_PREFIX pairing ${REQUEST_MAC}: ${code} ${CE_PAIR_REASON:-refused}${CE_PAIR_DETAIL:+ (${CE_PAIR_DETAIL})}"
 }
 
 #===============================================================================
@@ -613,17 +644,20 @@ handle_system_action() {
       # dispatcher. The registry-bound approver decides whether to approve.
       # Authorisation is by the binding checks in ce_approve_pair_request,
       # not by this endpoint (the caller is already MAC-authenticated).
-      if [[ -z "$REQUEST_REQID" ]]; then
-        api_error 400 "Missing reqid parameter"
-        return
-      fi
-      if ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID" "$CLIENT_IP"; then
-        api_net_after_pair "$REQUEST_MAC"
-        api_storage_after_pair "$REQUEST_MAC"
-        api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
-      else
-        api_error 403 "Pairing request denied" "$REQUEST_MAC"
-      fi
+      # An empty reqid is a node that has none yet asking whether to go on:
+      # the answer is 503 (retry), 410 (reboot) or 403 (stop), as below.
+      local pair_rc=0
+      ce_approve_pair_request "$REQUEST_MAC" "$REQUEST_REQID" "$CLIENT_IP" || pair_rc=$?
+      case "$pair_rc" in
+        0)
+          api_net_after_pair "$REQUEST_MAC"
+          api_storage_after_pair "$REQUEST_MAC"
+          api_success "{\"paired\": true, \"mac\": \"$REQUEST_MAC\"}"
+          ;;
+        3) api_pair_refusal 503 ;;
+        4) api_pair_refusal 410 ;;
+        *) api_pair_refusal 403 ;;
+      esac
       ;;
 
     node_functions|bootstrap_functions)

@@ -23,10 +23,14 @@
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      # hps-pair is idempotent: a transient failure (window not open yet, IPS
-      # busy) retries.
+      # hps-pair is idempotent and retries within the pairing window itself
+      # (backoff 5, 10, 20, 40, 60 ... s; it reboots into netboot when the IPS
+      # says the window has passed). A failure it gives up on for now (exit 1:
+      # no IPS address, no answer) retries here; a refusal by the IPS (exit 3)
+      # does not.
       Restart = "on-failure";
       RestartSec = 30;
+      RestartPreventExitStatus = 3;
       StandardOutput = "journal+console";
       StandardError = "journal+console";
       ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-node-init";

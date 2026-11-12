@@ -12,10 +12,14 @@ setup() {
   export HPS_AGENT_ETC="$TEST_DIR/etc/ctrl-exec-agent"
   export HPS_PAIR_TIMEOUT=4
   export HPS_PAIR_POLL=1
+  # hps-pair's window: over at once (no retry waits; a 503 ends the run)
+  export HPS_PAIR_BACKOFF=0 HPS_PAIR_GRACE=0 HPS_PAIR_WINDOW=0
+  export HPS_UPTIME="$TEST_DIR/uptime"
   ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   PAIR="$ROOT/node-manager/nixos-26/boot/hps-pair.sh"
   export PATH="$TEST_DIR/bin:$PATH"
   mkdir -p "$TEST_DIR/bin" "$HPS_AGENT_ETC"
+  echo "5.00 5.00" > "$HPS_UPTIME"
   echo "BOOT_IMAGE=bzImage hps.ips=10.99.1.1 hps.mac=aa:bb:cc:dd:ee:ff hps.profile=audit" > "$HPS_CMDLINE"
 
   cat > "$TEST_DIR/bin/curl" <<'SHIM'
@@ -24,8 +28,17 @@ echo "curl $*" >> "$SHIM_LOG"
 case "$*" in
   *host_variable*) printf 'held01' ;;
   */api/api.sh*)
-    : > "$TEST_DIR/approved"
-    echo '{"success":true}' ;;
+    o=/dev/null; p=""; nr=0
+    for x in "$@"; do
+      [[ "$p" == -o ]] && o="$x"
+      [[ "$p" == -d && "$x" == *'"reqid":""'* ]] && nr=1
+      p="$x"
+    done
+    if [[ $nr -eq 1 ]]; then printf '{"reason":"no_request"}' > "$o"; printf 503; exit 0; fi
+    c="${FAKE_API_CODE:-200}"
+    [[ "$c" == 200 ]] && : > "$TEST_DIR/approved"   # the IPS approves once it has the reqid
+    printf '{"success":true,"reason":"%s"}' "${FAKE_API_REASON:-paired}" > "$o"
+    printf '%s' "$c" ;;
 esac
 exit 0
 SHIM

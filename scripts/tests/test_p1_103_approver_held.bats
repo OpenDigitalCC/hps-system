@@ -65,10 +65,10 @@ held() {
   [ -n "$(host_registry "$MAC" get ctrl_exec_paired)" ]
 }
 
-@test "a HELD node outside the window is refused" {
+@test "a HELD node outside the window is not approved: told to reboot (4)" {
   held 301
   run ce_approve_pair_request "$MAC" abc123
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 4 ]
   ! grep -q "^approve" "$CE_LOG"
 }
 

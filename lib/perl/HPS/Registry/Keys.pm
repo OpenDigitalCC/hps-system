@@ -50,6 +50,8 @@ my @KEYS = (
     [ 'last_boot_at', 'host', 'epoch', 'ipxe menu', 'When the node was last issued a boot script (ADR 0002 check 3).' ],
     [ 'ctrl_exec_paired_at', 'host', 'epoch', 'ce_approve_pair_request (ctrl-exec pairing approver)', 'When the node paired with ctrl-exec. Present means paired; removed when the pairing window is reopened for a boot.' ],
     [ 'ctrl_exec_paired', 'host', 'epoch', 'ce_approve_pair_request', 'Compatibility copy of ctrl_exec_paired_at (same epoch value; the name reads as a boolean, it is not one). Kept one release; read ctrl_exec_paired_at.', 'ctrl_exec_paired_at' ],
+    [ 'pair_reboots', 'host', 'int', 'ce_approve_pair_request (cleared at pairing)', 'How many times the node was told to reboot into netboot because it asked to pair after its pairing window (at most CTRL_EXEC_PAIR_MAX_REBOOTS, default 3). Removed when the node pairs.' ],
+    [ 'pair_failed_at', 'host', 'epoch', 'ce_approve_pair_request (cleared at pairing)', 'When the IPS gave up on the node pairing: it missed its window again after the last allowed reboot. hps-monitor and hps-ips-check report it; removed when the node pairs.' ],
     [ 'system_pin', 'host', 'pin', 'hps-onboard (assign, repin)', 'The NixOS system the node boots.' ],
     [ 'system_pin_previous', 'host', 'pin', 'hps-onboard repin', 'The pin before the last repin, for rollback.' ],
     [ 'repinned_at', 'host', 'stamp', 'hps-onboard repin', 'When the pin last changed.' ],

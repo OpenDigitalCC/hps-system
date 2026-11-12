@@ -15,11 +15,15 @@ setup() {
   export HPS_AGENT_ETC="$TEST_DIR/etc/ctrl-exec-agent"
   export HPS_PAIR_TIMEOUT=6
   export HPS_PAIR_POLL=1
+  # hps-pair's window: over at once (no retry waits; a 503 ends the run)
+  export HPS_PAIR_BACKOFF=0 HPS_PAIR_GRACE=0 HPS_PAIR_WINDOW=0
+  export HPS_UPTIME="$TEST_DIR/uptime"
   export TMPDIR="$TEST_DIR"
   ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   PAIR="$ROOT/node-manager/nixos-26/boot/hps-pair.sh"
   export PATH="$TEST_DIR/bin:$PATH"
   mkdir -p "$TEST_DIR/bin" "$HPS_AGENT_ETC"
+  echo "5.00 5.00" > "$HPS_UPTIME"
   echo "BOOT_IMAGE=bzImage hps.ips=10.99.1.1 hps.mac=aabbccddeeff hps.profile=audit" > "$HPS_CMDLINE"
 
   cat > "$TEST_DIR/bin/curl" <<'SHIM'
@@ -29,9 +33,18 @@ case "$*" in
   *host_variable*)
     printf '%s' "${FAKE_HOSTNAME_BODY-held01}" ;;
   */api/api.sh*)
+    o=/dev/null; p=""; nr=0
+    for x in "$@"; do
+      [[ "$p" == -o ]] && o="$x"
+      [[ "$p" == -d && "$x" == *'"reqid":""'* ]] && nr=1
+      p="$x"
+    done
+    if [[ $nr -eq 1 ]]; then printf '{"reason":"no_request"}' > "$o"; printf 503; exit 0; fi
     echo "ips: reqid POSTed" >> "$SHIM_LOG"
-    : > "$TEST_DIR/approved"
-    echo '{"success":true}' ;;
+    c="${FAKE_API_CODE:-200}"
+    [[ "$c" == 200 ]] && : > "$TEST_DIR/approved"   # the IPS approves once it has the reqid
+    printf '{"success":true,"reason":"%s"}' "${FAKE_API_REASON:-paired}" > "$o"
+    printf '%s' "$c" ;;
 esac
 exit 0
 SHIM
@@ -117,30 +130,26 @@ teardown() {
   grep -q '^curl .*-d {"action":"ctrl_exec_pair_request","mac":"aabbccddeeff","reqid":"ab12cd"}' "$SHIM_LOG"
 }
 
-@test "request-pairing exiting non-zero before a reqid is a failure, nothing is POSTed" {
+@test "request-pairing exiting non-zero before a reqid is a failure, no reqid is POSTed" {
   FAKE_PAIRING_RC=3 run bash "$PAIR"
   [ "$status" -eq 1 ]
   [[ "$output" == *"no reqid"* ]]
-  ! grep -q 'api/api.sh' "$SHIM_LOG"
+  ! grep -q '"reqid":"[0-9a-f]' "$SHIM_LOG"
 }
 
 @test "request-pairing exiting 0 without printing a reqid is a failure too" {
   FAKE_NO_REQID=1 run bash "$PAIR"
   [ "$status" -eq 1 ]
   [[ "$output" == *"no reqid"* ]]
-  ! grep -q 'api/api.sh' "$SHIM_LOG"
+  ! grep -q '"reqid":"[0-9a-f]' "$SHIM_LOG"
 }
 
 @test "a pairing that is never approved times out and the agent process is stopped" {
-  # the IPS declines, so the shim is never approved
-  cat > "$TEST_DIR/bin/curl" <<'SHIM'
-#!/usr/bin/env bash
-case "$*" in *host_variable*) printf held01; exit 0 ;; esac
-exit 22
-SHIM
+  # the IPS refuses, so the shim is never approved
+  export FAKE_API_CODE=403
   run bash "$PAIR"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"declined"* ]]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"refused pairing"* ]]
   sleep 1
   ! pgrep -f "$TEST_DIR/bin/ctrl-exec-agent" > /dev/null
 }

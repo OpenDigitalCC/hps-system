@@ -142,9 +142,12 @@ in
       StandardOutput = "journal+console";
       StandardError = "journal+console";
       ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-pair";
-      # hps-pair is idempotent: a transient failure retries.
+      # hps-pair is idempotent and retries within the pairing window itself;
+      # a failure it gives up on for now (exit 1) retries here, a refusal by
+      # the IPS (exit 3) does not.
       Restart = "on-failure";
       RestartSec = 30;
+      RestartPreventExitStatus = 3;
     };
   };
 }

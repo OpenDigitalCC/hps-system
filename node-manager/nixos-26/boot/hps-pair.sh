@@ -27,7 +27,11 @@
 #      reqid, POST it to the IPS API (action ctrl_exec_pair_request, header
 #      X-HPS-MAC) at once - the IPS approves only after that - then wait for
 #      the certificate and for the request-pairing process to end, and
-#      restart the agent
+#      restart the agent. The IPS's HTTP code decides what comes next (see
+#      pair below): 503 retry with backoff 5, 10, 20, 40, 60, 60 ... s within
+#      the pairing window, 410 reboot into netboot (a new boot script, a new
+#      window; the IPS allows three), 403 stop. Every attempt is logged with
+#      the reason the IPS gave.
 #      With ctrl-exec 0.14.3 or later the agent is told the name to register
 #      under (request-pairing --name <the transient hostname>), so the
 #      registration is exactly <label>.<hps.domain> whatever hostfqdn() would
@@ -37,17 +41,34 @@
 #      gets the call without --name and registers as before.
 #
 # Usage: hps-pair [--no-hostname]
-# Exit: 0 paired or already paired, 1 pairing failed, 2 usage.
+# Exit: 0 paired, already paired, or rebooting for a new window; 1 pairing
+# failed for now (the unit retries); 2 usage; 3 the IPS refused (the units
+# do not restart on 3: RestartPreventExitStatus).
 #
 # Overrides for tests: HPS_CMDLINE (file), HPS_AGENT_ETC, HPS_PAIR_TIMEOUT
-# (seconds), HPS_PAIR_POLL (seconds).
+# (seconds), HPS_PAIR_POLL (seconds), HPS_PAIR_WINDOW, HPS_PAIR_BACKOFF,
+# HPS_PAIR_GRACE, HPS_PAIR_REPORT_TIMEOUT, HPS_UPTIME (file).
 
 set -euo pipefail
 
 : "${HPS_CMDLINE:=/proc/cmdline}"
 : "${HPS_AGENT_ETC:=/etc/ctrl-exec-agent}"
+# The pairing request timeout: request-pairing --timeout, the time the
+# dispatcher holds the request. The IPS waits as long for its pairing jobs
+# (CTRL_EXEC_PAIR_REQUEST_TIMEOUT, lib/functions.d/ctrl-exec-functions.sh):
+# keep the two equal.
 : "${HPS_PAIR_TIMEOUT:=300}"
 : "${HPS_PAIR_POLL:=2}"
+# The IPS's pairing window (CTRL_EXEC_PAIR_WINDOW): seconds from the boot
+# script within which the IPS approves. Used until the IPS gives window_left.
+: "${HPS_PAIR_WINDOW:=300}"
+# Waits between attempts, seconds; the last one repeats.
+: "${HPS_PAIR_BACKOFF:=5 10 20 40 60}"
+# How long past the window to go on asking an IPS that does not answer.
+: "${HPS_PAIR_GRACE:=60}"
+# curl --max-time of one report: the IPS may wait HPS_PAIR_TIMEOUT for its jobs.
+: "${HPS_PAIR_REPORT_TIMEOUT:=$((HPS_PAIR_TIMEOUT + 30))}"
+: "${HPS_UPTIME:=/proc/uptime}"
 
 log() {
   printf '[hps-pair] %s\n' "$*" >&2
@@ -173,18 +194,34 @@ ensure_hostname() {
   REGISTER_NAME="$name"
 }
 
-# Same request shape as node-manager/base/n_api_client.sh n_api_call.
+# report_pair_request <ips> <mac> <reqid or empty>: POST the reqid (same
+# request shape as node-manager/base/n_api_client.sh n_api_call; an empty reqid
+# asks only whether to keep trying). Sets REPLY_CODE (the HTTP status, 000
+# when there was no answer), REPLY_REASON, REPLY_DETAILS and REPLY_LEFT (the
+# window_left the IPS gave, empty when none). Always returns 0.
 report_pair_request() {
   local ips="$1"
   local mac="$2"
   local reqid="$3"
-  local body
+  local body reply code
   body=$(jq -n -c --arg mac "$mac" --arg reqid "$reqid" \
     '{action: "ctrl_exec_pair_request", mac: $mac, reqid: $reqid}')
-  run curl -fsS -X POST -H 'Content-Type: application/json' -H "X-HPS-MAC: ${mac}" \
-    -d "$body" "http://${ips}/api/api.sh"
+  reply="${TMPDIR:-/tmp}/hps-pair-$$.reply"
+  : > "$reply"
+  code=$(run curl -sS --max-time "$HPS_PAIR_REPORT_TIMEOUT" -o "$reply" -w '%{http_code}' \
+    -X POST -H 'Content-Type: application/json' -H "X-HPS-MAC: ${mac}" \
+    -d "$body" "http://${ips}/api/api.sh") || code=000
+  [[ "$code" =~ ^[0-9]{3}$ ]] || code=000
+  REPLY_CODE="$code"
+  REPLY_REASON=$(jq -r '.reason // empty' "$reply" 2> /dev/null || true)
+  REPLY_DETAILS=$(jq -r '.details // empty' "$reply" 2> /dev/null || true)
+  REPLY_LEFT=$(jq -r '.window_left // empty' "$reply" 2> /dev/null || true)
+  [[ "$REPLY_LEFT" =~ ^[0-9]+$ ]] || REPLY_LEFT=""
+  rm -f "$reply"
+  return 0
 }
 
+# wait_for_cert: poll for agent.crt, at most HPS_PAIR_TIMEOUT seconds.
 wait_for_cert() {
   local waited=0
   while [[ $waited -lt $HPS_PAIR_TIMEOUT ]]; do
@@ -194,7 +231,7 @@ wait_for_cert() {
     sleep "$HPS_PAIR_POLL"
     waited=$((waited + HPS_PAIR_POLL))
   done
-  return 1
+  [[ -s "$HPS_AGENT_ETC/agent.crt" ]]
 }
 
 # first_reqid_line <file>: print the hex reqid when the first line of the file
@@ -208,14 +245,16 @@ first_reqid_line() {
   printf '%s\n' "$line"
 }
 
-# await_reqid <pid> <file>: poll until the reqid line appears. Fails when the
-# process ends without one (non-zero exit, or no output) or on timeout.
+# await_reqid <pid> <file> [seconds]: poll until the reqid line appears. Fails
+# when the process ends without one (non-zero exit, or no output) or on
+# timeout (default HPS_PAIR_TIMEOUT).
 await_reqid() {
   local pid="$1"
   local file="$2"
+  local limit="${3:-$HPS_PAIR_TIMEOUT}"
   local waited=0
   local reqid
-  while [[ $waited -lt $HPS_PAIR_TIMEOUT ]]; do
+  while [[ $waited -lt $limit ]]; do
     if reqid=$(first_reqid_line "$file"); then
       printf '%s\n' "$reqid"
       return 0
@@ -244,55 +283,195 @@ agent_supports_name() {
   [[ "$help" == *--name* ]]
 }
 
+# The running request-pairing: its pid, stdout file and reqid.
+REQ_PID=""
+REQ_OUT=""
+REQID=""
+NAME_ARGS=()
+
+# stop_request: end the running request-pairing (if any) and forget its reqid.
+stop_request() {
+  if [[ -n "$REQ_PID" ]] && kill -0 "$REQ_PID" 2> /dev/null; then
+    kill "$REQ_PID" 2> /dev/null || true
+  fi
+  if [[ -n "$REQ_PID" ]]; then
+    wait "$REQ_PID" 2> /dev/null || true
+  fi
+  [[ -n "$REQ_OUT" ]] && rm -f "$REQ_OUT"
+  REQ_PID=""
+  REQ_OUT=""
+  REQID=""
+}
+
+# start_request <ips> <seconds>: start ctrl-exec-agent request-pairing in the
+# background and wait (at most <seconds>) for its reqid. Sets REQID; fails
+# (REQID empty, the process stopped) when none came.
+start_request() {
+  local ips="$1"
+  local limit="$2"
+  local rc=0
+  REQ_OUT="${TMPDIR:-/tmp}/hps-pair-$$.out"
+  : > "$REQ_OUT"
+  log "+ ctrl-exec-agent request-pairing --background --timeout $HPS_PAIR_TIMEOUT --dispatcher $ips ${NAME_ARGS[*]} (background, stdout in $REQ_OUT)"
+  ctrl-exec-agent request-pairing --background \
+    --timeout "$HPS_PAIR_TIMEOUT" --dispatcher "$ips" "${NAME_ARGS[@]}" > "$REQ_OUT" &
+  REQ_PID=$!
+  if REQID=$(await_reqid "$REQ_PID" "$REQ_OUT" "$limit"); then
+    log "pairing reqid $REQID"
+    return 0
+  fi
+  REQID=""
+  if kill -0 "$REQ_PID" 2> /dev/null; then
+    log "no reqid within ${limit}s; stopping request-pairing"
+    kill "$REQ_PID" 2> /dev/null || true
+  fi
+  wait "$REQ_PID" 2> /dev/null || rc=$?
+  log "request-pairing gave no reqid (exit ${rc})"
+  rm -f "$REQ_OUT"
+  REQ_PID=""
+  REQ_OUT=""
+  return 1
+}
+
+# backoff_for <attempt>: the attempt's wait from HPS_PAIR_BACKOFF (5 10 20 40
+# 60 by default); the last value repeats.
+backoff_for() {
+  local n="$1"
+  local -a steps
+  read -r -a steps <<< "$HPS_PAIR_BACKOFF"
+  if (( n > ${#steps[@]} )); then
+    n=${#steps[@]}
+  fi
+  printf '%s\n' "${steps[n - 1]}"
+}
+
+# window_end_from_boot: the epoch the node's pairing window ends, counted from
+# its own boot (HPS_UPTIME, /proc/uptime) until the IPS says otherwise. The boot
+# script was issued shortly before the kernel started, so this errs late; the
+# IPS's window_left in its first answer replaces it.
+window_end_from_boot() {
+  local up now
+  up=$(cut -d' ' -f1 "$HPS_UPTIME" 2> /dev/null || echo 0)
+  up="${up%%.*}"
+  [[ "$up" =~ ^[0-9]+$ ]] || up=0
+  now=$(date +%s)
+  printf '%s\n' "$((now - up + HPS_PAIR_WINDOW))"
+}
+
+# finish_paired: the IPS approved; wait for the certificate, restart the agent.
+finish_paired() {
+  if ! wait_for_cert; then
+    log "pairing timed out after ${HPS_PAIR_TIMEOUT}s: approved, but no certificate arrived"
+    stop_request
+    return 1
+  fi
+  if [[ -n "$REQ_PID" ]]; then
+    wait "$REQ_PID" || log "request-pairing exited ${?} (certificate present; continuing)"
+  fi
+  [[ -n "$REQ_OUT" ]] && rm -f "$REQ_OUT"
+  REQ_PID=""
+  log "paired (certificate received)"
+  run systemctl restart ctrl-exec-agent.service || log "agent restart failed (continuing)"
+  return 0
+}
+
+# pair <ips> <mac> [<name>]: request pairing and report the reqid to the IPS
+# until it decides, every attempt logged with the reason the IPS gave:
+#   200  approved: wait for the certificate, restart the agent (0)
+#   503  not yet: wait 5, 10, 20, 40, 60, 60 ... s (HPS_PAIR_BACKOFF), bounded by
+#        the time left in the pairing window, and ask again; reason
+#        unknown_request (or no reqid): a new request-pairing first
+#   410  the window has passed: reboot into netboot, which renews the window
+#        (the IPS counts these reboots and gives up after three) (0)
+#   403  refused: stop (3; the unit does not restart)
+# No answer at all (000, another code) counts as not yet; once the window is
+# HPS_PAIR_GRACE seconds past without a decision it fails (1; the unit retries).
 pair() {
   local ips="$1"
   local mac="$2"
   local name="${3:-}"
-  local reqid pid out rc=0
-  local -a name_args=()
+  local attempt=0 window_end now left wait_s
+  NAME_ARGS=()
   if [[ -n "$name" ]]; then
     if agent_supports_name; then
-      name_args=(--name "$name")
+      NAME_ARGS=(--name "$name")
       log "agent supports --name: registering as $name"
     else
       log "agent has no request-pairing --name (before ctrl-exec 0.14.3): registering under its own FQDN"
     fi
   fi
-  out="${TMPDIR:-/tmp}/hps-pair-$$.out"
-  : > "$out"
-  log "+ ctrl-exec-agent request-pairing --background --timeout $HPS_PAIR_TIMEOUT --dispatcher $ips ${name_args[*]} (background, stdout in $out)"
-  ctrl-exec-agent request-pairing --background \
-    --timeout "$HPS_PAIR_TIMEOUT" --dispatcher "$ips" "${name_args[@]}" > "$out" &
-  pid=$!
-  if ! reqid=$(await_reqid "$pid" "$out"); then
-    if kill -0 "$pid" 2> /dev/null; then
-      log "no reqid within ${HPS_PAIR_TIMEOUT}s; stopping request-pairing"
-      kill "$pid" 2> /dev/null || true
+  window_end=$(window_end_from_boot)
+  while true; do
+    attempt=$((attempt + 1))
+    now=$(date +%s)
+    left=$((window_end - now))
+    if [[ -s "$HPS_AGENT_ETC/agent.crt" ]]; then
+      log "attempt ${attempt}: the certificate is already here (approved earlier)"
+      finish_paired
+      return $?
     fi
-    wait "$pid" 2> /dev/null || rc=$?
-    log "request-pairing gave no reqid (exit ${rc})"
-    rm -f "$out"
-    return 1
-  fi
-  log "pairing reqid $reqid"
-  # Report at once: the IPS approves only after it has the reqid.
-  if ! report_pair_request "$ips" "$mac" "$reqid" > /dev/null; then
-    log "the IPS declined the pairing request"
-    kill "$pid" 2> /dev/null || true
-    rm -f "$out"
-    return 1
-  fi
-  if ! wait_for_cert; then
-    log "pairing timed out after ${HPS_PAIR_TIMEOUT}s"
-    kill "$pid" 2> /dev/null || true
-    rm -f "$out"
-    return 1
-  fi
-  wait "$pid" || log "request-pairing exited ${?} (certificate present; continuing)"
-  rm -f "$out"
-  log "paired (certificate received)"
-  run systemctl restart ctrl-exec-agent.service || log "agent restart failed (continuing)"
-  return 0
+    if [[ -z "$REQID" ]]; then
+      # Wait for the reqid at most the window left, but never less than 30 s
+      # (the node's own estimate of its window may be early); the IPS decides.
+      wait_s=$(( left > 30 ? left : 30 ))
+      start_request "$ips" "$(( wait_s < HPS_PAIR_TIMEOUT ? wait_s : HPS_PAIR_TIMEOUT ))" || true
+    fi
+    report_pair_request "$ips" "$mac" "$REQID"
+    if [[ -n "$REPLY_LEFT" ]]; then
+      window_end=$(( $(date +%s) + REPLY_LEFT ))
+    fi
+    log "attempt ${attempt}: reqid ${REQID:-<none>}: IPS answered ${REPLY_CODE} ${REPLY_REASON:-<no reason>}${REPLY_DETAILS:+ (${REPLY_DETAILS})}; ${REPLY_LEFT:-?}s left in the window"
+    case "$REPLY_CODE" in
+      200)
+        if [[ -z "$REQID" ]]; then
+          log "the IPS approved without a reqid: not expected; asking again"
+        else
+          finish_paired
+          return $?
+        fi
+        ;;
+      410)
+        log "error: the pairing window has passed; rebooting into netboot for a new one"
+        stop_request
+        run systemctl reboot || { log "systemctl reboot failed"; return 1; }
+        return 0
+        ;;
+      403)
+        log "error: the IPS refused pairing (${REPLY_REASON:-refused}); not retrying. ${REPLY_DETAILS}"
+        stop_request
+        return 3
+        ;;
+      503)
+        if [[ "$REPLY_REASON" == unknown_request && -n "$REQID" ]]; then
+          log "the dispatcher does not hold reqid ${REQID}; requesting pairing again"
+          stop_request
+        fi
+        ;;
+      *)
+        log "no usable answer from the IPS (HTTP ${REPLY_CODE}); counted as not yet"
+        ;;
+    esac
+    now=$(date +%s)
+    left=$((window_end - now))
+    if (( left < -HPS_PAIR_GRACE )); then
+      if [[ -s "$HPS_AGENT_ETC/agent.crt" ]]; then
+        log "the certificate arrived (approved without an answer reaching this node)"
+        finish_paired
+        return $?
+      fi
+      log "error: ${HPS_PAIR_GRACE}s past the pairing window with no decision from the IPS; giving up for now"
+      stop_request
+      return 1
+    fi
+    wait_s=$(backoff_for "$attempt")
+    # Bounded by the window: the next ask lands just after it ends at the
+    # latest, when the IPS answers 410 (reboot) or 403.
+    if (( left >= 0 && wait_s > left + 1 )); then
+      wait_s=$((left + 1))
+    fi
+    log "attempt ${attempt}: next attempt in ${wait_s}s"
+    sleep "$wait_s"
+  done
 }
 
 # The name the agent registers under: the FQDN just set as the hostname, or,

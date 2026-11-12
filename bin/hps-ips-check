@@ -22,6 +22,8 @@
 #   7 space and inodes used on the resources and log filesystems (WARN at
 #     monitor_disk_warn_pct, default 80% used; FAIL at monitor_disk_crit_pct, 90%)
 #   8 registry: cluster.db readable, active cluster set
+#   9 pairing: a host with pair_failed_at (the IPS gave up pairing it) is a
+#       WARN naming it
 #
 # Result: one syslog line per check (tag hps-ips-check), a summary line, and
 # <cluster services dir>/ips-check.json. Exit 0 no FAIL, 1 any FAIL, 2 usage.
@@ -559,6 +561,29 @@ check_registry() {
   fi
 }
 
+#===============================================================================
+# 9 pairing: hosts the IPS gave up pairing
+#===============================================================================
+# A host with pair_failed_at missed its pairing window after every reboot the
+# approver allows (ctrl-exec-functions.sh, CTRL_EXEC_PAIR_MAX_REBOOTS). It
+# waits for the operator: a WARN naming each such host; PASS when there is none.
+check_pairing() {
+  local h at name failed=""
+  [[ -n "$CLUSTER" ]] || return 0
+  while IFS= read -r h; do
+    [[ -n "$h" ]] || continue
+    at="$(host_registry "$h" get pair_failed_at 2> /dev/null)" || at=""
+    [[ "$at" =~ ^[0-9]+$ ]] || continue
+    name="$(host_registry "$h" get HOSTNAME 2> /dev/null)" || name=""
+    failed+="${failed:+, }${name:-$h} ($h) since $(date -u -d "@$at" +%Y-%m-%dT%H:%M:%SZ 2> /dev/null || echo "$at")"
+  done < <(list_cluster_hosts 2> /dev/null)
+  if [[ -n "$failed" ]]; then
+    record WARN "pairing" "the IPS gave up pairing (pair_failed_at): ${failed}; fix the cause and reboot each"
+  else
+    record PASS "pairing" "no host has given up pairing"
+  fi
+}
+
 #-------------------------------------------------------------------------------
 # write_result: summary line to syslog and stdout, JSON file (atomic).
 #-------------------------------------------------------------------------------
@@ -605,6 +630,7 @@ main() {
   check_chrony
   check_disk
   check_registry
+  check_pairing
   write_result || wrote=1
   if [[ $N_FAIL -gt 0 || $wrote -eq 1 ]]; then
     exit 1

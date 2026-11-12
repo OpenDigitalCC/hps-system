@@ -14,10 +14,14 @@ setup() {
   export HPS_AGENT_ETC="$TEST_DIR/etc/ctrl-exec-agent"
   export HPS_PAIR_TIMEOUT=4
   export HPS_PAIR_POLL=1
+  # hps-pair's window: over at once (no retry waits; a 503 ends the run)
+  export HPS_PAIR_BACKOFF=0 HPS_PAIR_GRACE=0 HPS_PAIR_WINDOW=0
+  export HPS_UPTIME="$TEST_DIR/uptime"
   ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   PAIR="$ROOT/node-manager/nixos-26/boot/hps-pair.sh"
   export PATH="$TEST_DIR/bin:$PATH"
   mkdir -p "$TEST_DIR/bin" "$HPS_AGENT_ETC"
+  echo "5.00 5.00" > "$HPS_UPTIME"
   echo "BOOT_IMAGE=bzImage hps.ips=10.99.1.1 hps.mac=aa:bb:cc:dd:ee:ff hps.profile=audit" > "$HPS_CMDLINE"
 
   cat > "$TEST_DIR/bin/curl" <<'SHIM'
@@ -33,9 +37,17 @@ case "$*" in
     [[ "${FAKE_HOSTNAME_RC:-0}" -ne 0 ]] && exit "$FAKE_HOSTNAME_RC"
     printf 'held01' ;;
   */api/api.sh*)
-    [[ "${FAKE_API_RC:-0}" -ne 0 ]] && exit "$FAKE_API_RC"
-    : > "$TEST_DIR/approved"   # the IPS approves once it has the reqid
-    echo '{"success":true}' ;;
+    o=/dev/null; p=""; nr=0
+    for x in "$@"; do
+      [[ "$p" == -o ]] && o="$x"
+      [[ "$p" == -d && "$x" == *'"reqid":""'* ]] && nr=1
+      p="$x"
+    done
+    if [[ $nr -eq 1 ]]; then printf '{"reason":"no_request"}' > "$o"; printf 503; exit 0; fi
+    c="${FAKE_API_CODE:-200}"
+    [[ "$c" == 200 ]] && : > "$TEST_DIR/approved"   # the IPS approves once it has the reqid
+    printf '{"success":true,"reason":"%s"}' "${FAKE_API_REASON:-paired}" > "$o"
+    printf '%s' "$c" ;;
 esac
 exit 0
 SHIM
@@ -137,16 +149,17 @@ teardown() {
   ! grep -q '^ctrl-exec-agent' "$SHIM_LOG"
 }
 
-@test "fails (1) when request-pairing fails" {
+@test "fails (1) when request-pairing fails: no reqid is reported, the IPS is only asked whether to go on" {
   FAKE_PAIRING_RC=1 run bash "$PAIR"
   [ "$status" -eq 1 ]
-  ! grep -q 'api/api.sh' "$SHIM_LOG"
+  ! grep -q '"reqid":"[0-9a-f]' "$SHIM_LOG"
+  grep -q '"reqid":""' "$SHIM_LOG"
 }
 
-@test "fails (1) when the IPS declines the report" {
-  FAKE_API_RC=22 run bash "$PAIR"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"declined"* ]]
+@test "stops (3) when the IPS refuses the report (403)" {
+  FAKE_API_CODE=403 FAKE_API_REASON=refused run bash "$PAIR"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"refused pairing"* ]]
   ! grep -q '^systemctl' "$SHIM_LOG"
 }
 

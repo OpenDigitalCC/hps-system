@@ -16,12 +16,16 @@ setup() {
   export HPS_AGENT_ETC="$TEST_DIR/etc/ctrl-exec-agent"
   export HPS_PAIR_TIMEOUT=4
   export HPS_PAIR_POLL=1
+  # hps-pair's window: over at once (no retry waits; a 503 ends the run)
+  export HPS_PAIR_BACKOFF=0 HPS_PAIR_GRACE=0 HPS_PAIR_WINDOW=0
+  export HPS_UPTIME="$TEST_DIR/uptime"
   export FAKE_BUNDLE="$TEST_DIR/bundle.sh"
   export BUNDLE_LOG="$TEST_DIR/bundle.log"
   INIT="${BATS_TEST_DIRNAME}/../../node-manager/nixos-26/boot/hps-node-init.sh"
   export HPS_PAIR="${BATS_TEST_DIRNAME}/../../node-manager/nixos-26/boot/hps-pair.sh"
   export PATH="$TEST_DIR/bin:$PATH"
   mkdir -p "$TEST_DIR/bin" "$HPS_AGENT_ETC"
+  echo "5.00 5.00" > "$HPS_UPTIME"
 
   echo "BOOT_IMAGE=bzImage initrd=initrd hps.ips=10.99.1.1 hps.mac=aa:bb:cc:dd:ee:ff hps.profile=converged" > "$HPS_CMDLINE"
   cat > "$FAKE_BUNDLE" <<'EOF'
@@ -48,8 +52,17 @@ case "$*" in
     [[ "${FAKE_BUNDLE_RC:-0}" -ne 0 ]] && exit "$FAKE_BUNDLE_RC"
     cat "$FAKE_BUNDLE" > "$out" ;;
   */api/api.sh*)
-    [[ "${FAKE_API_RC:-0}" -ne 0 ]] && exit "$FAKE_API_RC"
-    echo '{"success":true,"data":{"paired":true}}' ;;
+    o=/dev/null; p=""; nr=0
+    for x in "$@"; do
+      [[ "$p" == -o ]] && o="$x"
+      [[ "$p" == -d && "$x" == *'"reqid":""'* ]] && nr=1
+      p="$x"
+    done
+    if [[ $nr -eq 1 ]]; then printf '{"reason":"no_request"}' > "$o"; printf 503; exit 0; fi
+    c="${FAKE_API_CODE:-200}"
+    [[ "$c" == 200 ]] && : > "$TEST_DIR/approved"   # the IPS approves once it has the reqid
+    printf '{"success":true,"reason":"%s"}' "${FAKE_API_REASON:-paired}" > "$o"
+    printf '%s' "$c" ;;
 esac
 exit 0
 EOF
@@ -152,10 +165,10 @@ teardown() {
   ! grep -q '^systemctl restart' "$SHIM_LOG"
 }
 
-@test "fails when the IPS declines the pairing report" {
-  FAKE_API_RC=22 run bash "$INIT"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"declined"* ]]
+@test "exits 3 (no unit restart) when the IPS refuses the pairing report" {
+  FAKE_API_CODE=403 run bash "$INIT"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"refused pairing"* ]]
 }
 
 @test "skips pairing when a certificate is already present" {

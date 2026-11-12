@@ -10,6 +10,7 @@ use feature qw(signatures);
 no warnings 'experimental::signatures';
 
 use JSON::PP ();
+use POSIX ();
 use HPS::Registry;
 
 use constant DEFAULT_INTERVAL => 60;
@@ -259,6 +260,31 @@ sub skip_call ($memo, $host, $now, $boot_at = undef, $retry = 300) {
     # within 15 minutes of a netboot the node is coming up: retry every 60 s
     my $every = (defined $boot_at && $now - $boot_at < 900) ? 60 : $retry;
     return $now - $tried < $every ? 1 : 0;
+}
+
+# pair_failed_lines($reg, $now, $memo, $every): the hosts the IPS gave up
+# pairing (registry pair_failed_at, set by the pairing approver after the last
+# allowed reboot): one err line each, "hps-monitor: host=<name> state=PAIR_FAILED
+# since=<UTC time> reboots=<n>". Such a node is not paired, so it is never a
+# check target; this line is how it shows. With a memo (the loop) a host is
+# logged when first seen and then once every $every seconds (600 by default).
+sub pair_failed_lines ($reg, $now, $memo = undef, $every = 600) {
+    my @out;
+    for my $mac (sort $reg->host_list_all) {
+        my $at = eval { $reg->host_get($mac, 'pair_failed_at') };
+        next unless defined $at && $at =~ /\A\d+\z/;
+        if ($memo) {
+            my $m = $memo->{"pair_failed:$mac"};
+            next if defined $m && $now - $m < $every;
+            $memo->{"pair_failed:$mac"} = $now;
+        }
+        my $name = eval { $reg->fqdn($mac) } // eval { $reg->host_get($mac, 'HOSTNAME') } // $mac;
+        my $n = eval { $reg->host_get($mac, 'pair_reboots') } // 0;
+        my $since = POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($at));
+        push @out, [ 'err', "hps-monitor: host=$name state=PAIR_FAILED since=$since reboots=$n"
+            . ' the node missed its pairing window after every allowed reboot; fix the cause and reboot it' ];
+    }
+    return @out;
 }
 
 # targets($agents, $registry): the paired nodes to check: agent names known to

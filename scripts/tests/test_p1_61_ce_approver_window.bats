@@ -86,11 +86,11 @@ seed_request() {
   grep -q "^pairing-mode stop" "$CE_LOG"
 }
 
-@test "refuses a request that arrives after the window" {
+@test "a request that arrives after the window is told to reboot (4), not approved" {
   seed NETWORK_BOOT 301
   seed_request
   run ce_approve_pair_request "$MAC" abc123
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 4 ]
   ! grep -q "^approve" "$CE_LOG"
   grep -q "window is 300s" "$TEST_DIR/hps.log"
 }

@@ -48,6 +48,7 @@ hand.
 | `chrony` | `chronyc tracking` answers and the leap status is Normal | Unsynchronised is a WARN (the cluster may have no upstream by design); chronyd not answering is a FAIL. |
 | `disk resources`, `disk log` | space and inodes used on the filesystems of `$HPS_RESOURCES` and `$HPS_LOG` are below `monitor_disk_warn_pct` (default 80%) | At `monitor_disk_warn_pct` or more WARN, at `monitor_disk_crit_pct` (default 90%) or more FAIL; the higher of space and inodes counts (the grades of hps-monitor, `docs/MONITORING.md`). |
 | `registry` | `cluster.db` of the active cluster is readable and the IPS address is set | |
+| `pairing` | no host has `pair_failed_at` | A host with it is a WARN naming it: it missed its pairing window after every reboot the approver allows (ADR 0002, amendment 2026-11-12). Fix the cause and reboot it. |
 
 ## What is probed over HTTP, and why it is safe
 

@@ -123,7 +123,8 @@ teardown() {
   host_registry "$MAC" set STATE NETWORK_BOOT
   host_registry "$MAC" set last_boot_at "$(( $(date +%s) - 400 ))"
   run ce_approve_pair_request "$MAC" abc123
-  [ "$status" -eq 1 ]
+  # a stale window is not approved: the node is told to reboot for a new one
+  [ "$status" -eq 4 ]
   host_registry "$MAC" set last_boot_at "$(date +%s)"
   host_registry "$MAC" set ctrl_exec_paired 1
   run ce_approve_pair_request "$MAC" abc123

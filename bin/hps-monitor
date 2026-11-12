@@ -199,6 +199,8 @@ sub run_once {
         my @checks = ips_checks($warn, $crit);
         emit(@$_) for HPS::Monitor::host_lines(ips_name($reg), { checks => \@checks }, time - $t1);
     }
+    # Hosts the IPS gave up pairing are not targets (not paired): say so here.
+    emit(@$_) for HPS::Monitor::pair_failed_lines($reg, time, $memo);
     emit('info', sprintf('hps-monitor: tick hosts=%d duration=%.1f', scalar @hosts, time - $t0));
     return;
 }

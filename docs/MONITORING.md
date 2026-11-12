@@ -172,6 +172,10 @@ hps-monitor: tick hosts=3 duration=1.9
 - `host=<fqdn> checks=<n> worst=<state> duration=<s>`: one per host.
 - `host=<fqdn> state=UNREACHABLE <reason>`: the node could not be asked (not
   registered, call failed or timed out after 70 s, unreadable reply).
+- `host=<fqdn> state=PAIR_FAILED since=<UTC time> reboots=<n> ...` (`err`):
+  the IPS gave up pairing the host (registry `pair_failed_at`, ADR 0002
+  amendment 2026-11-12). It is not paired, so it is not checked; the loop logs
+  the line when it first sees it and then every 10 minutes.
 - `tick hosts=<n> duration=<s>`: one per run, so the cadence is visible.
 - `tick skipped missed=<k> run=<s>s interval=<n>s`: a run took longer than the
   interval; the ticks it covered are skipped (runs never overlap).

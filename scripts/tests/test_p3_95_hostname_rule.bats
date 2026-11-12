@@ -73,7 +73,8 @@ node_shims() {
     printf '#!/usr/bin/env bash\nprintf "%s %%s\\n" "$*" >> "$SHIM_LOG"\nexit "${FAKE_%s_RC:-0}"\n' "$s" "${s^^}" > "$T/bin/$s"
     chmod +x "$T/bin/$s"
   done
-  printf '#!/usr/bin/env bash\ncase "$*" in *host_variable*) printf "%%s" "${FAKE_HOSTNAME:-node01}" ;; esac\n' > "$T/bin/curl"
+  # the API answers 200 (approved) as an HTTP code (curl -w)
+  printf '#!/usr/bin/env bash\ncase "$*" in *host_variable*) printf "%%s" "${FAKE_HOSTNAME:-node01}" ;; *api.sh*) printf 200 ;; esac\n' > "$T/bin/curl"
   chmod +x "$T/bin/curl"
   printf '#!/usr/bin/env bash\necho abc123\necho cert > "$HPS_AGENT_ETC/agent.crt"\n' > "$T/bin/ctrl-exec-agent"
   chmod +x "$T/bin/ctrl-exec-agent"

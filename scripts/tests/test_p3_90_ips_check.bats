@@ -399,3 +399,19 @@ EOF
   [[ "$output" == *"waited 1s"* ]]
   [[ "$output" == *"summary: "* ]]
 }
+
+@test "pairing: a host the IPS gave up pairing (pair_failed_at) is a WARN naming it; none is a PASS" {
+  run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"PASS pairing: no host has given up pairing"* ]]
+  cat >> "$SYS/lib/functions.sh" <<'LIB'
+host_registry() {
+  case "$3" in
+    pair_failed_at) [[ "$1" == aabbccddeeff ]] && echo 1794321826 ;;
+    *) grep "^$1 " "$TEST_DIR/hosts" | cut -d' ' -f2 ;;
+  esac
+}
+LIB
+  run "$ROOT/bin/hps-ips-check"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARN pairing: the IPS gave up pairing (pair_failed_at): node1 (aabbccddeeff) since 2026-"* ]]
+}

@@ -86,3 +86,69 @@ the exposure is confined to the pairing window.
   and dispatchers are detected and used without those options.
 - ctrl-exec's short pairing timeout means the approver must poll promptly;
   it is triggered by the node's report rather than by periodic scan.
+
+## Amendment 2026-11-12: when pairing does not go through at once
+
+Incident, s1 after a host reboot: six nodes booted and asked to pair at once.
+The approval jobs waited behind a 30 s `storage-up` in the one serial job
+runner, the approver's 15 s wait gave up and the request read as missing (403),
+the first approval closed the pairing window under the five others, and their
+retries (hps-node-init, Restart=on-failure, 30 s apart) came after their own
+windows and were refused by check 3. Rebooting each VM by hand was the only recovery. Check 3 is
+unchanged and stays the security control; what changed is around it.
+
+The approver answers with a reason
+:   `ce_approve_pair_request` returns 0 approved, 3 not yet, 4 outside the
+    window, 1 refused, and sets `CE_PAIR_REASON`. The API
+    (`action ctrl_exec_pair_request`) turns that into the HTTP code the node
+    acts on, with a JSON body `{error, code, reason, details, window_left,
+    last_boot_at, timestamp}`:
+
+| HTTP | reason | meaning | the node |
+|---|---|---|---|
+| 200 | `paired` | approved | waits for the certificate |
+| 503 | `pending` | a pairing job did not finish within `CTRL_EXEC_PAIR_REQUEST_TIMEOUT` | retries |
+| 503 | `unknown_request` | the dispatcher holds no pending request with that reqid | requests pairing again, retries |
+| 503 | `no_request` | no reqid was given (the node has none yet); inside the window | retries |
+| 410 | `outside_window` | the request came after the window (check 3); `pair_reboots` counted | reboots into netboot |
+| 403 | `reboots_exhausted` | outside the window after `CTRL_EXEC_PAIR_MAX_REBOOTS` (3) reboots; `pair_failed_at` set | stops, logs at error |
+| 403 | `refused` | any other failed check (state, address, hostname, already paired, malformed reqid, no `last_boot_at`) | stops |
+
+Approval never waits behind other jobs
+:   The root job runner runs the pairing kinds in their own lane (ADR 0006).
+    One approval waits at most `CTRL_EXEC_PAIR_REQUEST_TIMEOUT` (300 s) in
+    total for its pairing jobs: the node's own request timeout
+    (`HPS_PAIR_TIMEOUT` in `hps-pair`, the `request-pairing --timeout`), so the
+    IPS never gives up on a request the node still holds open. The two
+    constants are kept equal (a bats test checks the IPS one is not shorter).
+
+The window is not closed under other waiting nodes
+:   After an approval (and after a refusal for check 3) the dispatcher's
+    pairing listener is closed only when no other host is still within its own
+    window and unpaired (eligible STATE, `last_boot_at` at most
+    `CTRL_EXEC_PAIR_WINDOW` ago, no `ctrl_exec_paired_at`); otherwise it stays
+    open, and the log names how many wait and when the last window ends.
+
+The node retries, then reboots, then stops
+:   `hps-pair` (run by `hps-node-init` and `hps-audit-pair`) reports its reqid
+    and retries a 503 after 5, 10, 20, 40, 60, 60 ... s, each wait cut so the
+    next ask lands no later than just after its window ends (the window is
+    counted from its own boot until the IPS's `window_left` replaces it). A
+    410 makes it run `systemctl reboot`: the netboot issues a new boot script,
+    which renews `last_boot_at` and with it the window. The IPS counts these
+    reboots in the host key `pair_reboots` and allows three; the next late
+    request is a 403 `reboots_exhausted` and records `pair_failed_at`. A
+    pairing removes both keys. A 403 makes `hps-pair` exit 3, and the units
+    carry `RestartPreventExitStatus = 3`, so the node stays up, unpaired, with
+    the reason in its journal. `hps-monitor` logs `state=PAIR_FAILED` for it
+    (every 10 minutes) and `hps-ips-check` reports a WARN `pairing` naming it.
+    Every attempt is logged on the node with the code and reason. Recovery:
+    fix the cause, then reboot the node (a pairing clears the keys).
+
+Still one listener for the IPS (IPS-17)
+:   The dispatcher listener is opened for `CTRL_EXEC_PAIR_WINDOW` by the first
+    boot script and an open while it runs does not extend it, so a host that
+    boots late in another host's window can find it stopped before its own
+    window ends. Its retries then get no reqid and ask with an empty one
+    (503 `no_request` until its window ends, then 410 and a reboot, which
+    reopens the listener). A per-node window (IPS-17) removes this.
