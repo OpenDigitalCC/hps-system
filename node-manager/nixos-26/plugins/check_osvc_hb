@@ -12,12 +12,16 @@
 #   WARNING   a peer is stale
 #   CRITICAL  the beating nodes (the beating peers and this one) are below a
 #             quorum of (peers + 1) / 2 + 1
-#   UNKNOWN   om is not installed, or the daemon is not running or answering
+#   OK        om3 not configured on this node: the daemon does not answer and
+#             there is no cluster CA ($OSVC_ETC/namespaces/system/sec/ca.conf)
+#   UNKNOWN   om is not installed, or the daemon is not running or answering on a
+#             node that has joined a cluster
 # Output: "OSVC_HB OK - 4 of 4 peers beating | peers=4 beating=4 stale=0"; a
 #         stale peer is named: "OSVC_HB WARNING - 3 of 4 peers beating; stale: tch-004 | ..."
 #
 # Usage: check_osvc_hb
-# Environment (tests): HPS_OM (the om command, default om).
+# Environment (tests): HPS_OM (the om command, default om), OSVC_ETC (default
+# /etc/opensvc).
 # Exit: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 
 set -uo pipefail
@@ -38,6 +42,12 @@ command -v jq > /dev/null 2>&1 || unknown "jq is not installed"
 rc=0
 out=$(timeout 8 "$OM" daemon status --format json 2>&1) || rc=$?
 if [[ $rc -ne 0 ]]; then
+  # A node never joined to an om3 cluster has no cluster CA: om3 is installed
+  # in the image but not configured here (the lab DL360). Not a fault.
+  if [[ ! -s "${OSVC_ETC:-/etc/opensvc}/namespaces/system/sec/ca.conf" ]]; then
+    echo "OSVC_HB OK - om3 not configured on this node | peers=0 beating=0 stale=0"
+    exit 0
+  fi
   unknown "om daemon status failed (exit $rc): the daemon is not running or not answering"
 fi
 

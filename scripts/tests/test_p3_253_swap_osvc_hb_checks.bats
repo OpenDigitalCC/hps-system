@@ -151,6 +151,9 @@ hb_status() {
   [ "$status" -eq 3 ]
   [ "$output" = "OSVC_HB UNKNOWN - om is not installed" ]
   hb_status sch-002:true
+  export OSVC_ETC="$TEST_DIR/osvc-etc"
+  mkdir -p "$OSVC_ETC/namespaces/system/sec"
+  echo ca > "$OSVC_ETC/namespaces/system/sec/ca.conf"
   FAKE_OM_RC=1 run "$P/check_osvc_hb"
   [ "$status" -eq 3 ]
   [[ "$output" == "OSVC_HB UNKNOWN - om daemon status failed (exit 1): the daemon is not running or not answering" ]]
@@ -158,4 +161,11 @@ hb_status() {
   run "$P/check_osvc_hb"
   [ "$status" -eq 3 ]
   [[ "$output" == *"no readable JSON"* ]]
+}
+
+@test "osvc_hb: a node never joined to an om3 cluster (no cluster CA) is OK, not UNKNOWN" {
+  export OSVC_ETC="$TEST_DIR/no-osvc-etc"
+  FAKE_OM_RC=1 run "$P/check_osvc_hb"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OSVC_HB OK - om3 not configured on this node | peers=0 beating=0 stale=0" ]
 }

@@ -105,6 +105,20 @@ to LOAD CRITICAL and the DL360 to 7-9 % memory available.
   `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
   `t/225-resource-limits.t`.
 
+## Two noise fixes from the limits rollout (2026-11-12)
+
+- fix: a node asking the boot channel for an unset cluster key (the optional
+  `host_reserve_cpus`, `host_reserve_mem_mib`, `zfs_arc_max_pct`, which fall
+  back to defaults) logged an ERROR on the IPS at every boot. A missing
+  cluster key is an expected absence: still 404, now logged at info. Test:
+  `test_p1_120_cgi_status.bats`.
+- fix: `osvc_hb` was UNKNOWN every cycle on a node that has om3 installed but
+  was never joined to an om3 cluster (the lab DL360). With no cluster CA
+  (`/etc/opensvc/namespaces/system/sec/ca.conf`) and no daemon answer it is now
+  OK "om3 not configured on this node"; a joined node whose daemon does not
+  answer stays UNKNOWN. Needs the node image. Test:
+  `test_p3_253_swap_osvc_hb_checks.bats`.
+
 ## mirror-rejoin heals a leg md still lists as faulty (2026-11-12)
 
 - fix: with `--failfast` md keeps a lost leg listed as `faulty`, and when its

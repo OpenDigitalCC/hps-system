@@ -82,3 +82,7 @@ setup() {
   grep -q "cgi_auto_fail \"Key '\$var_name' not found\" 404 \"Not Found\"" "$ROOT/http/cgi-bin/boot_manager.sh"
   grep -q "cgi_auto_fail \"Cluster key '\$name' not found\" 404 \"Not Found\"" "$ROOT/http/cgi-bin/boot_manager.sh"
 }
+
+@test "an unset cluster key is an expected absence: logged at info, not error" {
+  grep -q "cgi_auto_fail \"Cluster key '\$name' not found\" 404 \"Not Found\" info" "$ROOT/http/cgi-bin/boot_manager.sh"
+}

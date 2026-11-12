@@ -188,7 +188,9 @@ if [[ "$cmd" == "cluster_variable" ]]; then
       cgi_success "$val"
       exit 0
     else
-      cgi_auto_fail "Cluster key '$name' not found" 404 "Not Found"
+      # An unset key is an expected absence: nodes ask for optional keys
+      # (host_reserve_*, zfs_arc_max_pct) and use their defaults on 404.
+      cgi_auto_fail "Cluster key '$name' not found" 404 "Not Found" info
       exit 1
     fi
   fi
