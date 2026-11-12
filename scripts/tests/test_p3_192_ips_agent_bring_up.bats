@@ -91,7 +91,7 @@ grep -qx 'allowed_ips = 127.0.0.1' "$c"
   run ce_ips_agent_bring_up
   [ "$status" -eq 0 ]
   s="$CTRL_EXEC_IPS_AGENT_ETC/scripts.conf"
-  [ "$(grep -c ' profile=ips-admin' "$s")" -eq 16 ]
+  [ "$(grep -c ' profile=ips-admin' "$s")" -eq 17 ]
   grep -qx "hps-onboard = $TEST_DIR/sys/ips-admin/hps-onboard profile=ips-admin" "$s"
   grep -qx "hps-bmc-credential = $TEST_DIR/sys/ips-admin/hps-bmc-credential profile=ips-admin input=raw" "$s"
   grep -qx "hps-cluster-config-apply = $TEST_DIR/sys/ips-admin/hps-cluster-config-apply profile=ips-admin input=raw" "$s"
@@ -104,7 +104,7 @@ grep -qx 'allowed_ips = 127.0.0.1' "$c"
   [ "$status" -eq 0 ]
   h="$CTRL_EXEC_DISPATCHER_CONF_DIR/hps-operator.conf"
   grep -qx 'ips_agent = ips.lab.hps' "$h"
-  grep -q '^scripts = hps-onboard hps-cluster-config .*ips-syslog-forward hps-repo hps-log$' "$h"
+  grep -q '^scripts = hps-onboard hps-cluster-config .*ips-syslog-forward hps-repo hps-log hps-metrics$' "$h"
 }
 
 @test "an unpaired agent is paired: window, verified request under ips.<domain>, guarded approve, window closed" {

@@ -183,6 +183,53 @@ hps-monitor: tick hosts=3 duration=1.9
 
 Nodes are called in parallel, eight at a time.
 
+## Reading the results: hps-metrics
+
+`hps-metrics` reads hps-monitor's lines back from the IPS's own log tree, per
+host. It is read-only and an ips-admin tool, so an operator runs it through
+`hps-op` (`docs/OPERATOR.md`); the cluster browser's utilisation tiles and the
+health badge's monitor row call it.
+
+    hps-metrics last <mac|hostname|ips|all> [--json]
+    hps-metrics series <mac|hostname|ips|all> [--hours N] [--step S] [--json]
+
+- `last`: each host's newest result: the checks of its newest run (the lines
+  before its newest `checks=<n> worst=<state>` line) with state, text and
+  perfdata values, its utilisation and compound, and `unreachable` when a newer
+  `UNREACHABLE` or `PAIR_FAILED` line says it was not answered. Hosts with no
+  line in the newest 15 minutes (or 3 intervals, when longer) are left out.
+- `series`: the host's utilisation per bucket of `--step` seconds (30 to 86400,
+  default 300) over the last `--hours` (1 to 168, default 24), at most 10080
+  buckets: the max of each utilisation and raw value within a bucket, the last
+  state of each check, and `_host` (the host's worst, or `UNREACHABLE`).
+  Empty buckets are `null`. `series all` gives every host's compound only, for
+  an overview in one call.
+- `ips` is the IPS itself (`ips.<domain>`, its `disk_resources` and `disk_log`
+  checks).
+
+Utilisation, in percent:
+
+| Resource | From |
+| --- | --- |
+| cpu | `busy` (check `cpu`) |
+| mem | 100 - `available_pct` (check `mem`) |
+| load | `scaled_load1` (load per core) x 100, capped at 100 (check `load`) |
+| disk | the worst `*used_pct` or `*inode_pct` of the `disk_*` checks; `disk_root` (plain `check_disk`) gives free space and free inodes in its text: 100 - the lower |
+| pool | the worst `<pool>_cap` (check `zpool` or `zpool_cap`) |
+| diskio | the busiest device's `<dev>_busy`: shown, not in the compound (time with a request in flight, not a share of capacity) |
+| net | none: no link capacity is recorded (the audit's speed is null); the busiest interface's rx and tx bytes per second are given as raw series |
+
+The **compound** is the max of cpu, mem, load, disk and pool: anything high
+makes it high. Levels: ok below 70, warning below 90, critical from 90.
+
+Source: `<log>/metrics.log` when it exists (the lab's collector,
+`lab/syslog-lab.pl`), else `<log>/ips/hps/<date>.log`, which every IPS writes
+(hps-monitor logs with tag `hps`); `source` names the one read. A collector's
+`metrics.log` also holds the lines forwarded from its inner IPSs: only hosts in
+this cluster's DNS domain are read, so each IPS answers for its own hosts (an
+inner IPS answers from its own disk). Files are read from the end; a call reads
+at most 512 MiB (`truncated` says when it stopped there).
+
 ## The interval
 
 Cluster key `monitor_interval_seconds`: `0` disables, otherwise 10 to 86400

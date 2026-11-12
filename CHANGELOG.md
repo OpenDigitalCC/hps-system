@@ -12,6 +12,25 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## hps-metrics: monitor results and utilisation per host (2026-11-12)
+
+The owner asked for a low-resolution utilisation indicator per machine in the
+browser, with the separate resources on a click. The monitor's results were
+only in syslog; no read verb gave them, so the browser's health badge could not
+read the monitor either.
+
+- new: `hps-metrics last <mac|hostname|ips|all>`: each host's newest monitor
+  result (checks, state, text, perfdata, unreachable) with its utilisation;
+  `hps-metrics series <host|all> [--hours N] [--step S]`: utilisation per time
+  bucket (max within a bucket, last state per check). Utilisation: cpu busy,
+  mem 100 - available, load per core x 100 (capped), disk the worst used or
+  inode %, pool the worst capacity; compound = their max. diskio busy is shown
+  but not in the compound; net has no capacity and is throughput only
+  (docs/MONITORING.md).
+- new: an ips-admin tool; the gate opens `last` and `series` only.
+- changed: `HPS::Log` takes a per-call scan budget (`max_scan`); its own stays
+  64 MiB.
+
 ## Pairing survives a cluster booting at once; guests stop in storage order (2026-11-12)
 
 Incident 2026-11-12 09:27 UTC, s1 after a host reboot: six nodes asked to pair

@@ -1,0 +1,128 @@
+#!/usr/bin/env perl
+# hps-metrics: hps-monitor's results per host, read from the IPS's own log tree
+# (docs/MONITORING.md): the latest result of each check, and utilisation series.
+# Read-only; an ips-admin tool, so it works through hps-op.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use POSIX qw(strftime);
+use HPS::Metrics;
+
+my %EXIT = (usage => 2, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-metrics: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-metrics last <mac|hostname|ips|all> [--json]
+  hps-metrics series <mac|hostname|ips|all> [--hours N] [--step S] [--json]
+last: each host's latest hps-monitor result: the state, text and perfdata of
+  every check of its newest run, its utilisation and compound, and "unreachable"
+  when a newer line says it did not answer. Hosts with no line in the newest
+  15 minutes (or 3 monitor intervals, if longer) are left out.
+series: one host's utilisation per bucket of S seconds over the last N hours
+  (the max in each bucket; for each check its last state), its raw throughput
+  and load, and the compound. all: every host's compound only.
+  --hours N   1 to 168 (default 24)
+  --step S    seconds per bucket, 30 to 86400 (default 300)
+Utilisation (%): cpu = busy; mem = 100 - available; load = load1 per core x 100,
+capped at 100; disk = the worst disk_* used (space or inodes); pool = the worst
+zpool capacity; diskio = the busiest device's busy % (time with I/O in
+flight, not a share of capacity: shown, not in the compound). net is shown as
+throughput only (no link capacity is known) and is not in the compound.
+compound = the max of cpu, mem, load, disk and pool.
+Source: <log>/metrics.log when it exists (the lab collector; lines of hosts
+outside this cluster's DNS domain, forwarded from inner IPSs, are left out),
+else <log>/ips/hps/<date>.log (the IPS's own hps lines). "source" names it.
+ips is the IPS itself (ips.<domain>: its disk_resources and disk_log checks).
+Environment: HPS_LOG (default /srv/hps-log), HPS_CONFIG_BASE (the registry).
+Exit: 0 ok, 1 failed, 2 usage, 4 no such host, or no result for it.
+USAGE
+    return 2;
+}
+
+sub fmt { my ($v) = @_; return defined $v ? sprintf('%5.1f', $v) : '    -' }
+
+sub render_last {
+    my ($r) = @_;
+    my $out = "# source $r->{source}" . ($r->{newest} ? ', newest line ' . strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $r->{newest}) : ', no lines') . "\n";
+    for my $h (@{ $r->{hosts} }) {
+        $out .= sprintf("%s (%s) %s %s compound %s%%", $h->{host}, $h->{mac} // ($h->{ips} ? 'IPS' : 'no MAC'), $h->{time}, $h->{worst},
+            defined $h->{compound} ? sprintf('%.1f', $h->{compound}) : '-');
+        $out .= join('', map { defined $h->{util}{$_} ? " $_ $h->{util}{$_}%" : '' } @HPS::Metrics::RESOURCES) . "\n";
+        $out .= "  unreachable $h->{unreachable_at}: $h->{unreachable}\n" if $h->{unreachable};
+        $out .= sprintf("  %-15s %-8s %s\n", $_->{check}, $_->{state}, $_->{text}) for @{ $h->{checks} };
+    }
+    $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
+    return $out;
+}
+
+sub render_series {
+    my ($r) = @_;
+    my $out = "# source $r->{source}, $r->{hours} h in ${\ $r->{step}} s buckets, times UTC\n";
+    if ($r->{target} eq 'all') {
+        for my $h (@{ $r->{hosts} }) {
+            my @v = grep { defined } @{ $h->{compound} };
+            my $max = 0;
+            $max = $_ > $max ? $_ : $max for @v;
+            $out .= sprintf("%-28s current %s%% max %s%% (%d buckets with data)\n", $h->{host}, fmt($h->{current}), fmt(@v ? $max : undef), scalar @v);
+        }
+        return $out;
+    }
+    my @res = grep { $r->{util}{$_} } @HPS::Metrics::RESOURCES;
+    $out .= sprintf("%-17s %8s %s\n", 'time', 'compound', join(' ', map { sprintf('%6s', $_) } @res));
+    for my $i (0 .. $#{ $r->{t} }) {
+        next unless defined $r->{compound}[$i];
+        $out .= sprintf("%-17s %8s %s\n", strftime('%m-%d %H:%M', gmtime $r->{t}[$i]), fmt($r->{compound}[$i]),
+            join(' ', map { sprintf('%6s', fmt($r->{util}{$_}[$i])) } @res));
+    }
+    $out .= "# no data in the window\n" unless $r->{lines};
+    $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
+    return $out;
+}
+
+sub main {
+    my @argv = @_;
+    my $cmd = shift @argv;
+    return usage() if !defined $cmd || $cmd eq '--help' || $cmd eq '-h';
+    my %o;
+    GetOptionsFromArray(\@argv, 'hours=s' => \$o{hours}, 'step=s' => \$o{step}, 'json' => \$o{json}) or return usage();
+    my $json = delete $o{json};
+    my %opt = map { defined $o{$_} ? ($_ => $o{$_}) : () } keys %o;
+    my $r = eval {
+        HPS::Metrics::_fail(usage => "$cmd needs one MAC, host name, ips or all") unless @argv == 1;
+        my $m = HPS::Metrics->new;
+        if ($cmd eq 'last') {
+            HPS::Metrics::_fail(usage => 'last takes no --hours or --step') if %opt;
+            $m->latest($argv[0]);
+        } elsif ($cmd eq 'series') {
+            $m->series($argv[0], %opt);
+        } else {
+            HPS::Metrics::_fail(usage => "unknown command '$cmd'");
+        }
+    };
+    if (!$r) {
+        my $err = $@;
+        if (ref $err && $err->isa('HPS::Metrics::Error')) {
+            return usage($err->message) if $err->kind eq 'usage';
+            print STDERR 'hps-metrics: ' . $err->message . "\n";
+            return $EXIT{ $err->kind } // 1;
+        }
+        if (ref $err && $err->isa('HPS::Log::Error')) {
+            return usage($err->message) if $err->kind eq 'usage';
+            print STDERR 'hps-metrics: ' . $err->message . "\n";
+            return $EXIT{ $err->kind } // 1;
+        }
+        print STDERR "hps-metrics: $err";
+        return 1;
+    }
+    print $json ? JSON::PP->new->canonical->encode($r) . "\n"
+        : $cmd eq 'last' ? render_last($r) : render_series($r);
+    return 0;
+}
+
+exit main(@ARGV);

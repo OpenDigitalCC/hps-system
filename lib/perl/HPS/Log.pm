@@ -134,6 +134,7 @@ sub new ($class, %opt) {
         log_dir  => $opt{log_dir} // $ENV{HPS_LOG} // '/srv/hps-log',
         registry => $opt{registry},
         now      => $opt{now},
+        max_scan => $opt{max_scan} // MAX_SCAN_BYTES,    # bytes per call (HPS::Metrics reads more)
         scanned  => 0,
     }, $class;
     return $self;
@@ -164,7 +165,7 @@ sub _each_line_backwards ($self, $file, $cb) {
     my $pos = -s $fh // 0;
     my $tail = '';
     while ($pos > 0) {
-        if ($self->{scanned} >= MAX_SCAN_BYTES) { $self->{budget_spent} = 1; close $fh; return 0 }
+        if ($self->{scanned} >= $self->{max_scan}) { $self->{budget_spent} = 1; close $fh; return 0 }
         my $len = $pos < BLOCK ? $pos : BLOCK;
         $pos -= $len;
         seek($fh, $pos, SEEK_SET) or last;
