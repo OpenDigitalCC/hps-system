@@ -205,6 +205,13 @@ to LOAD CRITICAL and the DL360 to 7-9 % memory available.
   `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
   `t/225-resource-limits.t`.
 
+## hps-op prints the reply's text as UTF-8 (2026-11-12)
+
+- fix: `hps-op` decoded the API's JSON reply to characters and printed the
+  tool's stdout and stderr bare, so a non-ASCII character (the `→` of
+  `hps-issues list --all`) warned "Wide character in print". Both are now
+  encoded as UTF-8 on output; `--json` still prints the raw reply.
+
 ## A transit network may set its own MTU (2026-11-12)
 
 - new: a purpose-transit layout network takes `mtu` (576-9000, default

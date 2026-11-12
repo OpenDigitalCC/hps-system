@@ -9,6 +9,7 @@ use warnings;
 use Getopt::Long qw(GetOptionsFromArray :config require_order no_ignore_case);
 use File::Temp qw(tempfile);
 use JSON::PP;
+use Encode qw(encode);
 
 sub usage {
     my ($msg) = @_;
@@ -123,8 +124,10 @@ sub main {
         return 1;
     }
     my $r = $data->{results}[0];
-    print STDOUT $r->{stdout} // '';
-    print STDERR $r->{stderr} // '';
+    # decode_json gives characters; the terminal wants UTF-8 bytes (a bare print
+    # of a wide character warns and the stream's state is unclear afterwards).
+    print STDOUT encode('UTF-8', $r->{stdout} // '');
+    print STDERR encode('UTF-8', $r->{stderr} // '');
     my $exit = $r->{exit} // 1;
     return ($exit =~ /\A\d+\z/ && $exit <= 255) ? $exit : 1;
 }
