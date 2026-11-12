@@ -12,6 +12,15 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## mirror-rejoin heals a leg md still lists as faulty (2026-11-12)
+
+- fix: with `--failfast` md keeps a lost leg listed as `faulty`, and when its
+  target returns iscsid revives the same device. `mirror-rejoin` matched that
+  entry as "already a member" and did nothing, so the IPS healer would retry
+  for ever. A faulty entry is now not a member: after the divergence check it
+  is removed (`mdadm --remove`), then re-added from the bitmap. Test:
+  `test_p3_13_mirror_ops.bats`.
+
 ## Mirror legs fail fast: an outage, not a stall (2026-11-12)
 
 Owner ruling: "i dont expect network timeouts of 15s - that then should

@@ -7,7 +7,10 @@
 # Usage: mirror-rejoin <name> --leg <spec>
 # The mirror must be assembled (and known: /run/hps/mirrors/<name>.json). The
 # returning leg is resolved (leg-resolve); if it is already a member nothing is
-# done (exit 0). Its superblock and the other leg's are compared with the
+# done (exit 0). A leg md still lists as faulty (failfast keeps a lost
+# leg listed; iscsid revives the same device when the target returns) is not a
+# member: its entry is removed (mdadm --remove), after the divergence check, and
+# then re-added. Its superblock and the other leg's are compared with the
 # divergence rule of mirror-assemble; a diverged pair is refused (exit 3, prints
 # the DIVERGED line, changes nothing): that is a human decision (phase 4 adds the
 # ZFS-snapshot rollback path). Otherwise
@@ -253,28 +256,44 @@ load_sidecar() {
   fi
 }
 
-already_member() {
-  local detail real
+# member_state <dev>: active (a working or rebuilding member), faulty (still
+# listed, but md failed it: with --failfast a lost iSCSI leg stays listed as
+# faulty, and when the target returns iscsid revives the same device), or
+# absent.
+member_state() {
+  local detail real line
   detail=$(mdadm --detail "/dev/md/$NAME" 2> /dev/null)
   real=$(readlink -f -- "$1")
-  grep -qF -e "$1" -e "$real" <<< "$detail"
+  line=$(grep -F -e "$1" -e "$real" <<< "$detail" | head -1 || true)
+  if [[ -z "$line" ]]; then
+    echo absent
+  elif [[ "$line" == *faulty* ]]; then
+    echo faulty
+  else
+    echo active
+  fi
 }
 
 main() {
-  local dev
+  local dev state
   parse_args "$@"
   if ! array_present; then
     refuse "/dev/md/$NAME is not assembled"
   fi
   load_sidecar
   dev=$(resolve_leg "$RETURNING")
-  if already_member "$dev"; then
+  state=$(member_state "$dev")
+  if [[ "$state" == active ]]; then
     log "$RETURNING is already a member of $NAME; nothing to do"
     return 0
   fi
   read_sb "$RET_IDX" "$dev" "$RETURNING"
   read_sb "$OTHER_IDX" "${DEVS[$OTHER_IDX]}" "${LEGS[$OTHER_IDX]}"
   check_consistent "${LEGS[0]}" "${LEGS[1]}"
+  if [[ "$state" == faulty ]]; then
+    log "$RETURNING is listed as faulty in $NAME; removing that entry before the re-add"
+    run mdadm "/dev/md/$NAME" --remove "$dev" >&2 || { log "could not remove the faulty $dev from $NAME"; exit 1; }
+  fi
   if ! run mdadm "/dev/md/$NAME" --re-add --failfast "$dev"; then
     log "re-add of $RETURNING failed (no usable bitmap?); a full --add is a human decision"
     exit 1

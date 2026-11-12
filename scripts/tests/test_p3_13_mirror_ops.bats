@@ -203,3 +203,25 @@ V
   [ "$status" -eq 3 ]
   p3_no_state_change
 }
+
+@test "rejoin: a leg md still lists as faulty is removed, then re-added (not 'already a member')" {
+  p3_degraded
+  echo "       1     8     32        -      faulty   $REMDEV" >> "$STATE/detail.vm1-disk0"
+  p3_sb "$LOCDEV" "$P3_UUID" 60 "$P3_T2" 0 'A.'
+  p3_sb "$REMDEV" "$P3_UUID" 55 "$P3_T1" 1 AA
+  run --separate-stderr bash "$S/mirror-rejoin" vm1-disk0 --leg "$P3_REM_SPEC"
+  [ "$status" -eq 0 ]
+  grep -qxF "mdadm /dev/md/vm1-disk0 --remove $REMDEV" "$SHIM_LOG"
+  grep -qxF "mdadm /dev/md/vm1-disk0 --re-add --failfast $REMDEV" "$SHIM_LOG"
+  [ "$(grep -n -- "--remove $REMDEV" "$SHIM_LOG" | cut -d: -f1)" -lt "$(grep -n -- "--re-add" "$SHIM_LOG" | cut -d: -f1)" ]
+}
+
+@test "rejoin: a faulty-listed leg that diverged is refused before anything is removed" {
+  p3_degraded
+  echo "       1     8     32        -      faulty   $REMDEV" >> "$STATE/detail.vm1-disk0"
+  p3_sb "$LOCDEV" "$P3_UUID" 60 "$P3_T2" 0 'A.'
+  p3_sb "$REMDEV" "$P3_UUID" 58 "$P3_T1" 1 '.A'
+  run bash "$S/mirror-rejoin" vm1-disk0 --leg "$P3_REM_SPEC"
+  [ "$status" -eq 3 ]
+  run ! grep -qF -- "--remove" "$SHIM_LOG"
+}
