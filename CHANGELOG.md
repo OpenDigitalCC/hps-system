@@ -12,6 +12,48 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Pairing survives a cluster booting at once; guests stop in storage order (2026-11-12)
+
+Incident 2026-11-12 09:27 UTC, s1 after a host reboot: six nodes asked to pair
+at once. The approval jobs waited behind sch-001's 30 s `storage-up` in the one
+serial job runner, the approver gave up and answered a bare 403, the first
+approval closed the pairing window under the other five, and their retries came
+after their own 300 s windows. Each VM had to be rebooted by hand. In the same
+shutdown, s1's SCH VMs stopped before its TCH VMs and the probes' md mirrors
+lost both iSCSI legs.
+
+- changed: `hps-jobs` runs the pairing kinds in their own lane beside the work
+  lane (one job at a time in each); an approval never waits behind a storage,
+  net or workload job. One approval waits at most
+  `CTRL_EXEC_PAIR_REQUEST_TIMEOUT` (300 s, equal to the node's
+  `HPS_PAIR_TIMEOUT`) for its jobs (ADR 0006).
+- new: the pairing API says why: 200 `paired`; 503 `pending`,
+  `unknown_request`, `no_request` (retry); 410 `outside_window` (reboot); 403
+  `reboots_exhausted`, `refused` (stop). The body carries `reason`, `details`,
+  `window_left`, `last_boot_at` (ADR 0002, amendment 2026-11-12).
+- changed: the pairing listener stays open while another host is within its
+  own window and unpaired; check 3 (the per-host window) is unchanged.
+- new: `hps-pair` retries after 5, 10, 20, 40, 60, 60 ... s within the window,
+  reboots into netboot on 410 (at most 3 times, host key `pair_reboots`), and
+  on 403 exits 3, which `hps-node-init` and `hps-audit-pair` do not restart
+  (`RestartPreventExitStatus = 3`). After the last reboot the IPS records
+  `pair_failed_at`; `hps-monitor` logs `state=PAIR_FAILED` and
+  `hps-ips-check` a WARN `pairing`. A pairing clears both keys.
+- changed: a storage provider (a `boot: network` VM with disks: a nested SCH
+  or IPS) defaults to workload priority 1 and, at one priority, starts first
+  and stops last. `vm-start --priority N [--provides-storage]` records the
+  order on the node, and `hps-shutdown-storage` (every poweroff and reboot,
+  `node-poweroff` included) stops guests priority 5 first, consumers before
+  providers (docs/WORKLOADS.md "Stop order on a node").
+- tests: `t/207-jobs-pairing-lane.t`, `t/208-pair-failed-monitor.t`,
+  `t/209-workload-stop-order.t`, `test_p3_210_pair_retry.bats`,
+  `test_p3_211_pair_window.bats`, `test_p3_212_guest_stop_order.bats`; the
+  hps-ips-check pairing case in `test_p3_90_ips_check.bats`.
+- not done: the dispatcher listener is still one for the IPS and an open while
+  it runs does not extend it (IPS-17): a host that boots late in another
+  host's window can find it stopped early, and then gets its window back only
+  through the reboot.
+
 ## A full CNH state disk can be recovered, and VM disks grown (2026-11-12)
 
 Lab 2026-11-12: a bootstrap of a new pin filled cnh-001's 20G disk (the s1 IPS
