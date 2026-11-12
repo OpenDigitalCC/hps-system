@@ -41,6 +41,16 @@ was no way to hand a guest its first-boot configuration.
 - needs a node image rebuild (the new allowlisted script) on every compute
   host that runs a seeded VM.
 
+## vm-disk-hotplug: the pulled drive of a failure drill (2026-11-12)
+
+- new: node script `vm-disk-hotplug <vm> detach|attach <target>`. `detach`
+  saves the running guest's `<disk>` element for that target (`virsh dumpxml
+  --xpath`: source, driver, serial, so `/dev/disk/by-id` in the guest is the
+  same afterwards) and unplugs it live; `attach` plugs back only that saved
+  element. Live only; the boot disk is refused. For the scale test's
+  "detach one of s1-sch-001's three disks" drill. Tests:
+  `test_p3_222_vm_disk_hotplug.bats`, `test_p3_26_vm_wiring.bats`.
+
 ## VXLAN passes the node firewall (2026-11-12)
 
 - fix: the NixOS firewall (on by default) dropped VXLAN's udp 4789, so

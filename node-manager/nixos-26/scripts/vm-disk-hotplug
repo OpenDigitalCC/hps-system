@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+#
+# vm-disk-hotplug - unplug one disk from a running guest, and plug it back.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-disk-hotplug <vm> detach <target>
+#        vm-disk-hotplug <vm> attach <target>
+#
+#   <vm>      ^[a-z0-9][a-z0-9-]{0,31}$
+#   <target>  the guest's disk target as virsh domblklist lists it (vda, vdb,
+#             sda, ...)
+#
+# The "pulled drive" of a failure drill, and the way back. detach saves the
+# disk's own <disk> element from the live domain XML (virsh dumpxml --xpath;
+# source, driver, target and serial, so /dev/disk/by-id in the guest is the
+# same after attach) to /run/hps/hotplug/<vm>-<target>.xml, then
+#   virsh detach-device <vm> <file> --live
+# attach plugs back exactly that saved element (never a device named on the
+# command line), then removes the file:
+#   virsh attach-device <vm> <file> --live
+# Live only: the persistent definition is never changed, so a guest restart
+# also brings the disk back. The guest sees a disk vanish and return (a ZFS
+# pool on it goes DEGRADED, then resilvers what it missed).
+#
+# Last line: VM-DISK <vm> <target> <detached|attached|already-detached|already-attached>
+# Exit: 0 ok, 2 usage, 3 refused (not running, no such disk, nothing saved to
+#       attach, the boot disk), 4 not defined, 1 a command failed.
+#
+# Overrides for tests: HPS_HOTPLUG_DIR.
+
+set -euo pipefail
+
+: "${HPS_HOTPLUG_DIR:=/run/hps/hotplug}"
+
+VM=""
+OP=""
+TARGET=""
+
+log() {
+  printf '[vm-disk-hotplug] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-disk-hotplug <vm> detach|attach <vda|vdb|sda|...>
+Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 failed.
+USAGE
+}
+
+parse_args() {
+  if [[ $# -ne 3 ]]; then
+    usage
+    exit 2
+  fi
+  VM=$1
+  OP=$2
+  TARGET=$3
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+  [[ "$OP" == detach || "$OP" == attach ]] || { log "operation must be detach or attach"; usage; exit 2; }
+  [[ "$TARGET" =~ ^(vd|sd)[a-z]{1,2}$ ]] || { log "target must be vda, sdb, ..."; usage; exit 2; }
+}
+
+# has_target: true when the live domain lists TARGET.
+has_target() {
+  local t rest
+  while read -r t rest; do
+    [[ "$t" == "$TARGET" ]] && return 0
+  done < <(run virsh -c qemu:///system domblklist "$VM")
+  return 1
+}
+
+# disk_xml: the <disk>...</disk> element of the live domain whose target is
+# TARGET, on stdout (empty when none).
+disk_xml() {
+  run virsh -c qemu:///system dumpxml "$VM" --xpath "//devices/disk[target/@dev='$TARGET']"
+}
+
+main() {
+  local state file xml
+  parse_args "$@"
+  if ! state=$(run virsh -c qemu:///system domstate "$VM" 2> /dev/null); then
+    log "$VM is not defined"
+    exit 4
+  fi
+  [[ "$state" == running || "$state" == paused ]] || refuse "$VM is $state: hotplug is for a running guest"
+  file="$HPS_HOTPLUG_DIR/$VM-$TARGET.xml"
+  if [[ "$OP" == detach ]]; then
+    if ! has_target; then
+      [[ -f "$file" ]] || refuse "$VM has no disk $TARGET"
+      log "$TARGET of $VM is already detached (saved in $file)"
+      printf 'VM-DISK %s %s already-detached\n' "$VM" "$TARGET"
+      return 0
+    fi
+    xml=$(disk_xml)
+    [[ -n "$xml" ]] || { log "cannot find the <disk> element of $TARGET"; exit 1; }
+    [[ "$xml" != *"<boot "* ]] || refuse "$TARGET is $VM's boot disk"
+    run mkdir -p "$HPS_HOTPLUG_DIR"
+    printf '%s\n' "$xml" > "$file"
+    run virsh -c qemu:///system detach-device "$VM" "$file" --live >&2 || { log "detach of $TARGET failed"; exit 1; }
+    log "$VM: $TARGET detached (live); definition kept in $file"
+    printf 'VM-DISK %s %s detached\n' "$VM" "$TARGET"
+    return 0
+  fi
+  if has_target; then
+    run rm -f "$file"
+    log "$TARGET of $VM is attached"
+    printf 'VM-DISK %s %s already-attached\n' "$VM" "$TARGET"
+    return 0
+  fi
+  [[ -f "$file" ]] || refuse "nothing saved for $VM $TARGET: only a disk this script detached can be attached"
+  run virsh -c qemu:///system attach-device "$VM" "$file" --live >&2 || { log "attach of $TARGET failed"; exit 1; }
+  run rm -f "$file"
+  log "$VM: $TARGET attached again (live)"
+  printf 'VM-DISK %s %s attached\n' "$VM" "$TARGET"
+}
+
+main "$@"

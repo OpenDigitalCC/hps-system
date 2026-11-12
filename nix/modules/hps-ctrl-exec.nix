@@ -122,6 +122,8 @@ in
       vm-stop.options.profile = "node";
       vm-disk-resize.source = mkScript "vm-disk-resize" (scriptsDir + "/vm-disk-resize");
       vm-disk-resize.options.profile = "node";
+      vm-disk-hotplug.source = mkScript "vm-disk-hotplug" (scriptsDir + "/vm-disk-hotplug");
+      vm-disk-hotplug.options.profile = "node";
       vm-status.source = mkScript "vm-status" (scriptsDir + "/vm-status");
       vm-status.options.profile = "node";
       vm-undefine.source = mkScript "vm-undefine" (scriptsDir + "/vm-undefine");
