@@ -123,6 +123,25 @@ is($r->{count}, 0, '--grep matches after redaction: a secret cannot be probed');
 $r = $log->host_log('cnh-001', grep => 'redacted');
 is($r->{count}, 5, '--grep redacted finds the withheld lines');
 
+#--- --min-level --------------------------------------------------------------------------
+$r = $log->host_log('cnh-001', min_level => 'warning');
+is_deeply([ map { "$_->{time} $_->{level}" } @{ $r->{lines} } ],
+    [ '2026-11-12T08:01:00Z error', '2026-11-12T08:02:00Z warning' ],
+    '--min-level warning: the warnings and errors only (redacted lines, level info, left out)');
+is($r->{min_level}, 'warning', '--min-level is named in the result');
+is($r->{redacted}, 0, '--min-level warning: no redacted line');
+$r = $log->host_log('cnh-001', min_level => 'error');
+is_deeply([ map { $_->{time} } @{ $r->{lines} } ], [ '2026-11-12T08:01:00Z' ], '--min-level error: errors only');
+$r = $log->host_log('cnh-001', min_level => 'warning', lines => 1);
+is_deeply([ map { $_->{time} } @{ $r->{lines} } ], [ '2026-11-12T08:02:00Z' ],
+    '--lines counts the lines that pass: the newest warning-or-worse line');
+$r = $log->host_log('cnh-001', min_level => 'warning', grep => 'space');
+is($r->{count}, 1, '--min-level and --grep together');
+ok(!exists $log->host_log('cnh-001')->{min_level}, 'no min_level in the result without the option');
+$r = $log->ips_log(min_level => 'error');
+is_deeply([ map { "$_->{source}:$_->{message}" } @{ $r->{lines} } ], [ 'events:storage failed on sch-001' ],
+    'ips --min-level error: the error event only');
+
 #--- the IPS ------------------------------------------------------------------------------
 $r = $log->ips_log;
 is($r->{target}, 'ips', 'ips target');
@@ -152,6 +171,8 @@ refused(sub { $log->host_log('cnh-001', lines => 0) }, 'usage', '--lines 0: usag
 refused(sub { $log->host_log('cnh-001', since => 'x') }, 'usage', '--since x: usage');
 refused(sub { $log->host_log('cnh-001', grep => 'a b') }, 'usage', '--grep with a space: usage');
 refused(sub { $log->host_log('cnh-001', grep => '../x') }, 'usage', '--grep with a slash: usage');
+refused(sub { $log->host_log('cnh-001', min_level => 'info') }, 'usage', '--min-level info: usage (info is every line)');
+refused(sub { $log->host_log('cnh-001', min_level => 'WARN') }, 'usage', '--min-level WARN: usage');
 
 #--- an address that is not IPv4 never becomes a path ----------------------------------------
 $reg->host_set('aabbccddee03', 'HOSTNAME', 'odd-001');
@@ -175,6 +196,12 @@ system("$^X $bin host nosuch 2>/dev/null");
 is($? >> 8, 4, 'cli: no such host exits 4');
 system("$^X $bin host cnh-001 --lines 9999 2>/dev/null");
 is($? >> 8, 2, 'cli: --lines over 500 exits 2');
+$d = decode_json(`$^X $bin host cnh-001 --min-level warning --json`);
+is($? >> 8, 0, 'cli: --min-level warning exits 0');
+is_deeply([ map { $_->{level} } @{ $d->{lines} } ], [ 'error', 'warning' ], 'cli: --min-level warning');
+is($d->{min_level}, 'warning', 'cli: min_level in the JSON');
+system("$^X $bin host cnh-001 --min-level debug 2>/dev/null");
+is($? >> 8, 2, 'cli: --min-level debug exits 2');
 system("$^X $bin purge 2>/dev/null");
 is($? >> 8, 2, 'cli: an unknown verb exits 2');
 system("$^X $bin --help 2>/dev/null");

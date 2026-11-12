@@ -86,7 +86,7 @@ executor.
 | `hps-monitor` | `bin/hps-monitor run` | `run` |
 | `ips-syslog-forward` | `bin/hps-syslog-forward` | `<ipv4> <prefix>`, `off`, `show` |
 | `hps-repo` | `bin/hps-repo` | - (`seed` from the IPS's own cache only: a URL has a `/`; `--profiles a,b`) |
-| `hps-log` | `bin/hps-log` | `host`, `ips` (read-only: the newest syslog lines of a host or of the IPS, secret lines redacted; docs/LOGGING.md) |
+| `hps-log` | `bin/hps-log` | `host`, `ips` (read-only: the newest syslog lines of a host or of the IPS, secret lines redacted; `--min-level warning` (or `error`) for the warnings and errors only; docs/LOGGING.md) |
 | `hps-metrics` | `bin/hps-metrics` | `last`, `series` (read-only: hps-monitor's latest result and utilisation series per host; docs/MONITORING.md) |
 
 `ips-admin-exec` passes the arguments through (the tools validate their own)

@@ -17,8 +17,8 @@ sub usage {
     print STDERR "hps-log: $msg\n" if $msg;
     print STDERR <<'USAGE';
 Usage:
-  hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--json]
-  hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--json]
+  hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]
+  hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]
 host: the newest lines the IPS received from the host, from every address the
   registry knows for it (its IP, and the addresses its stored audit recorded),
   merged by time.
@@ -28,8 +28,11 @@ ips: the IPS's own lines: ips/<date>.log, ips/hps/<date>.log and the
   --since MINUTES  only lines of the last MINUTES (1 to 43200)
   --grep WORD      only lines that contain WORD (case-insensitive; one word of
                    A-Z a-z 0-9 _ . , : = @ + -), matched after redaction
+  --min-level LEVEL  only lines of LEVEL or worse: warning (warnings and errors)
+                   or error; a redacted line (level info) is left out
   --json           {target, host, mac, addresses, sources, lines:[{time, epoch,
-                   host, tag, message, level, source}], count, redacted, truncated}
+                   host, tag, message, level, source}], count, redacted, truncated,
+                   limit, and since_minutes, grep, min_level when given}
 A line that names a secret (a word matching the cluster-config secret-name
 rule: secret, passw, token, credential, psk, private, key), or holds a PEM
 marker, an operator token or 64 hex digits, is shown as [redacted].
@@ -61,7 +64,7 @@ sub main {
     my $cmd = shift @argv;
     return usage() if !defined $cmd || $cmd eq '--help' || $cmd eq '-h';
     GetOptionsFromArray(\@argv, 'lines=s' => \$o{lines}, 'since=s' => \$o{since},
-        'grep=s' => \$o{grep}, 'json' => \$o{json}) or return usage();
+        'grep=s' => \$o{grep}, 'min-level=s' => \$o{min_level}, 'json' => \$o{json}) or return usage();
     my $json = delete $o{json};
     my %opt = map { defined $o{$_} ? ($_ => $o{$_}) : () } keys %o;
     my $r = eval {

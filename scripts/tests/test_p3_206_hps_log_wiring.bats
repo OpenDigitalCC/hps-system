@@ -47,6 +47,18 @@ gate() {
   [[ "$output" == *"tool=hps-log args=ips --lines 500"* ]]
 }
 
+@test "the ips-admin gate: --min-level passes for host and ips (the browser's filtered log)" {
+  gate host 52:54:00:02:d3:ca --lines 50 --min-level warning --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-log args=host 52:54:00:02:d3:ca --lines 50 --min-level warning --json"* ]]
+  gate ips --lines 50 --min-level error --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-log args=ips --lines 50 --min-level error --json"* ]]
+  gate host cnh-001 --min-level '../warning'
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"tool="* ]]
+}
+
 @test "the ips-admin gate: any other hps-log verb, or a path, is refused" {
   gate
   [ "$status" -eq 2 ]

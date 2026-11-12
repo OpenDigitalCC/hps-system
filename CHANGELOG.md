@@ -12,6 +12,20 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## hps-log --min-level: warnings and errors at the source (2026-11-12)
+
+The owner asked for the browser's log to open on a filtered view (a host's
+warnings and errors) with the full log one click away, and for the filtering
+to happen on the IPS rather than in the page.
+
+- new: `hps-log host|ips --min-level warning|error`: only lines of that level
+  or worse (level as read from the text; a redacted line is info and never
+  shown); `--lines` counts the lines that pass, so the newest 50 warnings
+  reach back further than the newest 50 lines. The JSON names `min_level`.
+- the ips-admin gate already passes the option (a plain token); the wiring
+  test now proves it. An IPS without this change refuses the option (usage,
+  exit 2): the browser then shows the full log with a note.
+
 ## hps-metrics: monitor results and utilisation per host (2026-11-12)
 
 The owner asked for a low-resolution utilisation indicator per machine in the

@@ -49,8 +49,8 @@ this tree. It is read-only and an ips-admin tool, so an operator runs it
 through `hps-op` (`docs/OPERATOR.md`); the cluster browser's "Recent log"
 group calls it.
 
-    hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--json]
-    hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--json]
+    hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]
+    hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]
 
 - `host`: a MAC in any form, a registry `HOSTNAME` or an FQDN. A node is
   filed by the address it sent from, so its lines are read from every
@@ -62,7 +62,10 @@ group calls it.
   the `events.log` lines of host `ips`. hps-monitor's per-check results are
   left out (a line per check per node every tick; `metrics.log` keeps them).
 - `--lines` 1 to 500, default 50, newest last; `--since` 1 to 43200 minutes;
-  `--grep` one word, case-insensitive. A call reads at most 64 MiB of log
+  `--grep` one word, case-insensitive. `--min-level warning` keeps the
+  warnings and errors, `--min-level error` the errors; `--lines` then counts
+  the lines that pass (the browser's "Recent log" opens on this, the newest
+  warnings and errors, and offers the full log). A call reads at most 64 MiB of log
   (`truncated` says when it stopped there).
 - `level` (error, warning, info) is read from the text: the files keep no
   syslog priority. "No space left", "failed", "refused", `state=CRITICAL` are
@@ -78,6 +81,7 @@ of `A-Z a-z 0-9 _`) matches the cluster-config secret-name rule
 `credential`, `psk`, `private`, or `key` as a whole word or a `_key_`
 part), or the line holds a PEM marker (`-----BEGIN ...-----`), an operator
 token (`hpsop_...`) or 64 hex digits in a row (a raw key). `--grep` matches
-after redaction, so it cannot be used to probe a withheld line. The rule is
+after redaction, so it cannot be used to probe a withheld line. A redacted
+line has level info, so `--min-level` never shows one. The rule is
 deliberately wide: kernel lines such as "Key type asymmetric registered"
 are withheld too.

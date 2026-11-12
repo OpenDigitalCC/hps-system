@@ -200,7 +200,12 @@ sub _entry ($rec, $source) {
     return \%e;
 }
 
+# --min-level: a line passes at its level or worse. A redacted line is info (its
+# text, and so its level, is withheld), so a filtered read never shows one.
+my %RANK = (info => 0, warning => 1, error => 2);
+
 sub _matches ($e, $opt) {
+    return 0 if defined $opt->{min_level} && $RANK{ $e->{level} } < $RANK{ $opt->{min_level} };
     return 1 unless defined $opt->{grep};
     my $w = lc $opt->{grep};
     return index(lc("$e->{host} $e->{tag} $e->{message}"), $w) >= 0 ? 1 : 0;
@@ -241,7 +246,7 @@ sub _merge ($n, @lists) {
     return map { $_->[0] } @all;
 }
 
-# options(%raw): checked {lines, since, grep}; dies (usage) naming the bad one.
+# options(%raw): checked {lines, since, grep, min_level}; dies (usage) naming the bad one.
 sub options (%raw) {
     my %o = (lines => DEFAULT_LINES);
     if (defined $raw{lines}) {
@@ -258,6 +263,11 @@ sub options (%raw) {
         _fail(usage => '--grep takes one word: 1 to 64 of A-Z a-z 0-9 _ . , : = @ + -')
             unless $raw{grep} =~ $WORD_RE;
         $o{grep} = $raw{grep};
+    }
+    if (defined $raw{min_level}) {
+        _fail(usage => '--min-level must be warning or error')
+            unless $raw{min_level} =~ /\A(?:warning|error)\z/;
+        $o{min_level} = $raw{min_level};
     }
     return \%o;
 }
@@ -367,6 +377,7 @@ sub _result ($self, $head, $sources, $opt, @lists) {
         limit     => $opt->{lines},
         (defined $opt->{since} ? (since_minutes => $opt->{since}) : ()),
         (defined $opt->{grep}  ? (grep => $opt->{grep}) : ()),
+        (defined $opt->{min_level} ? (min_level => $opt->{min_level}) : ()),
     };
 }
 
