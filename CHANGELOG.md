@@ -12,6 +12,57 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Zvol write properties, one-disk pools, host reserve by TYPE, link-speed floor (2026-11-12)
+
+Owner-approved zvol sync/logbias verb; IPS-34 items 12 and 13; the one-disk
+storage host.
+
+- **New** `hps-storage <host> zfs-set <dataset> <prop>=<value>...` (node script
+  `storage-zfs-set`, allowlisted, profile node): `sync`
+  (standard|always|disabled) and `logbias` (latency|throughput) on `<pool>/enc`,
+  `<pool>/enc/vm` or a zvol under them, nothing else; a pool root or any other
+  dataset is refused (exit 3). Idempotent; the resulting `zfs get -H
+  sync,logbias` are the last stdout lines. Through the operator API
+  (`hps-op ... hps-storage sch-001 zfs-set c1/enc/vm/x sync=disabled
+  logbias=throughput`); the `ips-admin` gate takes the tokens as plain tokens.
+- **New** cluster keys `storage_zvol_sync` (standard|disabled, default
+  standard) and `storage_zvol_logbias` (latency|throughput, default latency):
+  `hps-storage zvol-create` passes them to `storage-zvol-create` as
+  `--sync`/`--logbias` (`-o` on the create) and `create` to
+  `storage-pool-create` (on `<pool>/enc`), only when not the ZFS default;
+  `hps-workload create` goes through `zvol-create`, so there is one path. A key
+  outside its enum refuses the op. `disabled` + `throughput` is for a cluster
+  whose durability is the cross-host md mirror (the lab DL360: two QLC SSDs,
+  every nested write journalled twice): the storage host acknowledges at once
+  and flushes per transaction group; a storage host crash loses its last
+  transaction group on that leg, the other leg has it and the bitmap resync
+  restores it. `docs/CLUSTER-CONFIG.md` "Zvol write properties".
+- **New** `hps-storage create` with one `--disk`: a plain single-vdev pool,
+  the normal storage-host shape (owner: each SCH gets one disk, the mirror
+  runs across the two SCHs, one md leg per SCH). Two to four disks are still
+  one mirror. `storage-pool-create` puts `mirror` in only with two or more.
+- IPS-34 item 13: `host-reserve-apply` takes its roles from the node's
+  registry `TYPE` through the boot channel (`cmd=host_variable`), the image's
+  `/etc/hps/roles` only when the host has no `TYPE`; `roles_from=
+  registry|image|none` in the record and the `HOST-RESERVE` line. A TCH-only
+  node on the converged image keeps the ZFS default ARC and the full guest
+  budget (a 6 GiB nested TCH: 4096 MiB to guests, was 2394); an SCH or SCH,TCH
+  host is unchanged.
+- IPS-34 item 12: `hps-node net-up` refuses every storage and transit network
+  of a host whose boot NIC the audit read below the **new** cluster key
+  `network_min_link_mbps` (default 1000; 0 disables; an unknown speed
+  passes), exit 3, the line naming the NIC, its speed and the key: `the boot
+  NIC enp1s0 (rtl8139) is 100 Mb/s, below the cluster's network_min_link_mbps
+  1000 (hps-cluster-config set network_min_link_mbps 100 allows it)`. s3's
+  tch-004 is the documented case; the lab sets the key to 100 on s3.
+- Tests: `test_p2_75_storage_zfs_set.bats` (new), `test_p2_70`, `test_p2_31`
+  (options, the one-disk pool), `test_p3_200` (the gate), `test_p3_251` (TYPE
+  through the CGI shim); `t/51-storage-zfs-set.t` (new), `t/40`, `t/42`,
+  `t/199-net-up.t`.
+- roll-out: node image (`storage-zfs-set`, `storage-zvol-create`,
+  `storage-pool-create`, `host-reserve-apply`); IPS tree (`HPS::Storage`,
+  `HPS::Node`, `HPS::ClusterConfig`, `hps-storage`, the gate).
+
 ## IPS-34 drill findings, second pass: vms in one call, CNH mounts through the unit (2026-11-12)
 
 Items 6 (again) and 11 of IPS-34, from s2 and s3 on 2026-11-12.

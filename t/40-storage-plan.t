@@ -63,12 +63,14 @@ is_deeply($st->plan('create', pool => 'lab', %d2, wipe => 1)->[0]{args}, [ 'lab'
 is_deeply($st->plan('create', pool => 'lab', disks => [ '/dev/disk/by-id/ata-SSD1', 'ata-SSD2', 'ata-SSD3' ])->[0]{args},
     [ 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD2', '--disk', 'ata-SSD3' ], 'three disks (three-way mirror); the by-id directory is dropped');
 is(scalar(@{ $st->plan('create', pool => 'lab', disks => [ map {"ata-SSD$_"} 1 .. 4 ])->[0]{args} }), 9, 'four disks accepted');
+is_deeply($st->plan('create', pool => 'lab', disks => ['ata-SSD1'])->[0]{args}, [ 'lab', '--disk', 'ata-SSD1' ],
+    'one disk: a single-vdev pool, the normal SCH shape (the mirror is across storage hosts)');
 
 # --- the disk and wipe arguments are validated (what the approval used to check)
 for my $case (
-    [ {}, qr/two to four --disk/, 'no disks' ],
-    [ { disks => ['ata-SSD1'] }, qr/two to four --disk/, 'one disk' ],
-    [ { disks => [ map {"ata-SSD$_"} 1 .. 5 ] }, qr/two to four --disk/, 'five disks' ],
+    [ {}, qr/one to four --disk/, 'no disks' ],
+    [ { disks => [] }, qr/one to four --disk/, 'an empty list' ],
+    [ { disks => [ map {"ata-SSD$_"} 1 .. 5 ] }, qr/one to four --disk/, 'five disks' ],
     [ { disks => [ 'ata-SSD1', 'ata-SSD1' ] }, qr/disk listed twice: ata-SSD1/, 'a disk twice' ],
     [ { disks => [ 'ata-SSD1', '/dev/disk/by-id/ata-SSD1' ] }, qr/disk listed twice/, 'a disk twice, once with the directory' ],
     [ { disks => [ 'ata-SSD1', '/dev/sdb' ] }, qr/not a \/dev\/disk\/by-id name/, 'a /dev/sdX path' ],

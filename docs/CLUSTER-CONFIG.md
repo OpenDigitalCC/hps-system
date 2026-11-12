@@ -168,6 +168,21 @@ host's NIC cannot do jumbo frames (an emulated rtl8139, an old onboard NIC):
 every TCH of the cluster then uses that MTU on transit, and a VXLAN over it
 defaults to it less 50 (a VXLAN `mtu` above that is refused).
 
+A boot NIC that is too slow for the storage path is refused as a whole: when
+the audit read the boot NIC's link speed (host key `macs`, the entry of the
+NIC the host last booted from) and it is below `network_min_link_mbps`
+(default 1000; `0` turns the check off; a speed the audit could not read is
+accepted), every storage and transit network of the host is refused and
+`net-up` exits 3 with the NIC, its speed and the key named:
+
+    storage-vlan113 (vlan 113): refused: the boot NIC enp1s0 (rtl8139) is 100 Mb/s, below the cluster's network_min_link_mbps 1000 (hps-cluster-config set network_min_link_mbps 100 allows it)
+
+IPS-34 item 12: s3's tch-004 (one emulated rtl8139 NIC for provisioning,
+storage and transit, the lab's "old onboard NIC") saturated during its probe's
+first mirror resync, iSCSI NOP-INs timed out and sch-001 dropped the leg; it
+will flap under any sustained resync. A lab that wants it anyway sets
+`network_min_link_mbps = 100` on s3; a site keeps the default.
+
 Scale test s1, sch-001 at 10.11.0.153/24, storage base VLAN 113, subnet base
 10.113, transit VLAN 112 on 10.11.2.0/24:
 
@@ -227,6 +242,15 @@ through `cmd=cluster_variable`; an empty, absent or out-of-range value takes
 the default, so the reserve is always on. A change applies at the node's
 next boot, or at once with `ced run host-reserve-apply` on that node.
 
+Which of the settings apply follows the node's assigned `TYPE` (host key, read
+through `cmd=host_variable`), not the image: the converged image carries
+`SCH,TCH`, so before IPS-34 item 13 a TCH-only node also capped its ARC and
+lost that from its guest budget (a 6 GiB nested TCH kept 2394 MiB for guests).
+A host with no `TYPE` yet (unassigned, or the IPS unreachable at boot) takes
+the image's roles; the record and the `HOST-RESERVE` line say which
+(`roles_from=registry|image|none`). A TCH keeps the ZFS default ARC and the
+full budget; an SCH or `SCH,TCH` host is unchanged.
+
 | Key | Default | Effect |
 | --- | --- | --- |
 | `host_reserve_cpus` | empty: 1 logical CPU, 2 on a host with 16 or more | the first N online CPUs are left out of `machine.slice` (`AllowedCPUs`); `0` keeps none; at least one CPU always stays with the guests |
@@ -235,6 +259,40 @@ next boot, or at once with `ced run host-reserve-apply` on that node.
 
 The guests' slice also gets `CPUWeight=50` and `IOWeight=50` against the
 host's `system.slice` (100); these are fixed, not keys.
+
+### Zvol write properties
+
+Two keys are the cluster's write policy for guest disks. `hps-storage <host>
+zvol-create` passes them to the node (`storage-zvol-create --sync V --logbias
+V`, so the new zvol carries them as local properties), and `hps-storage <host>
+create` sets them on the pool's `<pool>/enc` dataset at its creation, so
+anything made under it later inherits them. `hps-workload create` makes its
+zvols through that same `zvol-create`, so a workload's disks follow the policy
+with no second path. A key at the ZFS default passes nothing (the dataset
+inherits its parent). An existing dataset is changed with
+`hps-storage <host> zfs-set <dataset> sync=... logbias=...` (below).
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `storage_zvol_sync` | `standard` | `standard`: every synchronous write of a guest is journalled (ZIL) before it is acknowledged. `disabled`: the storage host acknowledges at once and flushes in its transaction groups (buffered in RAM, bounded by `zfs_dirty_data_max`) |
+| `storage_zvol_logbias` | `latency` | `latency`: sync writes go through the log (a SLOG when there is one). `throughput`: they go to the pool's main vdevs, which suits a pool with no SLOG and `sync=disabled` |
+
+`disabled` is for a cluster whose durability is the cross-host mirror: each
+guest disk is an md mirror over two storage hosts (`docs/WORKLOADS.md`), and a
+storage host that crashes loses the writes of its last transaction group (up
+to `zfs_txg_timeout`, 5 s) on its leg, which the other leg has; the md bitmap
+resync brings the returned leg back in line. On a single storage host, or a
+disk with one local leg, `disabled` loses those writes outright: keep
+`standard` there. The lab DL360 (two QLC SSDs, every nested write journalled
+twice) is the case for `disabled` + `throughput`.
+
+`hps-storage <host> zfs-set <dataset> <prop>=<value>...` (node script
+`storage-zfs-set`) sets `sync` (`standard`, `always`, `disabled`) and
+`logbias` (`latency`, `throughput`) on `<pool>/enc`, `<pool>/enc/vm` or a
+zvol under them, nothing else and nowhere else (a pool root is refused, exit
+3). It is idempotent and prints the resulting `zfs get -H sync,logbias` as its
+last lines. Through the operator API: `hps-op --cred FILE hps-storage sch-001
+zfs-set c1/enc/vm/probe-a sync=disabled logbias=throughput`.
 
 ## Catalogue
 
@@ -267,6 +325,7 @@ keys may be empty.
 | `network_time_server` | services | NTP server address | `host` | from `network_dhcp_ip` | no |
 | `network_time_upstream` | services | Upstream time servers (host names or IPv4, comma or space separated; may be empty) | `hostlist` | (empty) | no |
 | `network_layout` | networks | Workload network layout (one-line JSON object) | `layout` | - | no |
+| `network_min_link_mbps` | networks | Lowest audited link speed, Mb/s, of a node's boot NIC that `net-up` accepts for a storage or transit network (10-1000000; 0 = no check; an unknown speed is accepted) | `int0:10..1000000` | `1000` | no |
 | `osvc_log_level` | opensvc | Log level (debug/info/warn/error) | `enum:debug,info,warn,error` | `info` | no |
 | `osvc_listener_port` | opensvc | Listener port (1024-65535) | `int:1024..65535` | `1215` | no |
 | `osvc_web_ui` | opensvc | Enable Web UI? | `enum:yes,no` | `yes` | no |
@@ -294,6 +353,8 @@ keys may be empty.
 | `host_reserve_cpus` | resources | Logical CPUs every node keeps from its guests for itself (0-1024; 0 = none; empty: 1, or 2 on a host with 16 or more) | `int0:1..1024` | (empty) | no |
 | `host_reserve_mem_mib` | resources | MiB of RAM every node keeps from its guests for itself (256-16777216; empty: 10% of RAM, at least 2048) | `int:256..16777216` | (empty) | no |
 | `zfs_arc_max_pct` | resources | ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90) | `int:1..90` | `25` | no |
+| `storage_zvol_sync` | resources | ZFS `sync` of new zvols: `standard` (every sync write journalled) or `disabled` (acknowledged at once, flushed per transaction group; a storage host crash loses its last transaction group, the other mirror leg has it) | `enum:standard,disabled` | `standard` | no |
+| `storage_zvol_logbias` | resources | ZFS `logbias` of new zvols: `latency` (uses the log device) or `throughput` (writes go to the pool) | `enum:latency,throughput` | `latency` | no |
 
 ## Exit codes
 

@@ -234,13 +234,22 @@ hps-op --cred FILE hps-storage sch-001 export c1/enc/vm/probe-a \
   --portal 192.0.2.10
 hps-op --cred FILE hps-storage sch-001 unexport iqn.2026-01.example.c1:probe-a
 hps-op --cred FILE hps-storage sch-001 vdev-online c1 virtio-c1-sch-001-d3
+hps-op --cred FILE hps-storage sch-001 zfs-set c1/enc/vm/probe-a sync=disabled logbias=throughput
 hps-op --cred FILE hps-storage sch-001 zvol-destroy c1/enc/vm/probe-a
 ```
+
+`zfs-set` changes only `sync` and `logbias`, on `<pool>/enc` or a zvol under
+it; its `<prop>=<value>` tokens are plain tokens to the gate. New zvols take
+the cluster keys `storage_zvol_sync` and `storage_zvol_logbias`
+(`docs/CLUSTER-CONFIG.md` "Zvol write properties").
 
 Give each disk as its bare `/dev/disk/by-id` name (`ata-...`, `nvme-...`,
 `wwn-...`): `ips-admin-exec` passes no `/` outside an IPv4 CIDR, so the
 `/dev/disk/by-id/` prefix is refused there (`hps-storage` accepts both forms
-from a root shell). `create` takes 2 to 4 disks and makes one mirror of them all.
+from a root shell). `create` takes 1 to 4 disks: one disk makes a plain
+single-vdev pool, the normal storage-host shape (each SCH holds one disk; the
+mirror runs across the storage hosts, one md leg per SCH, `docs/WORKLOADS.md`);
+2 to 4 make one mirror of them all.
 A disk that carries a pool label or a filesystem or partition signature is
 refused unless `--wipe` is given, which wipes exactly the named disks; a
 mounted disk, a disk with a holder or a member of an imported pool is refused

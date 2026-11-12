@@ -201,6 +201,23 @@ my @CATALOGUE = (
     _q(key => 'zfs_arc_max_pct', group => 'resources', menu => 0,
         prompt => 'ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90)',
         rule => 'int:1..90', default => '25'),
+
+    # Zvol write properties (docs/CLUSTER-CONFIG.md "Zvol write properties"):
+    # hps-storage zvol-create and create pass them to the node. disabled +
+    # throughput is for a cluster whose durability is the cross-host mirror.
+    _q(key => 'storage_zvol_sync', group => 'resources', menu => 0,
+        prompt => 'ZFS sync of new zvols: standard (every sync write journalled) or disabled (acknowledged at once, flushed per transaction group; a storage host crash loses its last transaction group, the other mirror leg has it)',
+        rule => 'enum:standard,disabled', default => 'standard'),
+    _q(key => 'storage_zvol_logbias', group => 'resources', menu => 0,
+        prompt => 'ZFS logbias of new zvols: latency (uses the log device) or throughput (writes go to the pool)',
+        rule => 'enum:latency,throughput', default => 'latency'),
+
+    # Link speed floor (IPS-34 item 12; docs/CLUSTER-CONFIG.md "Host addresses on
+    # storage and transit networks"): hps-node net-up refuses a storage or transit
+    # network on a boot NIC audited slower.
+    _q(key => 'network_min_link_mbps', group => 'networks', menu => 0,
+        prompt => 'Lowest audited link speed, Mb/s, of a node\'s boot NIC that net-up accepts for a storage or transit network (10-1000000; 0 = no check; an unknown speed is accepted)',
+        rule => 'int0:10..1000000', default => '1000'),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

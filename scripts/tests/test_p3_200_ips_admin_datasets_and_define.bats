@@ -136,6 +136,20 @@ teardown() {
   [[ "$output" == *"tool=hps-workload args=grow-disk s1-ips s1-ips d0 64G"* ]]
 }
 
+@test "hps-storage zfs-set passes the gate: the dataset forms (the parent <pool>/enc too) and prop=value tokens" {
+  run "$W/hps-storage" sch-001 zfs-set s1/enc/vm/probe-a sync=disabled logbias=throughput
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-storage args=sch-001 zfs-set s1/enc/vm/probe-a sync=disabled logbias=throughput"* ]]
+  run "$W/hps-storage" sch-001 zfs-set s1/enc sync=standard
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"args=sch-001 zfs-set s1/enc sync=standard"* ]]
+  for a in 'sync=disabled;id' 'sync=$(id)' 'sync=disabled logbias=x' 'sync=/x' 'sync=a..b' "sync=\`id\`" 'sync=x|y'; do
+    run "$W/hps-storage" sch-001 zfs-set s1/enc/vm/probe-a "$a"
+    [ "$status" -eq 2 ] || { echo "accepted: [$a]"; false; }
+    [[ "$output" != *"tool="* ]]
+  done
+}
+
 @test "hps-storage vdev-online passes the gate with a pool and a plain by-id name; a path to the disk does not" {
   run "$W/hps-storage" sch-001 vdev-online s1 virtio-s1-sch-001-d3
   [ "$status" -eq 0 ]

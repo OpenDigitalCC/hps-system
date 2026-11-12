@@ -2,7 +2,10 @@
 
 A workload is a named set of VMs whose disks are mirrors of two legs: a local
 zvol on the compute node and a remote iSCSI LUN (or two remote LUNs on a
-compute-only node). `hps-workload` (Perl, `HPS::Workload`) drives the node
+compute-only node). The mirror is across storage hosts: each SCH holds one
+leg on its own pool, and a pool of one disk is the normal SCH shape
+(`hps-storage create` with one `--disk`; two to four disks make a local
+mirror as well). `hps-workload` (Perl, `HPS::Workload`) drives the node
 scripts of `VM-LIFECYCLE.md` and the mirror scripts through `scripts/hps-run.sh`,
 and records the outcome in the cluster registry. Placeholders in this page:
 `$NODE` (a host: MAC or registry HOSTNAME), `$VM`, `$POOL`, `$MAC`.
@@ -249,7 +252,9 @@ Two layers, both on by default:
 1. **The host first** (every node, at boot; `docs/CLUSTER-CONFIG.md` "Host
    reserve"). `host-reserve-apply` keeps the first `host_reserve_cpus`
    logical CPUs and `host_reserve_mem_mib` of RAM for the host and, on a
-   storage host, caps the ZFS ARC at `zfs_arc_max_pct` of RAM. Every libvirt
+   storage host (the node's registry `TYPE` contains `SCH`; the image's
+   roles only when the host has no `TYPE`), caps the ZFS ARC at
+   `zfs_arc_max_pct` of RAM. Every libvirt
    guest lives in `machine.slice`, which gets the other CPUs
    (`AllowedCPUs`), `CPUWeight=50` and `IOWeight=50` (the host's
    `system.slice` keeps 100) and `MemoryMax` = RAM - host reserve - ARC cap.

@@ -175,10 +175,16 @@ sub _host_val ($self, $key) {
 # net_plan(): the networks this host gets an address on, from the registry and
 # the address rule (HPS::ClusterConfig::vlan_host_address). Storage networks
 # (each network_storage_vlan<N>_subnet) for TYPE SCH or TCH; layout networks of
-# purpose transit for TYPE TCH. Returns {mac, ip, prefix, networks => [{name,
+# purpose transit for TYPE TCH. Returns {mac, ip, prefix, link => {ifname,
+# driver, speed} (the boot NIC as audited, or undef), networks => [{name,
 # vlan, subnet, address, prefix, mtu, script, args} or {name, ..., refused =>
 # reason}]}. Dies (HPS::Keysafe::Error refused) when the host as a whole cannot
 # take part: not a NixOS host, or no provisioning address.
+# Every storage and transit network is refused when the boot NIC's audited link
+# speed is below the cluster key network_min_link_mbps (default 1000; 0 turns
+# the check off; an unknown speed is allowed): IPS-34 item 12, s3's tch-004
+# (rtl8139, 100 Mb/s) saturated during a mirror resync and dropped its iSCSI
+# leg. The refusal names the NIC, its speed and the key.
 # On a TCH, after the transit networks, one entry per vxlan layout network
 # (kind vxlan, vni, bridge, over, local, peers, script net-vxlan-ensure, args;
 # HPS::Vxlan::host_plan), and `refresh`: the same call for every other transit
@@ -222,7 +228,10 @@ sub net_plan ($self) {
             push @nets, { name => $name, purpose => 'transit', vlan => $n->{vlan}, mtu => HPS::ClusterConfig::transit_mtu($n), subnet => $n->{cidr} };
         }
     }
+    my $link = $self->_boot_link;
+    my $slow = $self->_slow_link($c, $link);
     for my $n (grep { !$_->{kind} } @nets) {
+        if ($slow) { $n->{refused} = $slow; next }
         my $v = $n->{vlan};
         if (!defined $v || ref $v || $v !~ /^[1-9][0-9]{0,3}\z/ || $v > 4094) {
             $n->{refused} = 'no VLAN (1-4094): an untagged network needs a NIC of its own';
@@ -262,7 +271,38 @@ sub net_plan ($self) {
             }
         }
     }
-    return { mac => $self->{mac}, ip => $ip, prefix => $prefix + 0, networks => \@nets, refresh => \@refresh };
+    return { mac => $self->{mac}, ip => $ip, prefix => $prefix + 0, link => $link, networks => \@nets, refresh => \@refresh };
+}
+
+# _boot_link(): the boot NIC's audit entry {ifname, driver, speed} from the
+# host key `macs` (the NIC of boot_mac_last, else of the host key), or undef
+# when the audit has no such entry. speed is Mb/s as the audit read it, or
+# undef when the audit could not read it (a virtio NIC, a link that was down).
+sub _boot_link ($self) {
+    my $reg  = $self->{registry};
+    my $boot = eval { HPS::Registry::normalise_mac($self->_host_val('boot_mac_last') // $self->{mac}) } // $self->{mac};
+    my $macs = $reg->host_exists($self->{mac}, 'macs') ? eval { $reg->host_get_json($self->{mac}, 'macs') } : undef;
+    return undef unless ref $macs eq 'ARRAY';
+    for my $e (@$macs) {
+        next unless ref $e eq 'HASH';
+        my $m = eval { HPS::Registry::normalise_mac($e->{mac}) };
+        next unless defined $m && $m eq $boot;
+        my $speed = $e->{speed};
+        $speed = undef unless defined $speed && !ref $speed && $speed =~ /^[0-9]+\z/ && $speed > 0;
+        return { ifname => $e->{ifname} // '?', driver => $e->{driver} // 'unknown driver', speed => $speed };
+    }
+    return undef;
+}
+
+# _slow_link($cluster, $link): the refusal reason when the boot NIC's audited
+# speed is below network_min_link_mbps, else undef.
+sub _slow_link ($self, $c, $link) {
+    return undef unless $link && defined $link->{speed};
+    my $min = $self->_cluster_val($c, 'network_min_link_mbps');
+    $min = 1000 unless defined $min && $min =~ /^[0-9]+\z/;
+    return undef if $min == 0 || $link->{speed} >= $min;
+    return "the boot NIC $link->{ifname} ($link->{driver}) is $link->{speed} Mb/s, below the cluster's network_min_link_mbps $min"
+        . " (hps-cluster-config set network_min_link_mbps $link->{speed} allows it)";
 }
 
 sub _layout_entry ($self, $c, $name) {
@@ -480,6 +520,9 @@ On a TCH, then one C<net-vxlan-ensure> call per layout network of kind vxlan
 (C<HPS::Vxlan>), and the same call on every other transit host to refresh its
 peers (failures there are logged and do not change the result).
 NixOS hosts only. Nothing is recorded: the addresses follow from C<IP>.
+A boot NIC audited below the cluster key C<network_min_link_mbps> (default
+1000 Mb/s; 0 disables; an unknown speed passes) refuses every storage and
+transit network with the NIC, its speed and the key named.
 
 =head1 REGISTRY KEYS (per host)
 

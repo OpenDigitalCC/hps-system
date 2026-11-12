@@ -81,6 +81,8 @@ in
       storage-zvol-grow.options.profile = "node";
       storage-zvol-list.source = mkScript "storage-zvol-list" (scriptsDir + "/storage-zvol-list");
       storage-zvol-list.options.profile = "node";
+      storage-zfs-set.source = mkScript "storage-zfs-set" (scriptsDir + "/storage-zfs-set");
+      storage-zfs-set.options.profile = "node";
       storage-status.source = mkScript "storage-status" (scriptsDir + "/storage-status");
       storage-status.options.profile = "node";
       storage-vdev-online.source = mkScript "storage-vdev-online" (scriptsDir + "/storage-vdev-online");

@@ -101,9 +101,10 @@ is($rc, 3, 'destroy zp03: refused by the ruling');
 # --- create: the disks are arguments, validated; no approval anywhere
 ($rc, $out) = cli($mac, 'create', 'lab', '--dry-run');
 is($rc, 2, 'create without --disk: usage (2)');
-like($out, qr/two to four --disk/, 'says how many');
+like($out, qr/one to four --disk/, 'says how many');
 ($rc, $out) = cli($mac, 'create', 'lab', '--disk', 'ata-SSD1', '--dry-run');
-is($rc, 2, 'create with one --disk: usage (2)');
+is($rc, 0, 'create with one --disk: a single-vdev pool (0)');
+like($out, qr/storage-pool-create lab --disk ata-SSD1\n/, 'one disk shown, no mirror word');
 ($rc, $out) = cli($mac, 'create', 'lab', '--disk', 'ata-SSD1', '--disk', 'ata-SSD1', '--dry-run');
 is($rc, 2, 'the same disk twice: usage (2)');
 like($out, qr/disk listed twice/, 'says so');
@@ -199,6 +200,25 @@ like(join('', calls()), qr/^--json $mac storage-trim-check lab$/m, 'a call witho
     unlike($out, qr/healer was not told/, 'no warning');
     $f->{reg}->host_unset($mac, 'storage_exports');
 }
+
+# --- zfs-set: a dataset and prop=value tokens; sync and logbias only
+reset_shim();
+($rc, $out) = cli($mac, 'zfs-set', 'lab/enc/vm/g1-root');
+is($rc, 2, 'zfs-set without a property: usage (2)');
+like($out, qr/at least one <prop>=<value>/, 'says so');
+($rc, $out) = cli($mac, 'zfs-set', 'lab/enc/vm/g1-root', 'compression=off');
+is($rc, 2, 'zfs-set compression: usage (2)');
+like($out, qr/not a property zfs-set changes/, 'says which it changes');
+($rc, $out) = cli($mac, 'zfs-set', 'lab', 'sync=disabled');
+is($rc, 2, 'zfs-set on a pool root: usage (2)');
+is(ncalls(), 0, 'nothing called');
+($rc, $out) = cli($mac, 'zfs-set', 'lab/enc/vm/g1-root', 'sync=disabled', 'logbias=throughput', '--dry-run');
+is($rc, 0, 'zfs-set --dry-run: 0');
+like($out, qr/1\. storage-zfs-set lab\/enc\/vm\/g1-root sync=disabled logbias=throughput\n/, 'the one call shown');
+is(ncalls(), 0, 'dry run called nothing');
+($rc, $out) = cli($mac, 'zfs-set', 'lab/enc', 'sync=standard');
+is($rc, 0, 'zfs-set on <pool>/enc runs: 0');
+like(join('', calls()), qr/^--json $mac storage-zfs-set lab\/enc sync=standard$/m, 'sent without input');
 
 # --- forget-key
 ($rc, $out) = cli($mac, 'forget-key');

@@ -26,15 +26,17 @@ setup() {
   echo "0-31" > "$HPS_CPU_ONLINE"
   mkdir -p "$HPS_ZFS_PARAMS"
   echo 0 > "$HPS_ZFS_PARAMS/zfs_arc_max"
-  # curl: cmd=cluster_variable&name=<k> answers $STATE/key.<k>, else HTTP 404 (exit 22).
+  # curl: cmd=cluster_variable&name=<k> answers $STATE/key.<k>, cmd=host_variable&name=<k>
+  # $STATE/hostkey.<k> (the registry TYPE), else HTTP 404 (exit 22).
   cat > "$TEST_DIR/bin/curl" <<'SHIM'
 #!/usr/bin/env bash
 echo "curl $*" >> "$SHIM_LOG"
 [[ "${FAKE_CURL_RC:-0}" -ne 0 ]] && exit "$FAKE_CURL_RC"
 url=${*: -1}
 k=${url##*name=}
-[[ -e "$STATE/key.$k" ]] || exit 22
-cat "$STATE/key.$k"
+case "$url" in *cmd=host_variable*) f="$STATE/hostkey.$k" ;; *) f="$STATE/key.$k" ;; esac
+[[ -e "$f" ]] || exit 22
+cat "$f"
 SHIM
   cat > "$TEST_DIR/bin/systemctl" <<'SHIM'
 #!/usr/bin/env bash
@@ -55,18 +57,77 @@ mem() {
 }
 
 key() { printf '%s\n' "$2" > "$STATE/key.$1"; }
+hostkey() { printf '%s\n' "$2" > "$STATE/hostkey.$1"; }
 
 setprop() { grep '^systemctl set-property' "$SHIM_LOG"; }
 
 @test "defaults on a converged 32-CPU 64 GiB host: 2 CPUs and 6553 MiB kept, ARC 25%, the rest to machine.slice" {
   run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
   [ "$status" -eq 0 ]
-  [ "${lines[-1]}" = "HOST-RESERVE roles=SCH,TCH cpus=32 host_cpus=0-1 guest_cpus=2-31 mem_total_mib=65536 host_mem_mib=6553 arc_max_mib=16384 guest_mem_max_mib=42599" ]
+  [ "${lines[-1]}" = "HOST-RESERVE roles=SCH,TCH roles_from=image cpus=32 host_cpus=0-1 guest_cpus=2-31 mem_total_mib=65536 host_mem_mib=6553 arc_max_mib=16384 guest_mem_max_mib=42599" ]
   [ "$(setprop)" = "systemctl set-property --runtime machine.slice AllowedCPUs=2-31 CPUWeight=50 IOWeight=50 MemoryMax=42599M" ]
   [ "$(cat "$HPS_ZFS_PARAMS/zfs_arc_max")" = "$((16384 * 1048576))" ]
   grep -qx "options zfs zfs_arc_max=$((16384 * 1048576))" "$HPS_MODPROBE_DIR/hps-zfs-arc.conf"
   grep -qx "guest_mem_max_mib=42599" "$HPS_RUN_DIR/host-reserve"
+  grep -qx "roles_from=image" "$HPS_RUN_DIR/host-reserve"
   [ "$(grep -c 'cmd=cluster_variable&name=' "$SHIM_LOG")" -eq 3 ]
+  [ "$(grep -c 'cmd=host_variable&name=TYPE' "$SHIM_LOG")" -eq 1 ]
+  [[ "$output" == *"no TYPE assigned in the registry: roles from the image (SCH,TCH)"* ]]
+}
+
+#--- IPS-34 item 13: the roles are the node's assigned TYPE, read through the boot channel
+
+@test "registry TYPE TCH on the converged image: no ARC cap, the full budget to the guests" {
+  hostkey TYPE TCH
+  run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "HOST-RESERVE roles=TCH roles_from=registry cpus=32 host_cpus=0-1 guest_cpus=2-31 mem_total_mib=65536 host_mem_mib=6553 arc_max_mib=- guest_mem_max_mib=58983" ]
+  [ "$(cat "$HPS_ZFS_PARAMS/zfs_arc_max")" = 0 ]
+  [ ! -e "$HPS_MODPROBE_DIR/hps-zfs-arc.conf" ]
+  [ "$(setprop)" = "systemctl set-property --runtime machine.slice AllowedCPUs=2-31 CPUWeight=50 IOWeight=50 MemoryMax=58983M" ]
+  grep -qx "roles=TCH" "$HPS_RUN_DIR/host-reserve"
+  grep -qx "roles_from=registry" "$HPS_RUN_DIR/host-reserve"
+  [[ "$output" != *"roles from the image"* ]]
+}
+
+@test "a 6 GiB nested TCH (the s1/s2/s3 case): 2048 kept, 4096 to guests, no ARC taken" {
+  echo "0-3" > "$HPS_CPU_ONLINE"
+  mem 6144
+  hostkey TYPE TCH
+  run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
+  [ "$status" -eq 0 ]
+  [[ "${lines[-1]}" == *"roles=TCH roles_from=registry cpus=4 host_cpus=0 guest_cpus=1-3 mem_total_mib=6144 host_mem_mib=2048 arc_max_mib=- guest_mem_max_mib=4096" ]]
+}
+
+@test "registry TYPE SCH,TCH or SCH: unchanged from the image roles" {
+  hostkey TYPE SCH,TCH
+  run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "HOST-RESERVE roles=SCH,TCH roles_from=registry cpus=32 host_cpus=0-1 guest_cpus=2-31 mem_total_mib=65536 host_mem_mib=6553 arc_max_mib=16384 guest_mem_max_mib=42599" ]
+  hostkey TYPE SCH
+  : > "$SHIM_LOG"
+  echo "TCH" > "$HPS_ROLES_FILE"
+  run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
+  [ "$status" -eq 0 ]
+  [[ "${lines[-1]}" == "HOST-RESERVE roles=SCH roles_from=registry "*"arc_max_mib=16384 guest_mem_max_mib=-" ]]
+  run ! grep -q '^systemctl' "$SHIM_LOG"
+}
+
+@test "a registry TYPE that is not a role list, or the IPS unreachable: the image roles, logged" {
+  hostkey TYPE 'tch 4'
+  run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"registry TYPE 'tch4' is not a role list: the image roles used"* ]]
+  [[ "${lines[-1]}" == "HOST-RESERVE roles=SCH,TCH roles_from=image "* ]]
+  hostkey TYPE TCH
+  FAKE_CURL_RC=7 run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cannot read TYPE from the IPS (curl exit 7): the image roles used"* ]]
+  [[ "${lines[-1]}" == "HOST-RESERVE roles=SCH,TCH roles_from=image "* ]]
+}
+
+@test "the boot unit's script runs after the network, so the registry TYPE is reachable" {
+  awk '/systemd.services.hps-host-reserve/,/^  };/' "$ROOT/nix/modules/hps-node.nix" | grep -qF 'wants = [ "network-online.target" ];'
 }
 
 @test "small host: 1 CPU of 4, at least 2048 MiB kept, ARC at least 1024 MiB" {
@@ -151,7 +212,7 @@ setprop() { grep '^systemctl set-property' "$SHIM_LOG"; }
   rm -f "$HPS_ROLES_FILE"
   run bash "$ROOT/node-manager/nixos-26/scripts/host-reserve-apply"
   [ "$status" -eq 0 ]
-  [[ "${lines[-1]}" == "HOST-RESERVE roles=none "*"guest_cpus=- "*"arc_max_mib=- guest_mem_max_mib=-" ]]
+  [[ "${lines[-1]}" == "HOST-RESERVE roles=none roles_from=none "*"guest_cpus=- "*"arc_max_mib=- guest_mem_max_mib=-" ]]
   run ! grep -q '^systemctl' "$SHIM_LOG"
   [ -s "$HPS_RUN_DIR/host-reserve" ]
 }
@@ -197,7 +258,7 @@ setprop() { grep '^systemctl set-property' "$SHIM_LOG"; }
   : > "$SHIM_LOG"
   run bash "$ROOT/node-manager/nixos-26/scripts/host-resources"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"RESERVE roles=SCH,TCH cpus=32 host_cpus=0-1 guest_cpus=2-31 "* ]]
+  [[ "$output" == *"RESERVE roles=SCH,TCH roles_from=image cpus=32 host_cpus=0-1 guest_cpus=2-31 "* ]]
   [[ "$output" == *"SLICE machine.slice AllowedCPUs=2-31 CPUWeight=50 IOWeight=50 MemoryMax=40265318400"* ]]
   [[ "$output" == *"CGROUP machine.slice cpus=2-31 memory_max=$((42599 * 1048576)) memory_current_mib=1024"* ]]
   [[ "$output" == *"ZFS arc_max_mib=16384 arc_size_mib=100"* ]]

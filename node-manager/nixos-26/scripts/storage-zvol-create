@@ -2,16 +2,22 @@
 #
 # storage-zvol-create - create a sparse zvol under a pool's encrypted parent.
 #
-# ctrl-exec allowlisted node script. Usage: storage-zvol-create <dataset> <size>
+# ctrl-exec allowlisted node script. Usage:
+#   storage-zvol-create <dataset> <size> [--sync standard|always|disabled] [--logbias latency|throughput]
 #
 #   <dataset>  <pool>/enc/<name> or <pool>/enc/vm/<name>  (guest disks live under
 #              <pool>/enc/vm, apart from other zvols; that filesystem dataset is
 #              created here when absent and inherits the encryption of <pool>/enc)
 #   <size>     ^[0-9]+[KMGT]$      binary multiples, a multiple of 16K, > 0
+#   --sync, --logbias  the cluster's write policy (cluster keys storage_zvol_sync
+#              and storage_zvol_logbias; hps-storage passes them when they are
+#              not the ZFS default), set on the new zvol as -o sync= -o logbias=.
+#              Without them the zvol inherits <pool>/enc. An existing zvol keeps
+#              its properties (storage-zfs-set changes them).
 #
 # The parent <pool>/enc must have keystatus "available" (a locked parent is
 # never written to). Then:
-#   zfs create -V <size> -s -o volblocksize=16k -o compression=lz4 <dataset>
+#   zfs create -V <size> -s -o volblocksize=16k -o compression=lz4 [-o sync=..] [-o logbias=..] <dataset>
 # Idempotent: the dataset already there as a zvol of exactly that size exits 0
 # without a change; a different size, or a dataset that is not a zvol, is
 # refused. Nothing is ever resized or replaced.
@@ -25,6 +31,8 @@ SIZE=""
 POOL=""
 VM_PARENT=""
 BYTES=0
+SYNC=""
+LOGBIAS=""
 
 log() {
   printf '[storage-zvol-create] %s\n' "$*" >&2
@@ -38,7 +46,8 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-zvol-create <pool>/enc/[vm/]<name> <size>   (size like 1G, 512M, 2T)
+Usage: storage-zvol-create <pool>/enc/[vm/]<name> <size> [--sync standard|always|disabled] [--logbias latency|throughput]
+  (size like 1G, 512M, 2T)
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
 }
@@ -49,18 +58,33 @@ refuse() {
 }
 
 parse_args() {
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      -*) log "unknown option: $arg"; usage; exit 2 ;;
+  local -a pos=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --sync)
+        [[ $# -ge 2 ]] || { log "--sync needs a value"; usage; exit 2; }
+        case "$2" in
+          standard | always | disabled) SYNC=$2 ;;
+          *) refuse "--sync '$2' is not standard, always or disabled" ;;
+        esac
+        shift 2 ;;
+      --logbias)
+        [[ $# -ge 2 ]] || { log "--logbias needs a value"; usage; exit 2; }
+        case "$2" in
+          latency | throughput) LOGBIAS=$2 ;;
+          *) refuse "--logbias '$2' is not latency or throughput" ;;
+        esac
+        shift 2 ;;
+      -*) log "unknown option: $1"; usage; exit 2 ;;
+      *) pos+=("$1"); shift ;;
     esac
   done
-  if [[ $# -ne 2 ]]; then
+  if [[ ${#pos[@]} -ne 2 ]]; then
     usage
     exit 2
   fi
-  DATASET=$1
-  SIZE=$2
+  DATASET=${pos[0]}
+  SIZE=${pos[1]}
   if [[ ! "$DATASET" =~ ^([a-z][a-z0-9_.-]*)/enc/(vm/)?[A-Za-z0-9_-]+$ ]]; then
     refuse "dataset '$DATASET' is not <pool>/enc/<name> or <pool>/enc/vm/<name>"
   fi
@@ -132,13 +156,16 @@ check_existing() {
 }
 
 main() {
+  local -a props=()
   parse_args "$@"
   size_bytes
   require_unlocked_parent
   check_existing
   ensure_vm_parent
-  run zfs create -V "$SIZE" -s -o volblocksize=16k -o compression=lz4 "$DATASET"
-  log "created $DATASET ($SIZE, sparse)"
+  [[ -z "$SYNC" ]] || props+=(-o "sync=$SYNC")
+  [[ -z "$LOGBIAS" ]] || props+=(-o "logbias=$LOGBIAS")
+  run zfs create -V "$SIZE" -s -o volblocksize=16k -o compression=lz4 "${props[@]}" "$DATASET"
+  log "created $DATASET ($SIZE, sparse${SYNC:+, sync=$SYNC}${LOGBIAS:+, logbias=$LOGBIAS})"
 }
 
 main "$@"

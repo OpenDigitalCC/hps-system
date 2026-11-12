@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#
+# storage-zfs-set - set the write properties of an HPS dataset: sync and logbias.
+#
+# ctrl-exec allowlisted node script. Usage:
+#   storage-zfs-set <dataset> <prop>=<value>...
+#
+#   <dataset>  <pool>/enc, <pool>/enc/<name> or <pool>/enc/vm/<name>: the HPS
+#              zvols and their parent datasets. A pool root, a dataset outside
+#              <pool>/enc or one that does not exist is refused.
+#   sync       standard | always | disabled
+#   logbias    latency | throughput
+#
+# Nothing else is ever set here. The properties are the cluster's write policy
+# for guest disks (docs/CLUSTER-CONFIG.md "Zvol write properties"):
+# sync=disabled with logbias=throughput lets the storage host acknowledge a
+# write at once and flush it in its transaction groups; it is for a cluster
+# whose durability is the cross-host mirror, as a storage host crash loses its
+# last transaction group (the other leg has it; the bitmap resync restores it).
+#
+# Idempotent: a property already at the value is not set again. The last lines
+# on stdout are `zfs get -H sync,logbias <dataset>` after the change.
+#
+# Exit: 0 set (or already so), 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+DATASET=""
+PROPS=()
+
+log() {
+  printf '[storage-zfs-set] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-zfs-set <pool>/enc[/[vm/]<name>] <prop>=<value>...
+  sync=standard|always|disabled   logbias=latency|throughput
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# allowed <prop> <value>: true when the pair is one this script may set.
+allowed() {
+  case "$1=$2" in
+    sync=standard | sync=always | sync=disabled) return 0 ;;
+    logbias=latency | logbias=throughput) return 0 ;;
+  esac
+  return 1
+}
+
+parse_args() {
+  local arg name value seen=""
+  for arg in "$@"; do
+    case "$arg" in
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+    esac
+  done
+  if [[ $# -lt 2 ]]; then
+    usage
+    exit 2
+  fi
+  DATASET=$1
+  shift
+  if [[ ! "$DATASET" =~ ^[a-z][a-z0-9_.-]*/enc(/(vm/)?[A-Za-z0-9_-]+)?$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/enc, <pool>/enc/<name> or <pool>/enc/vm/<name>"
+  fi
+  for arg in "$@"; do
+    if [[ ! "$arg" =~ ^([a-z]+)=([a-z]+)$ ]]; then
+      refuse "'$arg' is not <prop>=<value>"
+    fi
+    name=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    if ! allowed "$name" "$value"; then
+      refuse "'$arg': only sync=standard|always|disabled and logbias=latency|throughput can be set"
+    fi
+    if [[ ",$seen," == *",$name,"* ]]; then
+      refuse "$name is given twice"
+    fi
+    seen="$seen,$name"
+    PROPS+=("$arg")
+  done
+}
+
+require_dataset() {
+  if ! run zfs list -H -o name "$DATASET" > /dev/null; then
+    refuse "dataset '$DATASET' does not exist"
+  fi
+}
+
+# apply: set only the properties whose value differs; one zfs set for them all.
+apply() {
+  local prop name value have
+  local -a change=()
+  for prop in "${PROPS[@]}"; do
+    name=${prop%%=*}
+    value=${prop#*=}
+    have=$(run zfs get -H -o value "$name" "$DATASET")
+    if [[ "$have" == "$value" ]]; then
+      log "$DATASET $name is already $value"
+    else
+      change+=("$prop")
+    fi
+  done
+  if [[ ${#change[@]} -eq 0 ]]; then
+    log "nothing to change"
+    return 0
+  fi
+  run zfs set "${change[@]}" "$DATASET"
+  log "set ${change[*]} on $DATASET"
+}
+
+main() {
+  parse_args "$@"
+  require_dataset
+  apply
+  run zfs get -H sync,logbias "$DATASET"
+}
+
+main "$@"

@@ -11,15 +11,22 @@
 # Who may run it is ctrl-exec's decision (the agent's script allowlist and the
 # dispatcher's auth hook; docs/adr/0007).
 #
-# Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>]... [--wipe]
-# A mirror of every disk given (2 to 4: a three-way mirror survives two disk
-# losses; owner 2026-11-11, scale test storage nodes).
+# Usage: storage-pool-create <pool> --disk <by-id> [--disk <by-id>]... [--wipe]
+#                            [--sync standard|always|disabled] [--logbias latency|throughput]
+# One disk: a plain single-vdev pool, the normal shape of a storage host (owner
+# 2026-11-12: each SCH gets one disk and the mirror runs across the two SCHs,
+# one md leg per SCH). Two to four disks: one mirror of them all (a three-way
+# mirror survives two disk losses; owner 2026-11-11).
 #
 #   --wipe   a disk that carries a pool label or a filesystem/partition
 #            signature is wiped (only the disks named); without it such a
 #            disk is refused
+#   --sync, --logbias  the cluster's write policy (cluster keys storage_zvol_sync
+#            and storage_zvol_logbias), set on <pool>/enc at its creation so the
+#            zvols under it inherit it. An existing <pool>/enc is left as it is
+#            (storage-zfs-set changes it).
 #
-# Checks, all before any disk is touched: the pool name, 2 to 4 distinct by-id
+# Checks, all before any disk is touched: the pool name, 1 to 4 distinct by-id
 # names, the key; then per disk: exists under /dev/disk/by-id, whole disk,
 # unmounted with no holders, not a member of an imported pool, and no pool
 # label or filesystem/partition signature unless --wipe - in which case
@@ -38,6 +45,8 @@ DISKS=()
 PAYLOAD=""
 ENC_KEY=""
 WIPE=0
+SYNC=""
+LOGBIAS=""
 POOL_EXISTS=0
 DISK_DIRTY=0
 IMPORT_LISTING=""
@@ -54,8 +63,9 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id> ...] [--wipe]
-  2 to 4 disks; the pool is one mirror of them all.
+Usage: storage-pool-create <pool> --disk <by-id> [--disk <by-id> ...] [--wipe]
+                           [--sync standard|always|disabled] [--logbias latency|throughput]
+  1 disk: a single-vdev pool (the mirror is across storage hosts); 2 to 4: one mirror of them all.
 Input (stdin): {"key_hex":"<64 hex>"}
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
@@ -90,6 +100,22 @@ parse_args() {
         WIPE=1
         shift
         ;;
+      --sync)
+        [[ $# -ge 2 ]] || { log "--sync needs a value"; usage; exit 2; }
+        case "$2" in
+          standard | always | disabled) SYNC=$2 ;;
+          *) refuse "--sync '$2' is not standard, always or disabled" ;;
+        esac
+        shift 2
+        ;;
+      --logbias)
+        [[ $# -ge 2 ]] || { log "--logbias needs a value"; usage; exit 2; }
+        case "$2" in
+          latency | throughput) LOGBIAS=$2 ;;
+          *) refuse "--logbias '$2' is not latency or throughput" ;;
+        esac
+        shift 2
+        ;;
       -*) log "unknown option: $arg"; usage; exit 2 ;;
       *)
         if [[ -n "$POOL" ]]; then
@@ -103,7 +129,7 @@ parse_args() {
     esac
   done
   [[ -n "$POOL" ]] || { usage; exit 2; }
-  [[ ${#DISKS[@]} -ge 2 && ${#DISKS[@]} -le 4 ]] || { log "two to four --disk arguments are required"; usage; exit 2; }
+  [[ ${#DISKS[@]} -ge 1 && ${#DISKS[@]} -le 4 ]] || { log "one to four --disk arguments are required"; usage; exit 2; }
   if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
     refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
   fi
@@ -217,24 +243,35 @@ wipe_disks() {
   done
 }
 
+# One disk: a plain single-vdev pool (the normal SCH shape: the mirror runs
+# across storage hosts, one md leg per SCH). Two to four: one mirror of them all.
 create_pool() {
   local d
-  local -a DEVS=()
+  local -a DEVS=() vdev=()
   for d in "${DISKS[@]}"; do DEVS+=("/dev/disk/by-id/$d"); done
   for d in "${DISKS[@]}"; do
     log "using /dev/disk/by-id/$d"
   done
-  run zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none "$POOL" mirror "${DEVS[@]}"
+  if [[ ${#DISKS[@]} -ge 2 ]]; then
+    vdev=(mirror)
+  else
+    log "one disk: a single-vdev pool (the mirror is across storage hosts)"
+  fi
+  run zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none "$POOL" "${vdev[@]}" "${DEVS[@]}"
 }
 
 enc_exists() {
   zfs list -H -o name "$POOL/enc" > /dev/null 2>&1
 }
 
-# The 32-byte raw key goes to zfs on stdin only (keylocation=prompt).
+# The 32-byte raw key goes to zfs on stdin only (keylocation=prompt). The
+# write policy, when given, is set here so every zvol under enc inherits it.
 create_enc() {
-  printf '+ zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt %s/enc  (raw key on stdin)\n' "$POOL" >&2
-  printf '%s' "$ENC_KEY" | xxd -r -p | zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt "$POOL/enc"
+  local -a props=()
+  [[ -z "$SYNC" ]] || props+=(-o "sync=$SYNC")
+  [[ -z "$LOGBIAS" ]] || props+=(-o "logbias=$LOGBIAS")
+  printf '+ zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt %s%s/enc  (raw key on stdin)\n' "${props[*]:+${props[*]} }" "$POOL" >&2
+  printf '%s' "$ENC_KEY" | xxd -r -p | zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt "${props[@]}" "$POOL/enc"
 }
 
 main() {

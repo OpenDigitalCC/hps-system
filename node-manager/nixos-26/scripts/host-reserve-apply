@@ -23,7 +23,16 @@
 #   zfs_arc_max_pct       the ZFS ARC cap, percent of RAM, at least 1024 MiB.
 #                         Default 25. Storage hosts (role SCH) only.
 #
-# What it sets (roles from /etc/hps/roles):
+# Roles: the node's assigned TYPE from the registry (host key TYPE, read through
+# the boot channel cmd=host_variable, as hps-node-init reads HOSTNAME), falling
+# back to the image's /etc/hps/roles only when the host has no TYPE (unassigned,
+# or the IPS unreachable). IPS-34 item 13: the converged image carries SCH,TCH,
+# so a TCH-only node took the ARC cap and lost it from its guest budget; with the
+# registry TYPE a TCH keeps the ZFS default ARC and the full budget, an SCH or
+# SCH,TCH host is unchanged. The record says where the roles came from
+# (roles_from=registry|image|none).
+#
+# What it sets (by role):
 #   SCH  zfs_arc_max = the cap, in bytes: /sys/module/zfs/parameters/zfs_arc_max
 #        when the module is loaded, and /run/modprobe.d/hps-zfs-arc.conf for a
 #        later load. The ARC then never grows into the guests' memory.
@@ -37,9 +46,9 @@
 # Then $HPS_RUN_DIR/host-reserve records the values (key=value, read by
 # host-resources). No role SCH or TCH: nothing to set, only the record.
 #
-# Last line on success: HOST-RESERVE roles=<r> cpus=<n> host_cpus=<list|none>
-#   guest_cpus=<list|-> mem_total_mib=<n> host_mem_mib=<n> arc_max_mib=<n|->
-#   guest_mem_max_mib=<n|->
+# Last line on success: HOST-RESERVE roles=<r> roles_from=<registry|image|none>
+#   cpus=<n> host_cpus=<list|none> guest_cpus=<list|-> mem_total_mib=<n>
+#   host_mem_mib=<n> arc_max_mib=<n|-> guest_mem_max_mib=<n|->
 # Exit: 0 applied, 2 usage, 1 a command failed.
 #
 # Overrides for tests: HPS_CMDLINE, HPS_RUN_DIR, HPS_ROLES_FILE, HPS_MEMINFO,
@@ -60,6 +69,7 @@ GUEST_IO_WEIGHT=50
 GUEST_MEM_FLOOR=512
 IPS=""
 ROLES=""
+ROLES_FROM="none"
 
 log() {
   printf '[host-reserve-apply] %s\n' "$*" >&2
@@ -83,19 +93,46 @@ cmdline_value() {
   return 1
 }
 
-# key <name>: the cluster key's value, empty when absent or unreadable.
-key() {
+# fetch <cluster_variable|host_variable> <name> <what>: the key's value through
+# the boot channel, empty when absent (HTTP 404, curl 22) or unreadable (logged,
+# "<what> used").
+fetch() {
   local out rc
   [[ -n "$IPS" ]] || return 0
   set +e
-  out=$(run curl -fsS --max-time 10 "http://${IPS}/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=$1" 2> /dev/null)
+  out=$(run curl -fsS --max-time 10 "http://${IPS}/cgi-bin/boot_manager.sh?cmd=$1&name=$2" 2> /dev/null)
   rc=$?
   set -e
   if [[ $rc -eq 0 ]]; then
     printf '%s\n' "$out"
   elif [[ $rc -ne 22 ]]; then
-    log "cannot read $1 from the IPS (curl exit $rc): default used"
+    log "cannot read $2 from the IPS (curl exit $rc): $3 used"
   fi
+}
+
+# key <name>: the cluster key's value, empty when absent or unreadable.
+key() {
+  fetch cluster_variable "$1" default
+}
+
+# load_roles: ROLES from the registry TYPE (host key, a comma list of role
+# words), else the image's roles file; ROLES_FROM says which.
+load_roles() {
+  local type
+  type=$(fetch host_variable TYPE "the image roles")
+  type=${type//[[:space:]]/}
+  if [[ "$type" =~ ^[A-Z]+(,[A-Z]+)*$ ]]; then
+    ROLES=$type
+    ROLES_FROM=registry
+    return 0
+  fi
+  [[ -z "$type" ]] || log "registry TYPE '$type' is not a role list: the image roles used"
+  if [[ -r "$HPS_ROLES_FILE" ]]; then
+    ROLES=$(tr -d '[:space:]' < "$HPS_ROLES_FILE")
+    ROLES_FROM=image
+  fi
+  [[ -n "$ROLES" ]] || ROLES_FROM=none
+  log "no TYPE assigned in the registry: roles from the image (${ROLES:-none})"
 }
 
 # key_int <name> <min> <max>: the key as an integer in range, else empty (default).
@@ -160,9 +197,7 @@ main() {
   fi
   IPS=$(cmdline_value hps.ips || true)
   [[ -n "$IPS" ]] || log "hps.ips absent from the command line: the cluster keys take their defaults"
-  if [[ -r "$HPS_ROLES_FILE" ]]; then
-    ROLES=$(tr -d '[:space:]' < "$HPS_ROLES_FILE")
-  fi
+  load_roles
 
   mapfile -t cpus < <(online_cpus)
   n=${#cpus[@]}
@@ -220,11 +255,11 @@ main() {
   has_role SCH || arc="-"
 
   mkdir -p "$HPS_RUN_DIR"
-  printf 'roles=%s\ncpus=%s\nhost_cpus=%s\nguest_cpus=%s\nmem_total_mib=%s\nhost_mem_mib=%s\narc_max_mib=%s\nguest_mem_max_mib=%s\n' \
-    "${ROLES:-none}" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget" \
+  printf 'roles=%s\nroles_from=%s\ncpus=%s\nhost_cpus=%s\nguest_cpus=%s\nmem_total_mib=%s\nhost_mem_mib=%s\narc_max_mib=%s\nguest_mem_max_mib=%s\n' \
+    "${ROLES:-none}" "$ROLES_FROM" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget" \
     > "$HPS_RUN_DIR/host-reserve"
-  printf 'HOST-RESERVE roles=%s cpus=%s host_cpus=%s guest_cpus=%s mem_total_mib=%s host_mem_mib=%s arc_max_mib=%s guest_mem_max_mib=%s\n' \
-    "${ROLES:-none}" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget"
+  printf 'HOST-RESERVE roles=%s roles_from=%s cpus=%s host_cpus=%s guest_cpus=%s mem_total_mib=%s host_mem_mib=%s arc_max_mib=%s guest_mem_max_mib=%s\n' \
+    "${ROLES:-none}" "$ROLES_FROM" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget"
 }
 
 main "$@"

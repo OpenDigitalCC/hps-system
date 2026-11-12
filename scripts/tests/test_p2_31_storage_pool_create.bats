@@ -53,7 +53,7 @@ no_disk_touched() {
 @test "usage errors exit 2 and run nothing" {
   run bash "$SCRIPT"
   [ "$status" -eq 2 ]
-  run bash "$SCRIPT" lab --disk "$P2_DISK_A"
+  run bash "$SCRIPT" lab
   [ "$status" -eq 2 ]
   run bash "$SCRIPT" --disk "$P2_DISK_A" --disk "$P2_DISK_B"
   [ "$status" -eq 2 ]
@@ -214,6 +214,27 @@ no_disk_touched() {
   run ! grep -q 'unload-key' "$SHIM_LOG"
 }
 
+@test "--sync and --logbias go on the enc dataset at its creation; an existing enc is left alone; bad values refused" {
+  create --sync disabled --logbias throughput
+  [ "$status" -eq 0 ]
+  grep -qxF "zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt -o sync=disabled -o logbias=throughput lab/enc" "$SHIM_LOG"
+  [[ "$stderr" == *"+ zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt -o sync=disabled -o logbias=throughput lab/enc  (raw key on stdin)"* ]]
+  [ "$(wc -c < "$STATE/stdin.create")" -eq 32 ]
+  printf '\t/dev/disk/by-id/%s-part1  ONLINE\n\t/dev/disk/by-id/%s-part1  ONLINE\n' "$P2_DISK_A" "$P2_DISK_B" > "$STATE/status-pool"
+  : > "$SHIM_LOG"
+  create --sync standard
+  [ "$status" -eq 0 ]
+  run ! grep -E '^zfs (create|set)' "$SHIM_LOG"
+  : > "$SHIM_LOG"
+  create --sync off
+  [ "$status" -eq 3 ]
+  create --logbias fast
+  [ "$status" -eq 3 ]
+  create --sync
+  [ "$status" -eq 2 ]
+  [ ! -s "$SHIM_LOG" ]
+}
+
 @test "the key appears in no logged command, stderr or file the script wrote" {
   create --wipe
   [ "$status" -eq 0 ]
@@ -267,7 +288,28 @@ no_disk_touched() {
   grep -qxF "zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none lab mirror /dev/disk/by-id/$P2_DISK_A /dev/disk/by-id/$P2_DISK_B /dev/disk/by-id/ata-DISK-C" "$SHIM_LOG"
 }
 
-@test "one disk, or five, is a usage error; a disk given twice is refused; nothing is touched" {
+@test "one disk makes a single-vdev pool (the normal SCH shape: the mirror is across storage hosts)" {
+  ARGS=(lab --disk "$P2_DISK_A")
+  create
+  [ "$status" -eq 0 ]
+  grep -qxF "zpool create -o ashift=12 -o autotrim=on -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none lab /dev/disk/by-id/$P2_DISK_A" "$SHIM_LOG"
+  run ! grep -q '^zpool create .* mirror' "$SHIM_LOG"
+  [[ "$stderr" == *"one disk: a single-vdev pool (the mirror is across storage hosts)"* ]]
+  grep -qxF "zfs create -o encryption=aes-256-gcm -o keyformat=raw -o keylocation=prompt lab/enc" "$SHIM_LOG"
+  # idempotent: the same one-disk pool again is a no-op after status
+  printf '\t/dev/disk/by-id/%s-part1  ONLINE\n' "$P2_DISK_A" > "$STATE/status-pool"
+  : > "$SHIM_LOG"
+  create
+  [ "$status" -eq 0 ]
+  run ! grep -E '^(zpool create|zfs create|wipefs)' "$SHIM_LOG"
+  grep -qxF 'zpool status lab' "$SHIM_LOG"
+}
+
+@test "no disk, or five, is a usage error; a disk given twice is refused; nothing is touched" {
+  ARGS=(lab)
+  create
+  [ "$status" -eq 2 ]
+  no_disk_touched
   ARGS=(lab --disk a1 --disk a2 --disk a3 --disk a4 --disk a5)
   create
   [ "$status" -eq 2 ]

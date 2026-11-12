@@ -153,6 +153,68 @@ for my $type ('TCH', 'SCH,TCH') {
     is(scalar(@{ calls($f) }), 2, 'the next network is still called');
 }
 
+# --- IPS-34 item 12: a boot NIC audited below network_min_link_mbps refuses the
+# storage and transit networks (s3 tch-004: rtl8139, 100 Mb/s); the key allows it
+{
+    my $macs = [
+        { mac => '52:54:00:00:00:01', ifname => 'enp1s0', driver => 'rtl8139',    speed => 100 },
+        { mac => '52:54:00:00:00:0a', ifname => 'enp2s0', driver => 'virtio_net', speed => undef },
+    ];
+    my ($n, $f, $log) = s1(type => 'TCH');
+    $f->{reg}->host_set($mac, 'macs', $macs);
+    my $r = $n->net_up;
+    is($r->{result}, 'refused', '100 Mb/s boot NIC, default key: refused');
+    is(scalar(@{ calls($f) }), 0, 'nothing called');
+    is(scalar(grep { $_->{refused} } @{ $r->{networks} }), 3, 'storage A, B and transit all refused');
+    is($r->{networks}[0]{refused},
+        "the boot NIC enp1s0 (rtl8139) is 100 Mb/s, below the cluster's network_min_link_mbps 1000 (hps-cluster-config set network_min_link_mbps 100 allows it)",
+        'the reason names the NIC, its speed and the key');
+    is_deeply($r->{link}, { ifname => 'enp1s0', driver => 'rtl8139', speed => 100 }, 'the plan carries the boot link');
+    ok((grep { /^warning net-up sch-001: storage-vlan113 refused: the boot NIC enp1s0 \(rtl8139\) is 100 Mb\/s, below the cluster's network_min_link_mbps 1000/ } @$log), 'logged with the line');
+
+    $f->{reg}->cluster_set('lab', 'network_min_link_mbps', '101');
+    $r = $n->net_up;
+    is($r->{result}, 'refused', 'key 101: still refused');
+    like($r->{networks}[0]{refused}, qr/network_min_link_mbps 101/, 'with the key value');
+    $f->{reg}->cluster_set('lab', 'network_min_link_mbps', '100');
+    $r = $n->net_up;
+    is($r->{result}, 'ok', 'key 100 (the lab setting for s3): allowed');
+    is(scalar(@{ calls($f) }), 3, 'storage A, B and transit called');
+    $f->{ce}{calls} = [];
+    $f->{reg}->cluster_set('lab', 'network_min_link_mbps', '0');
+    is($n->net_up->{result}, 'ok', 'key 0: the check is off');
+    $f->{ce}{calls} = [];
+    $f->{reg}->cluster_set('lab', 'network_min_link_mbps', 'fast');
+    $r = $n->net_up;
+    is($r->{result}, 'refused', 'a key that is not a number: the default 1000 applies');
+    like($r->{networks}[0]{refused}, qr/network_min_link_mbps 1000/, 'and is named as 1000');
+    $f->{reg}->cluster_unset('lab', 'network_min_link_mbps');
+
+    # the NIC the host last booted from decides; an unknown speed is allowed
+    $f->{reg}->host_set($mac, 'boot_mac_last', '52:54:00:00:00:0a');
+    $r = $n->net_up;
+    is($r->{result}, 'ok', 'boot_mac_last names the virtio NIC: speed unknown, allowed');
+    is_deeply($r->{link}, { ifname => 'enp2s0', driver => 'virtio_net', speed => undef }, 'that link, speed undef');
+    $f->{reg}->host_set($mac, 'boot_mac_last', '52:54:00:00:00:99');
+    $r = $n->net_up;
+    is($r->{result}, 'ok', 'a boot MAC the audit did not list: no link, allowed');
+    is($r->{link}, undef, 'link undef');
+    $f->{reg}->host_unset($mac, 'boot_mac_last');
+    $f->{reg}->host_set($mac, 'macs', [ { mac => '52:54:00:00:00:01', ifname => 'enp1s0', driver => 'e1000e', speed => 1000 } ]);
+    is($n->net_up->{result}, 'ok', '1000 Mb/s at the default: allowed');
+    $f->{reg}->host_set($mac, 'macs', [ { mac => '52:54:00:00:00:01', ifname => 'enp1s0', driver => 'e1000e', speed => 'n/a' } ]);
+    is($n->net_up->{result}, 'ok', 'a speed that is not a number counts as unknown');
+    $f->{reg}->host_unset($mac, 'macs');
+    is($n->net_up->{result}, 'ok', 'no audit MACs: allowed');
+
+    # an SCH is held to the same floor
+    ($n, $f) = s1(type => 'SCH');
+    $f->{reg}->host_set($mac, 'macs', $macs);
+    $r = $n->net_up;
+    is($r->{result}, 'refused', 'SCH on a 100 Mb/s NIC: refused');
+    is(scalar(@{ calls($f) }), 0, 'nothing called');
+}
+
 # --- wait: the agent is pinged until it answers
 {
     my ($n, $f) = s1();
@@ -214,11 +276,26 @@ for my $type ('TCH', 'SCH,TCH') {
                            "--json $mac net-vlan-address boot 112 10.11.2.153/24 --mtu 9000" ], 'CLI: hps-run called once per network');
 
     unlink "$tmp/args";
-    local $ENV{FAKE_NODE_EXIT} = 3;
-    local $ENV{FAKE_NODE_STDERR} = '[net-vlan-address] refused: eth0.113 is a member of bridge br-stor';
-    ($rc, $out) = $cli->('net-up', 'sch-001');
-    is($rc, 3, 'CLI: node refusal: 3');
-    like($out, qr/exited 3: \[net-vlan-address\] refused: eth0\.113 is a member/, 'CLI shows the node\'s reason');
+    {
+        local $ENV{FAKE_NODE_EXIT} = 3;
+        local $ENV{FAKE_NODE_STDERR} = '[net-vlan-address] refused: eth0.113 is a member of bridge br-stor';
+        ($rc, $out) = $cli->('net-up', 'sch-001');
+        is($rc, 3, 'CLI: node refusal: 3');
+        like($out, qr/exited 3: \[net-vlan-address\] refused: eth0\.113 is a member/, 'CLI shows the node\'s reason');
+    }
+
+    # the slow-NIC refusal, as the operator sees it (tch-004 of s3)
+    $reg->host_set($mac, 'macs', [ { mac => $mac, ifname => 'enp1s0', driver => 'rtl8139', speed => 100 } ]);
+    ($rc, $out) = $cli->('net-up', '--dry-run', 'sch-001');
+    is($rc, 3, 'CLI: a 100 Mb/s boot NIC: refused (3)');
+    like($out, qr/^storage-vlan113 \(vlan 113\): refused: the boot NIC enp1s0 \(rtl8139\) is 100 Mb\/s, below the cluster's network_min_link_mbps 1000 \(hps-cluster-config set network_min_link_mbps 100 allows it\)$/m, 'CLI prints the refusal line');
+    like($out, qr/^transit \(vlan 112\): refused: the boot NIC enp1s0/m, 'transit too');
+    like($out, qr/sch-001: dry run: refused, 2 network\(s\), 0 to call/, 'summary: refused, none to call');
+    $reg->cluster_set('lab', 'network_min_link_mbps', '100');
+    ($rc, $out) = $cli->('net-up', '--dry-run', 'sch-001');
+    is($rc, 0, 'CLI: network_min_link_mbps 100: allowed');
+    $reg->cluster_unset('lab', 'network_min_link_mbps');
+    $reg->host_unset($mac, 'macs');
 }
 
 # --- net-status: the node's read-only view, one call, output as the node gave it
