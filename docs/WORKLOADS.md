@@ -33,7 +33,7 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `access` | optional; `ssh_keys` a list of public key lines, `console` a JSON boolean |
 | `memory_mib` | 256-262144 |
 | `vcpus` | 1-64 |
-| `priority` | 1-5, default 3; 1 starts first and stops last |
+| `priority` | 1-5; 1 starts first and stops last. Default 1 for a storage provider (a `boot: network` VM with disks of its own: a nested SCH or IPS builds its pool on them), else 3. At one priority providers start first and stop last. See "Stop order on a node" |
 | `image` | `^[a-z0-9][a-z0-9._-]{0,63}$`; `hps-resources/images/<image>.qcow2` and `<image>.sha256` must exist on the IPS (checked by `create`; `image-fetch` on the node checks the sum); absent when `boot` is `network` |
 | `boot` | optional, `disk` (default) or `network`. `network`: the VM netboots from the first NIC like a metal node (a nested HPS node, CS-3.12a); `image` is refused, `disks` may be empty or absent, so `compute_host` is required; `create` runs `net-bridge-ensure` and `vm-define --boot network` only (no zvol, image, mirror or image write) and `start`, `stop`, `status` and `destroy` are unchanged |
 | `disks[].size` | `^[1-9][0-9]*[MGT]$` |
@@ -112,7 +112,7 @@ nothing). A node call that exits non-zero ends the run at once.
     (`mirror-create` calls `leg-resolve`).
 
 `start`
-:   VMs in priority order (1 first): `net-vxlan-ensure` for each vxlan net of
+:   VMs in priority order (1 first; at one priority the storage providers first): `net-vxlan-ensure` for each vxlan net of
     the VM (once per compute host and net; idempotent, and the node runs from
     RAM, so a reboot lost the link; the call also brings the peer list up to
     date), `mirror-assemble` (mirrored disks only; a
@@ -140,7 +140,7 @@ nothing). A node call that exits non-zero ends the run at once.
     be refused) and are shown `(skipped, not needed)` when the VM was defined.
 
 `stop`
-:   Reverse priority: `vm-stop`, then `mirror-stop`. Records `stopped`.
+:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped`.
 
 `destroy`
 :   Allowed in every recorded state (who may run it is ctrl-exec's decision, ADR 0007). From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
@@ -181,6 +181,37 @@ nothing). A node call that exits non-zero ends the run at once.
 
 `--vm` selects one VM (start, stop, status). `--allow-any-pool-name` (create,
 destroy) passes through to `HPS::Storage`: pools are named after the cluster.
+
+## Stop order on a node
+
+A compute host stops its guests when it powers off or reboots, however that
+was asked for (`hps-node <host> power-off` / `node-poweroff`, `systemctl
+reboot`, the power button): `hps-shutdown-storage.service` runs
+`hps-shutdown-storage`, which stops the guests one after the other before
+the mirrors, the iSCSI exports and sessions, and the pools. The order:
+
+1. priority 5 first, 1 last (the reverse of `start`);
+2. at one priority, the storage consumers before the storage providers;
+3. otherwise the order `virsh list` gives.
+
+A storage provider is a VM that serves storage to other guests: a `boot:
+network` VM with disks (a nested SCH, or a nested IPS). Everything else
+consumes: a `boot: disk` VM whose disks are md mirrors over iSCSI legs, and a
+diskless nested node (a nested TCH, whose storage is the nested SCHs').
+Stopping a provider first takes the legs from under its consumers' mirrors
+(2026-11-12: s1's SCH VMs stopped before its TCH VMs, and the probes' mirrors
+lost both legs).
+
+`start` passes the order to the node: `vm-start <vm> --priority <n>
+[--provides-storage]`, which `vm-start` records in `/run/hps/guests/<vm>`
+(`<priority> <0|1>`, tmpfs: the node runs from RAM) once the guest runs. A
+guest started any other way has no record and counts as priority 3, a
+consumer. A guest started before this change gets its record at its next
+`start`.
+
+The rule works within one compute host. Across hosts (a nested TCH on one
+host using a nested SCH on another) the order of the hosts' own shutdowns is
+the operator's: power the consumers' hosts off first.
 
 ## Registry
 

@@ -8,7 +8,9 @@
 # are still up (libvirt, the network, the iSCSI initiator, the log forwarder)
 # and before they are stopped. Order, each step bounded by a timeout and logged
 # when it is hit:
-#   1. running guests    vm-stop <vm> --timeout N --force   (clean ACPI first)
+#   1. running guests    vm-stop <vm> --timeout N --force   (clean ACPI first),
+#                        one after the other in stop order: priority 5 first,
+#                        1 last, consumers of storage before its providers
 #   2. md mirrors        mirror-stop <name>                 (each sidecar)
 #   3. iSCSI targets     iscsi-unexport <iqn>               (each target)
 #   4. iSCSI sessions    iscsiadm -m node --logoutall=all
@@ -18,7 +20,8 @@
 # was asked to power off must not hang here. Exit 0 when every step was clean,
 # 1 otherwise (the shutdown proceeds either way).
 #
-# Test hooks: HPS_SCRIPTS_DIR (default /opt/ctrl-exec-scripts), HPS_MIRROR_DIR
+# Test hooks: HPS_SCRIPTS_DIR (default /opt/ctrl-exec-scripts), HPS_GUEST_ORDER_DIR
+# (default /run/hps/guests, written by vm-start), HPS_MIRROR_DIR
 # (default /run/hps/mirrors), HPS_CONFIGFS_ISCSI (default
 # /sys/kernel/config/target/iscsi), HPS_SHUTDOWN_STEP_TIMEOUT (per command,
 # default 60 s), HPS_SHUTDOWN_GUEST_TIMEOUT (clean-stop wait per guest,
@@ -31,6 +34,7 @@ set -euo pipefail
 : "${HPS_CONFIGFS_ISCSI:=/sys/kernel/config/target/iscsi}"
 : "${HPS_SHUTDOWN_STEP_TIMEOUT:=60}"
 : "${HPS_SHUTDOWN_GUEST_TIMEOUT:=60}"
+: "${HPS_GUEST_ORDER_DIR:=/run/hps/guests}"
 
 # The system profile is where virsh, mdadm, zpool and iscsiadm live on NixOS.
 PATH="$PATH:/run/wrappers/bin:/run/current-system/sw/bin"
@@ -59,7 +63,31 @@ bounded() {
   return "$rc"
 }
 
-# stop_guests: every running libvirt guest, clean stop then forced after the timeout.
+# order_guests <vm>...: the guests in stop order, one per line. vm-start records
+# "<priority> <provides storage 0|1>" per guest in $HPS_GUEST_ORDER_DIR/<vm>
+# (the workload VM's priority, 1-5; a guest without a record counts as 3, a
+# consumer). Priority 5 stops first and 1 last (docs/WORKLOADS.md); within one
+# priority the storage consumers (VMs with md mirrors over iSCSI legs, nested
+# TCH nodes) stop before the providers (nested SCH nodes, exporters), so no
+# consumer loses its legs while it still runs (incident 2026-11-12). Ties keep
+# virsh's order.
+order_guests() {
+  local vm prio prov i=0
+  for vm in "$@"; do
+    prio=3
+    prov=0
+    if [[ -r "$HPS_GUEST_ORDER_DIR/$vm" ]]; then
+      read -r prio prov < "$HPS_GUEST_ORDER_DIR/$vm" || true
+    fi
+    [[ "$prio" =~ ^[1-5]$ ]] || prio=3
+    [[ "$prov" == 1 ]] || prov=0
+    printf '%d %d %s\n' "$(( (5 - prio) * 2 + prov ))" "$i" "$vm"
+    i=$((i + 1))
+  done | sort -n -k1,1 -k2,2 | cut -d' ' -f3
+}
+
+# stop_guests: every running libvirt guest in stop order (order_guests), clean
+# stop then forced after the timeout.
 stop_guests() {
   local vms vm budget
   if ! command -v virsh > /dev/null 2>&1; then
@@ -71,6 +99,9 @@ stop_guests() {
     return 0
   fi
   budget=$((HPS_SHUTDOWN_GUEST_TIMEOUT + HPS_SHUTDOWN_STEP_TIMEOUT))
+  # shellcheck disable=SC2086  # $vms is virsh's list of names, one per line
+  vms=$(order_guests $vms)
+  [[ -z "$vms" ]] || log "guest stop order: $(printf '%s ' $vms)"
   for vm in $vms; do
     log "stopping guest $vm"
     bounded "$budget" "$HPS_SCRIPTS_DIR/vm-stop" "$vm" --timeout "$HPS_SHUTDOWN_GUEST_TIMEOUT" --force \

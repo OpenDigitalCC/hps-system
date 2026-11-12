@@ -109,7 +109,7 @@ like($out, qr/already exists/, 'says so');
 reset_shim();
 ($rc, $out) = cli('start', 't0', '--vm', 't0-db');
 is($rc, 0, 'start --vm exits 0');
-is_deeply([ map { s/^(?:--\S+ )*\S+ //r =~ s/\s+\z//r } calls() ], [ 'mirror-assemble t0-db-root --leg local:lab/enc/vm/t0-t0-db-root --leg iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db', 'vm-status t0-db', 'vm-start t0-db' ], 'start --vm: only that VM');
+is_deeply([ map { s/^(?:--\S+ )*\S+ //r =~ s/\s+\z//r } calls() ], [ 'mirror-assemble t0-db-root --leg local:lab/enc/vm/t0-t0-db-root --leg iscsi:192.0.2.50:iqn.2026-01.lab.nas:hpslab-t0-db', 'vm-status t0-db', 'vm-start t0-db --priority 1' ], 'start --vm: only that VM (vm-start carries the priority)');
 is(rec()->{vms}{'t0-db'}{state}, 'running', 'registry: running');
 
 ($rc, $out) = cli('status', 't0');

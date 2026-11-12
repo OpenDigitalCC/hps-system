@@ -52,7 +52,7 @@ sub created {
         [ 'vm-define', 't0-db', '--memory', 4096, '--vcpus', 4, '--disk', '/dev/md/t0-db-root',
           '--net', 'br-mgmt', '--mac', $DB_MACS[0], '--net', 'br-db', '--mac', $DB_MACS[1],
           '--image', '/lab/enc/images/debian-13-generic-amd64.qcow2' ],
-        [ 'vm-start', 't0-db' ] ],
+        [ 'vm-start', 't0-db', '--priority', 1 ] ],
         'mirror assembled, VM found missing, re-defined with the recorded MACs, started') or diag explain calls($f);
     my ($def) = grep { $_->{script} eq 'vm-define' } $f->{ce}->calls;
     is_deeply([ grep { $_ ne '--mac' && !/^52:54/ } @{ $def->{args} } ], $create_args, "the re-define is create's vm-define plus --mac");

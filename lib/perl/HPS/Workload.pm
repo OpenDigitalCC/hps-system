@@ -113,8 +113,8 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     else {
         _bad($where, "image must match $IMAGE_RE") unless _plain($vm->{image}) && $vm->{image} =~ $IMAGE_RE;
     }
-    my $prio = exists $vm->{priority} ? $vm->{priority} : 3;
-    _bad($where, 'priority must be 1-5') unless _int_in($prio, 1, 5);
+    my $prio = exists $vm->{priority} ? $vm->{priority} : undef;
+    _bad($where, 'priority must be 1-5') if defined $prio && !_int_in($prio, 1, 5);
     my $disks = $net_boot ? ($vm->{disks} // []) : $vm->{disks};
     _bad($where, $net_boot ? 'disks must be a list' : 'disks must be a non-empty list')
         unless ref $disks eq 'ARRAY' && ($net_boot || @$disks);
@@ -208,10 +208,17 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     }
     elsif (@lh) { $compute = $lh[0] }
     else { _bad($where, 'no local {host,pool} leg and no compute_host: the compute host is unknown') }
+    # A storage provider: a network-boot VM with disks of its own (a nested
+    # node that builds its pool on them: a nested SCH, or a nested IPS). It
+    # starts first and stops last by default (priority 1, else 3), and at one
+    # priority it starts before and stops after the consumers (_ordered;
+    # vm-start --provides-storage for the node's shutdown order).
+    my $provides = ($net_boot && @d) ? 1 : 0;
+    $prio //= $provides ? 1 : 3;
     return { name => "$vm->{name}", memory_mib => $vm->{memory_mib} + 0, vcpus => $vm->{vcpus} + 0,
         boot => $boot, (defined $vm->{image} ? (image => "$vm->{image}") : ()), disks => \@d, nets => \@names,
         ($has_obj ? (nics => \@nics) : ()), (%hw ? (hardware => \%hw) : ()),
-        priority => $prio + 0, compute => $compute };
+        priority => $prio + 0, provides_storage => $provides, compute => $compute };
 }
 
 sub _validate_access ($access) {
@@ -480,12 +487,13 @@ sub _vm_info ($self, $def, $vm) {
         image_dir => ($has_pool ? "/$pool/enc/images" : '/run/hps/images') };
 }
 
-# VMs in start order (priority 1 first, then definition order); the selected
-# --vm only, else all.
+# VMs in start order (priority 1 first; at one priority the storage providers
+# first; then definition order); the selected --vm only, else all. Stop is the
+# reverse.
 sub _ordered ($self, $def, %a) {
     my $i = 0;
-    my @vms = map { $_->[1] } sort { $a->[0] <=> $b->[0] || $a->[2] <=> $b->[2] }
-        map { [ $_->{priority}, $_, $i++ ] } @{ $def->{vms} };
+    my @vms = map { $_->[1] } sort { $a->[0] <=> $b->[0] || $a->[3] <=> $b->[3] || $a->[2] <=> $b->[2] }
+        map { [ $_->{priority}, $_, $i++, ($_->{provides_storage} ? 0 : 1) ] } @{ $def->{vms} };
     if (defined $a{vm}) {
         @vms = grep { $_->{name} eq $a{vm} } @vms;
         _fail('notfound', "workload '$def->{name}' has no VM '$a{vm}'") unless @vms;
@@ -713,7 +721,10 @@ sub _steps_start ($self, $def, %a) {
             before => sub { $self->_log('notice', "start $n: VM $vname is not defined on $host; re-defining it from the definition and the record") });
         push @s, _step($in->{mac}, 'vm-status', [$vname], when => sub { $missing }, seen => $keep_macs,
             only => "$only, and no MACs were recorded: records the new ones") unless $macs;
-        push @s, _step($in->{mac}, 'vm-start', [ $vm->{name} ], after => sub {
+        # The priority and role go to the node: hps-shutdown-storage stops its
+        # guests in that order (docs/WORKLOADS.md "Stop order on a node").
+        push @s, _step($in->{mac}, 'vm-start', [ $vm->{name}, '--priority', $vm->{priority},
+            ($vm->{provides_storage} ? ('--provides-storage') : ()) ], after => sub {
             $self->_rec_update($n, sub ($r) {
                 @{ $r->{vms}{ $vm->{name} } }{qw(state last_owner started_at)} = ('running', $host, $self->_stamp);
                 $r->{state} = _state_of($r);

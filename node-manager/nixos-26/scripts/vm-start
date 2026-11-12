@@ -4,7 +4,13 @@
 #
 # ctrl-exec allowlisted node script.
 #
-# Usage: vm-start <vm>
+# Usage: vm-start <vm> [--priority <1-5>] [--provides-storage]
+#
+# Stop order. --priority (the workload VM's priority, default 3) and
+# --provides-storage (the guest provides storage to others, e.g. a nested SCH)
+# are recorded in $HPS_GUEST_ORDER_DIR/<vm> (default /run/hps/guests) once the
+# guest runs. hps-shutdown-storage stops guests by them: priority 5 first,
+# 1 last, and within one priority the storage consumers before the providers.
 # Not defined: refused with 4. Already running: nothing to do, exit 0. Shut
 # off: virsh start, then wait up to 30 s (HPS_VM_WAIT) for the state "running".
 # Any other state (paused, crashed, ...) is refused (3). The mirror under the
@@ -28,8 +34,11 @@ set -euo pipefail
 
 : "${HPS_VM_WAIT:=30}"
 : "${HPS_VM_STEP:=1}"
+: "${HPS_GUEST_ORDER_DIR:=/run/hps/guests}"
 
 VM=""
+PRIORITY=3
+PROVIDES_STORAGE=0
 
 log() {
   printf '[vm-start] %s\n' "$*" >&2
@@ -49,7 +58,7 @@ run_q() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: vm-start <vm>
+Usage: vm-start <vm> [--priority <1-5>] [--provides-storage]
 Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 failed.
 USAGE
 }
@@ -60,12 +69,33 @@ refuse() {
 }
 
 parse_args() {
-  [[ $# -eq 1 ]] || { usage; exit 2; }
+  [[ $# -ge 1 ]] || { usage; exit 2; }
   case "$1" in
     -*) usage; exit 2 ;;
   esac
   VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --priority)
+        [[ $# -ge 2 && "$2" =~ ^[1-5]$ ]] || { log "--priority takes 1-5"; usage; exit 2; }
+        PRIORITY=$2
+        shift 2
+        ;;
+      --provides-storage) PROVIDES_STORAGE=1; shift ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
   [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
+}
+
+# record_order: the guest's stop order for hps-shutdown-storage, one line
+# "<priority> <provides storage 0|1>" in $HPS_GUEST_ORDER_DIR/<vm> (tmpfs: a
+# node runs from RAM, and after a reboot no guest runs). Never fails the start.
+record_order() {
+  mkdir -p "$HPS_GUEST_ORDER_DIR" 2> /dev/null || true
+  printf '%s %s\n' "$PRIORITY" "$PROVIDES_STORAGE" > "$HPS_GUEST_ORDER_DIR/$VM" 2> /dev/null \
+    || log "cannot record the stop order in $HPS_GUEST_ORDER_DIR/$VM (continuing)"
 }
 
 wait_running() {
@@ -149,6 +179,7 @@ main() {
     running)
       log "$VM is already running; nothing to start"
       apply_vlans
+      record_order
       printf 'VM %s running\n' "$VM"
       return 0
       ;;
@@ -158,6 +189,7 @@ main() {
   run virsh -c qemu:///system start "$VM"
   wait_running
   apply_vlans
+  record_order
   printf 'VM %s running\n' "$VM"
 }
 
