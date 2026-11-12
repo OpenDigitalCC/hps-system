@@ -37,7 +37,7 @@ my $KEY     = 'enc';    # the keysafe name of <pool>/enc's key
 my %OPS = (
     'up' => '_steps_up', 'down' => '_steps_down', 'create' => '_steps_create',
     'destroy' => '_steps_destroy', 'trim-check' => '_steps_trim', 'status' => '_steps_status',
-    'zvol-create' => '_steps_zvol_create', 'zvol-destroy' => '_steps_zvol_destroy',
+    'zvol-create' => '_steps_zvol_create', 'zvol-destroy' => '_steps_zvol_destroy', 'zvol-grow' => '_steps_zvol_grow',
     'zvol-list' => '_steps_zvol_list', 'export' => '_steps_export', 'unexport' => '_steps_unexport',
 );
 
@@ -281,6 +281,17 @@ sub _steps_zvol_create ($self, %a) {
     my $pool = $self->pool(%a, dataset => undef);    # the host's pool, not the dataset's
     _fail('refused', "dataset '$ds' is not in pool '$pool'") unless $self->_dataset_pool($ds) eq $pool;
     return _step('storage-zvol-create', [ $ds, $size ]);
+}
+
+# Grow only: storage-zvol-grow refuses a shrink, an unknown dataset or a
+# non-zvol on the node. The dataset must be in the host's pool, as for create.
+sub _steps_zvol_grow ($self, %a) {
+    my $ds = $self->_dataset(%a);
+    my $size = $a{size};
+    _fail('usage', 'a new size like 64G is required (K, M, G or T)') unless defined $size && $size =~ $SIZE_RE;
+    my $pool = $self->pool(%a, dataset => undef);
+    _fail('refused', "dataset '$ds' is not in pool '$pool'") unless $self->_dataset_pool($ds) eq $pool;
+    return _step('storage-zvol-grow', [ $ds, $size ]);
 }
 
 sub _steps_zvol_destroy ($self, %a) {
@@ -564,7 +575,8 @@ carrying the pool key on stdin, then C<up>. C<destroy>: one C<storage-pool-destr
 call; clears the storage_* registry keys; the key stays in the keysafe.
 C<trim-check>, C<status> as named (C<status> is the read-only
 C<storage-status>; it imports nothing). C<zvol-create DATASET SIZE>,
-C<zvol-destroy DATASET> (refused while the zvol is in C<storage_exports>), C<zvol-list>,
+C<zvol-destroy DATASET> (refused while the zvol is in C<storage_exports>), C<zvol-grow DATASET SIZE>
+(the new size; the node only grows an existing zvol, never shrinks it), C<zvol-list>,
 C<export DATASET --iqn --initiator [--portal]> (portal defaults to the host's
 registry C<IP>; recorded in C<storage_exports> after the node did it) and
 C<unexport IQN> (removes the entry). A zvol is C<POOL/enc/NAME> or, for a guest disk, C<POOL/enc/vm/NAME>

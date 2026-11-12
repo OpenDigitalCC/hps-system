@@ -127,10 +127,14 @@ in
   services.ctrl-exec-agent.scripts = {
       cnh-disk-prepare.source = mkScript "cnh-disk-prepare" (scriptsDir + "/cnh-disk-prepare");
       cnh-disk-prepare.options.profile = "node";
+      cnh-disk-grow.source = mkScript "cnh-disk-grow" (scriptsDir + "/cnh-disk-grow");
+      cnh-disk-grow.options.profile = "node";
       cnh-image-load.source = mkScript "cnh-image-load" (scriptsDir + "/cnh-image-load");
       cnh-image-load.options.profile = "node";
       cnh-ips-bootstrap.source = mkScript "cnh-ips-bootstrap" (scriptsDir + "/cnh-ips-bootstrap");
       cnh-ips-bootstrap.options.profile = "node";
+      cnh-ips-cleanup.source = mkScript "cnh-ips-cleanup" (scriptsDir + "/cnh-ips-cleanup");
+      cnh-ips-cleanup.options.profile = "node";
       cnh-ips-cluster-bootstrap.source = mkScript "cnh-ips-cluster-bootstrap" (scriptsDir + "/cnh-ips-cluster-bootstrap");
       cnh-ips-cluster-bootstrap.options.profile = "node";
       cnh-ips-run.source = mkScript "cnh-ips-run" (scriptsDir + "/cnh-ips-run");
@@ -147,7 +151,7 @@ in
 
   # What the CNH scripts call, on the agent's scriptPath (the system profile).
   environment.systemPackages = with pkgs; [
-    e2fsprogs # mkfs.ext4 (cnh-disk-prepare)
+    e2fsprogs # mkfs.ext4 (cnh-disk-prepare), resize2fs (cnh-disk-grow)
     util-linux # blkid, findmnt, mount
     curl
     jq

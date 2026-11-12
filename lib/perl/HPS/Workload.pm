@@ -35,7 +35,7 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 # vm-define takes --disk 1..8 times.
 my $MAX_DISKS = 8;
 
-my %OPS = map { $_ => 1 } qw(create start stop destroy status);
+my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk);
 my %TOP = map { $_ => 1 } qw(name project access vms);
 my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware);
 my %NICK = map { $_ => 1 } qw(net pvid tagged model);
@@ -804,14 +804,40 @@ sub _steps_destroy ($self, $def, %a) {
     return @s;
 }
 
+# grow-disk: one disk of one VM to a new size, while the workload runs. The
+# zvol of the disk's local leg grows through HPS::Storage (storage-zvol-grow,
+# which never shrinks), then vm-disk-resize tells the guest. The filesystem
+# inside the guest is the guest's business (cnh-disk-grow on a container host).
+# Only a disk of one leg (always local): a mirrored disk would need both legs
+# and the md grown.
+sub _steps_grow_disk ($self, $def, %a) {
+    $self->_need_record($def->{name}, 'grow-disk');
+    _fail('usage', 'grow-disk needs a VM, a disk and a new size') unless defined $a{vm} && defined $a{disk} && defined $a{size};
+    _fail('usage', "size '$a{size}' is not like 64G (M, G or T)") unless $a{size} =~ $SIZE_RE;
+    my ($vm) = $self->_ordered($def, vm => $a{vm});
+    my $in = $self->_vm_info($def, $vm);
+    my ($d) = grep { $_->{name} eq $a{disk} } @{ $in->{disks} };
+    _fail('notfound', "VM '$vm->{name}' of workload '$def->{name}' has no disk '$a{disk}'") unless $d;
+    _fail('refused', "disk '$d->{name}' is mirrored ($d->{mirror}): grow-disk grows a single local zvol only")
+        if $d->{mirrored};
+    my $stor = $self->_st($vm->{compute});
+    my $shown = $stor->plan('zvol-grow', dataset => $d->{dataset}, size => $a{size})->[0];
+    $self->{notes} = [ "the definition still says $d->{size} for $vm->{name}/$d->{name}; a later create (after destroy) makes it at that size" ];
+    return (
+        _step($in->{mac}, $shown->{script}, $shown->{args}, storage => [ 'zvol-grow', dataset => $d->{dataset}, size => $a{size} ]),
+        _step($in->{mac}, 'vm-disk-resize', [ $vm->{name}, $d->{device} ]),
+    );
+}
+
 my %STEPS = (create => '_steps_create', start => '_steps_start', stop => '_steps_stop',
-    destroy => '_steps_destroy', status => '_steps_status');
+    destroy => '_steps_destroy', status => '_steps_status', 'grow-disk' => '_steps_grow_disk');
 
 sub _prepare ($self, $op, $name, %a) {
     my $m = $STEPS{ $op // '' } // _fail('usage', 'unknown operation; one of: ' . join(', ', ops()));
     _fail('usage', '--vm is not for ' . $op) if defined $a{vm} && ($op eq 'create' || $op eq 'destroy');
     _fail('usage', '--resume is only for create') if $a{resume} && $op ne 'create';
     _fail('usage', '--forget is only for destroy') if $a{forget} && $op ne 'destroy';
+    _fail('usage', '--disk and --size are only for grow-disk') if (defined $a{disk} || defined $a{size}) && $op ne 'grow-disk';
     my $def = $self->load($name);
     return ($def, $self->$m($def, %a));
 }
@@ -861,7 +887,7 @@ sub run ($self, $op, $name, %a) {
     if ($a{dry_run}) {
         my $plan = eval { $self->plan($op, $name, %a) };
         if (my $e = $@) { $self->_log('warning', "$op $name refused: " . (ref $e ? $e->message : $e)); die $e }
-        return { dry_run => 1, op => $op, name => $name, plan => $plan, ($op eq 'destroy' ? (notes => $self->{notes} // []) : ()) };
+        return { dry_run => 1, op => $op, name => $name, plan => $plan, ($op eq 'destroy' || $op eq 'grow-disk' ? (notes => $self->{notes} // []) : ()) };
     }
     my ($def, @steps) = eval { $self->_prepare($op, $name, %a) };
     if (my $e = $@) {
@@ -916,7 +942,7 @@ sub run ($self, $op, $name, %a) {
             $self->_rec_update($name, sub ($rec) { push @{ $rec->{done} }, $st->{key}; delete $rec->{attempting} });
         }
     }
-    my $out = { op => $op, name => $name, ok => 1, steps => \@results, ($op eq 'destroy' ? (notes => $self->{notes} // []) : ()) };
+    my $out = { op => $op, name => $name, ok => 1, steps => \@results, ($op eq 'destroy' || $op eq 'grow-disk' ? (notes => $self->{notes} // []) : ()) };
     $self->_post($op, $def, $out, %a);
     $self->_log('info', "$op $name ok");
     return $out;

@@ -124,3 +124,14 @@ teardown() {
   [[ "$output" == *"args=show-definition w1"* ]]
   [[ "$output" == *"stdin=[]"* ]]
 }
+
+@test "hps-storage zvol-grow and hps-workload grow-disk pass the gate with their dataset and plain arguments" {
+  run "$W/hps-storage" sch-001 zvol-grow lab/enc/vm/s1-ips-s1-ips-d0 64G
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-storage args=sch-001 zvol-grow lab/enc/vm/s1-ips-s1-ips-d0 64G"* ]]
+  run "$W/hps-storage" sch-001 zvol-grow lab/enc/vm/../x 64G
+  [ "$status" -eq 2 ]
+  run "$W/hps-workload" grow-disk s1-ips s1-ips d0 64G
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-workload args=grow-disk s1-ips s1-ips d0 64G"* ]]
+}

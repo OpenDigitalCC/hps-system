@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# storage-zvol-grow - grow an existing zvol under a pool's encrypted parent.
+#
+# ctrl-exec allowlisted node script. Usage: storage-zvol-grow <dataset> <size>
+#
+#   <dataset>  <pool>/enc/<name> or <pool>/enc/vm/<name>  (as storage-zvol-create)
+#   <size>     ^[0-9]+[KMGT]$      binary multiples, a multiple of 16K, > 0:
+#              the NEW size of the whole zvol, not an increment
+#
+# The parent <pool>/enc must have keystatus "available" (a locked parent is
+# never written to). The dataset must exist and be a zvol. Then:
+#   zfs set volsize=<size> <dataset>
+# It only grows: a size below the current one is refused (exit 3) and nothing
+# runs; the same size exits 0 without a change. A guest using the zvol sees the
+# new size after vm-disk-resize (or at its next start); its filesystem is grown
+# inside the guest (cnh-disk-grow on a container host).
+#
+# Last line: ZVOL <dataset> volsize=<bytes> was=<bytes>
+# Exit: 0 grown or already that size, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+DATASET=""
+SIZE=""
+POOL=""
+BYTES=0
+
+log() {
+  printf '[storage-zvol-grow] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-zvol-grow <pool>/enc/[vm/]<name> <size>   (the new size, like 64G)
+Only grows. Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -*) log "unknown option: $arg"; usage; exit 2 ;;
+    esac
+  done
+  if [[ $# -ne 2 ]]; then
+    usage
+    exit 2
+  fi
+  DATASET=$1
+  SIZE=$2
+  if [[ ! "$DATASET" =~ ^([a-z][a-z0-9_.-]*)/enc/(vm/)?[A-Za-z0-9_-]+$ ]]; then
+    refuse "dataset '$DATASET' is not <pool>/enc/<name> or <pool>/enc/vm/<name>"
+  fi
+  POOL=${BASH_REMATCH[1]}
+  if [[ ! "$SIZE" =~ ^[0-9]+[KMGT]$ ]]; then
+    refuse "size '$SIZE' does not match ^[0-9]+[KMGT]\$"
+  fi
+}
+
+# size_bytes: BYTES from SIZE; refuses zero, overflow and a size that is not a
+# multiple of the 16K volblocksize.
+size_bytes() {
+  local num=${SIZE%?} unit=${SIZE: -1} sh
+  case "$unit" in
+    K) sh=10 ;;
+    M) sh=20 ;;
+    G) sh=30 ;;
+    T) sh=40 ;;
+  esac
+  num=$((10#$num))
+  if ((${#SIZE} > 12 || num == 0)); then
+    refuse "size '$SIZE' is zero or out of range"
+  fi
+  BYTES=$((num << sh))
+  if ((BYTES % 16384 != 0)); then
+    refuse "size '$SIZE' is not a multiple of the 16K volblocksize"
+  fi
+}
+
+require_unlocked_parent() {
+  local ks
+  ks=$(run zfs get -H -o value keystatus "$POOL/enc") || refuse "cannot read keystatus of $POOL/enc"
+  if [[ "$ks" != "available" ]]; then
+    refuse "$POOL/enc is not unlocked (keystatus: $ks)"
+  fi
+}
+
+# current_bytes: the volsize of the existing zvol; refuses an unknown dataset or
+# one that is not a zvol.
+current_bytes() {
+  local type have
+  printf '+ zfs list -H -o type %s\n' "$DATASET" >&2
+  if ! type=$(zfs list -H -o type "$DATASET" 2> /dev/null); then
+    refuse "'$DATASET' does not exist (storage-zvol-create makes a zvol)"
+  fi
+  if [[ "$type" != "volume" ]]; then
+    refuse "'$DATASET' is a $type, not a zvol"
+  fi
+  have=$(run zfs get -H -p -o value volsize "$DATASET")
+  [[ "$have" =~ ^[0-9]+$ ]] || {
+    log "cannot read the volsize of $DATASET: '$have'"
+    exit 1
+  }
+  printf '%s\n' "$have"
+}
+
+main() {
+  local have now
+  parse_args "$@"
+  size_bytes
+  require_unlocked_parent
+  have=$(current_bytes)
+  if ((BYTES < have)); then
+    refuse "'$DATASET' is $have bytes; $SIZE ($BYTES bytes) would shrink it, and a zvol is never shrunk"
+  fi
+  if ((BYTES == have)); then
+    log "$DATASET is already $SIZE; nothing to do"
+    printf 'ZVOL %s volsize=%s was=%s\n' "$DATASET" "$have" "$have"
+    return 0
+  fi
+  run zfs set "volsize=$SIZE" "$DATASET"
+  now=$(run zfs get -H -p -o value volsize "$DATASET")
+  if [[ "$now" != "$BYTES" ]]; then
+    log "$DATASET reads back volsize $now after the set, wanted $BYTES"
+    exit 1
+  fi
+  log "grew $DATASET from $have to $BYTES bytes"
+  printf 'ZVOL %s volsize=%s was=%s\n' "$DATASET" "$now" "$have"
+}
+
+main "$@"

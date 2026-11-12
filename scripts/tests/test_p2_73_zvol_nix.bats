@@ -8,7 +8,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   CTRL="$ROOT/nix/modules/hps-ctrl-exec.nix"
-  NEW="storage-zvol-create storage-zvol-destroy storage-zvol-list storage-status"
+  NEW="storage-zvol-create storage-zvol-destroy storage-zvol-grow storage-zvol-list storage-status"
 }
 
 @test "every new script exists, is executable, and is allowlisted with profile node (one .source line each)" {
@@ -20,9 +20,9 @@ setup() {
   done
 }
 
-@test "no zvol script reads request input: destroy, create, list and status declare none (ADR 0007)" {
+@test "no zvol script reads request input: destroy, create, grow, list and status declare none (ADR 0007)" {
   local s
-  for s in storage-zvol-destroy storage-zvol-create storage-zvol-list storage-status; do
+  for s in storage-zvol-destroy storage-zvol-create storage-zvol-grow storage-zvol-list storage-status; do
     run ! grep -q "^      $s\.options\.input" "$CTRL"
   done
 }

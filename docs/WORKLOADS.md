@@ -86,7 +86,8 @@ else that host's registry `IP`.
 
 ## Operations
 
-`hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`
+`hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`,
+`hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]`
 (and `define`, `show-definition` above, which make no node call).
 Each operation is an ordered list of node calls (`--dry-run` prints it, changes
 nothing). A node call that exits non-zero ends the run at once.
@@ -163,6 +164,20 @@ nothing). A node call that exits non-zero ends the run at once.
 :   Per VM `vm-status` and per mirror `mirror-status`; reports the recorded and
     the node-reported state. A failing node call makes the exit status 1 but
     the report is still printed.
+
+`grow-disk <name> <vm> <disk> <new size>`
+:   Grows one disk of one VM while it runs. Two calls on the compute host:
+    `storage-zvol-grow <pool>/enc/vm/<name>-<vm>-<disk> <new size>` (through
+    `HPS::Storage`, the same as `hps-storage <host> zvol-grow`; the node only
+    grows, a smaller size is refused, 3), then `vm-disk-resize <vm>
+    /dev/zvol/<dataset>` (`virsh blockresize` to the zvol's new size; a shut
+    off guest sees it at its next start). The size is the new size of the whole
+    disk, like `64G`. Only a disk of one local leg: a mirrored disk is refused
+    (3). The filesystem inside the guest is grown there (`cnh-disk-grow` on a
+    container host, `docs/CONTAINER-HOST.md` "When the state disk fills").
+    The definition keeps its old size; a `create` after a `destroy` makes the
+    disk at that size again (the run says so in a `note:` line). Needs the
+    workload created (4 when it has no record).
 
 `--vm` selects one VM (start, stop, status). `--allow-any-pool-name` (create,
 destroy) passes through to `HPS::Storage`: pools are named after the cluster.

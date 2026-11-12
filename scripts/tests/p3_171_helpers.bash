@@ -12,6 +12,7 @@
 #   images               image names podman image exists accepts
 #   ipaddr.<iface>       ip -j -4 addr show dev <iface> output
 #   fw                   the nixos-fw chain exists; fw-rules: inserted rules
+#   df                   "<avail> <size>" bytes df reports (absent: 100 GiB free of 200)
 
 p3_171_setup() {
   p2_setup_dirs
@@ -180,6 +181,16 @@ case "$1" in
   -C) grep -qxF "$4" "$STATE/fw-rules" 2> /dev/null ;;
   -I) echo "$5" >> "$STATE/fw-rules" ;;
   -D) grep -vxF "$4" "$STATE/fw-rules" > "$STATE/fw-rules.new" || true; mv "$STATE/fw-rules.new" "$STATE/fw-rules" ;;
+esac
+SHIM
+  cat > "$TEST_DIR/bin/df" <<'SHIM'
+#!/usr/bin/env bash
+echo "df $*" >> "$SHIM_LOG"
+read -r avail size < "$STATE/df" 2> /dev/null || { avail=107374182400; size=214748364800; }
+case "$*" in
+  *--output=avail,size*) printf '    Avail   1B-blocks\n%s %s\n' "$avail" "$size" ;;
+  *--output=avail*) printf '    Avail\n%s\n' "$avail" ;;
+  *--output=size*) printf ' 1B-blocks\n%s\n' "$size" ;;
 esac
 SHIM
   chmod +x "$TEST_DIR"/bin/*

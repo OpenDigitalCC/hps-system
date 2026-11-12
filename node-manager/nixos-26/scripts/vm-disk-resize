@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+#
+# vm-disk-resize - tell a running guest that one of its disks has grown.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-disk-resize <vm> <disk>
+#
+#   <vm>    ^[a-z0-9][a-z0-9-]{0,31}$
+#   <disk>  the guest's target (vda, vdb, sda, ...) or the disk's source zvol
+#           /dev/zvol/<pool>/enc/[vm/]<name>, as virsh domblklist lists it
+#
+# After storage-zvol-grow made the zvol bigger, this sets the guest's disk to
+# the device's new size, so a running guest sees it without a restart:
+#   blockdev --getsize64 <source>
+#   virsh blockresize <vm> <target> <bytes>B
+# The size is always the source device's own: the guest disk never becomes
+# bigger than what backs it, and nothing is shrunk (the device is the zvol,
+# which storage-zvol-grow only grows). A guest that is shut off needs nothing:
+# it sees the new size when it starts (exit 0, "resized=no").
+#
+# Last line: VM-DISK <vm> <target> source=<device> bytes=<n> resized=<yes|no>
+# Exit: 0 ok, 2 usage, 3 refused (no such disk on the guest), 4 not defined,
+#       1 a command failed.
+
+set -euo pipefail
+
+VM=""
+DISK=""
+
+log() {
+  printf '[vm-disk-resize] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-disk-resize <vm> <vda|vdb|sda|...|/dev/zvol/<pool>/enc/[vm/]<name>>
+Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 failed.
+USAGE
+}
+
+parse_args() {
+  if [[ $# -ne 2 || "$1" == -* || "$2" == -* ]]; then
+    usage
+    exit 2
+  fi
+  VM=$1
+  DISK=$2
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+  if [[ "$DISK" =~ ^(vd|sd)[a-z]{1,2}$ ]]; then
+    return 0
+  fi
+  if [[ "$DISK" =~ ^/dev/zvol/[a-z][a-z0-9_.-]*/enc/(vm/)?[A-Za-z0-9_-]+$ ]]; then
+    return 0
+  fi
+  refuse "disk '$DISK' is not a target (vda, sda, ...) or /dev/zvol/<pool>/enc/[vm/]<name>"
+}
+
+main() {
+  local state list line target source="" want="" bytes
+  parse_args "$@"
+  if ! state=$(run_q virsh -c qemu:///system domstate "$VM"); then
+    log "$VM is not defined"
+    exit 4
+  fi
+  list=$(run virsh -c qemu:///system domblklist "$VM")
+  while read -r target line; do
+    [[ -n "$target" && "$target" != Target && "$target" != -* ]] || continue
+    if [[ "$DISK" == "$target" || "$DISK" == "$line" ]]; then
+      want=$target
+      source=$line
+      break
+    fi
+  done <<< "$list"
+  [[ -n "$want" ]] || refuse "$VM has no disk '$DISK' (virsh domblklist)"
+  [[ "$source" == /dev/* && "$source" != *..* ]] || refuse "disk $want of $VM is backed by '$source', not a device under /dev"
+  bytes=$(run blockdev --getsize64 "$source")
+  [[ "$bytes" =~ ^[0-9]+$ && "$bytes" -gt 0 ]] || {
+    log "cannot read the size of $source: '$bytes'"
+    exit 1
+  }
+  case "$state" in
+    running | paused | idle) ;;
+    *)
+      log "$VM is $state: it sees the new size of $want ($bytes bytes) when it starts; nothing to do"
+      printf 'VM-DISK %s %s source=%s bytes=%s resized=no\n' "$VM" "$want" "$source" "$bytes"
+      return 0
+      ;;
+  esac
+  run virsh -c qemu:///system blockresize "$VM" "$want" "${bytes}B"
+  log "$VM: disk $want set to $bytes bytes"
+  printf 'VM-DISK %s %s source=%s bytes=%s resized=yes\n' "$VM" "$want" "$source" "$bytes"
+}
+
+main "$@"

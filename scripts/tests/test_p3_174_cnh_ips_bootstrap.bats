@@ -250,3 +250,60 @@ raw_manifest() {
   run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
   [ "$status" -eq 3 ]
 }
+
+# --- the free-space check (lab 2026-11-12: a bootstrap filled cnh-001's disk) --
+
+@test "too little space: refused (3) before any file is fetched, both numbers named" {
+  publish
+  # 10 GiB disk: the margin is 1 GiB (10% is less); 1 byte short of the margin alone is free
+  echo "1073741823 10737418240" > "$STATE/df"
+  : > "$SHIM_LOG"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"plus a margin of 1073741824 needs "*" bytes, 1073741823 bytes are free"* ]]
+  run ! grep -qE '^curl .*(bzImage|initrd|SHA256SUMS|ctrl-exec|hps-system)' "$SHIM_LOG"
+  [ ! -e "$I/srv/hps-resources/nixos/$PIN/node-base/bzImage" ]
+  [ ! -e "$I/srv/hps-resources/nixos/$PIN/node-base/bzImage.part" ]
+}
+
+@test "the margin is 10% of the disk when that is more than 1 GiB" {
+  publish
+  # 100 GiB disk: margin 10 GiB; 10 GiB + a few bytes free is not enough
+  echo "10737418240 107374182400" > "$STATE/df"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"plus a margin of 10737418240 needs"* ]]
+  [[ "$output" == *"10737418240 bytes are free"* ]]
+  echo "10737518240 107374182400" > "$STATE/df"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 0 ]
+}
+
+@test "files already present at their size, and .part bytes, are not counted again" {
+  publish
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 0 ]
+  # everything is here: nothing to fetch, so exactly the margin is enough
+  echo "1073741824 1073741824" > "$STATE/df"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"space: 0 bytes to fetch"* ]]
+  # one file gone, its .part holding all but 2 bytes: 2 bytes to fetch
+  local f="$I/srv/hps-resources/nixos/$PIN/node-base/initrd"
+  head -c 25 "$f" > "$f.part"
+  rm -f "$f"
+  echo "1073741826 1073741824" > "$STATE/df"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"space: 2 bytes to fetch"* ]]
+}
+
+@test "an unreadable df fails the run (1) before any fetch" {
+  publish
+  printf 'x y\n' > "$STATE/df"
+  : > "$SHIM_LOG"
+  run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot read the free space"* ]]
+  run ! grep -qE '^curl .*bzImage' "$SHIM_LOG"
+}

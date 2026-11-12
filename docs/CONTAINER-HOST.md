@@ -69,7 +69,9 @@ failed.
 | --- | --- | --- |
 | `cnh-disk-prepare <device>` | `/dev/vd<x>`, `/dev/sd<x>`, `/dev/md/<name>` or `/dev/disk/by-id/<id>`; ext4 `hps-cnh` on a blank device, then both mounts; idempotent | `CNH-DISK <device> formatted=<yes\|no> containers=<dir> ips=<dir>` |
 | `cnh-image-load <url> <sha256>` | fetch an OCI or docker archive over plain http from this node's IPS only (the URL host must be `hps.ips` of the kernel command line, no redirect), verify, keep it as `hps-cnh-images/<sha256>.tar`, `podman load` | `IMAGE <name> <sha256>` |
-| `cnh-ips-bootstrap <base> <manifest-sha256>` | fill `/var/lib/hps-ips` from the IPS by manifest (below); every file verified, resumable | `BOOTSTRAP <sha256> files=<n> fetched=<n> present=<n> replaced=<n>` |
+| `cnh-ips-bootstrap <base> <manifest-sha256>` | fill `/var/lib/hps-ips` from the IPS by manifest (below); every file verified, resumable; refused (3, nothing fetched) when the disk has less free space than the files still to fetch plus a margin (10% of the disk or 1 GiB, whichever is larger) | `BOOTSTRAP <sha256> files=<n> fetched=<n> present=<n> replaced=<n>` |
+| `cnh-ips-cleanup [--dry-run]` | remove every `*.part` under `/var/lib/hps-ips` and every incomplete pin under `srv/hps-resources/nixos/` (no `SHA256SUMS`, or a profile directory without `boot.json`), except the pin `nixos/latest` names; nothing else. One line per item removed | `CLEANUP freed=<bytes> pins=<n> parts=<n> free=<bytes> dry_run=<yes\|no>` |
+| `cnh-disk-grow` | `resize2fs` (online) of the disk labelled `hps-cnh`, which must be the one mounted at `/var/lib/containers`; the last step of growing the disk (below) | `CNH-DISK-GROW <device> size_before=<bytes> size_after=<bytes>` |
 | `cnh-ips-cluster-bootstrap <image> <options...>` | run `scripts/cluster-bootstrap.sh` once in the image (entrypoint replaced, the IPS mounts): the inner cluster's registry, keys and CA are made on the CNH | `CLUSTER-BOOTSTRAP done image=<image>` |
 | `cnh-ips-run <image> <interface> [<address>/<prefix>]` | write `/var/lib/hps-ips/ips.env` and restart `hps-ips.service` | `IPS running image=<image> iface=<interface> address=<cidr>` |
 | `cnh-ips-stop` | stop `hps-ips.service`; rename `ips.env` to `ips.env.stopped` so it stays off after a reboot | `IPS stopped` |
@@ -224,6 +226,37 @@ address, `$PIN` a pin built with `node-cnh`:
 
 From then on the inner IPS is its own cluster's; the outer HPS keeps only its
 CNH node (power, the node scripts above).
+
+## When the state disk fills
+
+One disk holds podman's storage and the whole IPS state, the pins the inner
+IPS serves included. A bootstrap of a new pin that does not fit stops with
+`curl: (23) Failure writing output` and leaves `.part` files and a pin without
+its `SHA256SUMS` (lab 2026-11-12, cnh-001 on a 20G disk). With the disk full the
+inner IPS's own tools cannot run either (`mkdir: cannot create directory
+'/tmp/ips-admin.<pid>': No space left on device`), so `hps-pins prune` through
+its operator API is impossible. `cnh-ips-bootstrap` now checks the space before
+it fetches anything; a disk that is already full is recovered from outside:
+
+1. `cnh-ips-cleanup --dry-run`, then `cnh-ips-cleanup` (from the outer IPS, on
+   the CNH): the partial transfers and the incomplete pins go. Complete pins,
+   the latest pin, the hps-system tree, the registry and podman's storage are
+   left alone. The last line gives the bytes freed and the space free.
+2. Through the cluster's operator API: `hps-op --cred <file> hps-pins prune`
+   (for instance `--keep-previous 0`) removes the old complete pins the inner
+   IPS no longer needs.
+3. If the next pin still does not fit, grow the disk (it is a zvol of a VM on
+   a compute host), in three steps, without stopping the CNH:
+   - on the outer IPS: `hps-storage <compute host> zvol-grow <pool>/enc/vm/<zvol> <new size>`
+     (`storage-zvol-grow`: only grows, never shrinks);
+   - `vm-disk-resize <vm> <target or /dev/zvol path>` on the compute host
+     (`virsh blockresize` to the zvol's new size, so the running guest sees
+     it). The two together are `hps-workload grow-disk <workload> <vm> <disk> <new size>`
+     for a disk of a workload (`docs/WORKLOADS.md`);
+   - `cnh-disk-grow` on the CNH: `resize2fs` grows the mounted ext4 to fill
+     the disk.
+4. `cnh-ips-bootstrap` again. Its refusal names the bytes it needs (the files
+   still to fetch plus the margin) and the bytes free.
 
 ## Hazards
 

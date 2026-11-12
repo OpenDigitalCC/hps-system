@@ -31,6 +31,11 @@
 # ...; urls to a plain relative path. Anything else refuses the whole manifest
 # before the first download.
 #
+# Before the first download the free space is checked: when the filesystem
+# has less than the bytes still to fetch plus a margin (10% of the disk or 1 GiB,
+# whichever is larger) the run is refused (exit 3) with both numbers, and
+# nothing is fetched.
+#
 # Then:
 #   - hps-system.tar.gz is unpacked into /var/lib/hps-ips/hps-system when its
 #     hash differs from the one last unpacked (hps-system/.hps-cnh-tarball-sha256);
@@ -264,6 +269,42 @@ make_skeleton() {
   done
 }
 
+# check_space: refuse (3) before anything is fetched when the filesystem cannot
+# hold what is still to come plus a margin of 10% of the disk or 1 GiB, whichever
+# is larger. Still to come: every entry not on disk at its manifest size (a file
+# being replaced counts in full, the old one stays until the new one verifies),
+# less what a resumable .part already holds. The hashes are checked later.
+check_space() {
+  local e path url sha size dest part have need=0 out avail total margin
+  for e in "${ENTRIES[@]}"; do
+    IFS=$'\t' read -r path url sha size <<< "$e"
+    dest="$IPSDIR/$path"
+    part="$dest.part"
+    if [[ -f "$dest" && "$(file_size "$dest")" -eq "$size" ]]; then
+      continue
+    fi
+    have=0
+    if [[ -f "$part" ]]; then
+      have=$(file_size "$part")
+      ((have <= size)) || have=0
+    fi
+    need=$((need + size - have))
+  done
+  out=$(run df -B1 --output=avail,size -- "$IPSDIR")
+  out=${out##*$'\n'}
+  read -r avail total <<< "$out"
+  [[ "$avail" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] || {
+    log "cannot read the free space of $IPSDIR from df: '$out'"
+    exit 1
+  }
+  margin=$((total / 10))
+  ((margin >= 1073741824)) || margin=1073741824
+  if ((avail < need + margin)); then
+    refuse "not enough space on $IPSDIR: $need bytes to fetch plus a margin of $margin needs $((need + margin)) bytes, $avail bytes are free (cnh-ips-cleanup frees partial transfers and incomplete pins; grow the disk with cnh-disk-grow)"
+  fi
+  log "space: $need bytes to fetch, $avail bytes free (margin $margin)"
+}
+
 main() {
   local e path url sha size
   if [[ $# -ne 2 || "$1" == -* ]]; then
@@ -275,6 +316,7 @@ main() {
   check_args
   fetch_manifest
   read_manifest
+  check_space
   for e in "${ENTRIES[@]}"; do
     IFS=$'\t' read -r path url sha size <<< "$e"
     fetch_entry "$path" "$url" "$sha" "$size"

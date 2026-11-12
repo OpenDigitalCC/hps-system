@@ -25,6 +25,7 @@ Usage:
   hps-workload stop    <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]
   hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
   hps-workload show-definition <name>
 <name> is the workload: workloads/<name>.json under the cluster's config directory.
@@ -32,6 +33,9 @@ create refuses a workload that already exists unless --resume (continue an
 unfinished create). destroy removes the instance (VMs, zvols, mirrors, record) and
 keeps workloads/<name>.json, so a later create works; destroy --forget also removes
 the definition.
+grow-disk grows one disk of a VM (a single local zvol, never shrunk) to the new
+size, like 64G, and tells the running guest (storage-zvol-grow, vm-disk-resize);
+the filesystem inside the guest is grown there (cnh-disk-grow on a CNH).
 define checks the JSON on stdin as create checks a definition and writes it to
 workloads/<name>.json; an existing definition is replaced only with --replace,
 and never while the workload exists (destroy it first). show-definition prints
@@ -144,6 +148,12 @@ sub main {
         if $op eq 'define' || $op eq 'show-definition';
     return usage('--replace is only for define') if $replace;
     return usage("unknown operation '$op'") unless grep { $_ eq $op } HPS::Workload::ops();
+    my ($disk, $size);
+    if ($op eq 'grow-disk') {
+        return usage('grow-disk takes the VM as an argument, not --vm') if defined $vm;
+        return usage('grow-disk needs <vm> <disk> <new size>') unless @argv == 3;
+        ($vm, $disk, $size) = splice(@argv, 0, 3);
+    }
     return usage("$op takes no further arguments") if @argv;
     return usage('--resume is only for create') if $resume && $op ne 'create';
     return usage('--forget is only for destroy') if $forget && $op ne 'destroy';
@@ -152,7 +162,7 @@ sub main {
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         my $wl = HPS::Workload->new(allow_any_pool_name => $any);
-        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, disk => $disk, size => $size);
         if ($dry) {
             my $r = $wl->run($op, $name, %a);
             if ($json) { print $js->encode($r) }

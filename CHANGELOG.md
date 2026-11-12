@@ -12,6 +12,35 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A full CNH state disk can be recovered, and VM disks grown (2026-11-12)
+
+Lab 2026-11-12: a bootstrap of a new pin filled cnh-001's 20G disk (the s1 IPS
+state); the inner IPS's tools could no longer run, so its `hps-pins prune` was
+impossible and nothing in HPS could free space or grow the disk.
+
+- new: `cnh-ips-cleanup [--dry-run]` (CNH node script): removes `*.part` files
+  under `/var/lib/hps-ips` and incomplete pins (no `SHA256SUMS`, or a profile
+  without `boot.json`), never the latest pin, nothing else; reports the bytes
+  freed and the space free.
+- new: `cnh-ips-bootstrap` checks the free space before the first download and
+  refuses (3, nothing fetched) when it is less than the bytes still to fetch
+  plus a margin of 10% of the disk or 1 GiB, whichever is larger; the refusal
+  names both numbers.
+- new: growing a VM's disk in three node scripts. `storage-zvol-grow
+  <pool>/enc/[vm/]<name> <size>` (`zfs set volsize`; only grows, refuses a
+  shrink or an unknown dataset), `vm-disk-resize <vm> <target|/dev/zvol path>`
+  (`virsh blockresize` to the zvol's size, for the running guest) and, on a
+  CNH, `cnh-disk-grow` (`resize2fs`, online). `hps-storage <host> zvol-grow`
+  (`HPS::Storage`) and `hps-workload grow-disk <workload> <vm> <disk> <size>`
+  (the first two, for a single-leg local disk) drive them from the IPS.
+- docs: `docs/CONTAINER-HOST.md` "When the state disk fills",
+  `docs/WORKLOADS.md` (grow-disk), `docs/VM-LIFECYCLE.md` (vm-disk-resize).
+- tests: `test_p3_174_cnh_ips_bootstrap.bats` (space check),
+  `test_p3_206_cnh_ips_cleanup.bats`, `test_p3_207_cnh_disk_grow.bats`,
+  `test_p3_208_storage_zvol_grow.bats`, `test_p3_209_vm_disk_resize.bats`,
+  `test_p3_200_ips_admin_datasets_and_define.bats`, the wiring tests, and
+  `t/206-disk-grow.t`.
+
 ## repo update orders pre-release tags correctly (2026-11-12)
 
 - fix: repo update's newest-release check ranked every pre-release kind the

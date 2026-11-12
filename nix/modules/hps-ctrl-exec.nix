@@ -77,6 +77,8 @@ in
       storage-zvol-create.options.profile = "node";
       storage-zvol-destroy.source = mkScript "storage-zvol-destroy" (scriptsDir + "/storage-zvol-destroy");
       storage-zvol-destroy.options.profile = "node";
+      storage-zvol-grow.source = mkScript "storage-zvol-grow" (scriptsDir + "/storage-zvol-grow");
+      storage-zvol-grow.options.profile = "node";
       storage-zvol-list.source = mkScript "storage-zvol-list" (scriptsDir + "/storage-zvol-list");
       storage-zvol-list.options.profile = "node";
       storage-status.source = mkScript "storage-status" (scriptsDir + "/storage-status");
@@ -114,6 +116,8 @@ in
       vm-start.options.profile = "node";
       vm-stop.source = mkScript "vm-stop" (scriptsDir + "/vm-stop");
       vm-stop.options.profile = "node";
+      vm-disk-resize.source = mkScript "vm-disk-resize" (scriptsDir + "/vm-disk-resize");
+      vm-disk-resize.options.profile = "node";
       vm-status.source = mkScript "vm-status" (scriptsDir + "/vm-status");
       vm-status.options.profile = "node";
       vm-undefine.source = mkScript "vm-undefine" (scriptsDir + "/vm-undefine");

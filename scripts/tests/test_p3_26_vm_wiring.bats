@@ -7,7 +7,7 @@ bats_require_minimum_version 1.5.0
 
 ROOT="${BATS_TEST_DIRNAME}/../.."
 SD="$ROOT/node-manager/nixos-26/scripts"
-SCRIPTS="image-fetch vm-define vm-image-write vm-start vm-stop vm-status vm-undefine vm-console-log vm-confinement-report"
+SCRIPTS="image-fetch vm-define vm-image-write vm-start vm-stop vm-disk-resize vm-status vm-undefine vm-console-log vm-confinement-report"
 NIX="$ROOT/nix/modules/hps-ctrl-exec.nix"
 
 # code <script>: the script without comment lines.

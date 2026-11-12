@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# cnh-disk-grow - grow a container host's persistent filesystem to its disk.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-disk-grow
+#
+# The last of the three steps that give a CNH a bigger state disk
+# (docs/CONTAINER-HOST.md "When the state disk fills"): the zvol was grown on
+# the compute host (storage-zvol-grow) and the running guest told of it
+# (vm-disk-resize); this grows the ext4 filesystem on it, online, to fill the
+# device:
+#
+#   resize2fs <the disk labelled hps-cnh>
+#
+# The disk is the one cnh-disk-prepare made (ext4, label hps-cnh), found by
+# its label; it must be the one mounted at /var/lib/containers. No disk, two
+# disks with the label, another filesystem, or the disk not mounted there is
+# refused (exit 3) and nothing runs. resize2fs only grows a mounted ext4
+# filesystem; a device no bigger than the filesystem is "nothing to do".
+#
+# Last line: CNH-DISK-GROW <device> size_before=<bytes> size_after=<bytes>
+#            (the filesystem size df reports at /var/lib/containers)
+# Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
+#
+# Overrides for tests: HPS_CNH_ROOT (prefix of /var/lib/containers).
+
+set -euo pipefail
+
+: "${HPS_CNH_ROOT:=}"
+
+LABEL=hps-cnh
+CONTAINERS="$HPS_CNH_ROOT/var/lib/containers"
+DEV=""
+
+log() {
+  printf '[cnh-disk-grow] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-disk-grow
+Grows the ext4 filesystem labelled hps-cnh (mounted at /var/lib/containers)
+to fill its device. Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+find_disk() {
+  local out dev devs=() type
+  out=$(run blkid -o device -t "LABEL=$LABEL" || true)
+  while IFS= read -r dev; do
+    [[ -n "$dev" ]] && devs+=("$dev")
+  done <<< "$out"
+  ((${#devs[@]} > 0)) || refuse "no disk is labelled $LABEL (cnh-disk-prepare makes one)"
+  ((${#devs[@]} == 1)) || refuse "${#devs[@]} disks are labelled $LABEL (${devs[*]}): which to grow cannot be told"
+  DEV=${devs[0]}
+  type=$(run blkid -p -o value -s TYPE -- "$DEV" || true)
+  [[ "$type" == ext4 ]] || refuse "$DEV is labelled $LABEL but its filesystem is '${type:-none}', not ext4"
+}
+
+check_mounted() {
+  local src a b
+  src=$(run findmnt -n -o SOURCE --mountpoint "$CONTAINERS" || true)
+  [[ -n "$src" ]] || refuse "$CONTAINERS is not mounted: resize2fs grows only the mounted filesystem here"
+  a=$(readlink -f -- "$src")
+  b=$(readlink -f -- "$DEV")
+  [[ "$a" == "$b" ]] || refuse "$CONTAINERS is mounted from $src, not $DEV"
+}
+
+fs_size() {
+  local out
+  out=$(run df -B1 --output=size -- "$CONTAINERS")
+  out=${out##*$'\n'}
+  printf '%s\n' "${out//[[:space:]]/}"
+}
+
+main() {
+  local before after
+  if [[ $# -ne 0 ]]; then
+    usage
+    exit 2
+  fi
+  find_disk
+  check_mounted
+  before=$(fs_size)
+  run resize2fs "$DEV"
+  after=$(fs_size)
+  log "$DEV: filesystem $before -> $after bytes"
+  printf 'CNH-DISK-GROW %s size_before=%s size_after=%s\n' "$DEV" "$before" "$after"
+}
+
+main "$@"

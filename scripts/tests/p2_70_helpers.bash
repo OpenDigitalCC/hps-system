@@ -4,7 +4,8 @@
 
 # zfs for zvols. State files under $STATE: keystatus (value for <pool>/enc),
 # zvols (lines "<name> <bytes>"), datasets (names of plain filesystems).
-# FAKE_ZFS_CREATE_RC / FAKE_ZFS_DESTROY_RC set the exit status of those verbs.
+# FAKE_ZFS_CREATE_RC / FAKE_ZFS_DESTROY_RC / FAKE_ZFS_SET_RC set the exit status of
+# those verbs; set volsize=<size> changes the size in zvols.
 p2_shim_zfs_zvol() {
   cat > "$TEST_DIR/bin/zfs" <<'SHIM'
 #!/usr/bin/env bash
@@ -41,6 +42,15 @@ case "$verb" in
     done
     if [[ -z "$size" ]]; then echo "$last" >> "$STATE/datasets"; exit 0; fi
     echo "$last $(bytes_of "$size")" >> "$STATE/zvols"
+    exit 0 ;;
+  set)
+    [[ "${FAKE_ZFS_SET_RC:-0}" -ne 0 ]] && exit "$FAKE_ZFS_SET_RC"
+    case "$2" in
+      volsize=*)
+        b=$(bytes_of "${2#volsize=}")
+        awk -v n="$last" -v b="$b" '$1 == n { $2 = b } { print }' "$STATE/zvols" > "$STATE/zvols.new"
+        mv "$STATE/zvols.new" "$STATE/zvols" ;;
+    esac
     exit 0 ;;
   destroy)
     [[ "${FAKE_ZFS_DESTROY_RC:-0}" -ne 0 ]] && exit "$FAKE_ZFS_DESTROY_RC"

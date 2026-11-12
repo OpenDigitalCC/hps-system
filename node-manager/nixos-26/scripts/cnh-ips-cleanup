@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+#
+# cnh-ips-cleanup - free space on a container host's IPS state disk.
+#
+# ctrl-exec allowlisted node script (CNH image only: profiles/container-host.nix).
+#
+# Usage: cnh-ips-cleanup [--dry-run]
+#
+# For when the CNH disk is full (an interrupted or oversized cnh-ips-bootstrap)
+# and the inner IPS's own tools (hps-pins prune) cannot run. It removes exactly
+# two kinds of thing under /var/lib/hps-ips, and nothing else:
+#
+#   - every *.part file (a transfer cnh-ips-bootstrap left; a later bootstrap
+#     fetches it again from the start)
+#   - every INCOMPLETE pin directory srv/hps-resources/nixos/<pin>/: one with
+#     no SHA256SUMS, or with a profile directory (any subdirectory but ipxe)
+#     that has no boot.json. The pin nixos/latest names is never removed, and
+#     neither is nixos/firmware (the shared layers, not a pin).
+#
+# Complete pins, the hps-system tree, the registry, logs and podman's storage
+# are left alone: old complete pins go through the inner IPS's hps-pins prune
+# once it can run again. Symbolic links are never followed or removed, and the
+# search stays on the one filesystem. Nothing is written to disk.
+#
+# --dry-run lists what would go and removes nothing.
+#
+# Output: one line per item, then
+#   CLEANUP freed=<bytes> pins=<n> parts=<n> free=<bytes> dry_run=<yes|no>
+# (dry run: freed is what would be freed, free is the space now).
+# Exit: 0 ok, 2 usage, 3 refused (the disk is not mounted), 1 a command failed.
+#
+# Overrides for tests: HPS_CNH_ROOT (prefix of /var/lib/hps-ips).
+
+set -euo pipefail
+
+: "${HPS_CNH_ROOT:=}"
+
+IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
+NIXOS="$IPSDIR/srv/hps-resources/nixos"
+DRY=0
+VERB=removed
+FREED=0
+N_PINS=0
+N_PARTS=0
+LATEST=""
+DOOMED=()
+
+log() {
+  printf '[cnh-ips-cleanup] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: cnh-ips-cleanup [--dry-run]
+Removes *.part files and incomplete pins under /var/lib/hps-ips.
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+parse_args() {
+  case "$#:${1:-}" in
+    0:) ;;
+    1:--dry-run)
+      DRY=1
+      VERB="would remove"
+      ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+check_mounted() {
+  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+    || refuse "$IPSDIR is not mounted (the CNH disk): nothing to clean"
+}
+
+# free_bytes: the space free on the IPS state filesystem.
+free_bytes() {
+  local out
+  out=$(run df -B1 --output=avail -- "$IPSDIR")
+  out=${out##*$'\n'}
+  printf '%s\n' "${out//[[:space:]]/}"
+}
+
+# bytes_of <path>: apparent bytes of a file or a whole directory.
+bytes_of() {
+  local out
+  out=$(run du -sb -x -- "$1")
+  printf '%s\n' "${out%%[[:space:]]*}"
+}
+
+read_latest() {
+  if [[ -f "$NIXOS/latest" && ! -L "$NIXOS/latest" ]]; then
+    LATEST=$(tr -d '[:space:]' < "$NIXOS/latest")
+  fi
+  log "latest pin: ${LATEST:-(none)}"
+}
+
+# incomplete <pin dir>: prints the reason and succeeds when the pin is incomplete.
+incomplete() {
+  local dir=$1 prof name
+  if [[ ! -f "$dir/SHA256SUMS" ]]; then
+    printf 'no SHA256SUMS\n'
+    return 0
+  fi
+  for prof in "$dir"/*/; do
+    [[ -d "$prof" ]] || continue
+    prof=${prof%/}
+    name=${prof##*/}
+    [[ "$name" != ipxe && ! -L "$prof" ]] || continue
+    if [[ ! -f "$prof/boot.json" ]]; then
+      printf 'profile %s has no boot.json\n' "$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+remove() {
+  if ((DRY == 1)); then
+    return 0
+  fi
+  run rm -rf -- "$1"
+}
+
+clean_pins() {
+  local dir pin why bytes
+  [[ -d "$NIXOS" && ! -L "$NIXOS" ]] || return 0
+  read_latest
+  for dir in "$NIXOS"/*/; do
+    [[ -d "$dir" ]] || continue
+    dir=${dir%/}
+    pin=${dir##*/}
+    [[ ! -L "$dir" && "$pin" != firmware && "$pin" =~ ^[a-z0-9][a-z0-9.-]+$ ]] || continue
+    why=$(incomplete "$dir") || continue
+    if [[ "$pin" == "$LATEST" ]]; then
+      log "keeping $pin although it is incomplete ($why): nixos/latest names it"
+      continue
+    fi
+    bytes=$(bytes_of "$dir")
+    printf '%s pin %s bytes=%s (%s)\n' "$VERB" "$pin" "$bytes" "$why"
+    remove "$dir"
+    DOOMED+=("$dir/")
+    FREED=$((FREED + bytes))
+    N_PINS=$((N_PINS + 1))
+  done
+}
+
+# under_doomed <path>: true when the path is inside a pin removed above (its
+# bytes are already counted; in a dry run it is still on disk).
+under_doomed() {
+  local d
+  for d in "${DOOMED[@]}"; do
+    [[ "$1" == "$d"* ]] && return 0
+  done
+  return 1
+}
+
+clean_parts() {
+  local f bytes list
+  list=$(run find "$IPSDIR" -xdev -type f -name '*.part' -print)
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    if ((${#DOOMED[@]} > 0)) && under_doomed "$f"; then
+      continue
+    fi
+    bytes=$(stat -c %s -- "$f")
+    printf '%s part %s bytes=%s\n' "$VERB" "${f#"$IPSDIR"/}" "$bytes"
+    if ((DRY == 0)); then
+      run rm -f -- "$f"
+    fi
+    FREED=$((FREED + bytes))
+    N_PARTS=$((N_PARTS + 1))
+  done <<< "$list"
+}
+
+main() {
+  local before after
+  local DRYTAG=no
+  parse_args "$@"
+  check_mounted
+  ((DRY == 0)) || DRYTAG=yes
+  before=$(free_bytes)
+  log "free before: $before bytes"
+  clean_pins
+  clean_parts
+  after=$(free_bytes)
+  log "free after: $after bytes"
+  printf 'CLEANUP freed=%s pins=%s parts=%s free=%s dry_run=%s\n' "$FREED" "$N_PINS" "$N_PARTS" "$after" "$DRYTAG"
+}
+
+main "$@"
