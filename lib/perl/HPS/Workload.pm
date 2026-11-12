@@ -724,7 +724,8 @@ sub _steps_start ($self, $def, %a) {
         # The priority and role go to the node: hps-shutdown-storage stops its
         # guests in that order (docs/WORKLOADS.md "Stop order on a node").
         push @s, _step($in->{mac}, 'vm-start', [ $vm->{name}, '--priority', $vm->{priority},
-            ($vm->{provides_storage} ? ('--provides-storage') : ()) ], after => sub {
+            ($vm->{provides_storage} ? ('--provides-storage') : ()) ],
+            fallback_args => [ $vm->{name} ], after => sub {
             $self->_rec_update($n, sub ($r) {
                 @{ $r->{vms}{ $vm->{name} } }{qw(state last_owner started_at)} = ('running', $host, $self->_stamp);
                 $r->{state} = _state_of($r);
@@ -936,6 +937,16 @@ sub run ($self, $op, $name, %a) {
         }
         $self->_rec_update($name, sub ($rec) { $rec->{attempting} = $st->{key} }) if $op eq 'create' && $st->{key};
         my $r = $self->_run_step($st, $n, scalar(@steps), $op);
+        # A node on an older image may not know a newer option (exit 2, usage):
+        # retry once with the plain form the step carries (2026-11-12: sch-001's
+        # vm-start predated --priority and every start on it failed).
+        if ($r->{rc} == 2 && $st->{fallback_args}) {
+            $self->_log('notice', "$op $name: $st->{script} on $st->{host} does not take the newer options; "
+                . 'running it in its older form (update the node\'s image for the full behaviour)');
+            push @{ $self->{notes} }, "$st->{script} on $st->{host}: older node image, started without its newer options";
+            $st = { %$st, args => $st->{fallback_args} };
+            $r = $self->_run_step($st, $n, scalar(@steps), $op);
+        }
         push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => $r->{rc},
             stdout => $r->{stdout} // '', stderr => $r->{stderr} // '',
             (defined $st->{vm} ? (vm => $st->{vm}) : ()), (defined $st->{mirror} ? (mirror => $st->{mirror}) : ()) };

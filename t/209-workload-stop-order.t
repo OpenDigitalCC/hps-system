@@ -85,4 +85,33 @@ my $DISK = [ { name => 'd0', size => '20G', legs => [ { host => 'sch-001', pool 
         'a provider: vm-start <vm> --priority 1 --provides-storage');
 }
 
+#--- a node on an older image: vm-start does not know --priority (exit 2,
+# usage). The IPS retries once with the plain form, and notes it (2026-11-12:
+# every start on sch-001 failed until its image was updated).
+{
+    my $f = StorageFixture::setup_workload(no_def => 1,
+        ce => { out => { 'vm-define' => "VM s1-tch-001 defined mac=52:54:00:12:34:58\n" } });
+    $f->{reg}->cluster_set('lab', 'network_layout', $layout);
+    StorageFixture::write_def($f, { name => 's1', project => 'lab', vms => [ vm('s1-tch-001') ] });
+    my $wl = $f->{wl}->();
+    ok($wl->run('create', 's1')->{ok}, 'create ok');
+    $f->{ce}{calls} = [];
+    $f->{ce}{rc}{'vm-start'} = [ 2, 0 ];
+    my $r = $wl->run('start', 's1');
+    ok($r->{ok}, 'start succeeds through the fallback');
+    my @starts = grep { $_->{script} eq 'vm-start' } $f->{ce}->calls;
+    is(scalar @starts, 2, 'vm-start was called twice');
+    is_deeply($starts[0]{args}, [ 's1-tch-001', '--priority', 3 ], 'first with the newer options');
+    is_deeply($starts[1]{args}, [ 's1-tch-001' ], 'then in the plain form');
+    $f->{ce}{calls} = [];
+    $f->{ce}{rc}{'vm-start'} = [ 2, 2 ];
+    my $e = eval { $wl->run('start', 's1'); 1 } ? undef : $@;
+    ok($e, 'a usage error in the plain form too still fails the start');
+    $f->{ce}{calls} = [];
+    $f->{ce}{rc}{'vm-start'} = [ 1 ];
+    $e = eval { $wl->run('start', 's1'); 1 } ? undef : $@;
+    ok($e, 'another failure (exit 1) is not retried');
+    is(scalar(grep { $_->{script} eq 'vm-start' } $f->{ce}->calls), 1, 'one call only');
+}
+
 done_testing;

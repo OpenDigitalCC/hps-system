@@ -119,6 +119,17 @@ impossible and nothing in HPS could free space or grow the disk.
   `test_p3_206_hps_log_wiring.bats` (allowlist, wrapper, gate: `host` and
   `ips` only).
 
+## Workload start works on nodes with an older vm-start (2026-11-12)
+
+- fix: `hps-workload start` passes `vm-start <vm> --priority N
+  [--provides-storage]`. A node on an older image does not know those options
+  and exits 2 (usage), so every start on the lab's sch-001 failed after the
+  stop-order change landed. On exit 2 the IPS now retries once with the plain
+  `vm-start <vm>`, logs a notice and adds a note. The guest starts with no
+  stop-order record until the node's image is updated. Other failures are not
+  retried.
+- tests: `t/209-workload-stop-order.t`.
+
 ## repo update orders pre-release tags correctly (2026-11-12)
 
 - fix: repo update's newest-release check ranked every pre-release kind the
