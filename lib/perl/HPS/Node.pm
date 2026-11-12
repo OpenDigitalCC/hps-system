@@ -6,7 +6,9 @@ package HPS::Node;
 # report Off (hps-bmc, IPS-08) and forces power off only after force_after
 # seconds, logged as a fault. With no BMC driver it stops after the node script
 # and says the power state is not confirmed. net_up() gives a NixOS host its
-# addresses on the storage and transit VLANs (net-vlan-address per network).
+# addresses on the storage and transit VLANs (net-vlan-address per network),
+# then, on a transit host, builds the layout's vxlan networks
+# (net-vxlan-ensure, HPS::Vxlan) and refreshes the other transit hosts' peers.
 #
 # Every collaborator is injectable (storage, runner, bmc, logger, now, sleep) so
 # the sequence is testable without a node, a BMC or a clock.
@@ -20,6 +22,7 @@ use JSON::PP;
 use HPS::Registry;
 use HPS::Storage;
 use HPS::ClusterConfig ();
+use HPS::Vxlan ();
 
 our $DEFAULT_FORCE_AFTER = 120;
 
@@ -147,7 +150,7 @@ sub power_off ($self, %a) {
 
 #=== net-up: host addresses on the storage and transit VLANs ====================
 
-our $TRANSIT_MTU = 9000;    # the transit VLAN is jumbo (plans/networking.md)
+our $TRANSIT_MTU = $HPS::ClusterConfig::TRANSIT_MTU;    # the transit VLAN is jumbo (plans/networking.md)
 
 sub _cluster_val ($self, $c, $key) {
     my $reg = $self->{registry};
@@ -166,6 +169,12 @@ sub _host_val ($self, $key) {
 # vlan, subnet, address, prefix, mtu, script, args} or {name, ..., refused =>
 # reason}]}. Dies (HPS::Keysafe::Error refused) when the host as a whole cannot
 # take part: not a NixOS host, or no provisioning address.
+# On a TCH, after the transit networks, one entry per vxlan layout network
+# (kind vxlan, vni, bridge, over, local, peers, script net-vxlan-ensure, args;
+# HPS::Vxlan::host_plan), and `refresh`: the same call for every other transit
+# host with an address on the transit network ({mac, host, name, vni, script,
+# args} or {..., refused}), so their peer lists include this host. A host that
+# joins or leaves is seen by every other on its next pairing.
 sub net_plan ($self) {
     my $reg  = $self->{registry};
     my $host = $self->{host};
@@ -203,7 +212,7 @@ sub net_plan ($self) {
             push @nets, { name => $name, purpose => 'transit', vlan => $n->{vlan}, mtu => $TRANSIT_MTU, subnet => $n->{cidr} };
         }
     }
-    for my $n (@nets) {
+    for my $n (grep { !$_->{kind} } @nets) {
         my $v = $n->{vlan};
         if (!defined $v || ref $v || $v !~ /^[1-9][0-9]{0,3}\z/ || $v > 4094) {
             $n->{refused} = 'no VLAN (1-4094): an untagged network needs a NIC of its own';
@@ -222,16 +231,48 @@ sub net_plan ($self) {
         $n->{script}  = 'net-vlan-address';
         $n->{args}    = [ 'boot', "$v", "$addr/$tp", '--mtu', "$n->{mtu}" ];
     }
-    return { mac => $self->{mac}, ip => $ip, prefix => $prefix + 0, networks => \@nets };
+    my @refresh;
+    if ($type{TCH}) {
+        my %transit = map { $_->{name} => $_ } grep { ($_->{purpose} // '') eq 'transit' } @nets;
+        for my $x (HPS::Vxlan::host_plan($reg, $self->{mac}, cluster => $c)) {
+            my $t = $transit{ $x->{over} // '' };
+            $x->{kind} = 'vxlan';
+            $x->{refused} //= "its transit network '$x->{over}' is refused: $t->{refused}" if $t && $t->{refused};
+            push @nets, $x;
+        }
+        my %others;
+        for my $x (grep { ($_->{kind} // '') eq 'vxlan' && !$_->{refused} } @nets) {
+            for my $h (HPS::Vxlan::transit_hosts($reg, $c, $self->_layout_entry($c, $x->{over}))) {
+                $others{ $h->{mac} } //= $h if $h->{mac} ne $self->{mac} && defined $h->{address};
+            }
+        }
+        for my $m (sort keys %others) {
+            for my $x (HPS::Vxlan::host_plan($reg, $m, cluster => $c)) {
+                push @refresh, { %$x, mac => $m, host => $others{$m}{name} };
+            }
+        }
+    }
+    return { mac => $self->{mac}, ip => $ip, prefix => $prefix + 0, networks => \@nets, refresh => \@refresh };
+}
+
+sub _layout_entry ($self, $c, $name) {
+    my $reg = $self->{registry};
+    my $layout = $reg->cluster_exists($c, 'network_layout') ? eval { $reg->cluster_get_json($c, 'network_layout') } : undef;
+    return ref $layout eq 'HASH' ? $layout->{ $name // '' } : undef;
 }
 
 sub _net_fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
 
 # net_up(dry_run => 0|1, wait => SECONDS): apply net_plan() through the runner,
-# one net-vlan-address call per network. With wait, the node's agent is pinged
-# first (bounded by wait), as after pairing. Returns the plan with result
-# (ok | refused | failed) and per network rc/stderr; result is the worst of the
-# networks (failed over refused over ok). A refused network is not called.
+# one node call per network (net-vlan-address, then net-vxlan-ensure for the
+# vxlan networks). With wait, the node's agent is pinged first (bounded by
+# wait), as after pairing. Returns the plan with result (ok | refused | failed)
+# and per network rc/stderr; result is the worst of the networks (failed over
+# refused over ok). A refused network is not called, nor a vxlan network whose
+# transit network's call failed. Then the refresh calls on the other transit
+# hosts: their outcome is logged and kept per entry (rc, summary, error) and
+# never changes the result, because a host that is down gets its peers when it
+# next pairs.
 sub net_up ($self, %a) {
     my $plan = $self->net_plan;
     my $host = $self->{host};
@@ -247,23 +288,48 @@ sub net_up ($self, %a) {
         return $plan;
     }
     $self->_await_agent($a{wait} // 0);
+    my %by = map { $_->{name} => $_ } @nets;
     for my $n (grep { !$_->{refused} } @nets) {
-        $self->_log('info', "net-up $host: $n->{name}: net-vlan-address " . join(' ', @{ $n->{args} }));
-        my $r = $self->{runner}->call(mac => $self->{mac}, script => $n->{script}, args => [ @{ $n->{args} } ], input => undef);
-        $n->{rc} = $r->{rc};
-        my $last = (grep { length } split /\n/, ($r->{stderr} // ''))[-1] // '';
-        my $sum  = (grep { length } split /\n/, ($r->{stdout} // ''))[-1] // '';
-        if ($r->{rc} == 0) {
-            $n->{summary} = $sum;
-            $self->_log('info', "net-up $host: $n->{name}: $sum");
+        if (($n->{kind} // '') eq 'vxlan') {
+            my $t = $by{ $n->{over} };
+            if ($t && defined $t->{rc} && $t->{rc} != 0) {
+                $n->{error} = "not called: its transit network '$n->{over}' failed";
+                $self->_log('error', "net-up $host: $n->{name}: $n->{error}");
+                next;
+            }
+        }
+        my $r = $self->_net_call($self->{mac}, "net-up $host: $n->{name}", $n);
+        next if $r->{rc} == 0;
+        $result = $r->{rc} == 3 && $result ne 'failed' ? 'refused' : 'failed';
+    }
+    for my $x (@{ $plan->{refresh} }) {
+        my $what = "net-up $host: refresh $x->{host} $x->{name}";
+        if ($x->{refused}) {
+            $self->_log('warning', "$what refused: $x->{refused}");
             next;
         }
-        $n->{error} = $last;
-        $self->_log('error', "net-up $host: $n->{name}: net-vlan-address exited $r->{rc}" . (length $last ? ": $last" : ''));
-        $result = $r->{rc} == 3 && $result ne 'failed' ? 'refused' : 'failed';
+        $self->_net_call($x->{mac}, $what, $x, 'warning');
     }
     $plan->{result} = $result;
     return $plan;
+}
+
+# _net_call($mac, $what, \%entry, $level): one node call, rc/summary/error kept
+# in the entry, logged (a failure at $level, default error).
+sub _net_call ($self, $mac, $what, $n, $level = 'error') {
+    $self->_log('info', "$what: $n->{script} " . join(' ', @{ $n->{args} }));
+    my $r = $self->{runner}->call(mac => $mac, script => $n->{script}, args => [ @{ $n->{args} } ], input => undef);
+    $n->{rc} = $r->{rc};
+    my $last = (grep { length } split /\n/, ($r->{stderr} // ''))[-1] // '';
+    my $sum  = (grep { length } split /\n/, ($r->{stdout} // ''))[-1] // '';
+    if ($r->{rc} == 0) {
+        $n->{summary} = $sum;
+        $self->_log('info', "$what: $sum");
+        return $r;
+    }
+    $n->{error} = $last;
+    $self->_log($level, "$what: $n->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
+    return $r;
 }
 
 # Ping the agent until it answers or wait seconds pass (calls go ahead anyway).
@@ -348,6 +414,9 @@ C<net_up>: C<net_plan> lists the storage networks (C<network_storage_vlanN_subne
 TYPE SCH or TCH) and the layout networks of purpose transit (TYPE TCH) with
 the host's address on each (C<HPS::ClusterConfig::vlan_host_address>), then
 one C<net-vlan-address boot VLAN ADDR/PREFIX --mtu MTU> call per network.
+On a TCH, then one C<net-vxlan-ensure> call per layout network of kind vxlan
+(C<HPS::Vxlan>), and the same call on every other transit host to refresh its
+peers (failures there are logged and do not change the result).
 NixOS hosts only. Nothing is recorded: the addresses follow from C<IP>.
 
 =head1 REGISTRY KEYS (per host)

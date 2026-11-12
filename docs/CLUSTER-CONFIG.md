@@ -119,6 +119,34 @@ only with it. `net-bridge-ensure` builds a bridge with `vlan_filtering 1` and no
 member NIC (see `docs/VM-LIFECYCLE.md`); VMs attach with per-NIC VLANs
 (`docs/WORKLOADS.md`).
 
+A vxlan network (a workload network between client hosts, carried by the
+cluster's transit VLAN; `plans/networking.md`, rulings of 2026-11-10) is
+`{"kind": "vxlan", "vni": 1100, "over": "transit", "bridge": "br-client",
+"purpose": "workload", "mtu"?}`: `vni` is 1 to 16777215 and unique in the
+layout; `over` names a layout network of `purpose` `transit`; `purpose` is
+`workload` only; no `cidr`, `vlan`, `nic` or `uplink`; the bridge follows the
+rule above and is unique. `mtu` is 576 to 8950 and defaults to the transit MTU
+(9000) less the 50 bytes of VXLAN, 8950. `vni` and `over` are refused on every
+other kind.
+
+Every vxlan network is built on every transit host (TYPE contains `TCH`,
+NixOS), never through the host key `nets`: `net-bridge-ensure` lists and
+skips it. The node script is
+
+    net-vxlan-ensure <vni> <bridge> --local <ip> [--peer <ip>]... --mtu <N>
+
+It makes `vxlan<vni>` (`ip link add vxlan<vni> type vxlan id <vni> local <ip>
+dstport 4789 nolearning`) in the bridge, one all-zero MAC FDB entry per peer
+(`bridge fdb append 00:00:00:00:00:00 dev vxlan<vni> dst <peer>`: head-end
+replication, no multicast needed on the transit), sets both MTUs and brings
+both up; `05-hps-<bridge>.network` (Unmanaged) keeps networkd off them. It is
+idempotent; a changed peer list replaces the entries exactly. It refuses a
+local address that is not on the host (net-up gives it first) and a transit
+link whose MTU is below the VXLAN MTU plus 50. Local is the host's transit
+address and the peers are every other transit host's, all by the rule of the
+next section; `HPS::Vxlan` computes them. `hps-node net-up` and
+`hps-workload create`/`start` run it (below and `docs/WORKLOADS.md`).
+
 In the text file format the JSON goes on one line
 after `network_layout =`; in a JSON file it may be an object. It is stored,
 compared and exported as canonical one-line JSON.
@@ -152,6 +180,22 @@ network; `--dry-run` prints those calls. After every pairing (nodes run from
 RAM and pair on each boot) the API queues a `net-up <mac>` job for such a host,
 ahead of the storage hook's `storage-up`, so a rebooted node gets its addresses
 back with no operator step.
+
+On a TCH, `net-up` then builds each vxlan layout network with
+`net-vxlan-ensure` (after the transit address; not called when that call
+failed) and refreshes the other transit hosts with the same call, so a TCH
+that joins is added to every peer list at its pairing; one that leaves (is
+forgotten, or loses TYPE TCH) is dropped at the next pairing of any TCH, or at
+once with `hps-node net-up` on any TCH. A TCH that is only down stays a peer. A refresh that fails (a host down) is logged and listed (`refresh`
+lines, `--json` key `refresh`) and does not change the exit status: that host
+gets its peers when it pairs. Scale test s1, TCHs at 10.11.2.12-15, VNI 1100
+(storage lines left out):
+
+    $ hps-node net-up tch-001 --dry-run
+    transit (vlan 112): net-vlan-address boot 112 10.11.2.12/24 --mtu 9000
+    client (vni 1100): net-vxlan-ensure 1100 br-client --local 10.11.2.12 --peer 10.11.2.13 --peer 10.11.2.14 --peer 10.11.2.15 --mtu 8950
+    refresh tch-002 client (vni 1100): net-vxlan-ensure 1100 br-client --local 10.11.2.13 --peer 10.11.2.12 --peer 10.11.2.14 --peer 10.11.2.15 --mtu 8950
+    ...
 
 `net-vlan-address` makes `<bootnic>.<vlan>` (the boot NIC is the physical
 NIC carrying `hps.mac`) and gives it the address and MTU through

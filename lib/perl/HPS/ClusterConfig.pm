@@ -26,6 +26,8 @@ package HPS::ClusterConfig;
 #                   or a fabric entry {kind: "fabric", purpose: "emulated-switch", bridge, mtu?}
 #                   (no cidr, vlan, nic or uplink: a VLAN-aware bridge with no uplink)
 #                   (uplink boot, only with purpose provisioning: the bridge hps-net builds on the boot NIC)
+#                   or a vxlan entry {kind: "vxlan", vni, over, bridge, purpose: "workload", mtu?}
+#                   (over: a purpose-transit network; VNIs unique; no cidr, vlan, nic or uplink)
 # An optional (not required) key may be the empty string.
 use strict;
 use warnings;
@@ -271,22 +273,64 @@ sub validate_value ($q, $value) {
     die "Unknown rule '$q->{rule}' for $q->{key}\n";
 }
 
-# network_layout (the shape net-bridge-ensure reads). Returns an error or undef.
+# The transit VLAN is jumbo (plans/networking.md); a VXLAN over it loses 50
+# bytes to the outer Ethernet, IP, UDP and VXLAN headers.
+our $TRANSIT_MTU  = 9000;
+our $VXLAN_HEADER = 50;
+
+# vxlan_mtu(\%entry): the MTU of a vxlan layout network, its mtu or the
+# transit MTU less the VXLAN header (8950).
+sub vxlan_mtu ($n) { return defined $n->{mtu} ? $n->{mtu} + 0 : $TRANSIT_MTU - $VXLAN_HEADER }
+
+# A vxlan entry {kind: "vxlan", vni, over, bridge, purpose: "workload", mtu?}.
+# Returns an error or undef; `over` is checked against the whole layout after.
+sub _validate_vxlan ($name, $n, $vnis) {
+    for my $f (qw(cidr vlan nic uplink)) {
+        return "network '$name': a vxlan network takes no $f (it is carried by its transit network)" if defined $n->{$f};
+    }
+    return "network '$name': a vxlan network has purpose \"workload\""
+        unless defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'workload';
+    return "network '$name': vni must be 1 to 16777215"
+        unless defined $n->{vni} && !ref $n->{vni} && $n->{vni} =~ /^[1-9][0-9]{0,7}\z/ && $n->{vni} <= 16777215;
+    return "network '$name': vni $n->{vni} is also used by '$vnis->{ $n->{vni} + 0 }'" if $vnis->{ $n->{vni} + 0 };
+    $vnis->{ $n->{vni} + 0 } = $name;
+    return "network '$name': over (the name of a purpose transit network) is required"
+        unless defined $n->{over} && !ref $n->{over} && length $n->{over};
+    my $max = $TRANSIT_MTU - $VXLAN_HEADER;
+    if (defined $n->{mtu}) {
+        return "network '$name': mtu must be 576 to $max (the transit MTU $TRANSIT_MTU less $VXLAN_HEADER)"
+            unless !ref $n->{mtu} && $n->{mtu} =~ /^[1-9][0-9]{2,3}\z/ && $n->{mtu} >= 576 && $n->{mtu} <= $max;
+    }
+    return undef;
+}
+
+# network_layout (the shape net-bridge-ensure and net-vxlan-ensure read).
+# Returns an error or undef.
 sub validate_layout ($text) {
     my $data = eval { JSON::PP->new->decode($text) };
     return 'not valid JSON' unless defined $data;
     return 'must be a JSON object of networks' unless ref $data eq 'HASH';
-    my (%vlans, %bridges);
+    my (%vlans, %bridges, %vnis);
     for my $name (sort keys %$data) {
         my $n = $data->{$name};
         return "network name '$name' must match ^[a-z][a-z0-9-]{0,15}\$" unless $name =~ /^[a-z][a-z0-9-]{0,15}\z/;
         return "network '$name' must be an object" unless ref $n eq 'HASH';
-        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic uplink kind mtu);
+        my %ok = map { $_ => 1 } qw(cidr vlan bridge purpose nic uplink kind mtu vni over);
         my ($extra) = grep { !$ok{$_} } sort keys %$n;
         return "network '$name': unknown field '$extra'" if defined $extra;
-        my $fabric = defined $n->{kind};
-        if ($fabric) {
-            return "network '$name': kind must be \"fabric\"" unless !ref $n->{kind} && $n->{kind} eq 'fabric';
+        my $vxlan = defined $n->{kind} && !ref $n->{kind} && $n->{kind} eq 'vxlan';
+        if (!$vxlan) {
+            for my $f (qw(vni over)) {
+                return "network '$name': $f is only for a vxlan network" if defined $n->{$f};
+            }
+        }
+        my $fabric = defined $n->{kind} && !$vxlan;
+        if ($vxlan) {
+            my $e = _validate_vxlan($name, $n, \%vnis);
+            return $e if defined $e;
+        }
+        elsif ($fabric) {
+            return "network '$name': kind must be \"fabric\" or \"vxlan\"" unless !ref $n->{kind} && $n->{kind} eq 'fabric';
             return "network '$name': a fabric network has purpose \"emulated-switch\""
                 unless defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'emulated-switch';
             for my $f (qw(cidr vlan nic uplink)) {
@@ -299,14 +343,15 @@ sub validate_layout ($text) {
             }
         }
         else {
-            return "network '$name': mtu is only for a fabric network" if defined $n->{mtu};
+            return "network '$name': mtu is only for a fabric or vxlan network" if defined $n->{mtu};
             return "network '$name': purpose emulated-switch needs kind \"fabric\""
                 if defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'emulated-switch';
         }
-        for my $req ($fabric ? qw(bridge purpose) : qw(cidr bridge purpose)) {
+        my $bare = $fabric || $vxlan;    # no cidr of its own
+        for my $req ($bare ? qw(bridge purpose) : qw(cidr bridge purpose)) {
             return "network '$name': $req is required" unless defined $n->{$req} && !ref $n->{$req} && length $n->{$req};
         }
-        return "network '$name': cidr must be IPv4/prefix" if !$fabric && defined validate_value({ rule => 'cidr', required => 1 }, $n->{cidr});
+        return "network '$name': cidr must be IPv4/prefix" if !$bare && defined validate_value({ rule => 'cidr', required => 1 }, $n->{cidr});
         return "network '$name': bridge must match ^br-[a-z0-9-]{1,12}\$" unless $n->{bridge} =~ /^br-[a-z0-9-]{1,12}\z/;
         return "network '$name': purpose must be a short word" unless $n->{purpose} =~ /^[a-z][a-z0-9-]{0,15}\z/;
         if (defined $n->{uplink}) {
@@ -326,6 +371,14 @@ sub validate_layout ($text) {
                 unless !ref $n->{nic} && $n->{nic} =~ /^(?:[0-9A-Fa-f]{2}([:-]?)){5}[0-9A-Fa-f]{2}\z/;
         }
         return "network '$name': bridge '$n->{bridge}' is also used by another network" if $bridges{ $n->{bridge} }++;
+    }
+    for my $name (sort keys %$data) {
+        my $n = $data->{$name};
+        next unless defined $n->{kind} && $n->{kind} eq 'vxlan';
+        my $t = $data->{ $n->{over} };
+        return "network '$name': over '$n->{over}' is not a network of the layout" unless ref $t eq 'HASH';
+        return "network '$name': over '$n->{over}' is not a purpose transit network"
+            unless !defined $t->{kind} && defined $t->{purpose} && $t->{purpose} eq 'transit';
     }
     return undef;
 }

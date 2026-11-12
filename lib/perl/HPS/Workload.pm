@@ -20,6 +20,7 @@ use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX qw(strftime);
 use HPS::Registry;
 use HPS::Keysafe;
+use HPS::Vxlan ();
 use HPS::Storage;
 
 my $NAME_RE  = qr/^[a-z][a-z0-9-]{0,31}\z/;
@@ -555,6 +556,22 @@ sub _define_args ($self, $layout, $vm, $in, $macs = undef) {
         ($net_boot ? () : ('--image', "$in->{image_dir}/$vm->{image}.qcow2")), _hardware_args($vm) ];
 }
 
+# The net-vxlan-ensure calls for the vxlan nets of a VM on its compute host
+# (HPS::Vxlan::host_plan: local and peers from the transit addresses), once per
+# host and net (%$seen). A compute host that cannot carry one refuses the plan.
+sub _vxlan_calls ($self, $vm, $mac, $seen) {
+    my $layout = $self->layout;
+    my @want = grep { HPS::Vxlan::is_vxlan($layout, $_) && !$seen->{"$mac $_"}++ } @{ $vm->{nets} };
+    return () unless @want;
+    my %u;
+    @want = grep { !$u{$_}++ } @want;
+    my @plan = HPS::Vxlan::host_plan($self->{registry}, $mac, layout => $layout, only => \@want, cluster => $self->_cluster);
+    for my $x (grep { $_->{refused} } @plan) {
+        _fail('refused', "vm '$vm->{name}': net '$x->{name}' (vxlan $x->{vni}) cannot be built on compute host '$vm->{compute}': $x->{refused}");
+    }
+    return @plan;
+}
+
 sub _steps_create ($self, $def, %a) {
     my $name = $def->{name};
     my $rec = $self->record($name);
@@ -564,7 +581,7 @@ sub _steps_create ($self, $def, %a) {
     _fail('refused', "workload '$name' is already created (state $rec->{state}); nothing to resume")
         if $rec && $rec->{state} ne 'creating';
     my $layout = $self->layout;
-    my (@s, %fetched, %attached);
+    my (@s, %fetched, %attached, %vx);
     for my $vm (@{ $def->{vms} }) {
         my $in = $self->_vm_info($def, $vm);
         my $mac = $in->{mac};
@@ -589,7 +606,8 @@ sub _steps_create ($self, $def, %a) {
         push @s, _step($mac, 'vm-image-write', [ $vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path ],
             key => "write:$vm->{name}") unless $net_boot;
         my $have = $attached{$mac} //= $self->_attached($mac);
-        my @missing = grep { my $n = $_; !grep { $_ eq $n } @$have } @{ $vm->{nets} };
+        # vxlan nets are not host nets: net-vxlan-ensure builds them (below).
+        my @missing = grep { my $n = $_; !HPS::Vxlan::is_vxlan($layout, $n) && !grep { $_ eq $n } @$have } @{ $vm->{nets} };
         if (@missing) {
             push @$have, @missing;
             my @new = @$have;
@@ -602,6 +620,7 @@ sub _steps_create ($self, $def, %a) {
                 },
                 undo => sub { defined $prev ? $reg->host_set($mac, 'nets', $prev) : $reg->host_unset($mac, 'nets') });
         }
+        push @s, map { _step($mac, $_->{script}, $_->{args}, key => "vxlan:$mac:$_->{name}") } $self->_vxlan_calls($vm, $mac, \%vx);
         my ($wl, $vmname) = ($name, $vm->{name});
         my $args = $self->_define_args($layout, $vm, $in);
         push @s, _step($mac, 'vm-define', $args, key => "define:$vm->{name}",
@@ -661,9 +680,12 @@ sub _status_macs ($stdout, $vm) {
 sub _steps_start ($self, $def, %a) {
     my $rec = $self->_need_record($def->{name}, 'start');
     my $layout = $self->layout;
-    my @s;
+    my (@s, %vx);
     for my $vm ($self->_ordered($def, %a)) {
         my $in = $self->_vm_info($def, $vm);
+        # The compute host runs from RAM: a reboot lost its VXLAN links, and the
+        # peers may have changed. Idempotent, so every start runs it.
+        push @s, map { _step($in->{mac}, $_->{script}, $_->{args}) } $self->_vxlan_calls($vm, $in->{mac}, \%vx);
         for my $d (grep { $_->{mirrored} } @{ $in->{disks} }) {
             push @s, _step($in->{mac}, 'mirror-assemble', [ $d->{mirror}, map { ('--leg', $_) } @{ $d->{specs} } ]);
         }

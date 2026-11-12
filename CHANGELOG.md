@@ -12,6 +12,36 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## VXLAN workload networks over the transit VLAN (2026-11-12)
+
+- new: layout kind `vxlan`, `{"kind": "vxlan", "vni": 1-16777215, "over":
+  "<purpose-transit network>", "bridge": "br-...", "purpose": "workload",
+  "mtu"?: 576-8950}`; VNIs unique, no `cidr`, `vlan`, `nic` or `uplink`;
+  MTU by default the transit MTU less 50 (8950). VXLAN is the default for
+  virtual networks between client hosts, on the cluster's transit VLAN (owner
+  ruling 2026-11-10, `plans/networking.md`).
+- new: node script `net-vxlan-ensure <vni> <bridge> --local <ip> [--peer
+  <ip>]... --mtu <N>`, allowlisted on every node image. It builds
+  `vxlan<vni>` (`local`, `dstport 4789`, `nolearning`) in the bridge, one
+  all-zero MAC FDB entry per peer, the MTUs, links up; idempotent, a changed
+  peer list replaces the entries exactly; refuses when the local address is
+  not on the host or the transit link's MTU is too small.
+- new: `HPS::Vxlan`: transit hosts (TYPE TCH, NixOS) at their transit address
+  (the host-address rule of `net-up`), the peers of a host (every other one)
+  and the node call.
+- new: `hps-node net-up` on a TCH builds every vxlan network after the transit
+  address and refreshes the other TCHs' peer lists (`refresh` lines; a failed
+  refresh is reported and does not change the exit status). It runs after
+  every pairing, so the networks survive reboots and follow TCHs joining.
+- new: `hps-workload create` and `start` run `net-vxlan-ensure` on the compute
+  host for each vxlan net of a VM (before `vm-define` / the VM's start steps);
+  a compute host that is not a transit host refuses the plan.
+- change: `net-bridge-ensure` lists and skips vxlan networks.
+- docs: `docs/CLUSTER-CONFIG.md` (the kind, the script, net-up),
+  `docs/WORKLOADS.md` (a VM on a vxlan network).
+- tests: `t/202-vxlan.t`, `test_p3_201_net_vxlan_ensure.bats`, a vxlan case in
+  `test_p3_166_fabric_bridge.bats`.
+
 ## Zvols and workload definitions through the operator API (2026-11-11)
 
 - new: `ips-admin-exec` passes a `/` for `hps-storage` in exactly the dataset

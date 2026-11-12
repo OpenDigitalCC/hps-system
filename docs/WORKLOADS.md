@@ -39,10 +39,22 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `disks[].size` | `^[1-9][0-9]*[MGT]$` |
 | `disks` | 1 to 8 per VM, names unique within the VM; none needed with `boot: network`. Each disk gets its own zvol (and mirror when it has two legs); the first disk is the boot disk of a `boot: disk` VM and the only one `vm-image-write` fills, the others are left empty for the guest to use (a storage VM builds its own pool on them) |
 | `legs` | 1 or 2; `{host,pool}` is a local zvol, `{host,iqn[,portal]}` a remote LUN already exported by the storage side; at most one local leg per disk; one leg only if it is local (the disk is then the zvol itself, no mirror) |
-| `nets` | non-empty; every entry is a name in the cluster key `network_layout`, or an object `{"net": "<name>", "pvid": 1-4094, "tagged": [1-4094, ...], "model": "virtio\|e1000e\|rtl8139"}` (only `net` is required). One NIC per entry. `pvid` and `tagged` apply only to a fabric net (layout `kind: fabric`), whose NIC must have a `pvid`; `tagged` VLANs are distinct and not the pvid. Passed to `vm-define` as `--vlan-pvid`, `--vlan-tagged`, `--nic-model` after the `--net` |
+| `nets` | non-empty; every entry is a name in the cluster key `network_layout`, or an object `{"net": "<name>", "pvid": 1-4094, "tagged": [1-4094, ...], "model": "virtio\|e1000e\|rtl8139"}` (only `net` is required). One NIC per entry. `pvid` and `tagged` apply only to a fabric net (layout `kind: fabric`), whose NIC must have a `pvid`; `tagged` VLANs are distinct and not the pvid. Passed to `vm-define` as `--vlan-pvid`, `--vlan-tagged`, `--nic-model` after the `--net`. A vxlan net (layout `kind: vxlan`, `docs/CLUSTER-CONFIG.md`) is named like any other (`"nets": ["client"]`); its NIC sits on the layout bridge (`--net br-client`); its compute host must be a transit host (TYPE `TCH`, NixOS, with a transit address) |
 | `hardware` | optional object: `disk_bus` (`virtio` default, `scsi`, `sata`; not `virtio` needs a disk) and `smbios` (`vendor` and `product` required, `serial` optional; each letters, digits, space, `.`, `_`, `-`, first character alphanumeric, at most 63). Passed to `vm-define` as `--disk-bus` and `--smbios` |
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
 | unknown fields | refused |
+
+### A VM on a vxlan network
+
+With the layout entries `"transit": {"cidr": "10.11.2.0/24", "vlan": 112,
+"bridge": "br-transit", "purpose": "transit"}` and `"client": {"kind":
+"vxlan", "vni": 1100, "over": "transit", "bridge": "br-client", "purpose":
+"workload"}`, a VM joins the client network with `"nets": ["client"]` and a
+`compute_host` (or local leg host) that is a TCH. `create` and `start` run
+`net-vxlan-ensure` on that host before the VM's `vm-define` / `vm-start`;
+`hps-node net-up` (after every pairing) builds the same network on every TCH,
+so VMs on different TCHs share one L2 segment. The guest's MTU is its own
+(1500 by default, within the 8950 of the network).
 
 ### Writing and reading a definition
 
@@ -87,7 +99,11 @@ nothing). A node call that exits non-zero ends the run at once.
     the two leg specs (`local:<zvol>`, `iscsi:<portal>:<iqn>`); `vm-image-write`
     (base image onto the first disk only); `net-bridge-ensure` when the host's `nets` key
     lacks a network of the VM (the key is extended first, because the node reads
-    it; it is put back if the call fails); `vm-define` (one `--disk <device>` per disk in definition order: `/dev/md/<name>` or `/dev/zvol/<dataset>`,
+    it; it is put back if the call fails; vxlan nets are never added to it);
+    `net-vxlan-ensure <vni> <bridge> --local <ip> --peer <ip>... --mtu <mtu>`
+    for each vxlan net of the VM, once per compute host and net (local and
+    peers are the transit addresses, `HPS::Vxlan`; a compute host that is not a
+    transit host refuses the plan, 3); `vm-define` (one `--disk <device>` per disk in definition order: `/dev/md/<name>` or `/dev/zvol/<dataset>`,
     one `--net <bridge>` per net from the layout, with that NIC's `--nic-model`,
     `--vlan-pvid` and `--vlan-tagged`, then `--disk-bus` and `--smbios`). Refuses (3) if the workload
     already exists. `--resume` continues a `creating` workload: steps already
@@ -95,7 +111,10 @@ nothing). A node call that exits non-zero ends the run at once.
     (`mirror-create` calls `leg-resolve`).
 
 `start`
-:   VMs in priority order (1 first): `mirror-assemble` (mirrored disks only; a
+:   VMs in priority order (1 first): `net-vxlan-ensure` for each vxlan net of
+    the VM (once per compute host and net; idempotent, and the node runs from
+    RAM, so a reboot lost the link; the call also brings the peer list up to
+    date), `mirror-assemble` (mirrored disks only; a
     VM on local legs only has none), `vm-status` (read-only), then `vm-start`.
     Records `running`, `last_owner` (the compute host) and `started_at`.
     A node runs from RAM, so after its reboot libvirt no longer has the VM's

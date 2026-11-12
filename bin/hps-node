@@ -38,8 +38,15 @@ per network. The address keeps the host part of the host's provisioning
 address (host key IP) inside the network's subnet (10.11.0.153/24 gives
 10.113.0.153 on 10.113.0.0/24); a network where that lands on the network,
 broadcast or gateway address is refused and not called. Storage MTU is
-network_storage_mtu (default 1500), transit 9000. --dry-run prints the node
-calls and calls nothing; --wait pings the agent first (after pairing).
+network_storage_mtu (default 1500), transit 9000.
+On a TCH it then builds every layout network of kind vxlan, one node call
+  net-vxlan-ensure <vni> <bridge> --local <transit address> [--peer <address>]... --mtu <mtu>
+per network, the peers being every other NixOS TCH at its transit address
+(same rule), and refreshes the other TCHs with the same call (refresh lines),
+so a host that joined or left is in or out of every peer list. A refresh that
+fails is reported and does not change the exit status (that host gets its
+peers when it next pairs). --dry-run prints the node calls and calls nothing;
+--wait pings the agent first (after pairing).
 Exit: 0 every network done (or none for this host), 1 a node call failed,
 2 usage, 3 refused (not NixOS, no address, or a network refused), 4 not found.
 USAGE
@@ -74,15 +81,20 @@ sub net_up {
         return $NET_EXIT{ $res->{result} } // 1;
     }
     my @nets = @{ $res->{networks} };
-    for my $n (@nets) {
-        my $what = $n->{name} . (defined $n->{vlan} && !ref $n->{vlan} ? " (vlan $n->{vlan})" : '');
-        if ($n->{refused}) { print "$what: refused: $n->{refused}\n"; next }
+    my $line = sub {
+        my ($what, $n) = @_;
+        if ($n->{refused}) { print "$what: refused: $n->{refused}\n"; return }
         my $call = join ' ', $n->{script}, @{ $n->{args} };
         if ($dry)                  { print "$what: $call\n" }
-        elsif (!defined $n->{rc})  { print "$what: not called\n" }
+        elsif (!defined $n->{rc})  { print "$what: not called" . (length($n->{error} // '') ? " ($n->{error})" : '') . "\n" }
         elsif ($n->{rc} == 0)      { print "$what: $n->{summary}\n" }
         else                       { print "$what: $call exited $n->{rc}" . (length($n->{error} // '') ? ": $n->{error}" : '') . "\n" }
+    };
+    for my $n (@nets) {
+        my $tag = defined $n->{vni} ? " (vni $n->{vni})" : defined $n->{vlan} && !ref $n->{vlan} ? " (vlan $n->{vlan})" : '';
+        $line->($n->{name} . $tag, $n);
     }
+    $line->("refresh $_->{host} $_->{name} (vni $_->{vni})", $_) for @{ $res->{refresh} // [] };
     my $done = grep { !$_->{refused} } @nets;
     my $prefix = $dry ? 'dry run: ' : '';
     print "${host}: ${prefix}no storage or transit network for this host\n" unless @nets;
