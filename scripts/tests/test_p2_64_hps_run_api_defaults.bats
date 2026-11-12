@@ -34,6 +34,7 @@ EOT
 #!/usr/bin/env bash
 cat > /dev/null
 echo "$*" > "$TEST_DIR/cli.env"
+echo "${CTRL_EXEC_TIMEOUT:-unset}" > "$TEST_DIR/cli.timeout"
 EOT
   chmod +x "$CTRL_EXEC_DISPATCHER" "$TEST_DIR/bin/ctrl-exec-cli"
   unset CTRL_EXEC_CLI CTRL_EXEC_API_SOCKET CTRL_EXEC_API_URL
@@ -66,4 +67,14 @@ teardown() {
   rm -f "$TEST_DIR/bin/ctrl-exec-cli"
   run -127 bash -c "echo doc | bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc 2>&1"
   [[ "$output" == *"/usr/share/ctrl-exec/plugins/ce-api-plugins/ctrl-exec-cli/ctrl-exec-cli"* ]]
+}
+
+@test "the client waits CE_RUN_TIMEOUT for the API (900 by default)" {
+  run bash -c "echo doc | bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TEST_DIR/cli.timeout")" = 900 ]
+  run bash -c "echo doc | CE_RUN_TIMEOUT=1800 bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc"
+  [ "$(cat "$TEST_DIR/cli.timeout")" = 1800 ]
+  run bash -c "echo doc | CTRL_EXEC_TIMEOUT=60 CE_RUN_TIMEOUT=1800 bash '$RUN' --input aabbccddeeff dataset-unlock lab/enc"
+  [ "$(cat "$TEST_DIR/cli.timeout")" = 60 ]
 }

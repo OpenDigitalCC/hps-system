@@ -196,6 +196,11 @@ ce_run_input() {
   else
     transport=(--socket "${CTRL_EXEC_API_SOCKET:-/run/ctrl-exec-api/api.sock}")
   fi
+  # The client's own wait for the API's reply (CTRL_EXEC_TIMEOUT; its default
+  # 120s cut off image writes that finished a second later). The same
+  # bound as a dispatcher run: CE_RUN_TIMEOUT, 900 unless set. An env var,
+  # not --timeout, so an older client that does not know it is not broken.
+  export CTRL_EXEC_TIMEOUT="${CTRL_EXEC_TIMEOUT:-${CE_RUN_TIMEOUT:-900}}"
   local cmd=("$cli" "${transport[@]}" run "$agent" --script "$script")
   if [[ $INPUT -eq 1 ]]; then
     cmd+=(--input -)

@@ -157,6 +157,15 @@ impossible and nothing in HPS could free space or grow the disk.
   `read_timeout = 900` (`CTRL_EXEC_AGENT_READ_TIMEOUT`) to ctrl-exec.conf once;
   a value already there is kept.
 - tests: `test_p2_62_api_bring_up.bats`.
+- fix: `hps-run.sh --json/--input` calls ctrl-exec-cli, whose own wait for the
+  API is 120 s by default; s1's image writes finished one second after it gave
+  up. hps-run now sets `CTRL_EXEC_TIMEOUT` to `CE_RUN_TIMEOUT` (900) unless
+  the caller set it (an environment variable, so an older client is not
+  broken by an unknown option). Test: `test_p2_64_hps_run_api_defaults.bats`.
+- fix: `hps-workload destroy` passes `vm-stop <vm> --force`: a guest that does
+  not shut down within the graceful wait is forced off instead of blocking the
+  destroy (s1's probe-tch-003). `stop` still never forces. Test:
+  `t/71-workload-driver.t`.
 
 ## repo update orders pre-release tags correctly (2026-11-12)
 

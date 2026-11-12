@@ -799,7 +799,9 @@ sub _steps_destroy ($self, $def, %a) {
     for my $vm (reverse $self->_ordered($def)) {
         my $in = $self->_vm_info($def, $vm);
         if ($want->("define:$vm->{name}", "vm-stop and vm-undefine of $vm->{name}")) {
-            push @s, _step($in->{mac}, 'vm-stop', [ $vm->{name} ], ok_rc => [4]),
+            # destroy throws the guest away: after vm-stop's graceful wait it is
+            # forced off (a guest that ignores ACPI blocked destroy for good).
+            push @s, _step($in->{mac}, 'vm-stop', [ $vm->{name}, '--force' ], ok_rc => [4]),
                 _step($in->{mac}, 'vm-undefine', [ $vm->{name} ]);
         }
         push @s, map { _step($in->{mac}, 'mirror-stop', [ $_->{mirror} ]) }

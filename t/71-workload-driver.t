@@ -183,6 +183,7 @@ my $f = StorageFixture::setup_workload();
         [ qw(vm-stop vm-undefine mirror-stop vm-stop vm-undefine mirror-stop storage-zvol-destroy storage-zvol-destroy) ],
         'destroy plan: per VM (reverse priority) stop, undefine, mirror-stop; then the zvols');
     is_deeply([ map { $_->{args}[0] } @$plan[ 0 .. 2 ] ], [ 't0-app', 't0-app', 't0-app-root' ], 'last-started VM goes first');
+    is_deeply($plan->[0]{args}, [ 't0-app', '--force' ], 'destroy forces the guest off after the graceful wait');
     is_deeply($plan->[-1]{args}, [$DB], 'the zvol destroy takes the dataset only');
     is(scalar(grep { defined $_->{input} } @$plan), 0, 'no step of the destroy plan carries input');
     is(nodecalls($f), 0, 'plan sends nothing');
