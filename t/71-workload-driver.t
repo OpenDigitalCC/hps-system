@@ -449,6 +449,13 @@ my $f = StorageFixture::setup_workload();
         initiator => 'iqn.2026-01.lab.cmp:init', portal => '192.0.2.11' } ]);
     $plan = $g->{wl}->()->plan('create', 't0');
     like($plan->[1]{args}[2], qr/^iscsi:192\.0\.2\.11:/, 'an export recorded on the storage host decides the portal');
+    my ($dest) = grep { $plan->[0]{args}[$_ - 1] eq '--dest' } 1 .. $#{ $plan->[0]{args} };
+    is($plan->[0]{args}[$dest], '/run/hps/images', 'compute-only, no pool on the host: the image is cached in RAM');
+    like($plan->[2]{args}[-1], qr{^/run/hps/images/}, 'vm-image-write reads it from there');
+    $g->{reg}->host_set($StorageFixture::MAC2, 'storage_pool', 'lab');
+    $plan = $g->{wl}->()->plan('create', 't0');
+    ($dest) = grep { $plan->[0]{args}[$_ - 1] eq '--dest' } 1 .. $#{ $plan->[0]{args} };
+    is($plan->[0]{args}[$dest], '/lab/enc/images', 'a compute host with its own pool still uses the images dataset');
 }
 
 done_testing;

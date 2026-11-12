@@ -82,6 +82,16 @@ capabilities and removals are called out explicitly.
 - tests: `t/198-vlan-host-address.t`, `t/199-net-up.t`, `t/45-jobs.t`,
   `test_p3_198_net_vlan_address.bats`, `test_p3_199_net_up_hook.bats`.
 
+## A thin compute host caches workload images in RAM (2026-11-12)
+
+- fix: a VM whose legs are all remote, on a compute host with no pool of its
+  own (a thin TCH), failed its first create step: "cannot create
+  's1/enc/images': no such pool 's1'". Such a host now caches the base image in
+  `/run/hps/images`, which `image-fetch` may create (mode 0700). Any other
+  missing `--dest` is still refused. A host with a pool keeps
+  `/<pool>/enc/images`.
+- tests: `t/71-workload-driver.t`, `test_p3_22_image_fetch.bats`.
+
 ## Images and ctrl-exec-cli reach an inner IPS (2026-11-12)
 
 - new: `hps-cnh-publish --image NAME` adds a catalogue image

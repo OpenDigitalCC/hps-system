@@ -459,6 +459,7 @@ sub _vm_info ($self, $def, $vm) {
     my $mac = $self->_mac($vm->{compute});
     my ($first_local) = grep { exists $_->{pool} } map { @{ $_->{legs} } } @{ $vm->{disks} };
     my $reg = $self->{registry};
+    my $has_pool = $first_local || $reg->host_exists($mac, 'storage_pool');
     my $pool = $first_local ? $first_local->{pool}
         : $reg->host_exists($mac, 'storage_pool') ? $reg->host_get($mac, 'storage_pool') : $self->_cluster;
     my @disks;
@@ -472,7 +473,10 @@ sub _vm_info ($self, $def, $vm) {
             device => (@specs == 2 ? "/dev/md/$mirror" : "/dev/zvol/$ds") };
     }
     return { vm => $vm, name => $vm->{name}, host => $vm->{compute}, mac => $mac, pool => $pool, disks => \@disks,
-        image_dir => "/$pool/enc/images" };
+        # A thin compute host (every leg remote, no pool of its own) caches the
+        # base image in RAM: it is read once, by vm-image-write (scale test
+        # probes, 2026-11-12: "cannot create 's1/enc/images': no such pool").
+        image_dir => ($has_pool ? "/$pool/enc/images" : '/run/hps/images') };
 }
 
 # VMs in start order (priority 1 first, then definition order); the selected

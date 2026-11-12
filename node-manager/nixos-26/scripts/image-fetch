@@ -12,7 +12,8 @@
 #             Any other scheme (https, ftp, file, ...) is refused.
 #   --sha256  64 hex digits; the download is verified before it gets its name
 #   --dest    an existing directory; /<pool>/enc/images is created as a
-#             dataset below <pool>/enc on first use (zfs create, logged)
+#             dataset below <pool>/enc on first use (zfs create, logged);
+#             /run/hps/images (a thin compute host, no pool: RAM) is made
 #
 # Downloads to <dir>/<name>.qcow2.part, checks the hash, renames. A file
 # already there with the right hash: nothing is fetched (exit 0). One with the
@@ -96,6 +97,12 @@ check_args() {
 ensure_images_dataset() {
   local pool
   [[ -d "$DEST" ]] && return 0
+  # A thin compute host (no pool) caches images in RAM: /run/hps/images is the
+  # one other --dest made here (HPS_RUN_ROOT prefixes it in tests).
+  if [[ "$DEST" == "${HPS_RUN_ROOT:-}/run/hps/images" ]]; then
+    run mkdir -p -m 0700 -- "$DEST"
+    return 0
+  fi
   [[ "$DEST" =~ ^${HPS_POOL_ROOT}/([a-z][a-z0-9_.-]*)/enc/images$ ]] || return 0
   pool=${BASH_REMATCH[1]}
   command -v zfs > /dev/null 2>&1 || return 0

@@ -179,3 +179,21 @@ SH
   [ "$status" -eq 3 ]
   run ! grep -q "zfs" "$SHIM_LOG"
 }
+
+@test "a thin compute host's RAM cache /run/hps/images is created (no pool on the host)" {
+  body
+  export HPS_RUN_ROOT="$TEST_DIR/rr"
+  local d="$HPS_RUN_ROOT/run/hps/images"
+  [ ! -d "$d" ]
+  run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$d"
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "IMAGE base $SUM $d/base.qcow2" ]
+  [ "$(stat -c %a "$d")" = 700 ]
+}
+
+@test "any other missing --dest is still refused (only /run/hps/images is made)" {
+  body
+  export HPS_RUN_ROOT="$TEST_DIR/rr"
+  run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_RUN_ROOT/run/hps/other"
+  [ "$status" -eq 3 ]
+}
