@@ -200,7 +200,12 @@ Node scripts run as root with capabilities through the ctrl-exec executor;
 the allowlist and the per-script arguments are the control, not the sandbox.
 On NixOS images every HPS script is allowlisted under the profile `node`
 (`run_as = root`, `no_new_privileges`, a fixed list of `CAP_*` names; no
-`writable` list, so the filesystem is as on the console). The scripts are the
+`writable` list, so the filesystem is as on the console, with one difference:
+the executor runs each script in a private mount namespace, so a mount a
+script makes ends with it and is not seen by the next script. A script that
+needs a mount to persist starts the unit that makes it, as `cnh-disk-prepare`
+does with `hps-cnh-mount.service`, and reads mounts from PID 1's table with
+`findmnt -N 1`). The scripts are the
 readable manual runbook, so a `ced run` of `$SCRIPT` on `$NODE` does what the
 same commands do by hand as root, and recovery by hand matches it. A script
 reaches the profile only by being added to the allowlist in the image; `default`
