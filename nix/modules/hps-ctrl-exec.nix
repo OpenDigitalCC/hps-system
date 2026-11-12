@@ -112,6 +112,10 @@ in
       vm-define.options.profile = "node";
       vm-image-write.source = mkScript "vm-image-write" (scriptsDir + "/vm-image-write");
       vm-image-write.options.profile = "node";
+      # Scale test probes: the cloud-init NoCloud seed onto the freshly written boot disk (the seed arrives on stdin; partx, blkid and mount come with util-linux, jq with the common profile).
+      vm-seed-write.source = mkScript "vm-seed-write" (scriptsDir + "/vm-seed-write");
+      vm-seed-write.options.profile = "node";
+      vm-seed-write.options.input = "raw";
       vm-start.source = mkScript "vm-start" (scriptsDir + "/vm-start");
       vm-start.options.profile = "node";
       vm-stop.source = mkScript "vm-stop" (scriptsDir + "/vm-stop");

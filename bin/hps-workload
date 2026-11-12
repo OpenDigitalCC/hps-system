@@ -26,6 +26,7 @@ Usage:
   hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]
+  hps-workload console <name> [--vm <vm>] [--lines N] [--dry-run] [--json]
   hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
   hps-workload show-definition <name>
 <name> is the workload: workloads/<name>.json under the cluster's config directory.
@@ -40,6 +41,10 @@ define checks the JSON on stdin as create checks a definition and writes it to
 workloads/<name>.json; an existing definition is replaced only with --replace,
 and never while the workload exists (destroy it first). show-definition prints
 the stored JSON.
+console prints the tail of each VM's serial console log (vm-console-log on its
+compute host; read-only), --lines N of it (1-10000, default the node's 200);
+with --vm the log alone, else each under a "== <vm> on <host>" heading. Exit 4
+when the one VM asked for has no log, 1 when any VM's log could not be read.
 --dry-run prints the node calls (define: checks the definition) and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
@@ -79,6 +84,17 @@ sub render_status {
         $out .= sprintf("  %-20s host %-14s recorded %-9s node %s%s\n", $v->{vm}, $v->{host} // '-',
             $v->{recorded_state} // '-', $v->{state}, $v->{ok} ? '' : ' (a node call failed)');
         $out .= "    mirror $_->{name}: $_->{state}\n" for @{ $v->{mirrors} };
+        $out .= "    seed: $v->{seed}\n" if defined $v->{seed};
+    }
+    return $out;
+}
+
+sub render_console {
+    my ($r, $one) = @_;
+    my $out = '';
+    for my $v (@{ $r->{vms} }) {
+        $out .= "== $v->{vm} on " . ($v->{host} // '-') . ($v->{rc} ? " (vm-console-log exit $v->{rc})" : '') . "\n" unless $one;
+        $out .= $v->{log} . ($v->{log} =~ /\n\z/ || !length $v->{log} ? '' : "\n");
     }
     return $out;
 }
@@ -135,11 +151,11 @@ sub definition_verb {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget,
-        'replace' => \$replace,
+        'replace' => \$replace, 'lines=s' => \$lines,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     my $name = shift @argv // return usage('workload name required');
@@ -147,6 +163,9 @@ sub main {
         other => ($resume || $any || defined $vm || $forget))
         if $op eq 'define' || $op eq 'show-definition';
     return usage('--replace is only for define') if $replace;
+    return usage('--lines is only for console') if defined $lines && $op ne 'console';
+    return usage('--lines must be a number 1-10000')
+        if defined $lines && !($lines =~ /\A[0-9]{1,5}\z/ && $lines >= 1 && $lines <= 10000);
     return usage("unknown operation '$op'") unless grep { $_ eq $op } HPS::Workload::ops();
     my ($disk, $size);
     if ($op eq 'grow-disk') {
@@ -162,7 +181,7 @@ sub main {
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         my $wl = HPS::Workload->new(allow_any_pool_name => $any);
-        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, disk => $disk, size => $size);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, disk => $disk, size => $size, lines => $lines);
         if ($dry) {
             my $r = $wl->run($op, $name, %a);
             if ($json) { print $js->encode($r) }
@@ -176,6 +195,12 @@ sub main {
         my $r = $wl->run($op, $name, %a);
         if ($json) { print $js->encode($r) }
         elsif ($op eq 'status') { print render_status($r) }
+        elsif ($op eq 'console') {
+            print render_console($r, defined $vm);
+            print STDERR "hps-workload: console $name: $_->{vm} on " . ($_->{host} // '-') . ": $_->{error}\n"
+                for grep { $_->{rc} } @{ $r->{vms} };
+            return $r->{rc};
+        }
         else {
             print render_run($r) . join('', map {"note: $_\n"} @{ $r->{notes} // [] }) . "$op ok: workload $name\n";
             print $r->{forgotten} ? "definition workloads/$name.json removed (--forget)\n"

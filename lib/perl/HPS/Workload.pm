@@ -16,6 +16,8 @@ use feature qw(signatures);
 no warnings 'experimental::signatures';
 
 use JSON::PP;
+use Encode ();
+use Digest::SHA ();
 use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX qw(strftime);
 use HPS::Registry;
@@ -35,9 +37,9 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 # vm-define takes --disk 1..8 times.
 my $MAX_DISKS = 8;
 
-my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk);
+my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console);
 my %TOP = map { $_ => 1 } qw(name project access vms);
-my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware);
+my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware seed);
 my %NICK = map { $_ => 1 } qw(net pvid tagged model);
 my %HWK  = map { $_ => 1 } qw(disk_bus smbios);
 my %SMK  = map { $_ => 1 } qw(vendor product serial);
@@ -46,6 +48,8 @@ my %DISK_BUSES = map { $_ => 1 } qw(virtio scsi sata);
 my $SMBIOS_RE = qr/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\z/;
 my %DSK = map { $_ => 1 } qw(name size legs);
 my %LEG = map { $_ => 1 } qw(host pool iqn portal);
+# A cloud-init NoCloud seed (vm-seed-write): the largest text of each field, in bytes.
+our %SEED_MAX = (user_data => 64 * 1024, network_config => 16 * 1024, meta_data => 4 * 1024);
 
 sub _fail ($kind, $msg) { die HPS::Keysafe::Error->new($kind, $msg) }
 
@@ -97,6 +101,33 @@ sub _validate_disk ($where, $disk) {
     return { name => "$disk->{name}", size => "$disk->{size}", legs => \@l };
 }
 
+# A JSON string (not a number, boolean, null, list or object).
+sub _json_string ($v) {
+    return 0 unless _plain($v);
+    return JSON::PP->new->allow_nonref->encode($v) =~ /^"/ ? 1 : 0;
+}
+
+# The seed of a disk-boot VM: {user_data, network_config?, meta_data?}, each a
+# string within %SEED_MAX, no NUL. vm-seed-write puts it on the boot disk after
+# vm-image-write; cloud-init reads it on the guest's first boot.
+sub _validate_seed ($where, $seed) {
+    $where .= ' seed';
+    _bad($where, 'must be an object {user_data, network_config, meta_data}') unless ref $seed eq 'HASH';
+    _only($where, $seed, \%SEED_MAX);
+    _bad($where, 'user_data is required') unless exists $seed->{user_data};
+    my %out;
+    for my $k (sort keys %$seed) {
+        my $v = $seed->{$k};
+        _bad($where, "$k must be a string") unless _json_string($v);
+        my $len = length(Encode::encode('UTF-8', $v));
+        _bad($where, "$k must not be empty") if $k eq 'user_data' && !$len;
+        _bad($where, "$k is $len bytes; at most $SEED_MAX{$k}") if $len > $SEED_MAX{$k};
+        _bad($where, "$k holds a NUL character") if index($v, "\0") >= 0;
+        $out{$k} = "$v";
+    }
+    return \%out;
+}
+
 sub _validate_vm ($where, $vm, $layout_given, $layout) {
     _bad($where, 'a VM must be an object') unless ref $vm eq 'HASH';
     _only($where, $vm, \%VMK);
@@ -109,6 +140,7 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     my $net_boot = $boot eq 'network';
     if ($net_boot) {
         _bad($where, 'a network-boot VM has no image (it boots from the network)') if exists $vm->{image};
+        _bad($where, 'a network-boot VM has no seed (the seed goes on the image vm-image-write writes)') if exists $vm->{seed};
     }
     else {
         _bad($where, "image must match $IMAGE_RE") unless _plain($vm->{image}) && $vm->{image} =~ $IMAGE_RE;
@@ -215,9 +247,10 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     # vm-start --provides-storage for the node's shutdown order).
     my $provides = ($net_boot && @d) ? 1 : 0;
     $prio //= $provides ? 1 : 3;
+    my $seed = exists $vm->{seed} ? _validate_seed($where, $vm->{seed}) : undef;
     return { name => "$vm->{name}", memory_mib => $vm->{memory_mib} + 0, vcpus => $vm->{vcpus} + 0,
         boot => $boot, (defined $vm->{image} ? (image => "$vm->{image}") : ()), disks => \@d, nets => \@names,
-        ($has_obj ? (nics => \@nics) : ()), (%hw ? (hardware => \%hw) : ()),
+        ($has_obj ? (nics => \@nics) : ()), (%hw ? (hardware => \%hw) : ()), ($seed ? (seed => $seed) : ()),
         priority => $prio + 0, provides_storage => $provides, compute => $compute };
 }
 
@@ -580,6 +613,28 @@ sub _vxlan_calls ($self, $vm, $mac, $seen) {
     return @plan;
 }
 
+# The seed of a VM as the vm-seed-write input document (canonical JSON, UTF-8),
+# and its sha256 (recorded at create; status compares the definition's).
+sub _seed_doc ($seed) { return JSON::PP->new->utf8->canonical->encode($seed) }
+
+sub _seed_sha ($seed) { return Digest::SHA::sha256_hex(_seed_doc($seed)) }
+
+# vm-seed-write <vm> --disk <boot disk>, the seed on stdin (input=raw), right
+# after vm-image-write (key seed:<vm>: a resumed create runs it when it is not
+# done; a second run writes the same files). --dry-run shows the sizes only.
+sub _seed_step ($self, $wl, $vm, $in) {
+    my $seed = $vm->{seed};
+    my $args = [ $vm->{name}, '--disk', $in->{disks}[0]{device} ];
+    my $desc = join(', ', map { my $k = $_; exists $seed->{$k} ? "$k " . length(Encode::encode('UTF-8', $seed->{$k})) . ' bytes'
+        : $k eq 'meta_data' ? 'meta_data default (instance-id and local-hostname ' . $vm->{name} . ')' : "no $k" }
+        qw(user_data network_config meta_data));
+    my $sha = _seed_sha($seed);
+    my $vname = $vm->{name};
+    return _step($in->{mac}, 'vm-seed-write', $args, key => "seed:$vname", input => _seed_doc($seed),
+        show => { script => 'vm-seed-write', args => $args, input => "<seed: $desc; sha256 $sha>" },
+        after => sub ($r) { $self->_rec_update($wl, sub ($rec) { $rec->{vms}{$vname}{seed_sha256} = $sha }) });
+}
+
 sub _steps_create ($self, $def, %a) {
     my $name = $def->{name};
     my $rec = $self->record($name);
@@ -613,6 +668,7 @@ sub _steps_create ($self, $def, %a) {
         }
         push @s, _step($mac, 'vm-image-write', [ $vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path ],
             key => "write:$vm->{name}") unless $net_boot;
+        push @s, $self->_seed_step($name, $vm, $in) if $vm->{seed};
         my $have = $attached{$mac} //= $self->_attached($mac);
         # vxlan nets are not host nets: net-vxlan-ensure builds them (below).
         my @missing = grep { my $n = $_; !HPS::Vxlan::is_vxlan($layout, $n) && !grep { $_ eq $n } @$have } @{ $vm->{nets} };
@@ -766,6 +822,21 @@ sub _steps_status ($self, $def, %a) {
     return @s;
 }
 
+# console: vm-console-log <vm> [--lines N] on each VM's compute host (read-only;
+# the guest's serial console log, where a probe prints its line). A VM whose
+# host has no log for it (exit 4) does not stop the others.
+sub _steps_console ($self, $def, %a) {
+    $self->_need_record($def->{name}, 'console');
+    if (defined $a{lines}) {
+        _fail('usage', '--lines must be 1-10000') unless $a{lines} =~ /^[0-9]+\z/ && $a{lines} >= 1 && $a{lines} <= 10000;
+    }
+    return map {
+        my $in = $self->_vm_info($def, $_);
+        _step($in->{mac}, 'vm-console-log', [ $_->{name}, (defined $a{lines} ? ('--lines', $a{lines} + 0) : ()) ],
+            soft => 1, vm => $_->{name})
+    } $self->_ordered($def, %a);
+}
+
 # The MACs vm-define reports ("VM <vm> defined mac=<mac>", one line per NIC),
 # kept in the workload record so the operator can find the node.
 sub _record_macs ($self, $name, $vm, $r) {
@@ -777,7 +848,7 @@ sub _record_macs ($self, $name, $vm, $r) {
 sub _need_record ($self, $name, $op) {
     my $rec = $self->record($name) // _fail('notfound', "workload '$name' has not been created (no registry record)");
     _fail('refused', "workload '$name' is not fully created (state $rec->{state}); finish it with create --resume, or remove it with destroy")
-        if $rec->{state} eq 'creating' && $op ne 'status' && $op ne 'destroy';
+        if $rec->{state} eq 'creating' && $op ne 'status' && $op ne 'destroy' && $op ne 'console';
     return $rec;
 }
 
@@ -844,7 +915,8 @@ sub _steps_grow_disk ($self, $def, %a) {
 }
 
 my %STEPS = (create => '_steps_create', start => '_steps_start', stop => '_steps_stop',
-    destroy => '_steps_destroy', status => '_steps_status', 'grow-disk' => '_steps_grow_disk');
+    destroy => '_steps_destroy', status => '_steps_status', 'grow-disk' => '_steps_grow_disk',
+    console => '_steps_console');
 
 sub _prepare ($self, $op, $name, %a) {
     my $m = $STEPS{ $op // '' } // _fail('usage', 'unknown operation; one of: ' . join(', ', ops()));
@@ -852,6 +924,7 @@ sub _prepare ($self, $op, $name, %a) {
     _fail('usage', '--resume is only for create') if $a{resume} && $op ne 'create';
     _fail('usage', '--forget is only for destroy') if $a{forget} && $op ne 'destroy';
     _fail('usage', '--disk and --size are only for grow-disk') if (defined $a{disk} || defined $a{size}) && $op ne 'grow-disk';
+    _fail('usage', '--lines is only for console') if defined $a{lines} && $op ne 'console';
     my $def = $self->load($name);
     return ($def, $self->$m($def, %a));
 }
@@ -888,7 +961,7 @@ sub _run_step ($self, $st, $n, $total, $op) {
     }
     else {
         $self->_log('info', "call $st->{script} " . join(' ', @{ $st->{args} }) . " on $st->{host}");
-        $r = $self->{runner}->call(mac => $st->{host}, script => $st->{script}, args => [ @{ $st->{args} } ], input => undef);
+        $r = $self->{runner}->call(mac => $st->{host}, script => $st->{script}, args => [ @{ $st->{args} } ], input => $st->{input});
         $self->_log('info', "$st->{script} exit $r->{rc}");
     }
     return $r;
@@ -1005,6 +1078,31 @@ sub _post ($self, $op, $def, $out, %a) {
     elsif ($op eq 'status') {
         $self->_post_status($def, $out);
     }
+    elsif ($op eq 'console') {
+        $self->_post_console($def, $out);
+    }
+    return;
+}
+
+# Console: per VM its host, the node's exit (4: no log) and the log text with
+# carriage returns and other control characters (escape sequences of a
+# serial console) removed; tab and newline stay. rc: 0 all read, 4 when a
+# single VM was asked for and has no log, else 1 when any VM failed.
+sub _post_console ($self, $def, $out) {
+    my $rec = $self->record($def->{name});
+    my @vms;
+    for my $r (@{ $out->{steps} }) {
+        my $log = $r->{stdout} // '';
+        $log =~ s/\e\[[0-9;?]*[A-Za-z]//g;
+        $log =~ tr/\x00-\x08\x0b-\x1f\x7f//d;
+        push @vms, { vm => $r->{vm}, host => $rec->{vms}{ $r->{vm} }{host}, rc => $r->{rc}, log => $log,
+            ($r->{rc} != 0 ? (error => (grep { length } split /\n/, $r->{stderr} // '')[-1] // "vm-console-log exited $r->{rc}") : ()) };
+    }
+    $out->{vms} = \@vms;
+    my @bad = grep { $_->{rc} != 0 } @vms;
+    $out->{ok} = @bad ? 0 : 1;
+    $out->{rc} = !@bad ? 0 : (@vms == 1 && $bad[0]{rc} == 4) ? 4 : 1;
+    delete $out->{steps};
     return;
 }
 
@@ -1025,6 +1123,16 @@ sub _post_status ($self, $def, $out) {
             push @{ $v->{mirrors} }, { name => $r->{mirror}, state => (defined $l ? $l =~ s/^MIRROR \S+ //r : 'unknown'), rc => $r->{rc} };
         }
         if ($r->{rc} != 0) { $v->{ok} = 0; $out->{ok} = 0 }
+    }
+    # The seed reaches the guest once, at create: a definition whose seed
+    # differs from the one written needs destroy and create to take effect.
+    for my $vm (grep { $vms{ $_->{name} } } @{ $def->{vms} }) {
+        my $was = $rec->{vms}{ $vm->{name} }{seed_sha256};
+        my $now = $vm->{seed} ? _seed_sha($vm->{seed}) : undef;
+        next if !defined $was && !defined $now;
+        $vms{ $vm->{name} }{seed} = !defined $was ? 'none written (the seed was added after create; destroy and create to apply it)'
+            : !defined $now ? 'written at create; the definition has none now'
+            : $was eq $now ? 'as written' : 'changed since create (destroy and create to apply it)';
     }
     $out->{state} = $rec->{state};
     $out->{vms} = [ map { $vms{ $_->{name} } } grep { $vms{ $_->{name} } } @{ $def->{vms} } ];

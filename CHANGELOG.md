@@ -12,6 +12,49 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Guest seed: cloud-init NoCloud for workload VMs (2026-11-12)
+
+The scale test's probe guests (Debian generic cloud image) booted with no
+configuration: no address on the client network and no probe program. There
+was no way to hand a guest its first-boot configuration.
+
+- new: a VM in a workload definition may carry `"seed": {"user_data",
+  "network_config", "meta_data"}`. The loader checks it: strings only (a
+  number, boolean, null, list or object is refused), no NUL, `user_data`
+  required, at most 64 KiB / 16 KiB / 4 KiB (UTF-8 bytes); a `boot: network`
+  VM may not have one.
+- new node script `vm-seed-write <vm> --disk <dev> [--partition 1]`,
+  allowlisted under profile node with `input = raw`: the seed as JSON on
+  stdin, partition found read-only (`partx -g`), ext4 checked (`blkid -p`),
+  mounted through a loop device at its offset, `/var/lib/cloud/seed/nocloud/`
+  `user-data`, `meta-data` (default instance-id and local-hostname from the VM
+  name), `network-config` written mode 0600, unmounted. Refuses (3) a guest
+  that is not shut off, no such partition, not ext4, no `/etc`, and a symlink
+  anywhere on the seed path. No new node package: util-linux and jq are
+  already in the image.
+- `create` runs it right after `vm-image-write` (resume key `seed:<vm>`), the
+  seed as the run's input (never an argument, never logged; `--dry-run` shows
+  sizes and sha256 only), and records `seed_sha256`; `status` prints `seed:
+  changed since create` when the definition's seed differs. A changed seed
+  needs destroy, define `--replace` and create (cloud-init reads it once).
+- `HPS::Workload` passes a step's input to the runner (it always sent none).
+- needs a node image rebuild (the new allowlisted script) on every compute
+  host that runs a seeded VM.
+
+## hps-workload console: a guest's serial console through the operator API (2026-11-12)
+
+The scale board must read each probe's line without a tenant network touching
+the platform; `vm-console-log` existed on the nodes but nothing on the IPS
+called it.
+
+- new: `hps-workload console <name> [--vm <vm>] [--lines N] [--json]`:
+  `vm-console-log` on each VM's compute host, read-only, in every recorded
+  state. Control characters and escape sequences are removed. Exit 0; 4 when
+  the one VM asked for has no log; 1 when any VM's log could not be read.
+- open through the `ips-admin` gate and `hps-op` as `hps-workload status`
+  is (plain tokens); the wiring test proves it. Needs only the IPS's
+  hps-system tree (no node change).
+
 ## hps-log --min-level: warnings and errors at the source (2026-11-12)
 
 The owner asked for the browser's log to open on a filtered view (a host's

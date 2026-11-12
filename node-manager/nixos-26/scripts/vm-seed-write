@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+#
+# vm-seed-write - put a cloud-init NoCloud seed on a VM's freshly written disk.
+#
+# ctrl-exec allowlisted node script, declared input=raw: one JSON document on
+# stdin, never an argument (the seed can be large and may hold guest
+# credentials), never a file left on the node:
+#
+#   {"user_data": "<text>", "network_config": "<text>", "meta_data": "<text>"}
+#
+# user_data is required; network_config and meta_data are optional. Without
+# meta_data the script writes "instance-id: <vm>" and "local-hostname: <vm>".
+#
+# Usage: vm-seed-write <vm> --disk <block device> [--partition <n, default 1>]
+#
+# The disk is the one vm-image-write filled (the boot disk; a Debian generic
+# cloud image: partition 1, ext4, the root filesystem). The partition is found
+# read-only from the partition table (partx -g, nothing changes in the kernel),
+# its filesystem type is checked (blkid -p at that offset: ext4 only), then it
+# is mounted through a loop device at its offset (mount -o offset,sizelimit;
+# the loop device is released on umount) on a private directory under /run.
+# Written, mode 0600 root:
+#   /var/lib/cloud/seed/nocloud/user-data
+#   /var/lib/cloud/seed/nocloud/meta-data
+#   /var/lib/cloud/seed/nocloud/network-config   (only when given)
+# Refused (3) when any directory on that path, or a target file, is a
+# symlink: the guest filesystem never redirects a write to the node.
+# A second run writes the same files again (idempotent). cloud-init reads the
+# seed on the guest's first boot only (per instance-id): a changed seed needs a
+# fresh disk (destroy and create the workload), not a second run.
+#
+# Also refused (3): the VM is defined and not shut off (the disk is in use),
+# no such partition, not ext4, no /etc on it (not a root filesystem), bad
+# input. Last line:  SEED <vm> written user-data=<bytes> meta-data=<bytes> network-config=<bytes|->
+#
+# Calls, in order: virsh domstate (undefined is fine); jq; partx -g; blkid -p;
+# mount; install; umount.
+# Exit: 0 written, 2 usage, 3 refused, 1 a command failed.
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+: "${HPS_RUN:=/run/hps}"
+
+VM=""
+DISK=""
+PART=1
+WORK=""
+MNT=""
+MOUNTED=0
+
+log() {
+  printf '[vm-seed-write] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-seed-write <vm> --disk <block device> [--partition <n>]
+       (stdin: {"user_data":"...","network_config":"...","meta_data":"..."})
+Exit: 0 ok, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+cleanup() {
+  if ((MOUNTED == 1)); then
+    printf '+ umount %s\n' "$MNT" >&2
+    umount -- "$MNT" || log "umount $MNT failed"
+  fi
+  if [[ -n "$WORK" ]]; then
+    rm -rf -- "$WORK"
+  fi
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --disk | --partition)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        if [[ "$1" == "--disk" ]]; then DISK=$2; else PART=$2; fi
+        shift 2
+        ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  if [[ -z "$DISK" ]]; then
+    usage
+    exit 2
+  fi
+  [[ "$PART" =~ ^[1-9][0-9]{0,2}$ ]] || { log "--partition must be 1-999"; usage; exit 2; }
+}
+
+check_args() {
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
+  [[ "$DISK" =~ ^[A-Za-z0-9/_.:-]+$ && "$DISK" != *..* ]] || refuse "--disk '$DISK' has characters outside [A-Za-z0-9/_.:-] or contains .."
+  [[ "$DISK" == "$HPS_DEV"/* ]] || refuse "--disk '$DISK' is not under $HPS_DEV"
+  [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
+}
+
+check_not_in_use() {
+  local state
+  printf '+ virsh -c qemu:///system domstate %s\n' "$VM" >&2
+  if state=$(virsh -c qemu:///system domstate "$VM" 2> /dev/null); then
+    if [[ "$state" != "shut off" ]]; then
+      refuse "$VM is $state; the disk is in use"
+    fi
+  fi
+}
+
+# read_seed: stdin -> $WORK/user-data, meta-data, network-config (when given).
+read_seed() {
+  local doc="$WORK/seed.json" ok
+  cat > "$doc"
+  printf '+ jq (check the seed document)\n' >&2
+  ok=$(jq -r 'if type != "object" then "not an object"
+    elif ((keys - ["user_data","network_config","meta_data"]) | length) > 0 then "unknown field " + ((keys - ["user_data","network_config","meta_data"])[0])
+    elif (.user_data | type) != "string" or (.user_data | length) == 0 then "user_data must be a non-empty string"
+    elif has("network_config") and (.network_config | type) != "string" then "network_config must be a string"
+    elif has("meta_data") and (.meta_data | type) != "string" then "meta_data must be a string"
+    else "ok" end' "$doc" 2> /dev/null) || ok="not valid JSON"
+  [[ "$ok" == ok ]] || refuse "stdin: $ok"
+  jq -j '.user_data' "$doc" > "$WORK/user-data"
+  if [[ "$(jq -r 'has("meta_data")' "$doc")" == true ]]; then
+    jq -j '.meta_data' "$doc" > "$WORK/meta-data"
+  else
+    printf 'instance-id: %s\nlocal-hostname: %s\n' "$VM" "$VM" > "$WORK/meta-data"
+  fi
+  if [[ "$(jq -r 'has("network_config")' "$doc")" == true ]]; then
+    jq -j '.network_config' "$doc" > "$WORK/network-config"
+  fi
+  rm -f -- "$doc"
+}
+
+# find_partition: sets START and SECTORS (512-byte sectors) of partition $PART.
+find_partition() {
+  local line
+  line=$(run partx -g -n "$PART" -o START,SECTORS -- "$DISK" 2> /dev/null) || line=""
+  read -r START SECTORS <<< "$line" || true
+  [[ "${START:-}" =~ ^[0-9]+$ && "${SECTORS:-}" =~ ^[1-9][0-9]*$ ]] ||
+    refuse "$DISK has no partition $PART (partx found none)"
+}
+
+check_fstype() {
+  local fstype
+  fstype=$(run blkid -p -O "$((START * 512))" -o value -s TYPE -- "$DISK" 2> /dev/null) || fstype=""
+  [[ "$fstype" == ext4 ]] || refuse "partition $PART of $DISK is '${fstype:-unknown}', not ext4"
+}
+
+# no_symlink <path relative to the mount>: refuse a symlink anywhere we write.
+no_symlink() {
+  [[ ! -L "$MNT/$1" ]] || refuse "$1 on the guest disk is a symlink"
+}
+
+write_seed() {
+  local d f
+  [[ -d "$MNT/etc" && ! -L "$MNT/etc" ]] || refuse "partition $PART of $DISK has no /etc: not a root filesystem"
+  for d in var var/lib var/lib/cloud var/lib/cloud/seed var/lib/cloud/seed/nocloud; do
+    no_symlink "$d"
+  done
+  run install -d -m 0755 -o root -g root -- "$MNT/var/lib/cloud/seed/nocloud"
+  for f in user-data meta-data network-config; do
+    no_symlink "var/lib/cloud/seed/nocloud/$f"
+    if [[ -f "$WORK/$f" ]]; then
+      run install -m 0600 -o root -g root -- "$WORK/$f" "$MNT/var/lib/cloud/seed/nocloud/$f"
+    else
+      [[ ! -e "$MNT/var/lib/cloud/seed/nocloud/$f" ]] || run rm -f -- "$MNT/var/lib/cloud/seed/nocloud/$f"
+    fi
+  done
+}
+
+bytes() {
+  if [[ -f "$WORK/$1" ]]; then
+    wc -c < "$WORK/$1" | tr -d ' '
+  else
+    printf -- '-'
+  fi
+}
+
+main() {
+  local ud md nc
+  parse_args "$@"
+  check_args
+  check_not_in_use
+  mkdir -p -- "$HPS_RUN"
+  WORK="$HPS_RUN/seed.$$"
+  MNT="$WORK/mnt"
+  trap cleanup EXIT
+  rm -rf -- "$WORK"
+  mkdir -m 0700 -- "$WORK"
+  mkdir -m 0700 -- "$MNT"
+  read_seed
+  find_partition
+  check_fstype
+  run mount -t ext4 -o "loop,offset=$((START * 512)),sizelimit=$((SECTORS * 512)),nodev,nosuid,noexec" -- "$DISK" "$MNT"
+  MOUNTED=1
+  write_seed
+  run sync
+  printf '+ umount %s\n' "$MNT" >&2
+  umount -- "$MNT"
+  MOUNTED=0
+  ud=$(bytes user-data)
+  md=$(bytes meta-data)
+  nc=$(bytes network-config)
+  printf 'SEED %s written user-data=%s meta-data=%s network-config=%s\n' "$VM" "$ud" "$md" "$nc"
+}
+
+main "$@"

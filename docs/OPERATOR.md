@@ -282,7 +282,27 @@ hps-op --cred FILE hps-workload start w1
 ```
 
 To change it later: `hps-workload destroy w1`, then `hps-workload-define w1
---replace` and `create` again.
+--replace` and `create` again. The same holds for a VM's guest `seed`
+(`docs/WORKLOADS.md` "A guest seed"): the seed travels inside the definition
+(the `hps-workload-define` input), `create` writes it onto the fresh disk
+(`vm-seed-write`, the seed as that node run's input), and cloud-init reads it
+once, so a changed seed needs destroy, define `--replace` and create.
+
+### Reading a guest's console
+
+`hps-workload console <name> [--vm <vm>] [--lines N]` prints the tail of a
+VM's serial console log (`vm-console-log` on its compute host; read-only). It
+is open through the `ips-admin` gate like `hps-workload status` (every
+argument a plain token), so an operator reads a guest's console with no
+network path to the guest:
+
+```
+hps-op --cred FILE hps-workload console w1 --vm w1-app --lines 20
+hps-op --cred FILE hps-workload console w1 --json
+```
+
+The scale test's board (`lab/scale/board.pl`, lab-only) reads each probe's
+`PROBE` line this way.
 
 ## Optional: forward the IPS's syslog
 

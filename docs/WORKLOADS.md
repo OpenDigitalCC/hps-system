@@ -41,6 +41,7 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `legs` | 1 or 2; `{host,pool}` is a local zvol, `{host,iqn[,portal]}` a remote LUN already exported by the storage side; at most one local leg per disk; one leg only if it is local (the disk is then the zvol itself, no mirror) |
 | `nets` | non-empty; every entry is a name in the cluster key `network_layout`, or an object `{"net": "<name>", "pvid": 1-4094, "tagged": [1-4094, ...], "model": "virtio\|e1000e\|rtl8139"}` (only `net` is required). One NIC per entry. `pvid` and `tagged` apply only to a fabric net (layout `kind: fabric`), whose NIC must have a `pvid`; `tagged` VLANs are distinct and not the pvid. Passed to `vm-define` as `--vlan-pvid`, `--vlan-tagged`, `--nic-model` after the `--net`. A vxlan net (layout `kind: vxlan`, `docs/CLUSTER-CONFIG.md`) is named like any other (`"nets": ["client"]`); its NIC sits on the layout bridge (`--net br-client`); its compute host must be a transit host (TYPE `TCH`, NixOS, with a transit address) |
 | `hardware` | optional object: `disk_bus` (`virtio` default, `scsi`, `sata`; not `virtio` needs a disk) and `smbios` (`vendor` and `product` required, `serial` optional; each letters, digits, space, `.`, `_`, `-`, first character alphanumeric, at most 63). Passed to `vm-define` as `--disk-bus` and `--smbios` |
+| `seed` | optional, `boot: disk` only: a cloud-init NoCloud seed `{"user_data": "...", "network_config": "...", "meta_data": "..."}`. Every value a JSON string (a number, boolean, null, list or object is refused), no NUL; `user_data` required and non-empty, at most 64 KiB; `network_config` optional, at most 16 KiB; `meta_data` optional, at most 4 KiB (default, written on the node: `instance-id: <vm>`, `local-hostname: <vm>`). Sizes count UTF-8 bytes. See "A guest seed" |
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
 | unknown fields | refused |
 
@@ -55,6 +56,35 @@ With the layout entries `"transit": {"cidr": "10.11.2.0/24", "vlan": 112,
 `hps-node net-up` (after every pairing) builds the same network on every TCH,
 so VMs on different TCHs share one L2 segment. The guest's MTU is its own
 (1500 by default, within the 8950 of the network).
+
+### A guest seed (cloud-init NoCloud)
+
+A `boot: disk` VM whose image carries cloud-init (the Debian generic cloud
+image does) can be given its first-boot configuration in the definition:
+
+```json
+"seed": {"user_data": "#cloud-config\nwrite_files: ...",
+         "network_config": "version: 2\nethernets: ..."}
+```
+
+`create` runs `vm-seed-write <vm> --disk <boot disk>` right after
+`vm-image-write`, with the seed as the run's input (`input = raw` on the node:
+stdin, never an argument, never logged; `--dry-run` shows only its sizes and
+sha256). The node finds partition 1 of the freshly written disk read-only
+(`partx -g`), checks it is ext4, mounts it through a loop device at its offset
+and writes `/var/lib/cloud/seed/nocloud/user-data`, `meta-data` and
+`network-config` (`docs/VM-LIFECYCLE.md`). The guest's cloud-init finds the
+NoCloud seed there on its first boot. Its resume key is `seed:<vm>`: a
+`create --resume` after a failure at or before it runs it (a second run
+writes the same files). `create` records the seed's sha256 in the VM's record
+(`seed_sha256`).
+
+**A changed seed needs a re-create.** cloud-init applies a seed once, on the
+guest's first boot (per instance-id), and the seed lives on the guest's disk,
+so editing the definition changes nothing in a created workload. `status`
+says so (`seed: changed since create`). To apply it: `hps-workload destroy
+<name>`, `hps-workload define <name> --replace` (or edit the file), then
+`create` and `start`; the disk is written fresh.
 
 ### Writing and reading a definition
 
@@ -87,6 +117,7 @@ else that host's registry `IP`.
 ## Operations
 
 `hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`,
+`hps-workload console <name> [--vm $VM] [--lines N] [--json]`,
 `hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]`
 (and `define`, `show-definition` above, which make no node call).
 Each operation is an ordered list of node calls (`--dry-run` prints it, changes
@@ -106,7 +137,9 @@ nothing). A node call that exits non-zero ends the run at once.
     peers are the transit addresses, `HPS::Vxlan`; a compute host that is not a
     transit host refuses the plan, 3); `vm-define` (one `--disk <device>` per disk in definition order: `/dev/md/<name>` or `/dev/zvol/<dataset>`,
     one `--net <bridge>` per net from the layout, with that NIC's `--nic-model`,
-    `--vlan-pvid` and `--vlan-tagged`, then `--disk-bus` and `--smbios`). Refuses (3) if the workload
+    `--vlan-pvid` and `--vlan-tagged`, then `--disk-bus` and `--smbios`). A VM
+    with a `seed` gets `vm-seed-write <vm> --disk <boot disk>` (the seed on
+    stdin) right after its `vm-image-write`. Refuses (3) if the workload
     already exists. `--resume` continues a `creating` workload: steps already
     recorded in `done` are skipped. The leg resolution itself happens on the node
     (`mirror-create` calls `leg-resolve`).
@@ -163,7 +196,22 @@ nothing). A node call that exits non-zero ends the run at once.
 `status`
 :   Per VM `vm-status` and per mirror `mirror-status`; reports the recorded and
     the node-reported state. A failing node call makes the exit status 1 but
-    the report is still printed.
+    the report is still printed. For a VM with a seed (now or at create) a
+    `seed:` line: `as written`, or `changed since create` / `none written`
+    (destroy and create to apply it).
+
+`console <name> [--vm $VM] [--lines N]`
+:   Read-only: `vm-console-log <vm> [--lines N]` on each VM's compute host
+    (start order), the tail of the guest's serial console log
+    (`/var/log/libvirt/qemu/<vm>-serial.log`). `--lines` 1-10000 (default the
+    node's 200). With `--vm` the log alone is printed, else each under a
+    `== <vm> on <host>` heading; carriage returns, escape sequences and other
+    control characters are removed (tab and newline stay). `--json`: `{vms:
+    [{vm, host, rc, log, error}]}`. Works in every recorded state (also
+    `creating`); no record is not found (4). Exit 0; 4 when the one VM asked
+    for has no log (4 from the node); 1 when any VM's log could not be read
+    (the others are still printed). The scale test's board reads the probe
+    lines this way, through the operator API (`docs/OPERATOR.md`).
 
 `grow-disk <name> <vm> <disk> <new size>`
 :   Grows one disk of one VM while it runs. Two calls on the compute host:
@@ -179,7 +227,7 @@ nothing). A node call that exits non-zero ends the run at once.
     disk at that size again (the run says so in a `note:` line). Needs the
     workload created (4 when it has no record).
 
-`--vm` selects one VM (start, stop, status). `--allow-any-pool-name` (create,
+`--vm` selects one VM (start, stop, status, console). `--allow-any-pool-name` (create,
 destroy) passes through to `HPS::Storage`: pools are named after the cluster.
 
 ## Stop order on a node
@@ -221,7 +269,8 @@ Cluster key `workload_<name>`:
 {"state": "created", "created_at": "...", "by": "operator",
  "vms": {"$VM": {"host": "$NODE", "state": "defined",
                  "disks": {"root": {"md": "/dev/md/$VM-root", "legs": ["local:...", "iscsi:..."]}},
-                 "last_owner": "$NODE", "started_at": "..."}}}
+                 "last_owner": "$NODE", "started_at": "...",
+                 "seed_sha256": "<hex, only for a VM with a seed>"}}}
 ```
 
 After `destroy`, cluster key `workload_<name>_destroyed` is

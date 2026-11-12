@@ -17,8 +17,9 @@ For a new guest the IPS calls:
 1. `image-fetch` – the base qcow2 into the images dataset of `$POOL` (once per image).
 2. `mirror-create` (CS-3.2) – the guest's disk mirror, `/dev/md/<name>`.
 3. `vm-image-write` – base image onto the fresh mirror.
-4. `vm-define` – the libvirt domain.
-5. `vm-start`.
+4. `vm-seed-write` – only for a VM with a `seed`: the cloud-init NoCloud seed onto the root partition of that disk.
+5. `vm-define` – the libvirt domain.
+6. `vm-start`.
 
 Taking it away: `vm-stop`, then `vm-undefine`. Data (zvols, mirrors, images) is
 removed by the IPS's `hps-workload destroy`, never by these
@@ -32,6 +33,7 @@ and can run at any time.
 | `image-fetch <name> --from http://<ips>/<path> --sha256 <hex> --dest <dir>` | curl (http only, no redirects) to `<dir>/<name>.qcow2.part`, checks sha256, renames. File present with the right hash: no download. Last line `IMAGE <name> <sha256> <path>` | 0 ok, 2 usage, 3 refused (scheme/host/URL shape, bad name or hash, sha256 mismatch), 1 command failed |
 | `vm-define <vm> --memory <MiB> --vcpus <n> --disk <dev> [--disk <dev>...] --net <bridge> [--mac <mac>] [--net ...]... --image <qcow2> [--serial-log <path>] [--replace]` | Renders the domain XML (q35, OVMF, one raw disk per `--disk` (1 to 8, each path once; targets `vda`, `vdb`, ... in the order given, see `--disk-bus`), virtio NIC per bridge, serial console to a log, no graphics) and `virsh define`s it. Same definition again: no change. A different one: refused unless `--replace` (guest must be shut off). Never reads or copies `--image` (recorded in the metadata only). Last line `VM <vm> defined`. `--boot network` (CS-3.12a) instead: OVMF netboots from the first NIC (`<boot dev='network'/>`, then the disk if any), `--disk` and `--image` are optional (a guest may have no disk), `--mac` (lower-case unicast) fixes the MAC of the `--net` before it (else libvirt generates one) and the last lines are one `VM <vm> defined mac=<mac>` per NIC | 0, 2, 3 refused (bad argument, different definition, running with `--replace`), 1 |
 | `vm-image-write <vm> --disk <dev> --image <qcow2> [--force]` | `qemu-img convert -f qcow2 -O raw` onto the one disk named (a VM with several disks: the first, the boot disk; the others are never touched), only if its first 512 bytes are zero (or `--force`) and the guest is not running. Logs the image sha256. Last line `IMAGE <vm> <sha256> written` | 0, 2, 3 refused (data in first sector, guest in use, bad argument), 1 |
+| `vm-seed-write <vm> --disk <dev> [--partition 1]` | stdin (`input = raw`): `{"user_data": "...", "network_config": "...", "meta_data": "..."}`, `user_data` required. Finds the partition read-only (`partx -g`, no kernel change), checks it is ext4 (`blkid -p` at its offset), mounts it through a loop device at that offset (`mount -o loop,offset,sizelimit,nodev,nosuid,noexec`) on a private directory under `/run/hps`, writes `/var/lib/cloud/seed/nocloud/user-data`, `meta-data` (default `instance-id: <vm>`, `local-hostname: <vm>`) and `network-config` (only when given; an old one is removed), mode 0600 root, and unmounts. Refuses a symlink anywhere on that path and a partition with no `/etc`. Second run: the same files again. cloud-init reads the seed on the guest's first boot only, so a changed seed needs a fresh disk (destroy and create). Last line `SEED <vm> written user-data=<bytes> meta-data=<bytes> network-config=<bytes\|->` | 0, 2, 3 refused (guest not shut off, no such partition, not ext4, not a root filesystem, symlink, bad input or argument), 1 |
 | `vm-start <vm> [--priority <1-5>] [--provides-storage]` | `virsh start`, waits up to 30 s for running, then applies the fabric-port VLANs recorded by `vm-define` (below). Running already: nothing to start, VLANs re-applied. Then records the stop order (`<priority> <0\|1>`, default `3 0`) in `/run/hps/guests/<vm>` for `hps-shutdown-storage` (`docs/WORKLOADS.md` "Stop order on a node"). Last line `VM <vm> running` | 0, 2, 3 (paused or other odd state), 4 not defined, 1 not running in time |
 | `vm-stop <vm> [--timeout 60] [--force]` | `virsh shutdown`, waits. `virsh destroy` only with `--force` after the timeout. Last line `VM <vm> shut off` | 0, 2, 4 not defined, 1 still running |
 | `vm-disk-resize <vm> <target\|/dev/zvol/<pool>/enc/[vm/]<name>>` | After `storage-zvol-grow`: the disk (found in `virsh domblklist` by its target or its source) is set to its source device's size (`blockdev --getsize64`) with `virsh blockresize`, so a running guest sees the new size. A shut off guest needs nothing (it sees the size at start). Never larger than the device, so never a shrink of the zvol. Last line `VM-DISK <vm> <target> source=<device> bytes=<n> resized=<yes\|no>` | 0, 2, 3 (no such disk, not a device), 4 not defined, 1 |
@@ -45,7 +47,7 @@ and can run at any time.
 Every script can be run twice with the same arguments and the second run changes
 nothing: `image-fetch`, `vm-define`, `vm-start`, `vm-stop` and `vm-undefine`
 succeed with a no-op; `vm-image-write` refuses (3) because the disk is no longer
-fresh.
+fresh; `vm-seed-write` writes the same seed files again.
 
 ## A VM on the provisioning segment (CS-3.12a)
 
