@@ -41,6 +41,16 @@ was no way to hand a guest its first-boot configuration.
 - needs a node image rebuild (the new allowlisted script) on every compute
   host that runs a seeded VM.
 
+## VXLAN passes the node firewall (2026-11-12)
+
+- fix: the NixOS firewall (on by default) dropped VXLAN's udp 4789, so
+  guests on a client VXLAN reached no peer (s1's probes: `peers=0/3`, while
+  bridges, VXLAN links, FDB and transit addresses were all in place).
+  `net-vxlan-ensure` now keeps a chain `hps-vxlan`, jumped to from `nixos-fw`
+  for udp 4789, with one accept per peer (`-s <peer> -d <local>`). Rules are
+  added, never removed; without `nixos-fw` nothing is done. Needs the new node
+  image on every TCH. Test: `test_p3_201_net_vxlan_ensure.bats`.
+
 ## hps-node net-status: a host's bridges and VLANs through the operator API (2026-11-12)
 
 - new: `hps-node net-status <host>` runs the node script `net-status`

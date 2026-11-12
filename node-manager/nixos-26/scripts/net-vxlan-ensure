@@ -41,10 +41,18 @@
 # of link or another VNI, or a member of another bridge, <bridge> existing as
 # something other than a bridge or already carrying another VXLAN link.
 #
+# Firewall: the NixOS firewall (on by default) drops VXLAN's udp 4789, so the
+# guests on <bridge> reached no peer (s1, 2026-11-12: peers=0/3). When the
+# chain nixos-fw exists, the script keeps a chain hps-vxlan, jumped to from
+# nixos-fw for udp 4789, with one accept per peer: -s <peer> -d <local> -p udp
+# --dport 4789 -j nixos-fw-accept. Rules are added, never removed (every VNI
+# of a host has the same peers, the other TCHs; a stale one accepts only a
+# former transit peer). Without nixos-fw (no firewall) nothing is done.
+#
 # Exit: 0 done, 1 a command failed, 2 usage, 3 refused. The last line on stdout
 # is a one-line summary.
 #
-# Overrides for tests: HPS_NETWORK_DIR.
+# Overrides for tests: HPS_NETWORK_DIR, HPS_IPTABLES.
 
 set -euo pipefail
 
@@ -52,6 +60,8 @@ set -euo pipefail
 
 VXLAN_PORT=4789
 ZERO_MAC=00:00:00:00:00:00
+: "${HPS_IPTABLES:=iptables}"
+FW_CHAIN=hps-vxlan
 
 VNI=""
 BRIDGE=""
@@ -281,8 +291,35 @@ set_mtu() {
   return 1
 }
 
+# sync_firewall: the accept rules for the peers (see Firewall above). Prints
+# the number of rules added; nothing when there is no NixOS firewall.
+sync_firewall() {
+  local added=0 p
+  if ! "$HPS_IPTABLES" -w -n -L nixos-fw > /dev/null 2>&1; then
+    log "no nixos-fw chain: no firewall rules needed"
+    echo 0
+    return 0
+  fi
+  if ! "$HPS_IPTABLES" -w -n -L "$FW_CHAIN" > /dev/null 2>&1; then
+    run "$HPS_IPTABLES" -w -N "$FW_CHAIN" >&2 || fail "could not create chain $FW_CHAIN"
+  fi
+  if ! "$HPS_IPTABLES" -w -C nixos-fw -p udp --dport "$VXLAN_PORT" -j "$FW_CHAIN" 2> /dev/null; then
+    run "$HPS_IPTABLES" -w -I nixos-fw 1 -p udp --dport "$VXLAN_PORT" -j "$FW_CHAIN" >&2 \
+      || fail "could not hook $FW_CHAIN into nixos-fw"
+    added=$((added + 1))
+  fi
+  for p in "${PEERS[@]}"; do
+    if ! "$HPS_IPTABLES" -w -C "$FW_CHAIN" -s "$p/32" -d "$LOCAL/32" -p udp --dport "$VXLAN_PORT" -j nixos-fw-accept 2> /dev/null; then
+      run "$HPS_IPTABLES" -w -A "$FW_CHAIN" -s "$p/32" -d "$LOCAL/32" -p udp --dport "$VXLAN_PORT" -j nixos-fw-accept >&2 \
+        || fail "could not accept VXLAN from $p"
+      added=$((added + 1))
+    fi
+  done
+  echo "$added"
+}
+
 main() {
-  local vx_state br_state what=unchanged fdb_changed
+  local vx_state br_state what=unchanged fdb_changed fw_added
   parse_args "$@"
   check_local
   vx_state=$(check_vxlan)
@@ -311,6 +348,8 @@ main() {
   if set_mtu "$BRIDGE" && [[ "$what" == unchanged ]]; then what=updated; fi
   fdb_changed=$(sync_fdb)
   if (( fdb_changed > 0 )) && [[ "$what" == unchanged ]]; then what=updated; fi
+  fw_added=$(sync_firewall)
+  if (( fw_added > 0 )) && [[ "$what" == unchanged ]]; then what=updated; fi
   if ! link_is_up "$VX"; then
     run ip link set dev "$VX" up || fail "could not bring $VX up"
     [[ "$what" != unchanged ]] || what=updated

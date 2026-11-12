@@ -126,6 +126,24 @@ SHIM
 #!/usr/bin/env bash
 echo "networkctl $*" >> "$SHIM_LOG"
 SHIM
+  # iptables: chains as files under $T/ipt/<chain> (one rule per line);
+  # nixos-fw exists unless NO_FW is set.
+  mkdir -p "$T/ipt"
+  [[ -n "${NO_FW:-}" ]] || : > "$T/ipt/nixos-fw"
+  cat > "$T/bin/iptables" <<'SHIM'
+#!/usr/bin/env bash
+echo "iptables $*" >> "$SHIM_LOG"
+[[ "$1" == -w ]] && shift
+op="$1"; chain="$2"; shift 2
+case "$op" in
+  -n) [[ -f "$T/ipt/$1" ]] ;;
+  -N) : > "$T/ipt/$chain" ;;
+  -C) [[ -f "$T/ipt/$chain" ]] && grep -qxF -- "$*" "$T/ipt/$chain" ;;
+  -A) echo "$*" >> "$T/ipt/$chain" ;;
+  -I) shift; { echo "$*"; cat "$T/ipt/$chain"; } > "$T/ipt/$chain.new" && mv "$T/ipt/$chain.new" "$T/ipt/$chain" ;;
+  *) exit 2 ;;
+esac
+SHIM
   chmod +x "$T"/bin/*
 }
 
@@ -337,4 +355,28 @@ ARGS=(1100 br-client --local 10.11.2.12 --peer 10.11.2.13 --peer 10.11.2.14 --pe
   grep -q '^+ bridge fdb append 00:00:00:00:00:00 dev vxlan1100 dst 10.11.2.15' "$T/err"
   grep -q '^+ ip link set dev vxlan1100 master br-client' "$T/err"
   grep -q "^\[net-vxlan-ensure\] + write $T/net/05-hps-br-client.network" "$T/err"
+}
+
+@test "firewall: VXLAN from each peer to the local address is accepted, once" {
+  run "$SCRIPT" 1100 br-client --local 10.11.2.12 --peer 10.11.2.13 --peer 10.11.2.14 --mtu 8950
+  [ "$status" -eq 0 ]
+  grep -qxF -- '-p udp --dport 4789 -j hps-vxlan' "$T/ipt/nixos-fw"
+  grep -qxF -- '-s 10.11.2.13/32 -d 10.11.2.12/32 -p udp --dport 4789 -j nixos-fw-accept' "$T/ipt/hps-vxlan"
+  grep -qxF -- '-s 10.11.2.14/32 -d 10.11.2.12/32 -p udp --dport 4789 -j nixos-fw-accept' "$T/ipt/hps-vxlan"
+  run "$SCRIPT" 1100 br-client --local 10.11.2.12 --peer 10.11.2.13 --peer 10.11.2.14 --mtu 8950
+  [ "$status" -eq 0 ]
+  [[ "$output" == *": unchanged" ]]
+  [ "$(wc -l < "$T/ipt/hps-vxlan")" -eq 2 ]
+  [ "$(grep -c hps-vxlan "$T/ipt/nixos-fw")" -eq 1 ]
+}
+
+@test "firewall: a new peer is added; without nixos-fw nothing is touched" {
+  "$SCRIPT" 1100 br-client --local 10.11.2.12 --peer 10.11.2.13 --mtu 8950
+  run "$SCRIPT" 1100 br-client --local 10.11.2.12 --peer 10.11.2.13 --peer 10.11.2.15 --mtu 8950
+  [ "$status" -eq 0 ]
+  grep -qxF -- '-s 10.11.2.15/32 -d 10.11.2.12/32 -p udp --dport 4789 -j nixos-fw-accept' "$T/ipt/hps-vxlan"
+  rm -rf "$T/ipt"; mkdir -p "$T/ipt"
+  run "$SCRIPT" 1101 br-client2 --local 10.11.2.12 --peer 10.11.2.13 --mtu 8950
+  [ "$status" -eq 0 ]
+  [ ! -e "$T/ipt/hps-vxlan" ]
 }
