@@ -82,7 +82,7 @@ check_args() {
   ips=$(cmdline_value hps.ips || true)
   [[ -n "$ips" ]] || refuse "no hps.ips= on the kernel command line: the IPS address is unknown"
   [[ "$host" == "$ips" ]] || refuse "the URL host '$host' is not this node's IPS ($ips)"
-  run findmnt -n -o SOURCE --mountpoint "$CONTAINERS" > /dev/null 2>&1 \
+  run findmnt -N 1 -n -o SOURCE --mountpoint "$CONTAINERS" > /dev/null 2>&1 \
     || refuse "$CONTAINERS is not mounted (the CNH disk): run cnh-disk-prepare first; images are not loaded into RAM"
 }
 

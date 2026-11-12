@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 #
-# CS-3.11: cnh-disk-prepare (format a blank device once, mount it) and the
-# boot-time hps-cnh-mount (mount by label, never format).
+# CS-3.11: cnh-disk-prepare (format a blank device once, then the mounts
+# through hps-cnh-mount.service: IPS-34 item 11, the executor's private mount
+# namespace) and the boot-time hps-cnh-mount (mount by label, never format).
 
 bats_require_minimum_version 1.5.0
 load p2_30_helpers
@@ -19,30 +20,71 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
-@test "a blank device is formatted ext4 labelled hps-cnh, mounted, and the IPS state bind-mounted" {
+@test "a blank device is formatted ext4 labelled hps-cnh, then hps-cnh-mount.service mounts it and the IPS state" {
   p3_171_disk vdb
   run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 0 ]
   [ "${lines[-1]}" = "CNH-DISK $HPS_DEV/vdb formatted=yes containers=$C ips=$I" ]
+  [[ "$output" == *"mounted $HPS_DEV/vdb at $C and $I"* ]]
   grep -qxF "mkfs.ext4 -q -L hps-cnh -m 0 -- $HPS_DEV/vdb" "$SHIM_LOG"
+  grep -qxF "systemctl restart hps-cnh-mount.service" "$SHIM_LOG"
+  grep -qxF "systemctl is-active --quiet hps-cnh-mount.service" "$SHIM_LOG"
+  # the unit's mounts (the shim runs hps-cnh-mount.sh), never the script's own
   grep -qxF "mount -t ext4 -o noatime -- $HPS_DEV/vdb $C" "$SHIM_LOG"
   grep -qxF "mount --bind -- $C/hps-ips $I" "$SHIM_LOG"
+  run ! grep -qE '^[[:space:]]*(run )?mount ' "$S/cnh-disk-prepare"
   [ "$(stat -c %a "$C/hps-ips")" = 700 ]
-  # probe, mkfs, probe again, then the mounts
-  [ "$(awk '{print $1}' "$SHIM_LOG" | grep -E '^(blkid|mkfs.ext4|mount)$' | paste -sd' ' -)" = "blkid mkfs.ext4 blkid mount mount" ]
+  # probe, mkfs, probe again, the unit (its two blkid and two mounts), then the checks
+  [ "$(awk '{print $1}' "$SHIM_LOG" | grep -E '^(blkid|mkfs.ext4|mount|systemctl)$' | paste -sd' ' -)" = "blkid mkfs.ext4 blkid systemctl blkid blkid mount mount systemctl" ]
+}
+
+@test "the mount table read is PID 1's (findmnt -N 1): the script's own is a private copy under the executor" {
+  p3_171_disk vdb
+  run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
+  [ "$status" -eq 0 ]
+  grep -qxF "findmnt -N 1 -n -o SOURCE --mountpoint $C" "$SHIM_LOG"
+  grep -qxF "findmnt -N 1 -n -o SOURCE --mountpoint $I" "$SHIM_LOG"
+  # (hps-cnh-mount.sh, a service in the host's namespace, keeps findmnt's own view)
+  # the sibling scripts that need the disk read the same table
+  local f
+  for f in cnh-disk-prepare cnh-ips-bootstrap cnh-image-load cnh-disk-grow cnh-ips-cleanup cnh-ips-run cnh-ips-cluster-bootstrap; do
+    grep -q 'findmnt -N 1 -n -o SOURCE --mountpoint' "$S/$f"
+    run ! grep -q 'findmnt -n -o SOURCE' "$S/$f"
+  done
+}
+
+@test "the unit failing, or active without the mounts, fails the run (1) and names the unit" {
+  p3_171_disk vdb
+  p3_171_disk vdc
+  echo "$HPS_DEV/vdc" > "$STATE/labelled"  # a second disk already carries the label
+  run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"2 disks are labelled hps-cnh"* ]]
+  [[ "$output" == *"hps-cnh-mount.service failed: journalctl -u hps-cnh-mount.service"* ]]
+  [[ "${lines[-1]}" != CNH-DISK* ]]
+  rm -f "$STATE/labelled" "$STATE/sig.vdb"
+  FAKE_CNH_MOUNT_RC=0 run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$C is not mounted in the host's mount table after hps-cnh-mount.service ran"* ]]
+  rm -f "$STATE/sig.vdb"
+  FAKE_CNH_MOUNT_RC=0 FAKE_ACTIVE_RC=3 run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"hps-cnh-mount.service is not active after its restart"* ]]
 }
 
 @test "a device already labelled hps-cnh is mounted and never formatted" {
   p3_171_disk vdb
   printf 'LABEL=hps-cnh\nTYPE=ext4\n' > "$STATE/sig.vdb"
+  echo "$HPS_DEV/vdb" > "$STATE/labelled"
   run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 0 ]
   [[ "${lines[-1]}" == *"formatted=no"* ]]
   run ! grep -q '^mkfs' "$SHIM_LOG"
+  grep -qxF "systemctl restart hps-cnh-mount.service" "$SHIM_LOG"
   grep -q "^mount -t ext4" "$SHIM_LOG"
 }
 
-@test "idempotent: a second run on the prepared, mounted disk changes nothing" {
+@test "idempotent: a second run on the prepared, mounted disk changes nothing and leaves the unit alone" {
   p3_171_disk vdb
   run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 0 ]
@@ -50,7 +92,8 @@ teardown() {
   run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 0 ]
   [[ "${lines[-1]}" == *"formatted=no"* ]]
-  run ! grep -qE '^(mkfs|mount)' "$SHIM_LOG"
+  [[ "$output" == *"hps-cnh-mount.service not restarted"* ]]
+  run ! grep -qE '^(mkfs|mount|systemctl)' "$SHIM_LOG"
 }
 
 @test "any other signature is refused (3) and nothing is written or mounted" {
@@ -66,7 +109,7 @@ teardown() {
   run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 3 ]
   [[ "$output" == *"ambivalent"* ]]
-  run ! grep -qE '^(mkfs|mount)' "$SHIM_LOG"
+  run ! grep -qE '^(mkfs|mount|systemctl)' "$SHIM_LOG"
 }
 
 @test "a blkid error is a failure (1), never a format" {
@@ -84,7 +127,7 @@ teardown() {
   p3_171_disk md/cnh0
   p3_171_disk disk/by-id/virtio-hpscnh01
   for d in vdb sdc md/cnh0 disk/by-id/virtio-hpscnh01; do
-    rm -rf "$STATE/mounts" "${HPS_CNH_ROOT:?}/var"
+    rm -rf "$STATE/mounts" "$STATE/labelled" "${HPS_CNH_ROOT:?}/var"
     run bash "$S/cnh-disk-prepare" "$HPS_DEV/$d"
     [ "$status" -eq 0 ]
   done
@@ -130,7 +173,7 @@ teardown() {
   p3_171_disk vdb
   FAKE_MKFS_RC=1 run bash "$S/cnh-disk-prepare" "$HPS_DEV/vdb"
   [ "$status" -eq 1 ]
-  run ! grep -q '^mount' "$SHIM_LOG"
+  run ! grep -qE '^(mount|systemctl)' "$SHIM_LOG"
 }
 
 @test "usage errors exit 2" {

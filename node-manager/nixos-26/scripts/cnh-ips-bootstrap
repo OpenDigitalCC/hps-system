@@ -31,6 +31,11 @@
 # ...; urls to a plain relative path. Anything else refuses the whole manifest
 # before the first download.
 #
+# /var/lib/hps-ips must be mounted (the CNH disk), read from PID 1's mount
+# table (findmnt -N 1): under the ctrl-exec executor this script's own table is
+# a private copy, which is why cnh-disk-prepare mounts through
+# hps-cnh-mount.service (its header, IPS-34 item 11).
+#
 # Before the first download the free space is checked: when the filesystem
 # has less than the bytes still to fetch plus a margin (10% of the disk or 1 GiB,
 # whichever is larger) the run is refused (exit 3) with both numbers, and
@@ -111,7 +116,7 @@ check_args() {
   ips=$(cmdline_value hps.ips || true)
   [[ -n "$ips" ]] || refuse "no hps.ips= on the kernel command line: the IPS address is unknown"
   [[ "$host" == "$ips" ]] || refuse "the base host '$host' is not this node's IPS ($ips)"
-  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+  run findmnt -N 1 -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
     || refuse "$IPSDIR is not mounted (the CNH disk): run cnh-disk-prepare first"
 }
 

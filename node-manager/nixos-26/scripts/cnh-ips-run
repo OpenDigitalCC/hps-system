@@ -144,7 +144,7 @@ check_address() {
 }
 
 check_state() {
-  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+  run findmnt -N 1 -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
     || refuse "$IPSDIR is not mounted (the CNH disk): run cnh-disk-prepare first"
   [[ -d "$IPSDIR/srv" && -f "$IPSDIR/hps-system/scripts/run-hps.sh" ]] \
     || refuse "$IPSDIR holds no IPS state (srv/ and hps-system/): run cnh-ips-bootstrap first"

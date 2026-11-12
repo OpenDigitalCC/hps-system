@@ -12,6 +12,47 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## IPS-34 drill findings, second pass: vms in one call, CNH mounts through the unit (2026-11-12)
+
+Items 6 (again) and 11 of IPS-34, from s2 and s3 on 2026-11-12.
+
+- `check_vms` runs `virsh domstats --nowait` once per run, with 8 s of
+  `nagios-check`'s 10 s, and takes its rates from the sample the previous run
+  saved in `/run/hps/check_vms.prev` (the time and one line per guest, written
+  atomically). After 601b5b7 each of its two calls had 4 s, which a nested
+  libvirtd under I/O load could not meet: "VMS UNKNOWN - virsh domstats timed
+  out after 4s" on tch-001/002/003 of s2 (18:28-18:37 UTC) with one running
+  guest each while other guests were being created on the same hosts. The
+  first run, a saved sample older than 15 minutes or one with no running guest
+  in it gives the counts and levels only, with `rates: no previous sample` /
+  `previous sample too old` / `no guest in the previous sample` in the text,
+  OK; a guest started since the previous run gets levels only; a counter that
+  went backwards counts as 0. A slow call is still UNKNOWN, "timed out after
+  8s". Labels and the output format are unchanged; the `-i` option is gone (no
+  interval). Tests: `test_p3_181_usage_checks.bats` (first run, second run,
+  stale, empty, timeout, unwritable state).
+- the mounts `cnh-disk-prepare` makes survive it: cause found in ctrl-exec's
+  executor (`src/ctrl-exec-executor.c`: every action runs after
+  `unshare(CLONE_NEWNS)` and `mount(/, MS_REC | MS_PRIVATE)`, a private copy
+  of the host's mount table that ends with the script), so on s2 and s3 stage A
+  the prepare reported both mounts and `cnh-ips-bootstrap`, a second later,
+  refused "/var/lib/hps-ips is not mounted", until a reboot let
+  `hps-cnh-mount.service` mount the disk. Now `cnh-disk-prepare` formats (or
+  finds the labelled filesystem) and restarts `hps-cnh-mount.service`
+  (synchronous; `restart`, as the unit ran at boot and stays active with no
+  disk), then checks `systemctl is-active` and both mounts in PID 1's mount
+  table (`findmnt -N 1`), exit 1 with the unit named when either is missing;
+  a prepared and mounted disk leaves the unit alone. Every CNH script that
+  needs the disk (`cnh-ips-bootstrap`, `cnh-image-load`, `cnh-disk-grow`,
+  `cnh-ips-cleanup`, `cnh-ips-run`, `cnh-ips-cluster-bootstrap`) reads PID 1's
+  table for the same reason. The script headers and `docs/CONTAINER-HOST.md`
+  say why. Tests: `test_p3_171_cnh_disk_prepare.bats` (the unit's mounts, the
+  table read, the unit failing or mounting nothing, idempotent),
+  `test_p3_174_cnh_ips_bootstrap.bats`.
+- roll-out: node image (both items: `node-converged`/TCH for `check_vms`,
+  `node-cnh` for the CNH scripts); nothing on the IPS. To check on a CNH: a
+  prepare followed by a bootstrap without a reboot.
+
 ## IPS-34 drill findings: storage back, om3 after a reboot, vms, net-up race, start noise (2026-11-12)
 
 Scale test phase 4 drills on s1 (IPS stop, pulled SCH disk, SCH power-off);

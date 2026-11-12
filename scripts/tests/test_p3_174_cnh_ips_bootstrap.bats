@@ -215,9 +215,14 @@ raw_manifest() {
   run bash "$S/cnh-ips-bootstrap" "http://10.99.1.1:80" "$MSUM"
   [ "$status" -eq 0 ]
   rm -f "$STATE/mounts"
+  : > "$SHIM_LOG"
   run bash "$S/cnh-ips-bootstrap" "$BASE" "$MSUM"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"cnh-disk-prepare"* ]]
+  [[ "$output" == *"$I is not mounted (the CNH disk): run cnh-disk-prepare first"* ]]
+  # the host's mount table (PID 1's), as cnh-disk-prepare reads it: the
+  # script's own is a private copy under the executor (IPS-34 item 11)
+  grep -qxF "findmnt -N 1 -n -o SOURCE --mountpoint $I" "$SHIM_LOG"
+  run ! grep -q '^curl' "$SHIM_LOG"
 }
 
 @test "usage errors exit 2" {

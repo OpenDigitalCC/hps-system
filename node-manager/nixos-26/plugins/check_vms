@@ -5,31 +5,43 @@
 # Run by nagios-check (ctrl-exec) on compute nodes. Runs
 #   virsh -c qemu:///system domstats --raw --list-running --nowait --cpu-total
 #         --balloon --vcpu --block --interface
-# twice, INTERVAL seconds apart, and reports per running guest (name lower-cased,
-# characters outside [a-z0-9_-] become "_"):
-#   <vm>_cpu_pct   cpu.time delta / interval, in %; 100 is one full vCPU, so a
-#                  guest with several vCPUs can exceed 100
+# ONCE per run and reports per running guest (name lower-cased, characters
+# outside [a-z0-9_-] become "_"):
 #   <vm>_vcpus     vcpu.current
 #   <vm>_rss       balloon.rss in bytes (host memory the guest process uses)
 #   <vm>_mem       balloon.current in bytes (memory given to the guest)
+# and, against the sample the previous run saved (STATE, below):
+#   <vm>_cpu_pct   cpu.time delta / the time between the two runs, in %; 100 is
+#                  one full vCPU, so a guest with several vCPUs can exceed 100
 #   <vm>_rd_Bps <vm>_wr_Bps   block.N.rd.bytes / wr.bytes summed over its disks
 #   <vm>_rx_Bps <vm>_tx_Bps   net.N.rx.bytes / tx.bytes summed over its NICs
 # plus vms=<n>. A usage check: always OK when virsh answers; no running guest is
-# OK. A guest present in only one sample (started or stopped meanwhile) is left
-# out.
+# OK.
+#
+# One call, not two: a nested libvirtd under I/O load (guests being created on
+# the same host) could not answer twice inside nagios-check's 10 s budget
+# (IPS-34 item 6: "timed out after 4s" on every TCH while one guest ran). The
+# single call gets LIMIT seconds (8); a slower one is UNKNOWN "virsh domstats
+# timed out after 8s". The sample (the time and one line per guest) is saved
+# in STATE, written atomically, and the next run takes its rates from it. The
+# first run, a sample older than MAX_AGE seconds (900, no monitor for a quarter
+# of an hour: a reboot or a pause), or one no running guest appears in, gives
+# the counts and levels only and says so in the text: "rates: no previous
+# sample" / "previous sample too old" / "no guest in the previous sample". A
+# guest absent from the previous sample (started since) gets its levels only; a
+# counter that went backwards (the guest was restarted under the same name)
+# counts as 0.
 #
 # --nowait: libvirtd does not wait for a guest's state-change lock (held, for
 # example, by an earlier domstats it is still answering for a caller that gave
 # up); it leaves out the values that need the lock. A label whose value a
-# sample lacks is left out for that guest (rates need both samples, the
-# vcpus/rss/mem levels the second). Each virsh call gets (9 - INTERVAL) / 2
-# seconds, so both calls and the interval fit inside nagios-check's 10 s; a
-# call that takes longer is "virsh domstats timed out after Ns".
+# sample lacks is left out for that guest (a rate needs both samples).
 # Output: "VMS OK - 2 running VMs (rss 4.0 GiB) | vms=2 <vm>_cpu_pct=..% ..."
 #
-# Usage: check_vms [-i SECONDS]      (1 to 5, default 1)
+# Usage: check_vms          (no options)
 # Environment (tests): HPS_VIRSH (the virsh command, default virsh),
-#   HPS_SLEEP (default sleep).
+#   HPS_VMS_STATE (default /run/hps/check_vms.prev), HPS_NOW (epoch seconds,
+#   default the clock).
 # Exit: 0 OK, 3 UNKNOWN.
 
 set -uo pipefail
@@ -37,32 +49,27 @@ set -uo pipefail
 # @HPS_PATH@
 
 VIRSH=${HPS_VIRSH:-virsh}
-SLEEP=${HPS_SLEEP:-sleep}
-interval=1
+STATE=${HPS_VMS_STATE:-/run/hps/check_vms.prev}
+NOW=${HPS_NOW:-$EPOCHREALTIME}
+LIMIT=8
+MAX_AGE=900
 
 unknown() {
   echo "VMS UNKNOWN - $1"
   exit 3
 }
 
-while getopts "i:" opt; do
-  case $opt in
-    i) interval=$OPTARG ;;
-    *) unknown "usage: check_vms [-i SECONDS]" ;;
-  esac
-done
-[[ $interval =~ ^[1-5]$ ]] || unknown "-i must be 1 to 5"
-limit=$(( (9 - interval) / 2 ))
+[[ $# -eq 0 ]] || unknown "usage: check_vms (no options)"
 
 # One line per guest: name cpu_ns vcpus rss_kib mem_kib rd wr rx tx, "-" for a
 # value the sample did not carry. On failure: the reason, and return 1.
 sample() {
   local raw rc
-  raw=$(timeout "$limit" "$VIRSH" -c qemu:///system domstats --raw --list-running \
+  raw=$(timeout "$LIMIT" "$VIRSH" -c qemu:///system domstats --raw --list-running \
     --nowait --cpu-total --balloon --vcpu --block --interface 2>&1)
   rc=$?
   if (( rc == 124 )); then
-    echo "timed out after ${limit}s"
+    echo "timed out after ${LIMIT}s"
     return 1
   fi
   if (( rc != 0 )); then
@@ -95,35 +102,59 @@ sample() {
   END { flush() }'
 }
 
-a=$(sample) || unknown "virsh domstats ${a//$'\n'/ }"
-if [[ -z $a ]]; then
+# The previous sample: "ts=<epoch>" then the guest lines. Missing or malformed
+# reads as empty; the time check is done in the report.
+previous() {
+  [[ -r $STATE ]] || return 0
+  cat -- "$STATE"
+}
+
+# save <sample>: the sample for the next run, in place atomically. A state
+# directory that cannot be written costs the rates, never the check.
+save() {
+  local tmp="$STATE.tmp.$$"
+  mkdir -p -- "${STATE%/*}" 2> /dev/null
+  printf 'ts=%s\n%s' "$NOW" "${1:+$1$'\n'}" 2> /dev/null > "$tmp" || return 0
+  mv -f -- "$tmp" "$STATE" 2> /dev/null
+}
+
+b=$(sample) || unknown "virsh domstats ${b//$'\n'/ }"
+a=$(previous)
+save "$b"
+if [[ -z $b ]]; then
   echo "VMS OK - no running VMs | vms=0"
   exit 0
 fi
-"$SLEEP" "$interval"
-b=$(sample) || unknown "virsh domstats ${b//$'\n'/ }"
 
-awk -v a="$a" -v b="$b" -v iv="$interval" '
+awk -v a="$a" -v b="$b" -v now="$NOW" -v max_age="$MAX_AGE" '
 function level(lbl, val, fmt) { if (val != "-") perf = perf sprintf(" %s_" lbl "=" fmt, name, val) }
 function delta(i) { return y[i] > x[i] ? y[i] - x[i] : 0 }
 function rate(lbl, i) { if (x[i] != "-" && y[i] != "-") perf = perf sprintf(" %s_%s=%.0f", name, lbl, delta(i) / iv) }
 BEGIN {
   na = split(a, la, "\n"); nb = split(b, lb, "\n")
-  for (k = 1; k <= nb; k++) { split(lb[k], y, " "); later[y[1]] = lb[k] }
-  perf = ""; n = 0; rss = 0
-  for (k = 1; k <= na; k++) {
-    split(la[k], x, " ")
-    if (!(x[1] in later)) continue
-    split(later[x[1]], y, " ")
-    name = tolower(x[1]); gsub(/[^a-z0-9_-]/, "_", name)
+  why = "no previous sample"; iv = 0
+  if (na > 0 && la[1] ~ /^ts=[0-9.]+$/) {
+    ts = substr(la[1], 4) + 0; iv = now - ts
+    if (iv > max_age) { why = "previous sample too old"; iv = 0 }
+    else if (iv <= 0) { why = "previous sample not before now"; iv = 0 }
+    else why = "no guest in the previous sample"
+  }
+  if (iv > 0) for (k = 2; k <= na; k++) { split(la[k], x, " "); earlier[x[1]] = la[k] }
+  perf = ""; n = 0; rss = 0; rated = 0
+  for (k = 1; k <= nb; k++) {
+    split(lb[k], y, " ")
+    name = tolower(y[1]); gsub(/[^a-z0-9_-]/, "_", name)
     n++
-    if (x[2] != "-" && y[2] != "-") perf = perf sprintf(" %s_cpu_pct=%.1f%%", name, delta(2) / (iv * 1e9) * 100)
+    if (y[1] in earlier) {
+      split(earlier[y[1]], x, " "); rated++
+      if (x[2] != "-" && y[2] != "-") perf = perf sprintf(" %s_cpu_pct=%.1f%%", name, delta(2) / (iv * 1e9) * 100)
+    }
     level("vcpus", y[3], "%d")
     if (y[4] != "-") rss += y[4] * 1024
     level("rss", y[4] == "-" ? "-" : y[4] * 1024, "%.0fB")
     level("mem", y[5] == "-" ? "-" : y[5] * 1024, "%.0fB")
-    rate("rd_Bps", 6); rate("wr_Bps", 7); rate("rx_Bps", 8); rate("tx_Bps", 9)
+    if (y[1] in earlier) { rate("rd_Bps", 6); rate("wr_Bps", 7); rate("rx_Bps", 8); rate("tx_Bps", 9) }
   }
-  if (n == 0) { print "VMS OK - no running VMs | vms=0"; exit 0 }
-  printf "VMS OK - %d running VMs (rss %.1f GiB) | vms=%d%s\n", n, rss / 1073741824, n, perf
+  note = rated ? "" : ", rates: " why
+  printf "VMS OK - %d running VMs (rss %.1f GiB%s) | vms=%d%s\n", n, rss / 1073741824, note, n, perf
 }'

@@ -120,10 +120,13 @@ source, and says UNKNOWN only when it cannot (a missing `/proc/stat`, `zpool` or
 `virsh` failing). The one exception is optional: `check_cpu -w BUSY -c BUSY`
 applies thresholds to the busy percentage; `checks.conf` sets none.
 
-Each takes two samples of a counter one interval apart (`-i SECONDS`, 1 to 5,
-default 1) and reports the difference as a rate, so a value is the average over
-that one second, not over the tick; the log line is a snapshot. `check_zpool_io`
-asks `zpool iostat -Hp 1 2` and uses its second sample.
+`cpu`, `net`, `diskio` and `zpool_io` take two samples of a counter one
+interval apart (`-i SECONDS`, 1 to 5, default 1) and report the difference as a
+rate, so a value is the average over that one second, not over the tick; the
+log line is a snapshot. `check_zpool_io` asks `zpool iostat -Hp 1 2` and uses
+its second sample. `vms` samples once per run and rates against the sample the
+previous run saved, so its rates are averages over the monitor interval
+(below).
 
 Perf labels are lower-case `[a-z0-9_-]` (dots and other characters in interface,
 pool and guest names become `_`; the pool, disk, interface or guest name comes
@@ -144,22 +147,30 @@ first). The suffix says what the number is:
 | `net` | `NET OK - rx 1.2 Mbit/s tx 0.4 Mbit/s (3 interfaces)`; per interface `<if>_rx_Bps`, `_tx_Bps`, `_rx_pps`, `_tx_pps` and `_rx_errors`, `_tx_errors`, `_rx_dropped`, `_tx_dropped` (counter deltas, `c`). Left out: `lo`, `veth*`, `vnet*` (guest taps; see `vms`) and interfaces that are down |
 | `diskio` | `DISKIO OK - read 1.2 MB/s write 3.4 MB/s (2 disks)`; `disks`, and per whole disk (`sd*`, `vd*`, `xvd*`, `nvme<N>n<M>`; no partitions, `dm-*`, `md*`, `zd*`, `loop*`, `ram*`) `<dev>_rd_Bps`, `_wr_Bps` (sectors x 512), `_rd_iops`, `_wr_iops`, `<dev>_busy` (% of the interval with I/O in flight). A RAM node has no disk: `DISKIO OK - no disks | disks=0` |
 | `zpool_io` | `ZPOOL_IO OK - read 2.0 MB/s write 3.5 MB/s (2 pools)`; `pools`, per pool `<pool>_alloc`, `_free` (B), `_rd_iops`, `_wr_iops`, `_rd_Bps`, `_wr_Bps`. No pool: `ZPOOL_IO OK - no pools` |
-| `vms` | `VMS OK - 2 running VMs (rss 1.5 GiB)`; `vms`, per running guest `<vm>_cpu_pct` (guest CPU time / interval; 100% is one full vCPU, so it can exceed 100), `_vcpus`, `_rss` (host memory the guest process holds), `_mem` (memory given to the guest), `_rd_Bps`, `_wr_Bps` (summed over its disks), `_rx_Bps`, `_tx_Bps` (summed over its NICs). No guest: `VMS OK - no running VMs | vms=0` |
+| `vms` | `VMS OK - 2 running VMs (rss 1.5 GiB)`; `vms`, per running guest `<vm>_cpu_pct` (guest CPU time / the time since the previous run; 100% is one full vCPU, so it can exceed 100), `_vcpus`, `_rss` (host memory the guest process holds), `_mem` (memory given to the guest), `_rd_Bps`, `_wr_Bps` (summed over its disks), `_rx_Bps`, `_tx_Bps` (summed over its NICs). No guest: `VMS OK - no running VMs | vms=0` |
 
-`vms` asks `virsh domstats --nowait`: libvirtd does not wait for a guest's
-state-change lock, which an earlier `domstats` it is still answering can hold on
-a slow (nested) host, and leaves out the values that need it. A label whose
-value a sample lacks is left out for that guest that time (rates need both
-samples, `_vcpus`, `_rss` and `_mem` the second). Each `virsh` call gets
-(9 - interval) / 2 seconds (4 s at the default interval), so both calls and the
-interval fit inside `nagios-check`'s 10 s; a slower call is
-`VMS UNKNOWN - virsh domstats timed out after 4s`.
+`vms` asks `virsh domstats --nowait` once per run: libvirtd does not wait for a
+guest's state-change lock, which an earlier `domstats` it is still answering
+can hold on a slow (nested) host, and leaves out the values that need it. A
+label whose value a sample lacks is left out for that guest that time. The one
+call gets 8 s of `nagios-check`'s 10 s; a slower call is
+`VMS UNKNOWN - virsh domstats timed out after 8s`. The sample (time and one line
+per guest) is saved in `/run/hps/check_vms.prev`, written atomically, and the
+next run takes the rates from it. The first run, a saved sample older than 15
+minutes (a reboot or a monitor pause) or one with no running guest in it gives
+the counts and levels only and says so: `(rss 1.5 GiB, rates: no previous
+sample)`, `previous sample too old`, `no guest in the previous sample`. A guest
+started since the previous run gets its levels only; a counter that went
+backwards (the guest was restarted under the same name) counts as 0. Before
+(IPS-34 item 6) two calls of (9 - interval) / 2 s each timed out on every
+nested TCH while guests were being created on the same host.
 
 Time budget: `nagios-check` runs the checks one after another within its 50 s
-budget, 10 s at most each. The five samplers add about 5 s to a node's run (the
-`cpu`, `net`, `diskio`, `zpool_io` and `vms` waits do not overlap), well inside
-the budget at the lab's 30 s interval, but a shorter `monitor_interval_seconds`
-or more samplers would not be. Each plugin finds its tools itself: the build
+budget, 10 s at most each. The four two-sample checks add about 4 s to a node's
+run (the `cpu`, `net`, `diskio` and `zpool_io` waits do not overlap) and `vms`
+what its one `virsh` call takes (8 s at most), well inside the budget at the
+lab's 30 s interval, but a shorter `monitor_interval_seconds` or more samplers
+would not be. Each plugin finds its tools itself: the build
 puts coreutils and awk on its `PATH` and, for `zpool_io` and `vms`, the
 absolute store path of `zpool` and `virsh` (libvirt is on compute nodes with the
 compute profile).

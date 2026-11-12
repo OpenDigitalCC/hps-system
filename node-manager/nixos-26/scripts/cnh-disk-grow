@@ -72,7 +72,7 @@ find_disk() {
 
 check_mounted() {
   local src a b
-  src=$(run findmnt -n -o SOURCE --mountpoint "$CONTAINERS" || true)
+  src=$(run findmnt -N 1 -n -o SOURCE --mountpoint "$CONTAINERS" || true)
   [[ -n "$src" ]] || refuse "$CONTAINERS is not mounted: resize2fs grows only the mounted filesystem here"
   a=$(readlink -f -- "$src")
   b=$(readlink -f -- "$DEV")

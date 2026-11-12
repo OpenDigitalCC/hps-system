@@ -17,14 +17,30 @@
 #   ext4 labelled hps-cnh already prepared: mounted, never formatted again
 #   anything else         refused (exit 3), nothing is written
 #
-# Then the filesystem is mounted at /var/lib/containers (podman's storage) and
-# its directory hps-ips is bind-mounted at /var/lib/hps-ips (the IPS state that
-# cnh-ips-bootstrap fills and cnh-ips-run serves). After a reboot the boot unit
-# hps-cnh-mount mounts the same disk by its label; it never formats.
+# Then hps-cnh-mount.service (the boot unit, profiles/container-host.nix) is
+# restarted: it finds the disk by its label and mounts it at /var/lib/containers
+# (podman's storage) with its directory hps-ips bind-mounted at /var/lib/hps-ips
+# (the IPS state that cnh-ips-bootstrap fills and cnh-ips-run serves). It never
+# formats. The restart is synchronous (oneshot: systemctl returns when its
+# script has finished); the unit must then be active and both mounts in the
+# host's mount table, else exit 1.
 #
-# Idempotent: run again on a prepared and mounted disk, it changes nothing.
-# A mount point that already holds files, or another device, is refused (the
-# state there would be hidden or mixed).
+# Why the unit mounts and this script does not (IPS-34 item 11): the ctrl-exec
+# executor runs every node script in a mount namespace of its own
+# (unshare(CLONE_NEWNS), then mount(/, MS_REC | MS_PRIVATE): ctrl-exec
+# src/ctrl-exec-executor.c), a private copy of the host's mount table. A mount
+# this script made lived in that copy and vanished with the script: on s2 and
+# s3 the prepare reported both mounts and cnh-ips-bootstrap, a second later,
+# saw /var/lib/hps-ips unmounted, until a reboot let hps-cnh-mount mount the
+# disk. systemctl asks PID 1, which mounts in the host's namespace, where every
+# later script's copy starts from. For the same reason a mount the unit makes
+# while this script runs never appears in this script's own table, so the
+# checks read PID 1's (findmnt -N 1), never findmnt's default view.
+#
+# Idempotent: run again on a prepared and mounted disk, it changes nothing (the
+# unit is not restarted; a restart would also restart hps-ips.service, which
+# Requires it). A mount point that already holds files, or another device, is
+# refused (the state there would be hidden or mixed).
 #
 # Last line: CNH-DISK <device> formatted=<yes|no> containers=<dir> ips=<dir>
 # Exit: 0 ok, 2 usage, 3 refused, 1 a command failed.
@@ -38,6 +54,7 @@ set -euo pipefail
 : "${HPS_CNH_ROOT:=}"
 
 LABEL=hps-cnh
+UNIT=hps-cnh-mount.service
 DEV=""
 CONTAINERS="$HPS_CNH_ROOT/var/lib/containers"
 IPSDIR="$HPS_CNH_ROOT/var/lib/hps-ips"
@@ -133,10 +150,12 @@ is_prepared() {
   [[ "$SIG_TYPE" == ext4 && "$SIG_LABEL" == "$LABEL" && -z "$SIG_OTHER" ]]
 }
 
-# mounted_source <dir>: the device mounted exactly at <dir>, or nothing.
+# mounted_source <dir>: the device mounted exactly at <dir> in the host's mount
+# table (PID 1's: this script's own is a private copy, see the header), or
+# nothing.
 mounted_source() {
   local src
-  src=$(run findmnt -n -o SOURCE --mountpoint "$1" || true)
+  src=$(run findmnt -N 1 -n -o SOURCE --mountpoint "$1" || true)
   printf '%s' "$src"
 }
 
@@ -170,35 +189,38 @@ same_device() {
   [[ "$a" == "$b" ]]
 }
 
-mount_containers() {
+# mount_by_unit: both mounts through hps-cnh-mount.service, unless the host's
+# table already has them.
+mount_by_unit() {
   local src
   src=$(mounted_source "$CONTAINERS")
-  if [[ -n "$src" ]]; then
-    same_device "$src" "$DEV" || refuse "$CONTAINERS is already mounted from $src, not $DEV"
-    log "$CONTAINERS is already mounted from $DEV"
+  if [[ -n "$src" && -n "$(mounted_source "$IPSDIR")" ]]; then
+    log "$CONTAINERS is already mounted from $DEV and $IPSDIR is mounted: $UNIT not restarted"
     return 0
   fi
-  if dir_has_files "$CONTAINERS"; then
-    refuse "$CONTAINERS already holds files (container storage in RAM): they would be hidden by the mount; reboot the CNH, then run this before any container is loaded"
-  fi
-  run mkdir -p -- "$CONTAINERS"
-  run mount -t ext4 -o noatime -- "$DEV" "$CONTAINERS"
-}
-
-mount_ips_state() {
-  local src
-  run mkdir -p -- "$CONTAINERS/hps-ips"
-  run chmod 0700 -- "$CONTAINERS/hps-ips"
-  src=$(mounted_source "$IPSDIR")
-  if [[ -n "$src" ]]; then
-    log "$IPSDIR is already mounted ($src)"
-    return 0
-  fi
-  if dir_has_files "$IPSDIR"; then
-    refuse "$IPSDIR already holds files: they would be hidden by the bind mount"
-  fi
-  run mkdir -p -- "$IPSDIR"
-  run mount --bind -- "$CONTAINERS/hps-ips" "$IPSDIR"
+  log "restarting $UNIT to mount $DEV in the host's mount namespace (a mount made here would end with this script)"
+  run systemctl restart "$UNIT" || {
+    log "$UNIT failed: journalctl -u $UNIT says why (two disks labelled $LABEL, or the mount itself)"
+    exit 1
+  }
+  run systemctl is-active --quiet "$UNIT" || {
+    log "$UNIT is not active after its restart"
+    exit 1
+  }
+  src=$(mounted_source "$CONTAINERS")
+  [[ -n "$src" ]] || {
+    log "$CONTAINERS is not mounted in the host's mount table after $UNIT ran"
+    exit 1
+  }
+  same_device "$src" "$DEV" || {
+    log "$UNIT mounted $src at $CONTAINERS, not $DEV: another disk carries the label $LABEL"
+    exit 1
+  }
+  [[ -n "$(mounted_source "$IPSDIR")" ]] || {
+    log "$IPSDIR is not mounted in the host's mount table after $UNIT ran"
+    exit 1
+  }
+  log "$UNIT mounted $DEV at $CONTAINERS and $IPSDIR"
 }
 
 main() {
@@ -229,8 +251,7 @@ main() {
       exit 1
     }
   fi
-  mount_containers
-  mount_ips_state
+  mount_by_unit
   printf 'CNH-DISK %s formatted=%s containers=%s ips=%s\n' "$DEV" "$formatted" "$CONTAINERS" "$IPSDIR"
 }
 

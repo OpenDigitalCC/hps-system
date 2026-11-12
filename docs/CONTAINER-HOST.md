@@ -55,9 +55,26 @@ disk:
 `cnh-disk-prepare <device>` makes the filesystem once: only on a device with no
 signature at all (`blkid -p`: no filesystem, RAID member, ZFS label or
 partition table). A device already carrying ext4 labelled `hps-cnh` is only
-mounted. Any other signature is refused. After a reboot `hps-cnh-mount.service`
-finds the disk by its label and mounts it; it never formats, and two disks with
-the label mount nothing.
+mounted. Any other signature is refused. The mounts are always made by
+`hps-cnh-mount.service`: at boot it finds the disk by its label and mounts it,
+and `cnh-disk-prepare` restarts it (synchronously; the unit is a oneshot) after
+the format, then checks that the unit is active and both mounts are in the
+host's mount table. It never formats, and two disks with the label mount
+nothing. A prepared and mounted disk leaves the unit alone (a restart would
+also restart `hps-ips.service`, which requires it).
+
+Why the script does not mount (IPS-34 item 11, s2 and s3 on 2026-11-12): the
+ctrl-exec executor runs every node script in a mount namespace of its own
+(`unshare(CLONE_NEWNS)` then `mount(/, MS_REC | MS_PRIVATE)` in ctrl-exec's
+`src/ctrl-exec-executor.c`): a private copy of the host's mount table, taken
+when the script starts. A mount the script makes lives in that copy and ends
+with the script, so `cnh-disk-prepare` reported both mounts and
+`cnh-ips-bootstrap`, one second later, refused "`/var/lib/hps-ips` is not
+mounted", until a reboot let the unit mount the disk. `systemctl` asks PID 1,
+which mounts in the host's namespace, where every later script's copy starts
+from. The same copy never gains a mount the unit makes while the script runs,
+so every CNH script that needs the disk reads PID 1's table (`findmnt -N 1`),
+never `findmnt`'s default view of its own.
 
 ## Node scripts
 
@@ -67,7 +84,7 @@ failed.
 
 | Script | Does | Last line |
 | --- | --- | --- |
-| `cnh-disk-prepare <device>` | `/dev/vd<x>`, `/dev/sd<x>`, `/dev/md/<name>` or `/dev/disk/by-id/<id>`; ext4 `hps-cnh` on a blank device, then both mounts; idempotent | `CNH-DISK <device> formatted=<yes\|no> containers=<dir> ips=<dir>` |
+| `cnh-disk-prepare <device>` | `/dev/vd<x>`, `/dev/sd<x>`, `/dev/md/<name>` or `/dev/disk/by-id/<id>`; ext4 `hps-cnh` on a blank device, then both mounts through `hps-cnh-mount.service` (restarted, checked); idempotent | `CNH-DISK <device> formatted=<yes\|no> containers=<dir> ips=<dir>` |
 | `cnh-image-load <url> <sha256>` | fetch an OCI or docker archive over plain http from this node's IPS only (the URL host must be `hps.ips` of the kernel command line, no redirect), verify, keep it as `hps-cnh-images/<sha256>.tar`, `podman load` | `IMAGE <name> <sha256>` |
 | `cnh-ips-bootstrap <base> <manifest-sha256>` | fill `/var/lib/hps-ips` from the IPS by manifest (below); every file verified, resumable; refused (3, nothing fetched) when the disk has less free space than the files still to fetch plus a margin (10% of the disk or 1 GiB, whichever is larger) | `BOOTSTRAP <sha256> files=<n> fetched=<n> present=<n> replaced=<n>` |
 | `cnh-ips-cleanup [--dry-run]` | remove every `*.part` under `/var/lib/hps-ips` and every incomplete pin under `srv/hps-resources/nixos/` (no `SHA256SUMS`, or a profile directory without `boot.json`), except the pin `nixos/latest` names; nothing else. One line per item removed | `CLEANUP freed=<bytes> pins=<n> parts=<n> free=<bytes> dry_run=<yes\|no>` |

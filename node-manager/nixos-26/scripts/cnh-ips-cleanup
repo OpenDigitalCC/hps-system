@@ -80,7 +80,7 @@ parse_args() {
 }
 
 check_mounted() {
-  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+  run findmnt -N 1 -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
     || refuse "$IPSDIR is not mounted (the CNH disk): nothing to clean"
 }
 

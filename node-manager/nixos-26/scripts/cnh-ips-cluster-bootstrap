@@ -100,7 +100,7 @@ check_state() {
   if run systemctl is-active --quiet "$UNIT"; then
     refuse "$UNIT is running: stop it first (cnh-ips-stop), then cnh-ips-run after this"
   fi
-  run findmnt -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
+  run findmnt -N 1 -n -o SOURCE --mountpoint "$IPSDIR" > /dev/null 2>&1 \
     || refuse "$IPSDIR is not mounted (the CNH disk): run cnh-disk-prepare first"
   [[ -d "$IPSDIR/srv" && -f "$IPSDIR/hps-system/scripts/cluster-bootstrap.sh" ]] \
     || refuse "$IPSDIR holds no IPS state (srv/ and hps-system/): run cnh-ips-bootstrap first"

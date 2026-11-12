@@ -6,7 +6,9 @@
 #   sig.<dev basename>   blkid -p -o export output (absent: blank device)
 #   sigrc.<dev basename> blkid -p exit status to return instead
 #   labelled             devices blkid -t LABEL=hps-cnh lists, one per line
-#   mounts               "<dir> <source>" lines (findmnt, mount)
+#                        (mkfs.ext4 appends the device it formatted)
+#   mounts               "<dir> <source>" lines (findmnt, mount; findmnt -N 1
+#                        reads the same table: the shims have one namespace)
 #   www/<url path>       what curl serves for http://<host>/<url path>
 #   partial.<file name>  N: curl writes only the first N bytes, exits 18
 #   images               image names podman image exists accepts
@@ -85,6 +87,7 @@ echo "mkfs.ext4 $*" >> "$SHIM_LOG"
 [[ "${FAKE_MKFS_RC:-0}" -ne 0 ]] && exit "$FAKE_MKFS_RC"
 dev="${@: -1}"
 printf 'DEVNAME=%s\nLABEL=hps-cnh\nUUID=0000\nTYPE=ext4\nUSAGE=filesystem\n' "$dev" > "$STATE/sig.${dev##*/}"
+echo "$dev" >> "$STATE/labelled"
 SHIM
   cat > "$TEST_DIR/bin/findmnt" <<'SHIM'
 #!/usr/bin/env bash
@@ -157,10 +160,18 @@ case "$1 ${2:-}" in
 esac
 exit 0
 SHIM
+  # restart hps-cnh-mount.service runs the boot script itself (the mounts then
+  # come from it, through the same shims), unless FAKE_CNH_MOUNT_RC is set: the
+  # unit "ran" with that status and mounted nothing.
   cat > "$TEST_DIR/bin/systemctl" <<'SHIM'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "$SHIM_LOG"
 [[ "$1" == is-active ]] && exit "${FAKE_ACTIVE_RC:-0}"
+if [[ "$1" == restart && "$2" == hps-cnh-mount.service ]]; then
+  [[ -n "${FAKE_CNH_MOUNT_RC:-}" ]] && exit "$FAKE_CNH_MOUNT_RC"
+  bash "$B/hps-cnh-mount.sh"
+  exit $?
+fi
 exit 0
 SHIM
   cat > "$TEST_DIR/bin/ip" <<'SHIM'

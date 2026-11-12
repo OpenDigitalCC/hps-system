@@ -1,11 +1,12 @@
 #!/usr/bin/env bats
 #
 # Usage checks (docs/MONITORING.md): check_cpu, check_net, check_diskio,
-# check_zpool_io, check_vms. Each plugin samples twice; the tests give it a fake
-# /proc and /sys under $TEST_DIR/root and a sleep shim that, instead of waiting,
-# copies $TEST_DIR/second over the tree, so the first read sees the "before" and
-# the second the "after" state. zpool and virsh are shims that check their
-# arguments. Plus the hps-monitor.nix wiring.
+# check_zpool_io, check_vms. The first four sample twice; the tests give them a
+# fake /proc and /sys under $TEST_DIR/root and a sleep shim that, instead of
+# waiting, copies $TEST_DIR/second over the tree, so the first read sees the
+# "before" and the second the "after" state. check_vms samples once per run and
+# keeps the sample for the next (its own section). zpool and virsh are shims
+# that check their arguments. Plus the hps-monitor.nix wiring.
 
 bats_require_minimum_version 1.5.0
 
@@ -202,15 +203,22 @@ zpool_shim() {
 }
 
 # ---- check_vms -------------------------------------------------------------
+#
+# One virsh call per run; the rates come from the sample the previous run saved
+# in $HPS_VMS_STATE. The shim serves $TEST_DIR/root/virsh.out and counts its
+# calls in $TEST_DIR/virsh.calls; HPS_NOW fixes the clock.
 
 virsh_shim() {
   cat > "$TEST_DIR/bin/virsh" <<EOT
 #!/bin/sh
+echo "\$*" >> "$TEST_DIR/virsh.calls"
 [ "\$*" = "-c qemu:///system domstats --raw --list-running --nowait --cpu-total --balloon --vcpu --block --interface" ] || { echo "bad args: \$*" >&2; exit 2; }
 cat "$TEST_DIR/root/virsh.out"
 EOT
   chmod +x "$TEST_DIR/bin/virsh"
   export HPS_VIRSH="$TEST_DIR/bin/virsh"
+  export HPS_VMS_STATE="$TEST_DIR/run/hps/check_vms.prev"
+  export HPS_NOW=1000
 }
 
 # dom NAME CPU_NS RSS_KIB MEM_KIB VCPUS RD0 WR0 RD1 WR1 RX TX
@@ -242,38 +250,86 @@ Domain: '$1'
 EOT
 }
 
-@test "check_vms: per guest cpu %, memory, block and net rates, names sanitised, late guests ignored" {
+@test "check_vms: the first run reports levels only, one virsh call, and saves the sample" {
   virsh_shim
   { dom web-1 10000000000 1048576 2097152 2 1000 2000 500 0 10000 20000; dom Db.2 1000000000 524288 1048576 1 0 0 0 0 0 0; } > "$TEST_DIR/root/virsh.out"
-  { dom web-1 11500000000 1048576 2097152 2 3000 5000 1500 1000 15000 21000; dom Db.2 1250000000 524288 1048576 1 0 0 0 0 0 0; dom late 5 1 1 1 0 0 0 0 0 0; } > "$TEST_DIR/second/virsh.out"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 2 running VMs (rss 1.5 GiB) | vms=2 web-1_cpu_pct=150.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=3000 web-1_wr_Bps=4000 web-1_rx_Bps=5000 web-1_tx_Bps=1000 db_2_cpu_pct=25.0% db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B db_2_rd_Bps=0 db_2_wr_Bps=0 db_2_rx_Bps=0 db_2_tx_Bps=0" ]
+  [ "$output" = "VMS OK - 2 running VMs (rss 1.5 GiB, rates: no previous sample) | vms=2 web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B" ]
+  [ "$(wc -l < "$TEST_DIR/virsh.calls")" -eq 1 ]
+  [ "$(cat "$HPS_VMS_STATE")" = $'ts=1000\nweb-1 10000000000 2 1048576 2097152 1500 2000 10000 20000\nDb.2 1000000000 1 524288 1048576 0 0 0 0' ]
+  run ls "$TEST_DIR/run/hps"
+  [ "$output" = "check_vms.prev" ]
 }
 
-@test "check_vms: no running VMs is OK; a failing virsh is UNKNOWN" {
+@test "check_vms: the second run rates each guest against the saved sample; a guest started since gets levels only" {
+  virsh_shim
+  { dom web-1 10000000000 1048576 2097152 2 1000 2000 500 0 10000 20000; dom Db.2 1000000000 524288 1048576 1 0 0 0 0 0 0; } > "$TEST_DIR/root/virsh.out"
+  run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  { dom web-1 11500000000 1048576 2097152 2 3000 5000 1500 1000 15000 21000; dom Db.2 1250000000 524288 1048576 1 0 0 0 0 0 0; dom late 5 1 1 1 0 0 0 0 0 0; } > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1001 run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  [ "$output" = "VMS OK - 3 running VMs (rss 1.5 GiB) | vms=3 web-1_cpu_pct=150.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=3000 web-1_wr_Bps=4000 web-1_rx_Bps=5000 web-1_tx_Bps=1000 db_2_cpu_pct=25.0% db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B db_2_rd_Bps=0 db_2_wr_Bps=0 db_2_rx_Bps=0 db_2_tx_Bps=0 late_vcpus=1 late_rss=1024B late_mem=1024B" ]
+  [ "$(wc -l < "$TEST_DIR/virsh.calls")" -eq 2 ]
+  # 30 s apart (the lab's monitor interval): the same deltas, a thirtieth of the rate
+  { dom web-1 16000000000 1048576 2097152 2 3000 5000 1500 1000 15000 21000; } > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1031 run "$P/check_vms"
+  [ "$output" = "VMS OK - 1 running VMs (rss 1.0 GiB) | vms=1 web-1_cpu_pct=15.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=0 web-1_wr_Bps=0 web-1_rx_Bps=0 web-1_tx_Bps=0" ]
+  [ "$(head -n 1 "$HPS_VMS_STATE")" = "ts=1031" ]
+}
+
+@test "check_vms: a saved sample older than 15 minutes, or not before now, gives no rates; the next run does again" {
+  virsh_shim
+  dom web 1000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
+  run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  dom web 2000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1901 run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: previous sample too old) | vms=1 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
+  dom web 3000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1903 run "$P/check_vms"
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB) | vms=1 web_cpu_pct=50.0% web_vcpus=1 web_rss=1048576B web_mem=2097152B web_rd_Bps=0 web_wr_Bps=0 web_rx_Bps=0 web_tx_Bps=0" ]
+  HPS_NOW=1903 run "$P/check_vms"
+  [[ "$output" == *"rates: previous sample not before now)"* ]]
+  # a restarted guest: its counters went backwards, which counts as 0
+  dom web 5 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1904 run "$P/check_vms"
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB) | vms=1 web_cpu_pct=0.0% web_vcpus=1 web_rss=1048576B web_mem=2097152B web_rd_Bps=0 web_wr_Bps=0 web_rx_Bps=0 web_tx_Bps=0" ]
+}
+
+@test "check_vms: no running VMs is OK and saves an empty sample; a failing virsh is UNKNOWN and saves nothing" {
   virsh_shim
   : > "$TEST_DIR/root/virsh.out"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
   [ "$output" = "VMS OK - no running VMs | vms=0" ]
+  [ "$(cat "$HPS_VMS_STATE")" = "ts=1000" ]
+  dom web 1000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1001 run "$P/check_vms"
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: no guest in the previous sample) | vms=1 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
   printf '#!/bin/sh\necho "error: failed to connect to the hypervisor" >&2\nexit 1\n' > "$TEST_DIR/bin/virsh"
-  run "$P/check_vms"
+  HPS_NOW=1002 run "$P/check_vms"
   [ "$status" -eq 3 ]
   [ "$output" = "VMS UNKNOWN - virsh domstats failed: error: failed to connect to the hypervisor" ]
+  [ "$(head -n 1 "$HPS_VMS_STATE")" = "ts=1001" ]
 }
 
-@test "check_vms: a virsh call that outlives its limit is UNKNOWN 'timed out after Ns', and the limit fits nagios-check's 10 s" {
+@test "check_vms: a virsh call that outlives 8 s is UNKNOWN 'timed out after 8s' and keeps the saved sample; the limit fits nagios-check's 10 s" {
   # timeout(1) exits 124 when it kills the command; a shim that exits 124 itself
-  # looks the same to the plugin. -i 1: (9 - 1) / 2 = 4 s; -i 5: 2 s.
-  printf '#!/bin/sh\nexit 124\n' > "$TEST_DIR/bin/virsh"
-  chmod +x "$TEST_DIR/bin/virsh"
-  export HPS_VIRSH="$TEST_DIR/bin/virsh"
+  # looks the same to the plugin.
+  virsh_shim
+  dom web 1000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
   run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  printf '#!/bin/sh\nexit 124\n' > "$TEST_DIR/bin/virsh"
+  HPS_NOW=1001 run "$P/check_vms"
   [ "$status" -eq 3 ]
-  [ "$output" = "VMS UNKNOWN - virsh domstats timed out after 4s" ]
-  run "$P/check_vms" -i 5
-  [ "$output" = "VMS UNKNOWN - virsh domstats timed out after 2s" ]
+  [ "$output" = "VMS UNKNOWN - virsh domstats timed out after 8s" ]
+  [ "$(head -n 1 "$HPS_VMS_STATE")" = "ts=1000" ]
+  grep -qxF 'LIMIT=8' "$P/check_vms"
+  grep -qF 'timeout "$LIMIT" "$VIRSH"' "$P/check_vms"
   printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/bin/virsh"
   run "$P/check_vms"
   [ "$output" = "VMS UNKNOWN - virsh domstats failed: exit 1" ]
@@ -283,11 +339,28 @@ EOT
   virsh_shim
   # first sample: libvirtd skipped balloon and block (state-change lock busy)
   printf "Domain: 'web'\n  cpu.time=1000000000\n  vcpu.current=2\n  net.count=1\n  net.0.rx.bytes=100\n  net.0.tx.bytes=100\n\n" > "$TEST_DIR/root/virsh.out"
-  { dom web 1500000000 1024 2048 2 10 20 0 0 300 200; printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n"; } > "$TEST_DIR/second/virsh.out"
   printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n" >> "$TEST_DIR/root/virsh.out"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
+  [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB, rates: no previous sample) | vms=2 web_vcpus=2" ]
+  { dom web 1500000000 1024 2048 2 10 20 0 0 300 200; printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n"; } > "$TEST_DIR/root/virsh.out"
+  HPS_NOW=1001 run "$P/check_vms"
+  [ "$status" -eq 0 ]
   [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB) | vms=2 web_cpu_pct=50.0% web_vcpus=2 web_rss=1048576B web_mem=2097152B web_rx_Bps=200 web_tx_Bps=100 bare_cpu_pct=0.0% bare_rd_Bps=0 bare_wr_Bps=0 bare_rx_Bps=0 bare_tx_Bps=0" ]
+}
+
+@test "check_vms: an unwritable state directory costs the rates, never the check; options are refused" {
+  virsh_shim
+  dom web 1000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
+  mkdir -p "$TEST_DIR/run/hps"
+  chmod 0555 "$TEST_DIR/run/hps"
+  run "$P/check_vms"
+  [ "$status" -eq 0 ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: no previous sample) | vms=1 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
+  chmod 0755 "$TEST_DIR/run/hps"
+  run "$P/check_vms" -i 1
+  [ "$status" -eq 3 ]
+  [ "$output" = "VMS UNKNOWN - usage: check_vms (no options)" ]
 }
 
 # ---- all plugins -----------------------------------------------------------
@@ -301,6 +374,7 @@ EOT
     grep -qxF '# @HPS_PATH@' "$P/$p"
     run "$P/$p" -i 6
     [ "$status" -eq 3 ]
+    [ "$p" = check_vms ] && continue  # one sample per run: no interval (above)
     [[ "$output" == *"UNKNOWN - -i must be 1 to 5" ]]
     run "$P/$p" -i 0
     [ "$status" -eq 3 ]
