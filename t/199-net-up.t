@@ -221,4 +221,37 @@ for my $type ('TCH', 'SCH,TCH') {
     like($out, qr/exited 3: \[net-vlan-address\] refused: eth0\.113 is a member/, 'CLI shows the node\'s reason');
 }
 
+# --- net-status: the node's read-only view, one call, output as the node gave it
+{
+    my ($n, $f) = s1(type => 'TCH');
+    my $r = $n->net_status;
+    is($r->{rc}, 0, 'net-status: 0');
+    is_deeply(calls($f), ['net-status'], 'net-status: one call, no arguments');
+    is($r->{stdout}, "out of net-status\n", 'net-status: the node output kept');
+}
+{
+    my $f   = StorageFixture::setup();
+    my $tmp = tempdir(CLEANUP => 1);
+    StorageFixture::write_hps_run_shim("$tmp/hps-run");
+    local $ENV{HPS_CONFIG_BASE}     = $f->{base};
+    local $ENV{HPS_SYSTEM_REGISTRY} = "$f->{base}/system.db";
+    local $ENV{HPS_RUN_CMD}         = "$tmp/hps-run";
+    local $ENV{HPS_NODE_NO_SYSLOG}  = 1;
+    local $ENV{SHIM_DIR}            = $tmp;
+    my $cli = sub {
+        my @cmd = ($^X, "-I$Bin/../lib/perl", "$Bin/../bin/hps-node", @_);
+        my $out = qx(@cmd 2>$tmp/stderr);
+        return ($? >> 8, $out);
+    };
+    my ($rc, $out) = $cli->('net-status');
+    is($rc, 2, 'CLI net-status: no host: usage');
+    ($rc) = $cli->('net-status', 'sch-001', 'extra');
+    is($rc, 2, 'CLI net-status: two hosts: usage');
+    ($rc) = $cli->('net-status', 'nosuch');
+    is($rc, 4, 'CLI net-status: unknown host: not found');
+    ($rc, $out) = $cli->('net-status', 'sch-001');
+    is($rc, 0, 'CLI net-status: 0');
+    is($out, "node says hi\n", 'CLI net-status prints the node output');
+}
+
 done_testing;

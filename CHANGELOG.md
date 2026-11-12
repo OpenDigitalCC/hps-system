@@ -41,6 +41,14 @@ was no way to hand a guest its first-boot configuration.
 - needs a node image rebuild (the new allowlisted script) on every compute
   host that runs a seeded VM.
 
+## hps-node net-status: a host's bridges and VLANs through the operator API (2026-11-12)
+
+- new: `hps-node net-status <host>` runs the node script `net-status`
+  (read-only: bridges, VLAN sub-interfaces, members, addresses) and prints
+  its output. s1, probes on the client VXLAN reporting `peers=0/3`: the
+  operator had no way to see a node's network state. Test:
+  `t/199-net-up.t`.
+
 ## hps-workload console: a guest's serial console through the operator API (2026-11-12)
 
 The scale board must read each probe's line without a tenant network touching

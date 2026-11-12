@@ -332,6 +332,13 @@ sub _net_call ($self, $mac, $what, $n, $level = 'error') {
     return $r;
 }
 
+# net_status(): the node's read-only net-status (bridges, VLAN sub-interfaces,
+# their members and addresses) through the runner. Returns {rc, stdout, stderr}.
+sub net_status ($self) {
+    my $r = $self->{runner}->call(mac => $self->{mac}, script => 'net-status', args => [], input => undef);
+    return { rc => $r->{rc}, stdout => $r->{stdout} // '', stderr => $r->{stderr} // '' };
+}
+
 # Ping the agent until it answers or wait seconds pass (calls go ahead anyway).
 sub _await_agent ($self, $wait) {
     return 1 unless $wait > 0 && $self->{runner}->can('ping');
