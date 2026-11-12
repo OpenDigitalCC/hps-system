@@ -183,17 +183,19 @@ sub _mirror ($self, $mac, $host, $mirror, $hint) {
     my @legs = missing_legs($wd->{specs}, $st->{stdout}, $hint);
     return { outcome => 'failed', detail => "$state; every leg of $mirror is an active member: nothing to rejoin (checked again later)" }
         unless @legs;
-    my (@d, %o);
+    my (@d, %o, @done);
     for my $spec (@legs) {
         my $r = $self->_call($mac, 'mirror-rejoin', $mirror, '--leg', $spec);
         my $l = result_line($r);
         push @d, "mirror-rejoin $mirror --leg $spec exit $r->{rc}" . (length $l ? ": $l" : '');
+        push @done, "mirror-rejoin $mirror --leg $spec (re-add from bitmap)" if $r->{rc} == 0;
         # Only DIVERGED is a human decision; every other refusal (UNREADABLE
         # while the leg's target is down, ...) is retried by the backoff.
         $o{ $r->{rc} == 0 ? 'ok' : ($r->{rc} == 3 && $l =~ /\ADIVERGED /) ? 'human' : 'failed' }++;
     }
     my $outcome = $o{human} ? 'human' : $o{failed} ? 'failed' : 'healing';
-    return { outcome => $outcome, detail => "$state; " . join('; ', @d), attempted => 1 };
+    return { outcome => $outcome, detail => "$state; " . join('; ', @d), attempted => 1,
+        (@done ? (action => join('; ', @done)) : ()) };
 }
 
 # attempt($rec): the outcome {outcome, detail, attempted, by} of one heal.
@@ -223,9 +225,10 @@ sub _vdev ($self, $mac, $host, $f) {
         return { outcome => 'human', detail => "$d; " . $line, attempted => 1 };
     }
     return { outcome => 'failed', detail => $d, attempted => 1 } if $r->{rc} != 0 || !defined $vstate || $vstate ne 'ONLINE';
-    return { outcome => 'healing', detail => "$d (resilvering)", attempted => $did } if $resilver eq 'yes';
+    my @act = $did ? (action => "zpool online $pool $vdev; zpool clear") : ();
+    return { outcome => 'healing', detail => "$d (resilvering)", attempted => $did, @act } if $resilver eq 'yes';
     return { outcome => 'clean', detail => $d, attempted => $did, pool_health => $health // 'unknown',
-        by => "zpool status: $vdev ONLINE, no resilver" };
+        by => "zpool status: $vdev ONLINE, no resilver", result => "$vdev ONLINE, no resilver running", @act };
 }
 
 # _mirrors($mac, $host, \%fields): the combined outcome over the issue's mirror(s).
@@ -244,15 +247,17 @@ sub _mirrors ($self, $mac, $host, $f) {
     my @r = map { $self->_mirror($mac, $host, $_, $f->{leg}) } @mirrors;
     my %o = map { $_->{outcome} => 1 } @r;
     my $outcome = $o{human} ? 'human' : $o{failed} ? 'failed' : $o{healing} ? 'healing' : 'clean';
+    my @act = grep { defined } map { $_->{action} } @r;
     return { outcome => $outcome, detail => join(' | ', map { $_->{detail} } @r),
-        attempted => (grep { $_->{attempted} } @r) ? 1 : 0, by => 'mirror-status clean' };
+        attempted => (grep { $_->{attempted} } @r) ? 1 : 0, by => 'mirror-status clean',
+        (@act ? (action => join('; ', @act)) : ()) };
 }
 
 # heal($rec): one attempt or check, its result in the trail.
 sub heal ($self, $rec) {
     my $res = $self->attempt($rec);
     my $issues = $self->{issues};
-    my $resolved;
+    my ($resolved, $healed_before);
     $issues->update($rec->{id}, sub ($r) {
         return unless $r->{state} eq 'open' || $r->{state} eq 'healing';    # changed meanwhile
         my $h = $r->{heal} //= { attempts => 0 };
@@ -260,6 +265,11 @@ sub heal ($self, $rec) {
         $h->{last_at} = HPS::Issues::iso($now);
         $h->{last_result} = HPS::Issues::clean_text("$res->{outcome}: $res->{detail}");
         my $o = $res->{outcome};
+        # the last action that worked, named by the resolution even when the
+        # resolve comes later (a mirror-status check, a marker, the monitor)
+        $h->{last_action} = HPS::Issues::clean_text($res->{action})
+            if defined $res->{action} && ($o eq 'healing' || $o eq 'clean');
+        $healed_before = 1 if $r->{state} eq 'healing';
         if ($res->{attempted} || $o eq 'failed') {
             $h->{attempts}++;
             $issues->trail($r, 'heal', "attempt $h->{attempts}: $res->{detail}");
@@ -290,7 +300,10 @@ sub heal ($self, $rec) {
         }
     });
     if ($resolved) {
-        $issues->resolve($rec->{id}, $res->{by} // 'heal');
+        my $result = $res->{result} // $res->{by} // 'healed';
+        $result = "$rec->{fields}{vdev} ONLINE, resilver finished" if $rec->{kind} eq 'zfs-vdev' && $healed_before;
+        $issues->resolve($rec->{id}, $res->{by} // 'heal',
+            resolution => { by => 'healer', action => $res->{action}, result => $result });
         $self->_pool_resolved($rec, $res) if $rec->{kind} eq 'zfs-vdev';
     }
     my $after = $issues->get($rec->{id});
@@ -310,7 +323,10 @@ sub _pool_resolved ($self, $rec, $res) {
     my $pool = $issues->find_open(join ':', 'zfs-pool', $f->{host}, $f->{pool}) or return;
     return if grep { $_->{kind} eq 'zfs-vdev' && ($_->{fields}{host} // '') eq $f->{host}
         && ($_->{fields}{pool} // '') eq $f->{pool} } $issues->list;
-    $issues->resolve($pool->{id}, "zpool status: pool $f->{pool} ONLINE (issue $rec->{id} healed)");
+    my $vr = $issues->get($rec->{id})->{resolution} // {};
+    $issues->resolve($pool->{id}, "zpool status: pool $f->{pool} ONLINE (issue $rec->{id} healed)",
+        resolution => { by => 'healer', action => (($vr->{action} // '-') eq '-' ? undef : $vr->{action}),
+            result => "pool $f->{pool} ONLINE (zfs-vdev $rec->{id} healed)" });
     return;
 }
 

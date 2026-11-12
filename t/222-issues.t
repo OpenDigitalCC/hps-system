@@ -195,6 +195,16 @@ is($rc, 4, 'retry of an unknown id: exit 4');
 ($rc, $out) = cli('resolve', '--kind', 'mirror-leg', '--key-field', 'host=tch-009', '--key-field', 'mirror=m1', '--by', 'cable', 'replaced');
 is($rc, 0, 'cli resolve by key') or diag $out;
 like($out, qr/^resolved \Q$id\E/m, 'resolves that issue');
+my $rs = $is->get($id)->{resolution};
+is_deeply({ map { $_ => $rs->{$_} } qw(by action result) }, { by => 'operator tester', action => 'cable replaced', result => 'cable replaced' },
+    'an operator\'s resolution: by operator <who>, the --by text as action and result');
+($rc, $out) = cli('list', '--all');
+like($out, qr/^\Q$id\E +resolved .* leg lost by hand → resolved by operator tester: cable replaced$/m, 'list --all: summary, then the resolution');
+($rc, $out) = cli('show', $id);
+like($out, qr/^summary   leg lost by hand\nresolution\n  at      \S+\n  by      operator tester\n  action  cable replaced\n  result  cable replaced\nopened /m,
+    'show: the issue, then the resolution, before the trail');
+($rc, $out) = cli('show', $id, '--json');
+is(decode_json($out)->{resolution}{by}, 'operator tester', 'show --json carries the resolution object');
 ($rc, $out) = cli('resolve', $id, '--by', 'again');
 is($rc, 3, 'resolving it again: refused');
 ($rc, $out) = cli('retry', $id);
@@ -202,6 +212,14 @@ is($rc, 3, 'retry of a resolved issue: refused');
 like($out, qr/is resolved/, 'saying so');
 ($rc, $out) = cli('resolve', '20261112-002', '--by', 'fixed');
 is($rc, 0, 'cli resolve by id');
+# a record resolved before resolutions were recorded
+$is->update('20261112-002', sub { delete $_[0]{resolution} });
+($rc, $out) = cli('list', '--all');
+like($out, qr/^20261112-002 +resolved .*→ resolved -$/m, 'an older resolved record: "-"');
+($rc, $out) = cli('show', '20261112-002');
+like($out, qr/^resolution -$/m, 'show: resolution -');
+($rc, $out) = cli('list');
+unlike($out, qr/→/, 'list of unresolved issues: no resolution');
 ($rc, $out) = cli('show', '20991231-009');
 is($rc, 4, 'unknown id: exit 4');
 ($rc, $out) = cli('purge');

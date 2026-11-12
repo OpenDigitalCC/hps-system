@@ -308,24 +308,47 @@ sub update ($self, $id, $cb) {
     });
 }
 
-# resolve($id, $by): the issue resolved; dies notfound / refused (already resolved).
-sub resolve ($self, $id, $by) {
+# resolve($id, $by, resolution => {by, action, result}): the issue resolved;
+# dies notfound / refused (already resolved). $by is the trail's text. The
+# record keeps resolution {at, by (healer, operator <who>, log, monitor),
+# action (what fixed it), result (the evidence that it is fixed)}. Without an
+# action the healer's last successful action on the issue (heal.last_action)
+# is named, else "-"; without a resolution: by operator, action and result $by.
+sub resolve ($self, $id, $by, %o) {
     $by = clean_text($by);
+    my $res = $o{resolution} // { by => 'operator', action => $by, result => $by };
     my $rec = $self->update($id, sub ($rec) {
         _fail(refused => "issue $id is already resolved ($rec->{resolved_at})") if $rec->{state} eq 'resolved';
+        my $h = ref $rec->{heal} eq 'HASH' ? $rec->{heal} : {};
         $rec->{state} = 'resolved';
         $rec->{resolved_at} = iso($self->now);
+        $rec->{resolution} = {
+            at     => $rec->{resolved_at},
+            by     => clean_text($res->{by} // 'operator'),
+            action => clean_text($res->{action} // $h->{last_action} // '-') || '-',
+            result => clean_text($res->{result} // $by) || '-',
+        };
         delete $rec->{heal}{next_at} if ref $rec->{heal} eq 'HASH';
         $self->trail($rec, 'resolved', "by $by");
     });
-    $self->_log('notice', "hps-issue: resolved $id by $by");
+    my $r = $rec->{resolution};
+    $self->_log('notice', "hps-issue: resolved $id by $by; issue: $rec->{key}: $rec->{summary}; "
+        . "resolution by $r->{by}: $r->{action}; result: $r->{result}");
     return $rec;
 }
 
-# resolve_key($key, $by): resolves the unresolved issue of that key; undef when none.
-sub resolve_key ($self, $key, $by) {
+# resolve_key($key, $by, %o): resolves the unresolved issue of that key (as
+# resolve); undef when none.
+sub resolve_key ($self, $key, $by, %o) {
     my $rec = $self->find_open($key) or return undef;
-    return $self->resolve($rec->{id}, $by);
+    return $self->resolve($rec->{id}, $by, %o);
+}
+
+# resolution_line($rec): "by <by>: <action>" of a resolved issue, "-" without one.
+sub resolution_line ($rec) {
+    my $r = $rec->{resolution};
+    return '-' unless ref $r eq 'HASH';
+    return "by $r->{by}: $r->{action}";
 }
 
 # retry($id, $who): an unresolved issue (needs-human, or open or healing) back

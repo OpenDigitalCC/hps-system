@@ -251,6 +251,9 @@ append("$logd/10.9.0.12/2026-11-13.log", "Nov 13 00:04:11 10.9.0.12 [tch-002] is
 is($w3->poll, 1, 'the recovery line is read');
 is($is->get($spd->{id})->{state}, 'resolved', '"iscsid: iscsid: connection2:0 is operational after recovery (9 attempts)" resolves it');
 like($is->get($spd->{id})->{trail}[-1]{detail}, qr/by log tch-002 iscsid: iscsid: connection2:0 is operational after recovery/, 'by that line');
+is_deeply({ map { $_ => $is->get($spd->{id})->{resolution}{$_} } qw(by action result) },
+    { by => 'log', action => '-', result => 'iscsid: iscsid: connection2:0 is operational after recovery (9 attempts)' },
+    'resolution: by log, no action, the resolving line as the result');
 
 # the IPS's own hps lines (ips/hps): hps-monitor's zpool results
 make_path("$logd/ips/hps");
@@ -268,6 +271,8 @@ ok(!$is->find_open('zfs-pool:ghost-009:s1'), 'a monitor line of a host not in th
 ok(!$is->find_open('mirror-leg:sch-001:from-ips'), 'a marker in the IPS\'s own file is not read');
 is($is->get($zp->{id})->{state}, 'resolved', 'the monitor OK resolved zfs-pool');
 like($is->get($zp->{id})->{trail}[-1]{detail}, qr/by log ips hps: hps-monitor: .*state=OK/, 'by the monitor line');
+is($is->get($zp->{id})->{resolution}{by}, 'monitor', 'resolution by monitor (a from=ips rule)');
+like($is->get($zp->{id})->{resolution}{result}, qr/\Ahps: hps-monitor: host=sch-001\.lab\.hps check=zpool state=OK ZPOOL OK/, 'its line the result');
 my $w5 = watcher();
 $w5->start;
 ok(defined $w5->{pos}{'ips/hps'}, 'ips/hps is kept in the state file across a restart');
@@ -320,6 +325,8 @@ $now += 1;
 $w3->poll;
 is($is->get($hb[0]{id})->{state}, 'resolved', 'resolved once settled');
 like($is->get($hb[0]{id})->{trail}[-1]{detail}, qr/by log sch-001 om: .*end a send error period/, 'by the end line');
+is($is->get($hb[0]{id})->{resolution}{by}, 'log', 'a settled resolve keeps its resolution: by log');
+like($is->get($hb[0]{id})->{resolution}{result}, qr/\Aom: daemon: hb: ucast: tx: hb#1: end a send error period for node tch-003/, 'the end line');
 
 # max_read: a big backlog is read in pieces, in order
 my $w4 = watcher(max_read => 200);

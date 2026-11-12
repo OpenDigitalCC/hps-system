@@ -56,7 +56,8 @@ sequence from 001 each day).
 | `fields` | every field of the report (`host` as its short name): `mirror`, `component`, `event`, `leg`, ... |
 | `seen`, `last_seen_at` | how often it was reported, and when last |
 | `previous` | the id of the resolved issue of the same key, on a re-occurrence |
-| `heal` | the healer's `attempts`, `next_at` (epoch), `last_at`, `last_result` |
+| `heal` | the healer's `attempts`, `next_at` (epoch), `last_at`, `last_result`, `last_action` (the last heal action that worked) |
+| `resolution` | on a resolved issue: `{at, by, action, result}`, below |
 | `urgent_at` | (rules with `urgent_after=S`) the epoch from which the issue, still unresolved, is made urgent |
 | `trail` | append-only list of `{at, event, detail}` |
 
@@ -67,6 +68,27 @@ line, `mirror-status clean`, `zpool status: ...`, or the operator). An entry equ
 before it (same event and detail) counts up (`count`, `last_at`) instead of
 adding a line; repeats of an open are kept for the first 5 and then only
 counted in `seen`; past 300 entries the last entry counts what was not kept.
+
+Every resolved issue carries a `resolution`: what fixed it and the evidence
+that it is fixed, so a record reads issue, then resolution.
+
+| Key | Meaning |
+| --- | --- |
+| `at` | when it resolved (the `resolved_at`) |
+| `by` | `healer`, `operator <who>`, `log` (a node's line or marker) or `monitor` (an hps-monitor line, a `from=ips` rule) |
+| `action` | what fixed it: the healer's last action that worked (`heal.last_action`), even when the resolve comes later from a check, a marker or the monitor; an operator's `--by` text; `-` when nothing was done |
+| `result` | the evidence: the healer's check, the resolving line (tag and message), an operator's `--by` text |
+
+Examples:
+
+- healer, mirror-leg: action `mirror-rejoin probe-tch-001-root --leg iscsi:10.113.1.11:... (re-add from bitmap)`, result `mirror-status clean`;
+- healer, zfs-vdev: action `zpool online s1 virtio-s1-sch-001-d3; zpool clear`, result `virtio-s1-sch-001-d3 ONLINE, resilver finished` (`..., no resilver running` when none was seen); the zfs-pool issue it resolves names the same action, result `pool s1 ONLINE (zfs-vdev <id> healed)`;
+- log: action `-`, result `iscsid: iscsid: connection2:0 is operational after recovery (9 attempts)`;
+- operator: by `operator <who>`, action and result the `--by` text.
+
+The syslog line says both: `hps-issue: resolved <id> by <trail text>; issue:
+<key>: <summary>; resolution by <by>: <action>; result: <result>`. Issues
+resolved before resolutions were recorded have none (`-` in `list` and `show`).
 
 Rules:
 
@@ -223,7 +245,10 @@ healer's next tick), and says so in the trail (`retry by operator <who>`): for
 when the cause was fixed, or was transient, and the IPS should heal it after
 all. A resolved issue is refused (exit 3): a new report opens a new one.
 `list` shows `open`, `healing` and `needs-human` issues; `--all` the resolved
-ones too; `--json` is `{"issues": [<record>...]}`, the form a page can read.
+ones too, each as `<summary> → resolved by <by>: <action>`; `--json` is
+`{"issues": [<record>...]}`, the form a page can read (with `resolution`).
+`show` prints the issue, then its `resolution` block (at, by, action, result),
+then the trail.
 Words after the options are joined to the text with spaces: the ips-admin gate
 passes no space inside one argument. Through the operator API:
 

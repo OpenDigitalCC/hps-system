@@ -12,6 +12,25 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Issues say how they were resolved (2026-11-12)
+
+Owner: "on the issues, include the resolution action in the resolved log, so
+it has issue, then resolved."
+
+- new: every resolved issue carries `resolution` `{at, by, action, result}`:
+  by `healer`, `operator <who>`, `log` or `monitor`; the action that fixed it
+  (the healer's `mirror-rejoin ... (re-add from bitmap)` or `zpool online ...;
+  zpool clear`, an operator's `--by` text, `-` when nothing was done); the
+  evidence (`mirror-status clean`, `<vdev> ONLINE, resilver finished`, the
+  resolving log line). The healer keeps its last action that worked
+  (`heal.last_action`), so a resolve that comes later, from a check, a marker
+  or the monitor, still names it.
+- the `hps-issue: resolved` syslog line carries the issue (key and summary),
+  then the resolution; `hps-issues list --all` shows a resolved row as
+  `<summary> → resolved by <by>: <action>`; `show` prints the resolution right
+  after the summary, before the trail; JSON has the object. Issues resolved
+  before this have none (`-`). Tests: `t/222`, `t/223`, `t/224`, `t/226`.
+
 ## Pool disks, om3 heartbeat and swap in the issue register and monitor (2026-11-12)
 
 s1 drill: a disk of s1-sch-001's three-way mirror was hot-unplugged for two

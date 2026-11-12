@@ -110,10 +110,30 @@ $h->tick;
 $r = $is->get($id);
 is($r->{state}, 'resolved', 'mirror-status clean: resolved');
 like($r->{trail}[-1]{detail}, qr/by mirror-status clean/, 'by mirror-status clean');
+is($r->{heal}{last_action}, "mirror-rejoin t0-app-root --leg $REMOTE (re-add from bitmap)", 'the healer remembers its last action that worked');
+is_deeply({ map { $_ => $r->{resolution}{$_} } qw(by action result) },
+    { by => 'healer', action => "mirror-rejoin t0-app-root --leg $REMOTE (re-add from bitmap)", result => 'mirror-status clean' },
+    'resolution: by the healer, the rejoin two checks earlier as the action, mirror-status clean as the result');
+is($r->{resolution}{at}, $r->{resolved_at}, 'resolution at: when it resolved');
+ok((grep { /hps-issue: resolved \Q$id\E by mirror-status clean; issue: mirror-leg:sch-001:t0-app-root: .*; resolution by healer: mirror-rejoin t0-app-root --leg \Q$REMOTE\E \(re-add from bitmap\); result: mirror-status clean/ } @log),
+    'the resolved log line has the issue, then the resolution');
 ok((grep { /hps-issue: resolved \Q$id\E by mirror-status clean/ } @log), 'logged');
 $now += 3600;
 is($h->tick, 0, 'a resolved issue is never touched again');
 is(scalar $ce->calls, 4, 'no more node calls');
+
+#--- resolved later by the node's marker: the healer's action is still named ---------------
+$id = open_leg();
+($h, $ce) = healer(out => { 'mirror-status' => status_out('degraded') }, rc => { 'mirror-rejoin' => 0 });
+$h->tick; $now += 30; $h->tick;
+is($is->get($id)->{state}, 'healing', 'rejoined: healing');
+$is->resolve_key('mirror-leg:sch-001:t0-app-root', 'log tch-002 hps-issue: HPS-ISSUE resolve ...',
+    resolution => { by => 'log', result => 'hps-issue: HPS-ISSUE resolve kind=mirror-leg host=sch-001 mirror=t0-app-root event=RebuildFinished' });
+$r = $is->get($id);
+is_deeply({ map { $_ => $r->{resolution}{$_} } qw(by action result) },
+    { by => 'log', action => "mirror-rejoin t0-app-root --leg $REMOTE (re-add from bitmap)",
+      result => 'hps-issue: HPS-ISSUE resolve kind=mirror-leg host=sch-001 mirror=t0-app-root event=RebuildFinished' },
+    'a marker resolving it: by log, the healer\'s rejoin as the action, the line as the result');
 
 #--- failures: backoff and escalation ------------------------------------------------------
 $id = open_leg();

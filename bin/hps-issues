@@ -26,7 +26,8 @@ Usage:
   hps-issues resolve --kind K --key-field k=v... --by TEXT [words...]
   hps-issues note <id> TEXT [words...]
   hps-issues retry <id>
-list: the issues not resolved (open, healing, needs-human); --all every one.
+list: the issues not resolved (open, healing, needs-human); --all every one,
+  a resolved one as "<summary> → resolved by <by>: <action>".
 show: one issue with its trail.
 open: files an issue (or adds to the unresolved one of the same key). The key is
   the kind and the values of its key fields: those the rules file declares for
@@ -51,15 +52,27 @@ sub render_list {
     my (@r) = @_;
     return "no issues\n" unless @r;
     return join '', map {
-        sprintf("%-13s %-11s %-7s %s seen=%d %s\n", $_->{id}, $_->{state}, $_->{severity}, $_->{key},
-            $_->{seen} // 1, $_->{summary})
+        sprintf("%-13s %-11s %-7s %s seen=%d %s%s\n", $_->{id}, $_->{state}, $_->{severity}, $_->{key},
+            $_->{seen} // 1, $_->{summary},
+            $_->{state} eq 'resolved' ? ' → resolved ' . HPS::Issues::resolution_line($_) : '')
     } @r;
+}
+
+# render_resolution($r): the resolution block of a resolved issue ("-" for one
+# resolved before resolutions were recorded); nothing while it is unresolved.
+sub render_resolution {
+    my ($r) = @_;
+    return '' unless $r->{state} eq 'resolved';
+    my $s = $r->{resolution};
+    return "resolution -\n" unless ref $s eq 'HASH';
+    return "resolution\n  at      " . ($s->{at} // '-') . "\n  by      " . ($s->{by} // '-')
+        . "\n  action  " . ($s->{action} // '-') . "\n  result  " . ($s->{result} // '-') . "\n";
 }
 
 sub render_one {
     my ($r) = @_;
     my $out = "id        $r->{id}\nkey       $r->{key}\nkind      $r->{kind}\nstate     $r->{state}\n"
-        . "severity  $r->{severity}\nsummary   $r->{summary}\nopened    $r->{opened_at}\n"
+        . "severity  $r->{severity}\nsummary   $r->{summary}\n" . render_resolution($r) . "opened    $r->{opened_at}\n"
         . 'resolved  ' . ($r->{resolved_at} // '-') . "\nseen      " . ($r->{seen} // 1) . ' (last ' . ($r->{last_seen_at} // '-') . ")\n";
     $out .= "previous  $r->{previous}\n" if $r->{previous};
     $out .= 'fields    ' . join(' ', map { "$_=$r->{fields}{$_}" } sort keys %{ $r->{fields} // {} }) . "\n";
@@ -145,7 +158,7 @@ sub main {
                 $id = $open->{id};
             }
             HPS::Issues::_fail(usage => 'resolve needs an issue id or --kind with --key-field') unless defined $id;
-            my $r = $is->resolve($id, "$who: $by");
+            my $r = $is->resolve($id, "$who: $by", resolution => { by => "operator $who", action => $by, result => $by });
             return $o{json} ? $r : "resolved $r->{id} $r->{key}\n";
         }
         if ($cmd eq 'note') {

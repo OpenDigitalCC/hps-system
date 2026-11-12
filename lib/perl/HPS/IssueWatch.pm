@@ -334,12 +334,15 @@ sub _act ($self, $a, $rec) {
     my $key = HPS::Issues::make_key($a->{kind}, $fields, @{ $a->{key_fields} });
     my $detail = 'log ' . ($rec->{host} // '?') . ' ' . ($rec->{tag} // '') . ': ' . ($rec->{message} // '');
     if ($a->{action} eq 'resolve') {
+        # the resolving line is the evidence; the action is the healer's, if any
+        my $res = { by => ($a->{rule} && $a->{rule}{from} ? 'monitor' : 'log'),
+            result => (length($rec->{tag} // '') ? "$rec->{tag}: " : '') . ($rec->{message} // '') };
         if (my $s = $a->{rule} && $a->{rule}{settle}) {
             # held back: an open of the same key within S seconds cancels it
-            $self->{pending}{$key} = { due => $self->{now}->() + $s, detail => $detail } if $issues->find_open($key);
+            $self->{pending}{$key} = { due => $self->{now}->() + $s, detail => $detail, resolution => $res } if $issues->find_open($key);
             return;
         }
-        $issues->resolve_key($key, $detail);
+        $issues->resolve_key($key, $detail, resolution => $res);
         return;
     }
     delete $self->{pending}{$key};
@@ -366,7 +369,7 @@ sub settle ($self) {
         my $p = $self->{pending}{$key};
         next if $p->{due} > $now;
         delete $self->{pending}{$key};
-        eval { $self->{issues}->resolve_key($key, $p->{detail}); 1 }
+        eval { $self->{issues}->resolve_key($key, $p->{detail}, resolution => $p->{resolution}); 1 }
             or $self->_log('err', "hps-issue: resolve of $key failed: " . (ref $@ ? $@->message : $@ =~ s/\s+\z//r));
     }
     return;

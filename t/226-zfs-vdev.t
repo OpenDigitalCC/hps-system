@@ -143,9 +143,15 @@ $h->tick;
 $r = $is->get($id);
 is($r->{state}, 'resolved', 'ONLINE, no resilver: resolved');
 like($r->{trail}[-1]{detail}, qr/by zpool status: \Q$V\E ONLINE, no resilver/, 'by zpool status');
+is_deeply({ map { $_ => $r->{resolution}{$_} } qw(by action result) },
+    { by => 'healer', action => "zpool online s1 $V; zpool clear", result => "$V ONLINE, resilver finished" },
+    'resolution: the online and clear of two checks earlier, ONLINE with the resilver finished');
 my $p = $is->get($pool->{id});
 is($p->{state}, 'resolved', 'the pool ONLINE and its last zfs-vdev resolved: zfs-pool resolved');
 like($p->{trail}[-1]{detail}, qr/by zpool status: pool s1 ONLINE \(issue \Q$id\E healed\)/, 'saying why');
+is_deeply({ map { $_ => $p->{resolution}{$_} } qw(by action result) },
+    { by => 'healer', action => "zpool online s1 $V; zpool clear", result => "pool s1 ONLINE (zfs-vdev $id healed)" },
+    'the pool\'s resolution names the vdev\'s action');
 is(scalar(grep { $_->{event} eq 'escalated' } @{ $r->{trail} }), 0, 'never escalated');
 $now += 3600;
 is($h->tick, 0, 'a resolved issue is never touched again');
@@ -159,6 +165,9 @@ $r = $is->get($id);
 is($r->{state}, 'resolved', 'already ONLINE, no resilver: resolved');
 is($r->{trail}[-2]{event}, 'check', 'a check (nothing was onlined), not an attempt');
 ok(!$r->{heal}{attempts}, 'no attempt counted');
+is_deeply({ map { $_ => $r->{resolution}{$_} } qw(by action result) },
+    { by => 'healer', action => '-', result => 'virtio-s1-sch-001-d1 ONLINE, no resilver running' },
+    'nothing done: action -, the evidence as the result');
 
 # the pool stays open while another zfs-vdev of it is unresolved, or the pool is not ONLINE
 ($pool) = $is->open_issue(kind => 'zfs-pool', key_fields => [qw(host pool)], fields => { host => 'sch-001', pool => 's1' });
