@@ -164,6 +164,15 @@ to LOAD CRITICAL and the DL360 to 7-9 % memory available.
   `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
   `t/225-resource-limits.t`.
 
+## A transit network may set its own MTU (2026-11-12)
+
+- new: a purpose-transit layout network takes `mtu` (576-9000, default
+  9000). net-up gives the TCHs their transit address at that MTU, and a VXLAN
+  over it defaults to it less 50; a VXLAN `mtu` above that is refused at
+  validation. Scale test s3 has a compute host with an emulated rtl8139, which
+  cannot do jumbo frames; with transit fixed at 9000 its net-up failed and the
+  cluster's client network could never be whole. Tests: `t/202-vxlan.t`.
+
 ## Two noise fixes from the limits rollout (2026-11-12)
 
 - fix: a node asking the boot channel for an unset cluster key (the optional

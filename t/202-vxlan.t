@@ -300,4 +300,24 @@ my $VX = [ '1100', 'br-client', '--local', '10.11.2.12', '--peer', '10.11.2.13',
     like($@ && $@->message, qr/not a fabric/, 'pvid on a vxlan net is refused');
 }
 
+
+#--- a transit network with its own mtu (a NIC without jumbo frames, s3)
+{
+    is(verr({ transit => { %$TRANSIT, mtu => 1500 }, client => $CLIENT }), undef, 'transit mtu 1500 is accepted');
+    like(verr({ transit => { %$TRANSIT, mtu => 9001 }, client => $CLIENT }), qr/mtu must be 576 to 9000/, 'transit mtu above 9000 refused');
+    like(verr({ transit => $TRANSIT, odoo => { cidr => '10.40.0.0/24', vlan => 40, bridge => 'br-odoo', purpose => 'workload', mtu => 1500 } }),
+        qr/mtu is only for a fabric, vxlan or transit network/, 'mtu on a workload network still refused');
+    like(verr({ transit => { %$TRANSIT, mtu => 1500 }, client => { %$CLIENT, mtu => 1460 } }),
+        qr/mtu 1460 is above its transit network's MTU less 50 \(1450\)/, 'a vxlan mtu above its transit MTU less 50 refused');
+    is(HPS::ClusterConfig::vxlan_mtu($CLIENT, { %$TRANSIT, mtu => 1500 }), 1450, 'vxlan default follows its transit network: 1450');
+    is(HPS::ClusterConfig::transit_mtu($TRANSIT), 9000, 'transit default 9000');
+
+    my ($n, $f) = s1(layout => { transit => { %$TRANSIT, mtu => 1500 }, client => $CLIENT });
+    my $r = $n->net_up;
+    is($r->{result}, 'ok', 'net-up with a 1500 transit: ok');
+    my @c = @{ calls($f) };
+    is($c[0], "$MAC net-vlan-address boot 112 10.11.2.12/24 --mtu 1500", 'the transit address at mtu 1500');
+    like($c[1], qr/^\Q$MAC\E net-vxlan-ensure 1100 br-client .* --mtu 1450\z/, 'the vxlan at 1450');
+}
+
 done_testing;

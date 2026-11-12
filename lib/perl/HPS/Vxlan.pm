@@ -116,7 +116,7 @@ sub host_plan ($reg, $mac, %o) {
             map { $_->{address} } grep { $_->{mac} ne $mac && defined $_->{address} && $_->{address} ne $local } @{ $hosts{ $n->{over} } };
         my %seen;
         @peers = grep { !$seen{$_}++ } @peers;
-        $e{mtu}    = HPS::ClusterConfig::vxlan_mtu($n);
+        $e{mtu}    = HPS::ClusterConfig::vxlan_mtu($n, $t);
         $e{local}  = $local;
         $e{peers}  = \@peers;
         $e{script} = $SCRIPT;

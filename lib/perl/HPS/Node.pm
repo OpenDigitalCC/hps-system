@@ -219,7 +219,7 @@ sub net_plan ($self) {
         for my $name (sort keys %$layout) {
             my $n = $layout->{$name};
             next unless ref $n eq 'HASH' && ($n->{purpose} // '') eq 'transit';
-            push @nets, { name => $name, purpose => 'transit', vlan => $n->{vlan}, mtu => $TRANSIT_MTU, subnet => $n->{cidr} };
+            push @nets, { name => $name, purpose => 'transit', vlan => $n->{vlan}, mtu => HPS::ClusterConfig::transit_mtu($n), subnet => $n->{cidr} };
         }
     }
     for my $n (grep { !$_->{kind} } @nets) {

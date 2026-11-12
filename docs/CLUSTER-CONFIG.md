@@ -162,7 +162,11 @@ or `network_cidr`) inside the target subnet, modulo the subnet's size. For a
 /24 the last octet is kept. A network where that lands on the subnet's network
 or broadcast address or on its gateway (`network_storage_vlan<N>_gateway`) is
 refused and logged; the other networks still go ahead. MTU:
-`network_storage_mtu` (default 1500) for storage, 9000 for transit.
+`network_storage_mtu` (default 1500) for storage; for transit the transit
+layout network's own `mtu` (576-9000, default 9000). Set it where a compute
+host's NIC cannot do jumbo frames (an emulated rtl8139, an old onboard NIC):
+every TCH of the cluster then uses that MTU on transit, and a VXLAN over it
+defaults to it less 50 (a VXLAN `mtu` above that is refused).
 
 Scale test s1, sch-001 at 10.11.0.153/24, storage base VLAN 113, subnet base
 10.113, transit VLAN 112 on 10.11.2.0/24:

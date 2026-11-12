@@ -305,14 +305,18 @@ sub validate_value ($q, $value) {
     die "Unknown rule '$q->{rule}' for $q->{key}\n";
 }
 
-# The transit VLAN is jumbo (plans/networking.md); a VXLAN over it loses 50
-# bytes to the outer Ethernet, IP, UDP and VXLAN headers.
+# The transit VLAN is jumbo by default (plans/networking.md); a transit network
+# may set its own mtu (576-9000) where a NIC cannot do jumbo frames. A VXLAN over
+# it loses 50 bytes to the outer Ethernet, IP, UDP and VXLAN headers.
 our $TRANSIT_MTU  = 9000;
 our $VXLAN_HEADER = 50;
 
-# vxlan_mtu(\%entry): the MTU of a vxlan layout network, its mtu or the
-# transit MTU less the VXLAN header (8950).
-sub vxlan_mtu ($n) { return defined $n->{mtu} ? $n->{mtu} + 0 : $TRANSIT_MTU - $VXLAN_HEADER }
+# transit_mtu(\%transit_entry): a transit network's MTU, its mtu or 9000.
+sub transit_mtu ($t) { return ref $t eq 'HASH' && defined $t->{mtu} ? $t->{mtu} + 0 : $TRANSIT_MTU }
+
+# vxlan_mtu(\%entry, \%transit_entry?): the MTU of a vxlan layout network, its
+# mtu or its transit network's MTU less the VXLAN header (8950 by default).
+sub vxlan_mtu ($n, $t = undef) { return defined $n->{mtu} ? $n->{mtu} + 0 : transit_mtu($t) - $VXLAN_HEADER }
 
 # A vxlan entry {kind: "vxlan", vni, over, bridge, purpose: "workload", mtu?}.
 # Returns an error or undef; `over` is checked against the whole layout after.
@@ -375,7 +379,12 @@ sub validate_layout ($text) {
             }
         }
         else {
-            return "network '$name': mtu is only for a fabric or vxlan network" if defined $n->{mtu};
+            if (defined $n->{mtu}) {
+                return "network '$name': mtu is only for a fabric, vxlan or transit network"
+                    unless defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'transit';
+                return "network '$name': mtu must be 576 to $TRANSIT_MTU"
+                    unless !ref $n->{mtu} && $n->{mtu} =~ /^[1-9][0-9]{2,3}\z/ && $n->{mtu} >= 576 && $n->{mtu} <= $TRANSIT_MTU;
+            }
             return "network '$name': purpose emulated-switch needs kind \"fabric\""
                 if defined $n->{purpose} && !ref $n->{purpose} && $n->{purpose} eq 'emulated-switch';
         }
@@ -411,6 +420,9 @@ sub validate_layout ($text) {
         return "network '$name': over '$n->{over}' is not a network of the layout" unless ref $t eq 'HASH';
         return "network '$name': over '$n->{over}' is not a purpose transit network"
             unless !defined $t->{kind} && defined $t->{purpose} && $t->{purpose} eq 'transit';
+        my $max = transit_mtu($t) - $VXLAN_HEADER;
+        return "network '$name': mtu $n->{mtu} is above its transit network's MTU less $VXLAN_HEADER ($max)"
+            if defined $n->{mtu} && $n->{mtu} > $max;
     }
     return undef;
 }
