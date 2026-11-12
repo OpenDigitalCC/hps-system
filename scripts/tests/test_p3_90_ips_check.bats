@@ -33,6 +33,8 @@ cluster_registry() {
   case "$3" in
     network_dhcp_ip) echo 192.0.2.1 ;;
     network_dns_domain) echo lab.test ;;
+    monitor_disk_warn_pct) echo "${FAKE_DISK_WARN:-}" ;;
+    monitor_disk_crit_pct) echo "${FAKE_DISK_CRIT:-}" ;;
     *) return 1 ;;
   esac
 }
@@ -143,6 +145,9 @@ EOF
 path="${@: -1}"
 used=10
 case "$path" in */res) used="${FAKE_DF_RES:-10}" ;; */log) used="${FAKE_DF_LOG:-10}" ;; esac
+if [[ " $* " == *" -i "* ]]; then
+  used="${FAKE_DF_INODE:-5}"
+fi
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
 printf '/dev/x 1000 %s 100 %s%% %s\n' "$used" "$used" "$path"
 EOF
@@ -346,13 +351,32 @@ EOF
   [[ "$output" == *"FAIL chrony: chronyd not answering"* ]]
 }
 
-@test "disk: below 15% free is a WARN, below 5% a FAIL" {
-  FAKE_DF_RES=90 run "$ROOT/bin/hps-ips-check"
+@test "disk: 80% used or more is a WARN, 90% a FAIL (space or inodes)" {
+  run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"PASS disk resources: "*"/res 90% free (10% used, inodes 5% used)"* ]]
+  FAKE_DF_RES=79 run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"PASS disk resources: "* ]]
+  FAKE_DF_RES=80 run "$ROOT/bin/hps-ips-check"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"WARN disk resources: "*"10% free (below 15%)"* ]]
+  [[ "$output" == *"WARN disk resources: "*"20% free (80% used, inodes 5% used): at or over 80%"* ]]
   FAKE_DF_LOG=97 run "$ROOT/bin/hps-ips-check"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"FAIL disk log: "*"3% free (below 5%)"* ]]
+  [[ "$output" == *"FAIL disk log: "*"3% free (97% used, inodes 5% used): at or over 90%"* ]]
+  FAKE_DF_INODE=92 run "$ROOT/bin/hps-ips-check"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL disk log: "*"90% free (10% used, inodes 92% used): at or over 90%"* ]]
+}
+
+@test "disk: the thresholds are the cluster keys monitor_disk_warn_pct and monitor_disk_crit_pct" {
+  FAKE_DISK_WARN=50 FAKE_DISK_CRIT=60 FAKE_DF_RES=55 run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"WARN disk resources: "*"at or over 50%"* ]]
+  FAKE_DISK_WARN=50 FAKE_DISK_CRIT=60 FAKE_DF_RES=65 run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"FAIL disk resources: "*"at or over 60%"* ]]
+  # a warn not below crit, or a value out of range: both defaults
+  FAKE_DISK_WARN=95 FAKE_DISK_CRIT=90 FAKE_DF_RES=85 run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"WARN disk resources: "*"at or over 80%"* ]]
+  FAKE_DISK_WARN=x FAKE_DISK_CRIT=900 FAKE_DF_RES=91 run "$ROOT/bin/hps-ips-check"
+  [[ "$output" == *"FAIL disk resources: "*"at or over 90%"* ]]
 }
 
 @test "registry: no active cluster is a FAIL" {

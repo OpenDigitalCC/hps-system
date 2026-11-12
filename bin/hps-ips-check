@@ -19,7 +19,8 @@
 #       group; ctrl-exec-cli health over the socket
 #   5 rsyslog files a tagged logger message in ips/<date>.log within 5 s
 #   6 chrony runs; unsynchronised is a WARN (no upstream may be by design)
-#   7 free space on the resources and log directories (< 15% WARN, < 5% FAIL)
+#   7 space and inodes used on the resources and log filesystems (WARN at
+#     monitor_disk_warn_pct, default 80% used; FAIL at monitor_disk_crit_pct, 90%)
 #   8 registry: cluster.db readable, active cluster set
 #
 # Result: one syslog line per check (tag hps-ips-check), a summary line, and
@@ -483,8 +484,29 @@ check_chrony() {
 #===============================================================================
 # 7 disk space
 #===============================================================================
+# disk_thresholds: "<warn> <crit>", percent used, from the cluster keys
+# monitor_disk_warn_pct and monitor_disk_crit_pct (default 80 and 90, the same
+# grades as hps-monitor); a value that is not 1..100, or a warn not below crit,
+# gives both defaults.
+disk_thresholds() {
+  local w c
+  w="$(cluster_registry "$CLUSTER" get monitor_disk_warn_pct 2> /dev/null)" || w=""
+  c="$(cluster_registry "$CLUSTER" get monitor_disk_crit_pct 2> /dev/null)" || c=""
+  [[ "$w" =~ ^([1-9][0-9]?|100)$ ]] || w=""
+  [[ "$c" =~ ^([1-9][0-9]?|100)$ ]] || c=""
+  w="${w:-80}"
+  c="${c:-90}"
+  if [[ $w -ge $c ]]; then
+    w=80
+    c=90
+  fi
+  echo "$w $c"
+}
+
+# check_disk_one <label> <path>: space and inodes used on the filesystem of
+# <path>; WARN at the warn threshold or more, FAIL at the crit threshold.
 check_disk_one() {
-  local label="$1" path="$2" used free
+  local label="$1" path="$2" used ipct free warn crit worst text
   if [[ -z "$path" || ! -d "$path" ]]; then
     record FAIL "disk ${label}" "${path:-path unknown} does not exist"
     return 0
@@ -494,13 +516,22 @@ check_disk_one() {
     record FAIL "disk ${label}" "cannot read free space of ${path}"
     return 0
   fi
+  # inodes: "-" where the filesystem has no fixed count
+  ipct="$(df -P -i "$path" 2> /dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')" || ipct=""
+  [[ "$ipct" =~ ^[0-9]+$ ]] || ipct=""
+  read -r warn crit <<< "$(disk_thresholds)"
   free=$((100 - used))
-  if [[ $free -lt 5 ]]; then
-    record FAIL "disk ${label}" "${path} ${free}% free (below 5%)"
-  elif [[ $free -lt 15 ]]; then
-    record WARN "disk ${label}" "${path} ${free}% free (below 15%)"
+  text="${path} ${free}% free (${used}% used"
+  [[ -n "$ipct" ]] && text+=", inodes ${ipct}% used"
+  text+=")"
+  worst=$used
+  [[ -n "$ipct" && $ipct -gt $worst ]] && worst=$ipct
+  if [[ $worst -ge $crit ]]; then
+    record FAIL "disk ${label}" "${text}: at or over ${crit}%"
+  elif [[ $worst -ge $warn ]]; then
+    record WARN "disk ${label}" "${text}: at or over ${warn}%"
   else
-    record PASS "disk ${label}" "${path} ${free}% free"
+    record PASS "disk ${label}" "${text}"
   fi
 }
 

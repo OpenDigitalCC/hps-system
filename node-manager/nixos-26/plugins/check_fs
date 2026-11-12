@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+#
+# check_fs - Nagios plugin: space and inode use of a node's persistent
+# filesystems (docs/MONITORING.md).
+#
+# Run by nagios-check (ctrl-exec). Reads /proc/self/mountinfo and statfs
+# (`stat -f`) only.
+#   check_fs -p MOUNT [-w PCT] [-c PCT]
+#       one mount point (checks.conf: disk_<mount slug>). Not mounted, or
+#       mounted from RAM (tmpfs, ramfs): OK and says so (the data is then on
+#       the RAM root, which disk_root watches).
+#   check_fs -a [-x MOUNT]... [-w PCT] [-c PCT]
+#       every other persistent local filesystem (checks.conf: disk_other):
+#       all mounts except RAM and pseudo filesystems (tmpfs, overlay, squashfs,
+#       proc, sysfs, cgroup, ...), network filesystems, ZFS (zpool_cap has the
+#       pool), the -x mount points (they have their own check), and a second
+#       mount of a device already counted (a bind mount).
+# Space used is used / (used + available) as df shows it; inode use is
+# (inodes - free inodes) / inodes, left out where a filesystem has no fixed
+# inode count. The state is the worst of the two over every filesystem:
+# WARNING at -w (default 80) percent used or more, CRITICAL at -c (default 90).
+# Output: "DISK <STATE> - <mount> 41% used (12.3 GiB of 30.0 GiB), inodes 3%
+#   | used_pct=41%;80;90;0;100 inode_pct=3%;80;90;0;100 used=<B>B size=<B>B"
+# for -p; for -a one "<mount> N% (inodes N%)" part per filesystem and the
+# perfdata labels prefixed by the mount slug (srv_used_pct=...).
+#
+# Environment (tests): HPS_PROC (default /proc), HPS_STAT (default stat).
+# Exit: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
+
+set -uo pipefail
+
+# @HPS_PATH@
+
+PROC=${HPS_PROC:-/proc}
+STAT=${HPS_STAT:-stat}
+warn=80
+crit=90
+mode=""
+mount=""
+excludes=()
+
+unknown() {
+  echo "DISK UNKNOWN - $1"
+  exit 3
+}
+
+while getopts "p:ax:w:c:" opt; do
+  case $opt in
+    p) mode=one; mount=$OPTARG ;;
+    a) mode=all ;;
+    x) excludes+=("$OPTARG") ;;
+    w) warn=$OPTARG ;;
+    c) crit=$OPTARG ;;
+    *) unknown "usage: check_fs -p MOUNT | -a [-x MOUNT]... [-w PCT] [-c PCT]" ;;
+  esac
+done
+shift $((OPTIND - 1))
+[[ $# -eq 0 && -n $mode ]] || unknown "usage: check_fs -p MOUNT | -a [-x MOUNT]... [-w PCT] [-c PCT]"
+[[ $warn =~ ^[0-9]{1,3}$ && $crit =~ ^[0-9]{1,3}$ && $warn -le 100 && $crit -le 100 && $warn -lt $crit ]] ||
+  unknown "-w and -c must be percentages with -w below -c"
+[[ $mode == all || $mount == /* ]] || unknown "-p needs an absolute mount point"
+
+# The mount table: "<maj:min> <mount point> <fstype>" per line, octal escapes
+# (\040 for a space) decoded.
+mounts() {
+  awk '{
+    for (i = 7; i <= NF; i++) if ($i == "-") break
+    mp = $5
+    while (match(mp, /\\[0-7][0-7][0-7]/)) {
+      c = sprintf("%c", (substr(mp, RSTART + 1, 1) * 64) + (substr(mp, RSTART + 2, 1) * 8) + substr(mp, RSTART + 3, 1))
+      mp = substr(mp, 1, RSTART - 1) c substr(mp, RSTART + 4)
+    }
+    print $3 "\t" mp "\t" $(i + 1)
+  }' "$PROC/self/mountinfo"
+}
+
+# Not a disk: RAM, pseudo, network and ZFS (the pool is zpool_cap's).
+skip_type() {
+  case $1 in
+    tmpfs | ramfs | overlay | squashfs | proc | sysfs | devtmpfs | devpts | cgroup | cgroup2 | \
+      mqueue | debugfs | tracefs | securityfs | pstore | bpf | configfs | fusectl | hugetlbfs | \
+      efivarfs | autofs | binfmt_misc | nsfs | rpc_pipefs | iso9660 | zfs | \
+      nfs | nfs4 | cifs | smb3 | ceph | 9p | virtiofs | fuse | fuse.*) return 0 ;;
+  esac
+  return 1
+}
+
+slug() {
+  local s
+  s=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_')
+  s=${s##_}
+  s=${s%%_}
+  while [[ $s == *__* ]]; do s=${s//__/_}; done
+  printf '%s' "${s:-root}"
+}
+
+rank() {
+  case $1 in OK) echo 0 ;; WARNING) echo 1 ;; CRITICAL) echo 2 ;; *) echo 3 ;; esac
+}
+
+# measure MOUNT: "<used pct> <inode pct or -> <used bytes> <size bytes>", or fails.
+measure() {
+  local out
+  out=$("$STAT" -f -c '%S %b %f %a %c %d' -- "$1" 2>&1) || return 1
+  printf '%s\n' "$out" | awk '
+    NF == 6 && $1 > 0 {
+      bs = $1; used = ($2 - $3) * bs; avail = $4 * bs; size = $2 * bs
+      pct = (used + avail) > 0 ? int((used * 100 + (used + avail) - 1) / (used + avail)) : 0
+      ipct = "-"
+      if ($5 > 0) { iu = $5 - $6; ipct = int((iu * 100 + $5 - 1) / $5) }
+      printf "%d %s %.0f %.0f\n", pct, ipct, used, size
+      ok = 1
+    }
+    END { exit ok ? 0 : 1 }'
+}
+
+grade() {
+  local p=$1
+  if [[ $p == - ]]; then echo OK; return; fi
+  if [[ $p -ge $crit ]]; then echo CRITICAL
+  elif [[ $p -ge $warn ]]; then echo WARNING
+  else echo OK
+  fi
+}
+
+human() {
+  awk -v b="$1" 'BEGIN {
+    if (b >= 1099511627776) printf "%.1f TiB", b / 1099511627776
+    else if (b >= 1073741824) printf "%.1f GiB", b / 1073741824
+    else printf "%.1f MiB", b / 1048576 }'
+}
+
+[[ -r $PROC/self/mountinfo ]] || unknown "cannot read $PROC/self/mountinfo"
+table=$(mounts) || unknown "cannot read the mount table"
+
+state=OK
+parts=()
+perf=()
+
+# add MOUNT PREFIX: measure one filesystem and fold it into the result.
+add() {
+  local mp=$1 prefix=$2 m pct ipct used size s1 s2 s
+  m=$(measure "$mp") || unknown "statfs $mp failed"
+  read -r pct ipct used size <<< "$m"
+  s1=$(grade "$pct")
+  s2=$(grade "$ipct")
+  s=$s1
+  [[ $(rank "$s2") -gt $(rank "$s") ]] && s=$s2
+  [[ $(rank "$s") -gt $(rank "$state") ]] && state=$s
+  local text
+  if [[ $mode == one ]]; then
+    text="$mp ${pct}% used ($(human "$used") of $(human "$size"))"
+    [[ $ipct == - ]] || text+=", inodes ${ipct}%"
+  else
+    text="$mp ${pct}%"
+    [[ $ipct == - ]] || text+=" (inodes ${ipct}%)"
+  fi
+  parts+=("$text")
+  perf+=("${prefix}used_pct=${pct}%;$warn;$crit;0;100")
+  [[ $ipct == - ]] || perf+=("${prefix}inode_pct=${ipct}%;$warn;$crit;0;100")
+  perf+=("${prefix}used=${used}B" "${prefix}size=${size}B")
+}
+
+if [[ $mode == one ]]; then
+  line=$(printf '%s\n' "$table" | awk -F'\t' -v m="$mount" '$2 == m { l = $0 } END { if (l != "") print l }')
+  if [[ -z $line ]]; then
+    echo "DISK OK - $mount not mounted (on the RAM root; disk_root watches it)"
+    exit 0
+  fi
+  type=$(printf '%s' "$line" | cut -f3)
+  case $type in
+    tmpfs | ramfs)
+      echo "DISK OK - $mount is $type (RAM; disk_root watches it)"
+      exit 0
+      ;;
+  esac
+  add "$mount" ""
+else
+  declare -A seen=()
+  n=0
+  while IFS=$'\t' read -r dev mp type; do
+    [[ -n $mp ]] || continue
+    skip_type "$type" && continue
+    skip=0
+    for x in "${excludes[@]}"; do [[ $mp == "$x" ]] && skip=1; done
+    [[ $skip -eq 1 || -n ${seen[$dev]:-} ]] && continue
+    seen[$dev]=1
+    n=$((n + 1))
+    add "$mp" "$(slug "$mp")_"
+  done <<< "$table"
+  if [[ $n -eq 0 ]]; then
+    echo "DISK OK - no other persistent filesystem mounted"
+    exit 0
+  fi
+fi
+
+summary=""
+for p in "${parts[@]}"; do summary+="${summary:+; }$p"; done
+[[ $mode == all ]] && summary="${#parts[@]} filesystems: $summary"
+echo "DISK $state - $summary | ${perf[*]}"
+exit "$(rank "$state")"

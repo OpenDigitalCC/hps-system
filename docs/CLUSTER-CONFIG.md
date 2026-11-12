@@ -248,6 +248,8 @@ keys may be empty.
 | `audit_max_concurrent` | onboarding | Audit boots the IPS serves at once (0-1000; 0 = no limit) | `int:0..1000` | `2` | no |
 | `audit_timeout_seconds` | onboarding | Seconds after serving the audit image that an unfinished audit frees its slot (30-86400) | `int:30..86400` | `900` | no |
 | `monitor_interval_seconds` | monitoring | Seconds between resource checks of the paired nodes (10-86400; 0 disables) | `int0:10..86400` | `60` | no |
+| `monitor_disk_warn_pct` | monitoring | Percent of a persistent filesystem or pool used (space or inodes) that is a WARNING (1-100, below `monitor_disk_crit_pct`; otherwise both defaults are used) | `int:1..100` | `80` | no |
+| `monitor_disk_crit_pct` | monitoring | Percent of a persistent filesystem or pool used (space or inodes) that is CRITICAL (1-100); hps-monitor grades the nodes' `disk_*` and `zpool_cap` checks and the IPS's own disks with these, hps-ips-check its disk checks | `int:1..100` | `90` | no |
 | `held_reboot_after_audit` | onboarding | Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection) | `bool` | `true` | no |
 | `operator_api_listen` | operator | Address of this IPS where the ctrl-exec API listens with TLS for remote operators (empty: no remote operator; `docs/OPERATOR.md`) | `ip` | (empty) | no |
 | `ips_admin_read_timeout` | operator | Seconds to wait for the IPS's own ips-admin agent to answer, so long jobs (publish, storage) return their output (60-3600; needs ctrl-exec 0.14.7; `docs/OPERATOR.md`) | `int:60..3600` | `900` | no |

@@ -41,6 +41,26 @@ impossible and nothing in HPS could free space or grow the disk.
   `test_p3_200_ips_admin_datasets_and_define.bats`, the wiring tests, and
   `t/206-disk-grow.t`.
 
+## Disk checks: every persistent filesystem and pool, nodes and IPS (2026-11-12)
+
+- new (node image): `check_fs`, space and inode use, WARNING at 80% used,
+  CRITICAL at 90%. Checks `disk_var_lib_containers` and
+  `disk_var_lib_hps_ips` (container hosts: the CNH state disk),
+  `disk_var_lib_hps_builder` (builders) and `disk_other` (every other
+  persistent local filesystem, every node); `zpool_cap`
+  (`check_zpool -m cap`, pool capacity) on storage nodes. Takes effect with a
+  new node image.
+- new (IPS): hps-monitor also checks the IPS's own resources and log
+  filesystems each tick (host `ips.<domain>`, checks `disk_resources`,
+  `disk_log`), and grades the nodes' disk checks again with the new cluster
+  keys `monitor_disk_warn_pct` (default 80) and `monitor_disk_crit_pct`
+  (default 90), so a threshold change needs no image.
+- change: hps-ips-check `disk resources` and `disk log` WARN at
+  `monitor_disk_warn_pct` used and FAIL at `monitor_disk_crit_pct` (was: below
+  15% and 5% free), inodes included.
+- tests: `test_p3_207_disk_checks.bats`, `t/207-monitor-disk.t`; p3_90 and
+  `t/101-hps-monitor.t` updated.
+
 ## hps-log: read a host's or the IPS's recent syslog (2026-11-12)
 
 - new: `hps-log host <mac|hostname>` and `hps-log ips` (`--lines N` up to

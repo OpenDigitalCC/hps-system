@@ -156,6 +156,12 @@ my @CATALOGUE = (
     # Resource monitor (docs/MONITORING.md): hps-monitor loop, run under supervisor.
     _q(key => 'monitor_interval_seconds', group => 'monitoring', menu => 0,
         prompt => 'Seconds between resource checks of the paired nodes (10-86400; 0 disables)', rule => 'int0:10..86400', default => '60'),
+    # Persistent filesystems and pools (docs/MONITORING.md): hps-monitor grades the
+    # nodes' disk_*, zpool_cap and the IPS's own disks with these; hps-ips-check too.
+    _q(key => 'monitor_disk_warn_pct', group => 'monitoring', menu => 0,
+        prompt => 'Percent of a persistent filesystem or pool used (space or inodes) that is a WARNING (1-100, below monitor_disk_crit_pct)', rule => 'int:1..100', default => '80'),
+    _q(key => 'monitor_disk_crit_pct', group => 'monitoring', menu => 0,
+        prompt => 'Percent of a persistent filesystem or pool used (space or inodes) that is CRITICAL (1-100)', rule => 'int:1..100', default => '90'),
     _q(key => 'held_reboot_after_audit', group => 'onboarding', menu => 0,
         prompt => 'Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection)', rule => 'bool', default => 'true'),
 

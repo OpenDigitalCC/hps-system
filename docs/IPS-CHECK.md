@@ -46,7 +46,7 @@ hand.
 | `ctrl-exec api health` | `ctrl-exec-cli --socket $SOCK health` succeeds (no target, no authentication needed) | |
 | `rsyslog` | a `logger` message with a unique token appears in `ips/<date>.log` within 5 s | |
 | `chrony` | `chronyc tracking` answers and the leap status is Normal | Unsynchronised is a WARN (the cluster may have no upstream by design); chronyd not answering is a FAIL. |
-| `disk resources`, `disk log` | free space on `$HPS_RESOURCES` and `$HPS_LOG` is at least 15% | Below 15% WARN, below 5% FAIL. |
+| `disk resources`, `disk log` | space and inodes used on the filesystems of `$HPS_RESOURCES` and `$HPS_LOG` are below `monitor_disk_warn_pct` (default 80%) | At `monitor_disk_warn_pct` or more WARN, at `monitor_disk_crit_pct` (default 90%) or more FAIL; the higher of space and inodes counts (the grades of hps-monitor, `docs/MONITORING.md`). |
 | `registry` | `cluster.db` of the active cluster is readable and the IPS address is set | |
 
 ## What is probed over HTTP, and why it is safe

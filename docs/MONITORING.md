@@ -14,15 +14,17 @@ beyond the log.
   `nix/modules/hps-monitor.nix` installs it, a directory of plugins
   (`check_disk`, `check_load`, `check_swap`, `check_procs` from
   monitoring-plugins, `check_mem` from the plugin repository, and HPS's own
-  `check_zpool` and usage checks `check_cpu`, `check_net`, `check_diskio`,
-  `check_zpool_io` and `check_vms`) and `/etc/nagios-checks/checks.conf`.
+  `check_zpool`, `check_fs` and usage checks `check_cpu`, `check_net`,
+  `check_diskio`, `check_zpool_io` and `check_vms`) and
+  `/etc/nagios-checks/checks.conf`.
 - On the IPS: `bin/hps-monitor`, supervisor program `hps-monitor` running
   `hps-monitor loop`. It calls `scripts/hps-run.sh --json <fqdn> nagios-check --all`
   for each paired node and logs the result.
 
 The targets are the paired nodes only: hosts of the registry that the dispatcher
-also lists as agents (names starting `stale-` are ignored). The IPS and the host
-it runs on are never checked; there are no local checks.
+also lists as agents (names starting `stale-` are ignored). No node script runs
+on the IPS; a run of every node also checks the IPS's own resources and log
+filesystems locally (see below). The host the IPS runs on is never checked.
 
 ## Who decides what
 
@@ -45,6 +47,10 @@ The IPS sends the script name and `--all` and nothing else.
 | `swap` | `check_swap -w 30% -c 10%` | only a node with swap configured |
 | `zpool` | `check_zpool` (pool health; DEGRADED is WARNING, FAULTED and worse CRITICAL; capacity as perfdata) | storage nodes |
 | `zpool_io` | `check_zpool_io` (pool I/O and capacity in bytes, see below) | storage nodes |
+| `zpool_cap` | `check_zpool -m cap -w 80 -c 90` (how full each pool is, see below) | storage nodes |
+| `disk_var_lib_containers`, `disk_var_lib_hps_ips` | `check_fs -p <mount> -w 80 -c 90` (the CNH state disk, see below) | container hosts |
+| `disk_var_lib_hps_builder` | `check_fs -p /var/lib/hps-builder -w 80 -c 90` (the builder disk) | builders |
+| `disk_other` | `check_fs -a -x <the role mounts> -w 80 -c 90` (every other persistent filesystem) | every node |
 | `cpu` | `check_cpu` (CPU time by state, see below) | every node |
 | `net` | `check_net` (traffic per interface, see below) | every node |
 | `diskio` | `check_diskio` (throughput per whole disk, see below) | every node |
@@ -52,8 +58,57 @@ The IPS sends the script name and `--all` and nothing else.
 
 A netbooted node runs from RAM: `/` is a tmpfs and the store is a squashfs.
 `disk_root` therefore measures RAM taken by files written to `/`, and `mem` the
-RAM left. `disk` covers the real filesystems, which on these nodes are the
-mounted ZFS datasets. Thresholds are the plugin's example values.
+RAM left. The persistent filesystems and pools are the `disk_*` checks and
+`zpool_cap` (below). Other thresholds are the plugin's example values.
+
+## Persistent filesystems and pools
+
+A full persistent disk stops what lives on it (lab 2026-11-12: cnh-001's
+state disk filled, "No space left on device", and no check covered it). These
+checks grade space and inode use, WARNING at 80% used or more and CRITICAL at
+90%, the higher of the two counting:
+
+- `disk_<mount slug>` (`check_fs -p`): one per role disk the image mounts,
+  the slug being the mount point with `/` and `-` as `_`. Not mounted (no
+  disk prepared yet) or on tmpfs is OK and says so: the data is then on the
+  RAM root, which `disk_root` watches.
+- `disk_other` (`check_fs -a`): every other mounted filesystem except RAM and
+  pseudo filesystems (tmpfs, overlay, squashfs, proc, sysfs, cgroup, ...),
+  network filesystems, ZFS (its datasets share the pool: `zpool_cap`), the
+  role mounts above and a second mount of the same device (a bind mount).
+  No such filesystem is OK. A check per mount point is not possible for
+  these: `checks.conf` is fixed in the image and they are only known at run
+  time, so their figures carry the slug as a prefix (`srv_used_pct`).
+- `zpool_cap` (`check_zpool -m cap`): capacity of each imported pool from
+  `zpool list`, health aside (that is `zpool`).
+
+| Check | Status line and perf labels |
+| --- | --- |
+| `disk_<slug>` | `DISK OK - /var/lib/containers 41% used (12.3 GiB of 30.0 GiB), inodes 3%`; `used_pct`, `inode_pct` (left out where the filesystem has no fixed inode count), `used`, `size` (B) |
+| `disk_other` | `DISK OK - 2 filesystems: /srv 41% (inodes 3%); /data 12% (inodes 1%)`; the same labels prefixed `<slug>_` |
+| `zpool_cap` | `ZPOOL_CAP OK - 2 pools: lab 41% fast 3%`; `<pool>_cap` |
+
+The thresholds are cluster keys, `monitor_disk_warn_pct` (default 80) and
+`monitor_disk_crit_pct` (default 90). The node grades at 80 and 90 (they are
+in its image); hps-monitor grades the same figures (`used_pct`, `inode_pct`,
+`<pool>_cap`) again with the keys, so a change takes effect at the next tick
+with no new image. A state the IPS changed says so in the line: `(graded at
+warn 70% crit 85%)`. A warn not below crit, or a value outside 1 to 100, is
+logged once and both defaults are used. `hps-ips-check` grades its `disk
+resources` and `disk log` checks with the same keys.
+
+The IPS's own filesystems: a run of every node (the loop's, or `hps-monitor
+run` with no `--host`) also measures the filesystems of `$HPS_RESOURCES` and
+`$HPS_LOG` with `df` and logs them as host `ips.<cluster domain>`, checks
+`disk_resources` and `disk_log`, in the same form as a node's:
+
+```
+hps-monitor: host=ips.lab.hps check=disk_log state=CRITICAL DISK CRITICAL - /srv/hps-log 97% used (95.0 GiB of 97.9 GiB), inodes 34% on /srv | used_pct=97% inode_pct=34% used=...B size=...B
+hps-monitor: host=ips.lab.hps checks=2 worst=CRITICAL duration=0.0
+```
+
+The node checks take effect with a new node image; the IPS's with the IPS's
+tree.
 
 ## Usage checks: trend and baseline data
 

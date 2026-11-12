@@ -69,6 +69,13 @@ chmod 0755, $logger;
 $ENV{HPS_MONITOR_RUN}    = $runner;
 $ENV{HPS_MONITOR_AGENTS} = $agents;
 $ENV{HPS_MONITOR_LOGGER} = $logger;
+# The IPS's own filesystems: two directories and a df stub (t/207 covers the grading).
+make_path("$base/res", "$base/hpslog");
+$ENV{HPS_RESOURCES} = "$base/res";
+$ENV{HPS_LOG}       = "$base/hpslog";
+spew("$base/df.sh", "#!/bin/sh\ncase \"\$2\" in -i) printf 'Filesystem Inodes IUsed IFree IUse%% Mounted\\n/dev/x 1000 100 900 10%% /srv\\n' ;; *) printf 'Filesystem 1-blocks Used Available Capacity Mounted\\n/dev/x 1000 400 600 40%% /srv\\n' ;; esac\n");
+chmod 0755, "$base/df.sh";
+$ENV{HPS_MONITOR_DF} = "$base/df.sh";
 
 sub monitor { my $out = `perl $Bin/../bin/hps-monitor @_ 2>$base/stderr`; return ($? >> 8, $out) }
 sub reset_logs { unlink "$base/log", "$base/run-args" }
@@ -88,10 +95,13 @@ is($lines[3], 'hps-monitor: host=tch-001.hps.test check=load state=WARNING LOAD 
 is($lines[4], 'hps-monitor: host=tch-001.hps.test check=procs state=OK PROCS OK: 120 processes', 'no perfdata: no separator');
 like($lines[5], qr/^hps-monitor: host=tch-001\.hps\.test checks=2 worst=WARNING duration=$d$/, 'host summary, worst is WARNING');
 like($lines[6], qr/^hps-monitor: host=tch-002\.hps\.test state=UNREACHABLE hps-run exit 4: hps-run: no registered agent for tch-002\.hps\.test/, 'unreachable host: one line with the reason');
-like($lines[7], qr/^hps-monitor: tick hosts=3 duration=$d$/, 'tick line');
-is(scalar @lines, 8, 'nothing else');
+is($lines[7], "hps-monitor: host=ips.hps.test check=disk_resources state=OK DISK OK - $base/res 40% used (0.0 MiB of 0.0 MiB), inodes 10% on /srv | used_pct=40% inode_pct=10% used=400B size=1000B", 'the IPS: its resources filesystem');
+like($lines[8], qr/^hps-monitor: host=ips\.hps\.test check=disk_log state=OK DISK OK - \Q$base\E\/hpslog 40% used/, 'the IPS: its log filesystem');
+like($lines[9], qr/^hps-monitor: host=ips\.hps\.test checks=2 worst=OK duration=$d$/, 'the IPS: summary line');
+like($lines[10], qr/^hps-monitor: tick hosts=3 duration=$d$/, 'tick line');
+is(scalar @lines, 11, 'nothing else');
 is_deeply([ map { (split ' ')[0] } split /\n/, slurp("$base/log") ],
-    [ qw(info info info warning info warning err info) ], 'priorities: OK info, WARNING warning, unreachable err');
+    [ qw(info info info warning info warning err info info info info) ], 'priorities: OK info, WARNING warning, unreachable err');
 my @args = split /\n/, slurp("$base/run-args");
 is_deeply([ sort @args ], [ '--json sch-001.hps.test nagios-check --all', '--json tch-001.hps.test nagios-check --all', '--json tch-002.hps.test nagios-check --all' ],
     'the node is sent the script name and --all only; IPS, unpaired and stale hosts are not called');

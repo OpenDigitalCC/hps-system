@@ -85,9 +85,121 @@ sub parse_reply ($rc, $text, $err = '') {
         next unless ref $c eq 'HASH' && defined $c->{name};
         my $s = $c->{state} // '';
         $s = 'UNKNOWN' unless exists $RANK{$s};
-        push @checks, { name => $c->{name}, state => $s, summary => _one_line($c->{summary}), perf => perf_text($c->{perfdata}) };
+        push @checks, { name => $c->{name}, state => $s, summary => _one_line($c->{summary}),
+                        perf => perf_text($c->{perfdata}), pcts => _fill_pcts($c->{perfdata}) };
     }
     return { checks => \@checks };
+}
+
+#--- persistent filesystems (disk_*, zpool_cap) -------------------------------------
+# The node grades its own disk checks at 80/90 (hps-monitor.nix); the IPS grades
+# the same figures again with the cluster keys monitor_disk_warn_pct and
+# monitor_disk_crit_pct, so a threshold change needs no new image. The same
+# thresholds grade the IPS's own resources and log filesystems.
+
+use constant DISK_WARN => 80;
+use constant DISK_CRIT => 90;
+
+my $FILL_LABEL = qr/(?:\A|_)(?:used_pct|inode_pct|cap)\z/;
+
+# _fill_pcts(\@perfdata): the fill percentages of a disk check (labels
+# used_pct, inode_pct, <pool>_cap, any prefix; unit %).
+sub _fill_pcts ($perf) {
+    my @p;
+    for my $x (@{ $perf // [] }) {
+        next unless ref $x eq 'HASH' && defined $x->{label} && defined $x->{value};
+        push @p, $x->{value} + 0 if $x->{label} =~ $FILL_LABEL && ($x->{uom} // '') eq '%';
+    }
+    return \@p;
+}
+
+sub is_disk_check ($name) { return $name =~ /\Adisk_/ && $name ne 'disk_root' || $name eq 'zpool_cap' }
+
+# disk_thresholds($warn, $crit): (warn, crit, warning text). Each is the stored
+# key (undef when unset: the default silently); a value that is not 1..100, or
+# a warn not below crit, gives the defaults and a warning.
+sub disk_thresholds ($w, $c) {
+    my $ok = sub ($v) { defined $v && $v =~ /\A(?:[1-9][0-9]?|100)\z/ };
+    my @bad;
+    push @bad, "monitor_disk_warn_pct='$w'" if defined $w && length $w && !$ok->($w);
+    push @bad, "monitor_disk_crit_pct='$c'" if defined $c && length $c && !$ok->($c);
+    my $wv = $ok->($w) ? $w + 0 : DISK_WARN;
+    my $cv = $ok->($c) ? $c + 0 : DISK_CRIT;
+    if (!@bad && $wv >= $cv) { push @bad, "monitor_disk_warn_pct=$wv is not below monitor_disk_crit_pct=$cv" }
+    return (DISK_WARN, DISK_CRIT, join('; ', @bad) . '; using ' . DISK_WARN . ' and ' . DISK_CRIT) if @bad;
+    return ($wv, $cv, undef);
+}
+
+sub grade_pct ($pct, $warn, $crit) {
+    return 'CRITICAL' if $pct >= $crit;
+    return 'WARNING'  if $pct >= $warn;
+    return 'OK';
+}
+
+# regrade($parsed, $warn, $crit): the node's disk checks graded with the IPS's
+# thresholds (in place). A check the node could not measure (UNKNOWN, or no fill
+# figures: not mounted) keeps its state. A changed state is also put in the
+# summary's state word and noted.
+sub regrade ($parsed, $warn, $crit) {
+    for my $c (@{ $parsed->{checks} // [] }) {
+        next unless is_disk_check($c->{name}) && $c->{state} ne 'UNKNOWN' && @{ $c->{pcts} // [] };
+        my $s = 'OK';
+        for my $p (@{ $c->{pcts} }) {
+            my $g = grade_pct($p, $warn, $crit);
+            $s = $g if $RANK{$g} > $RANK{$s};
+        }
+        next if $s eq $c->{state};
+        $c->{summary} =~ s/\A(\S+) \Q$c->{state}\E\b/$1 $s/;
+        $c->{summary} .= " (graded at warn $warn% crit $crit%)";
+        $c->{state} = $s;
+    }
+    return $parsed;
+}
+
+# parse_df($df, $dfi): {size, used, avail, pct, ipct, mount} from the text of
+# `df -P -B1 <path>` and `df -P -i <path>`; undef when it is not readable.
+# ipct is undef where the filesystem has no fixed inode count ("-").
+sub parse_df ($df, $dfi = '') {
+    my @l = grep { length } split /\n/, $df // '';
+    my @f = split ' ', $l[-1] // '';
+    return undef unless @l >= 2 && @f >= 6 && $f[1] =~ /\A\d+\z/ && $f[2] =~ /\A\d+\z/ && $f[3] =~ /\A\d+\z/;
+    my ($size, $used, $avail) = @f[1 .. 3];
+    my $den = $used + $avail;
+    my $pct = $den > 0 ? int(($used * 100 + $den - 1) / $den) : 0;
+    my $ipct;
+    my @i = grep { length } split /\n/, $dfi // '';
+    my @g = split ' ', $i[-1] // '';
+    if (@i >= 2 && @g >= 6 && $g[1] =~ /\A\d+\z/ && $g[1] > 0 && $g[2] =~ /\A\d+\z/) {
+        $ipct = int(($g[2] * 100 + $g[1] - 1) / $g[1]);
+    }
+    return { size => $size + 0, used => $used + 0, avail => $avail + 0, pct => $pct, ipct => $ipct, mount => $f[-1] };
+}
+
+sub _human ($b) {
+    return sprintf('%.1f TiB', $b / 1024**4) if $b >= 1024**4;
+    return sprintf('%.1f GiB', $b / 1024**3) if $b >= 1024**3;
+    return sprintf('%.1f MiB', $b / 1024**2);
+}
+
+# fs_check($name, $path, $fs, $warn, $crit): one check result in the form of
+# parse_reply's, for the IPS's own filesystems. $fs from parse_df, or undef
+# with $why saying what failed.
+sub fs_check ($name, $path, $fs, $warn, $crit, $why = 'df failed') {
+    return { name => $name, state => 'UNKNOWN', summary => "DISK UNKNOWN - $path: " . _one_line($why), perf => '', pcts => [] }
+        unless $fs;
+    my $s = grade_pct($fs->{pct}, $warn, $crit);
+    if (defined $fs->{ipct}) {
+        my $g = grade_pct($fs->{ipct}, $warn, $crit);
+        $s = $g if $RANK{$g} > $RANK{$s};
+    }
+    my $sum = sprintf('DISK %s - %s %d%% used (%s of %s)', $s, $path, $fs->{pct}, _human($fs->{used}), _human($fs->{size}));
+    $sum .= ", inodes $fs->{ipct}%" if defined $fs->{ipct};
+    $sum .= " on $fs->{mount}" if $fs->{mount} ne $path;
+    my $perf = "used_pct=$fs->{pct}%";
+    $perf .= " inode_pct=$fs->{ipct}%" if defined $fs->{ipct};
+    $perf .= " used=$fs->{used}B size=$fs->{size}B";
+    return { name => $name, state => $s, summary => $sum, perf => $perf,
+             pcts => [ $fs->{pct}, defined $fs->{ipct} ? $fs->{ipct} : () ] };
 }
 
 # host_lines($host, $parsed, $duration): list of [priority, line] for one host.

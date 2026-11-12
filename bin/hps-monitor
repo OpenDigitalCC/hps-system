@@ -4,7 +4,11 @@
 # Asks each paired node to run its configured checks (the ctrl-exec nagios-check
 # node script, called through scripts/hps-run.sh with the single argument --all:
 # the IPS sends nothing but that) and logs every result to syslog, OK ones too.
-# Never checks the IPS or its host. `loop` runs under supervisor (program:hps-monitor).
+# No node script runs on the IPS: its own resources and log filesystems are
+# checked here, with df (host=ips.<domain>, checks disk_resources and disk_log).
+# Disk checks of the nodes (disk_<mount>, disk_other, zpool_cap) are graded
+# again with the cluster keys monitor_disk_warn_pct and monitor_disk_crit_pct.
+# `loop` runs under supervisor (program:hps-monitor).
 use strict;
 use warnings;
 use FindBin qw($RealBin);
@@ -22,6 +26,7 @@ $| = 1;
 
 my $PARALLEL     = 8;     # nodes checked at once
 my $HOST_TIMEOUT = 70;    # seconds per node call (the node's own budget is 50)
+my @THRESH = (HPS::Monitor::DISK_WARN, HPS::Monitor::DISK_CRIT);    # this run's disk grades
 
 sub usage {
     my ($msg) = @_;
@@ -33,14 +38,19 @@ Usage:
   hps-monitor interval
 run checks every paired node (or the named hosts: MAC, registry HOSTNAME or FQDN)
 once, logs one line per check and one summary line per host to syslog and prints the
-same lines, then "hps-monitor: tick hosts=<n> duration=<s>". loop runs run every
+same lines; a run of every node also checks the IPS's own resources and log
+filesystems (host=ips.<domain>: disk_resources, disk_log; space and inodes); then
+"hps-monitor: tick hosts=<n> duration=<s>". Disk checks (the IPS's, and the nodes'
+disk_<mount>, disk_other and zpool_cap) are graded WARNING at monitor_disk_warn_pct
+(default 80) percent used and CRITICAL at monitor_disk_crit_pct (default 90). loop runs run every
 monitor_interval_seconds (cluster key; default 60, 0 disables, else 10..86400),
 reading the key afresh each tick; a run that overruns its interval skips the ticks it
 covered and logs one line saying so. interval prints the effective interval.
 Environment: HPS_MONITOR_RUN (default scripts/hps-run.sh), HPS_MONITOR_AGENTS (command
 printing the paired agent names; default: ctrl-exec-dispatcher list-agents --json),
 HPS_MONITOR_LOGGER (command called as <cmd> <priority> <line>; default logger -t hps
--p local0.<priority>).
+-p local0.<priority>), HPS_MONITOR_DF (df command; default df), HPS_RESOURCES and
+HPS_LOG (the two IPS paths; default /srv/hps-resources, /srv/hps-log).
 Exit: 0 ok, 2 usage, 1 failed.
 USAGE
     return 2;
@@ -112,7 +122,7 @@ sub check_host {
     my ($host, $dir, $idx) = @_;
     my $t0 = time;
     my ($rc, $out, $err) = call_host($host, $dir, $idx);
-    my $parsed = HPS::Monitor::parse_reply($rc, $out, $err);
+    my $parsed = HPS::Monitor::regrade(HPS::Monitor::parse_reply($rc, $out, $err), @THRESH);
     return [ HPS::Monitor::host_lines($host, $parsed, time - $t0) ];
 }
 
@@ -123,6 +133,11 @@ sub run_once {
     my (@hosts) = @_;
     my $t0 = time;
     my $reg = registry();
+    my $all = !@hosts;
+    my ($warn, $crit, $twarn) = current_thresholds();
+    @THRESH = ($warn, $crit);
+    emit('warning', "hps-monitor: $twarn") if defined $twarn && (!$memo || ($memo->{_twarn} // '') ne $twarn);
+    $memo->{_twarn} = $twarn // '' if $memo;
     if (!@hosts) {
         @hosts = HPS::Monitor::targets([ agent_names() ], $reg);
     } else {
@@ -179,6 +194,11 @@ sub run_once {
         my @emit = $memo ? HPS::Monitor::throttle($memo, $hosts[$idx], $lines, time) : @$lines;
         emit(@$_) for @emit;
     }
+    if ($all) {
+        my $t1 = time;
+        my @checks = ips_checks($warn, $crit);
+        emit(@$_) for HPS::Monitor::host_lines(ips_name($reg), { checks => \@checks }, time - $t1);
+    }
     emit('info', sprintf('hps-monitor: tick hosts=%d duration=%.1f', scalar @hosts, time - $t0));
     return;
 }
@@ -196,6 +216,45 @@ sub resolve_name {
     }
     my $f = defined $mac ? eval { $reg->fqdn($mac) } : undef;
     return defined $f ? $f : $name;
+}
+
+# The IPS's own filesystems, checked locally with df.
+sub df_text {
+    my (@args) = @_;
+    my $cmd = $ENV{HPS_MONITOR_DF};
+    my @argv = ((defined $cmd && length $cmd ? $cmd : 'df'), @args);
+    open(my $fh, '-|', @argv) or return (undef, "cannot run $argv[0]: $!");
+    my $text = do { local $/; <$fh> };
+    close $fh;
+    return ($text, $? == 0 ? undef : "$argv[0] exit " . ($? >> 8));
+}
+
+sub ips_checks {
+    my ($warn, $crit) = @_;
+    my @out;
+    for my $c ([ disk_resources => $ENV{HPS_RESOURCES} || '/srv/hps-resources' ], [ disk_log => $ENV{HPS_LOG} || '/srv/hps-log' ]) {
+        my ($name, $path) = @$c;
+        if (!-d $path) { push @out, HPS::Monitor::fs_check($name, $path, undef, $warn, $crit, 'does not exist'); next }
+        my ($df, $e1)  = df_text('-P', '-B1', '--', $path);
+        my ($dfi)      = df_text('-P', '-i', '--', $path);
+        my $fs = defined $df ? HPS::Monitor::parse_df($df, $dfi) : undef;
+        push @out, HPS::Monitor::fs_check($name, $path, $fs, $warn, $crit, $e1 // 'df gave no readable answer');
+    }
+    return @out;
+}
+
+# The IPS's name in the lines: its agent name ips.<cluster domain>, as the nodes are named.
+sub ips_name {
+    my ($reg) = @_;
+    my $d = eval { $reg->cluster_dns_domain } // '';
+    return length $d ? "ips.$d" : 'ips';
+}
+
+sub current_thresholds {
+    my $cc = eval { HPS::ClusterConfig->new(logger => sub { }) };
+    my $w = $cc ? eval { $cc->get('monitor_disk_warn_pct') } : undef;
+    my $c = $cc ? eval { $cc->get('monitor_disk_crit_pct') } : undef;
+    return HPS::Monitor::disk_thresholds($w, $c);
 }
 
 sub current_interval {
