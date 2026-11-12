@@ -66,6 +66,8 @@
 : "${CTRL_EXEC_API_SOCKET:=/run/ctrl-exec-api/api.sock}"
 : "${CTRL_EXEC_API_SOCKET_GROUP:=ctrl-exec}"
 : "${CTRL_EXEC_DISPATCHER_CONF:=${CTRL_EXEC_DISPATCHER_CONF_DIR}/ctrl-exec.conf}"
+# Seconds a dispatch waits for an agent's reply (ctrl-exec.conf read_timeout).
+: "${CTRL_EXEC_AGENT_READ_TIMEOUT:=900}"
 
 #===============================================================================
 # _ce_persist_dir
@@ -223,6 +225,14 @@ ce_api_bring_up() {
         return 1
       }
       hps_log info "ce_api_bring_up: api_socket set in $conf"
+    fi
+    # How long a dispatch waits for an agent's reply. ctrl-exec's default (60s)
+    # is shorter than node scripts that write an image or a pool take, so the
+    # run failed while the script went on. Appended once; a read_timeout
+    # already in the config is left alone.
+    if ! grep -qE '^[[:space:]]*read_timeout[[:space:]]*=' "$conf"; then
+      printf '\n# HPS: node scripts (vm-image-write, storage) run for minutes\nread_timeout = %s\n' \
+        "$CTRL_EXEC_AGENT_READ_TIMEOUT" >> "$conf" || hps_log warn "ce_api_bring_up: cannot set read_timeout"
     fi
     # The TCP listener: off, unless the cluster key operator_api_listen names
     # an address of this IPS, where it listens with TLS for remote operators

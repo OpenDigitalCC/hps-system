@@ -130,6 +130,15 @@ impossible and nothing in HPS could free space or grow the disk.
   retried.
 - tests: `t/209-workload-stop-order.t`.
 
+## Node script runs may take longer than a minute (2026-11-12)
+
+- fix: the dispatcher waited 60 s (ctrl-exec's default `read_timeout`) for a
+  node agent's reply, so `vm-image-write` of a 4G probe disk on s1 failed with
+  "read timeout after 60s" while the write went on. IPS bring-up now appends
+  `read_timeout = 900` (`CTRL_EXEC_AGENT_READ_TIMEOUT`) to ctrl-exec.conf once;
+  a value already there is kept.
+- tests: `test_p2_62_api_bring_up.bats`.
+
 ## repo update orders pre-release tags correctly (2026-11-12)
 
 - fix: repo update's newest-release check ranked every pre-release kind the

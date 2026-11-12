@@ -144,3 +144,13 @@ teardown() {
   [ -x "$BATS_TEST_DIRNAME/../ctrl-exec-auth-hook.sh" ]
   grep -q 'ENVEXEC_PEER_UID' "$BATS_TEST_DIRNAME/../ctrl-exec-auth-hook.sh"
 }
+
+@test "read_timeout 900 is appended once; one already set is left alone" {
+  ce_api_bring_up
+  ce_api_bring_up
+  [ "$(grep -c '^read_timeout = 900$' "$CTRL_EXEC_DISPATCHER_CONF")" -eq 1 ]
+  printf 'port = 7443\nread_timeout = 120\n' > "$CTRL_EXEC_DISPATCHER_CONF"
+  ce_api_bring_up
+  [ "$(grep -c '^read_timeout' "$CTRL_EXEC_DISPATCHER_CONF")" -eq 1 ]
+  grep -qx 'read_timeout = 120' "$CTRL_EXEC_DISPATCHER_CONF"
+}
