@@ -8,6 +8,10 @@
 #   never-running / stubborn start never completes / shutdown is ignored
 #   caps          space-separated security models virsh capabilities lists
 #   curl-body     what the curl shim "downloads"
+#   mem.<vm>      the guest's memory in MiB (dominfo "Max memory"); else from
+#                 xml.<vm>'s <memory unit='MiB'>, else 1024
+# $HPS_CGROUP_ROOT is $TEST_DIR/cgroup (empty: vm-start has no memory budget
+# unless a test writes machine.slice/memory.max there).
 
 p3_20_setup() {
   p2_setup_dirs
@@ -15,6 +19,7 @@ p3_20_setup() {
   export HPS_LIBVIRT_LOGDIR="$TEST_DIR/log"
   export HPS_VM_STEP=0.01
   export HPS_VM_WAIT=3
+  export HPS_CGROUP_ROOT="$TEST_DIR/cgroup"
   mkdir -p "$HPS_DEV/md" "$HPS_LIBVIRT_LOGDIR"
   DISK="$HPS_DEV/md/vm1-disk0"
   head -c 4096 /dev/zero > "$DISK"
@@ -37,7 +42,11 @@ state() { cat "$STATE/dom.$1"; }
 case "$cmd" in
   dominfo)
     [[ -e "$STATE/dom.$vm" ]] || { echo "error: failed to get domain '$vm'" >&2; exit 1; }
-    printf 'Name:           %s\nState:          %s\nSecurity model: %s\nSecurity DOI:   0\n' "$vm" "$(state "$vm")" "${FAKE_SECMODEL:-apparmor}" ;;
+    mem=1024
+    if [[ -e "$STATE/mem.$vm" ]]; then mem=$(cat "$STATE/mem.$vm")
+    elif [[ -e "$STATE/xml.$vm" ]] && grep -q "<memory unit='MiB'>" "$STATE/xml.$vm"; then
+      mem=$(sed -n -E "s/.*<memory unit='MiB'>([0-9]+)<.*/\1/p" "$STATE/xml.$vm" | head -n 1); fi
+    printf 'Name:           %s\nState:          %s\nMax memory:     %s KiB\nSecurity model: %s\nSecurity DOI:   0\n' "$vm" "$(state "$vm")" "$((mem * 1024))" "${FAKE_SECMODEL:-apparmor}" ;;
   domstate)
     [[ -e "$STATE/dom.$vm" ]] || { echo "error: failed to get domain '$vm'" >&2; exit 1; }
     if [[ -e "$STATE/pending.$vm" ]]; then

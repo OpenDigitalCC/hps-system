@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+#
+# host-reserve-apply - keep CPU, memory and IO for the host itself, so its
+# guests cannot starve it (or, through it, each other).
+#
+# ctrl-exec allowlisted node script; also run once per boot by
+# hps-host-reserve.service (nix/modules/hps-node.nix), before pairing, so the
+# reserve is in place before any guest starts. Usage: host-reserve-apply (no
+# arguments). Idempotent: a second run sets the same values. Runtime only: the
+# node runs from RAM and every boot applies it again.
+#
+# Owner, 2026-11-12: "vm host must be protected primarily so it has enough
+# resource to manage the raid, on storage so they can run the zfs, and on vm
+# host so it can manage its vm's."
+#
+# Cluster keys (IPS cmd=cluster_variable; docs/CLUSTER-CONFIG.md "Host
+# reserve"). An absent, empty or unreadable key, or a value out of range, takes
+# the default (logged): the reserve is always on.
+#   host_reserve_cpus     logical CPUs kept for the host: the first N online
+#                         CPUs. Default: 1, or 2 on a host with 16 or more.
+#                         0: none kept. At least one CPU is always left to guests.
+#   host_reserve_mem_mib  MiB kept for the host. Default: 10% of RAM, at least 2048.
+#   zfs_arc_max_pct       the ZFS ARC cap, percent of RAM, at least 1024 MiB.
+#                         Default 25. Storage hosts (role SCH) only.
+#
+# What it sets (roles from /etc/hps/roles):
+#   SCH  zfs_arc_max = the cap, in bytes: /sys/module/zfs/parameters/zfs_arc_max
+#        when the module is loaded, and /run/modprobe.d/hps-zfs-arc.conf for a
+#        later load. The ARC then never grows into the guests' memory.
+#   TCH  systemctl set-property --runtime machine.slice (every libvirt guest):
+#          AllowedCPUs  the online CPUs less the host's
+#          CPUWeight=50, IOWeight=50  (system.slice keeps the default 100)
+#          MemoryMax    RAM - host_reserve_mem_mib - ARC cap (SCH only),
+#                       at least 512 MiB (a warning when the floor is used)
+#        MemoryHigh is not set: the nodes have no swap, so throttling the
+#        guests' anonymous memory would only stall them; MemoryMax is the line.
+# Then $HPS_RUN_DIR/host-reserve records the values (key=value, read by
+# host-resources). No role SCH or TCH: nothing to set, only the record.
+#
+# Last line on success: HOST-RESERVE roles=<r> cpus=<n> host_cpus=<list|none>
+#   guest_cpus=<list|-> mem_total_mib=<n> host_mem_mib=<n> arc_max_mib=<n|->
+#   guest_mem_max_mib=<n|->
+# Exit: 0 applied, 2 usage, 1 a command failed.
+#
+# Overrides for tests: HPS_CMDLINE, HPS_RUN_DIR, HPS_ROLES_FILE, HPS_MEMINFO,
+# HPS_CPU_ONLINE, HPS_ZFS_PARAMS, HPS_MODPROBE_DIR.
+
+set -euo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_RUN_DIR:=/run/hps}"
+: "${HPS_ROLES_FILE:=/etc/hps/roles}"
+: "${HPS_MEMINFO:=/proc/meminfo}"
+: "${HPS_CPU_ONLINE:=/sys/devices/system/cpu/online}"
+: "${HPS_ZFS_PARAMS:=/sys/module/zfs/parameters}"
+: "${HPS_MODPROBE_DIR:=/run/modprobe.d}"
+
+GUEST_CPU_WEIGHT=50
+GUEST_IO_WEIGHT=50
+GUEST_MEM_FLOOR=512
+IPS=""
+ROLES=""
+
+log() {
+  printf '[host-reserve-apply] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# key <name>: the cluster key's value, empty when absent or unreadable.
+key() {
+  local out rc
+  [[ -n "$IPS" ]] || return 0
+  set +e
+  out=$(run curl -fsS --max-time 10 "http://${IPS}/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=$1" 2> /dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    printf '%s\n' "$out"
+  elif [[ $rc -ne 22 ]]; then
+    log "cannot read $1 from the IPS (curl exit $rc): default used"
+  fi
+}
+
+# key_int <name> <min> <max>: the key as an integer in range, else empty (default).
+key_int() {
+  local v
+  v=$(key "$1")
+  [[ -n "$v" ]] || return 0
+  if [[ "$v" =~ ^(0|[1-9][0-9]{0,8})$ ]] && ((v >= $2 && v <= $3)); then
+    printf '%s\n' "$v"
+  else
+    log "$1 '$v' is not $2-$3: default used"
+  fi
+}
+
+has_role() {
+  [[ ",$ROLES," == *",$1,"* ]]
+}
+
+# online_cpus: the online CPU ids, one per line, from a list like 0-3,8,10-11.
+online_cpus() {
+  local part a b
+  local -a parts
+  IFS=',' read -r -a parts < "$HPS_CPU_ONLINE"
+  for part in "${parts[@]}"; do
+    part=${part//[[:space:]]/}
+    if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      a=${BASH_REMATCH[1]}
+      b=${BASH_REMATCH[2]}
+      seq "$a" "$b"
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$part"
+    fi
+  done
+}
+
+# cpu_list <id...>: ids in ascending order as a compact list (0-3,8).
+cpu_list() {
+  local out="" start="" prev="" id
+  for id in "$@" end; do
+    if [[ "$id" != end && -n "$prev" && $id -eq $((prev + 1)) ]]; then
+      prev=$id
+      continue
+    fi
+    if [[ -n "$start" ]]; then
+      out+="${out:+,}$start"
+      if ((prev != start)); then
+        out+="-$prev"
+      fi
+    fi
+    start=$id
+    prev=$id
+  done
+  printf '%s\n' "$out"
+}
+
+main() {
+  local -a cpus
+  local n reserve_cpus mem_kib total reserve_mem pct arc=0 budget host_list guest_list
+  if [[ $# -ne 0 ]]; then
+    log "takes no arguments"
+    exit 2
+  fi
+  IPS=$(cmdline_value hps.ips || true)
+  [[ -n "$IPS" ]] || log "hps.ips absent from the command line: the cluster keys take their defaults"
+  if [[ -r "$HPS_ROLES_FILE" ]]; then
+    ROLES=$(tr -d '[:space:]' < "$HPS_ROLES_FILE")
+  fi
+
+  mapfile -t cpus < <(online_cpus)
+  n=${#cpus[@]}
+  ((n >= 1)) || { log "no online CPU read from $HPS_CPU_ONLINE"; exit 1; }
+  reserve_cpus=$(key_int host_reserve_cpus 0 1024)
+  if [[ -z "$reserve_cpus" ]]; then
+    reserve_cpus=1
+    ((n >= 16)) && reserve_cpus=2
+  fi
+  if ((reserve_cpus >= n)); then
+    log "host_reserve_cpus $reserve_cpus leaves no CPU of $n to guests: $((n - 1)) kept"
+    reserve_cpus=$((n - 1))
+  fi
+  host_list=$(cpu_list "${cpus[@]:0:reserve_cpus}")
+  guest_list=$(cpu_list "${cpus[@]:reserve_cpus}")
+
+  mem_kib=$(awk '/^MemTotal:/ { print $2; exit }' "$HPS_MEMINFO")
+  [[ "$mem_kib" =~ ^[0-9]+$ ]] || { log "no MemTotal in $HPS_MEMINFO"; exit 1; }
+  total=$((mem_kib / 1024))
+  reserve_mem=$(key_int host_reserve_mem_mib 256 16777216)
+  if [[ -z "$reserve_mem" ]]; then
+    reserve_mem=$((total / 10))
+    ((reserve_mem >= 2048)) || reserve_mem=2048
+  fi
+
+  if has_role SCH; then
+    pct=$(key_int zfs_arc_max_pct 1 90)
+    pct=${pct:-25}
+    arc=$((total * pct / 100))
+    ((arc >= 1024)) || arc=1024
+    mkdir -p "$HPS_MODPROBE_DIR"
+    log "+ echo 'options zfs zfs_arc_max=$((arc * 1048576))' > $HPS_MODPROBE_DIR/hps-zfs-arc.conf"
+    printf 'options zfs zfs_arc_max=%s\n' "$((arc * 1048576))" > "$HPS_MODPROBE_DIR/hps-zfs-arc.conf"
+    if [[ -w "$HPS_ZFS_PARAMS/zfs_arc_max" ]]; then
+      log "+ echo $((arc * 1048576)) > $HPS_ZFS_PARAMS/zfs_arc_max"
+      printf '%s\n' "$((arc * 1048576))" > "$HPS_ZFS_PARAMS/zfs_arc_max"
+    else
+      log "zfs module not loaded: the ARC cap applies when it loads ($HPS_MODPROBE_DIR/hps-zfs-arc.conf)"
+    fi
+  fi
+
+  budget=$((total - reserve_mem - arc))
+  if ((budget < GUEST_MEM_FLOOR)); then
+    log "warning: RAM $total MiB less host $reserve_mem MiB and ARC $arc MiB leaves $budget MiB for guests; $GUEST_MEM_FLOOR MiB used"
+    budget=$GUEST_MEM_FLOOR
+  fi
+
+  if has_role TCH; then
+    run systemctl set-property --runtime machine.slice "AllowedCPUs=$guest_list" \
+      "CPUWeight=$GUEST_CPU_WEIGHT" "IOWeight=$GUEST_IO_WEIGHT" "MemoryMax=${budget}M"
+  else
+    guest_list="-"
+    budget="-"
+  fi
+  has_role SCH || arc="-"
+
+  mkdir -p "$HPS_RUN_DIR"
+  printf 'roles=%s\ncpus=%s\nhost_cpus=%s\nguest_cpus=%s\nmem_total_mib=%s\nhost_mem_mib=%s\narc_max_mib=%s\nguest_mem_max_mib=%s\n' \
+    "${ROLES:-none}" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget" \
+    > "$HPS_RUN_DIR/host-reserve"
+  printf 'HOST-RESERVE roles=%s cpus=%s host_cpus=%s guest_cpus=%s mem_total_mib=%s host_mem_mib=%s arc_max_mib=%s guest_mem_max_mib=%s\n' \
+    "${ROLES:-none}" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget"
+}
+
+main "$@"

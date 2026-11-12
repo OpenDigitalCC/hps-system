@@ -42,6 +42,11 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `nets` | non-empty; every entry is a name in the cluster key `network_layout`, or an object `{"net": "<name>", "pvid": 1-4094, "tagged": [1-4094, ...], "model": "virtio\|e1000e\|rtl8139"}` (only `net` is required). One NIC per entry. `pvid` and `tagged` apply only to a fabric net (layout `kind: fabric`), whose NIC must have a `pvid`; `tagged` VLANs are distinct and not the pvid. Passed to `vm-define` as `--vlan-pvid`, `--vlan-tagged`, `--nic-model` after the `--net`. A vxlan net (layout `kind: vxlan`, `docs/CLUSTER-CONFIG.md`) is named like any other (`"nets": ["client"]`); its NIC sits on the layout bridge (`--net br-client`); its compute host must be a transit host (TYPE `TCH`, NixOS, with a transit address) |
 | `hardware` | optional object: `disk_bus` (`virtio` default, `scsi`, `sata`; not `virtio` needs a disk) and `smbios` (`vendor` and `product` required, `serial` optional; each letters, digits, space, `.`, `_`, `-`, first character alphanumeric, at most 63). Passed to `vm-define` as `--disk-bus` and `--smbios` |
 | `seed` | optional, `boot: disk` only: a cloud-init NoCloud seed `{"user_data": "...", "network_config": "...", "meta_data": "..."}`. Every value a JSON string (a number, boolean, null, list or object is refused), no NUL; `user_data` required and non-empty, at most 64 KiB; `network_config` optional, at most 16 KiB; `meta_data` optional, at most 4 KiB (default, written on the node: `instance-id: <vm>`, `local-hostname: <vm>`). Sizes count UTF-8 bytes. See "A guest seed" |
+| `cpu_weight` | optional, 1-10000: the VM's CPU weight against the other guests on its host when the CPUs are contended (libvirt `<cputune><shares>`, cgroup v2 `cpu.weight`). Default (vm-define): 100 per vCPU. See "Resource limits" |
+| `cpu_max_pct` | optional, 1-100: each vCPU may use at most this percent of one host CPU (`<cputune>` period 100000 µs, quota). Default: no cap |
+| `mem_hard_limit_mib` | optional, at least `memory_mib` + 128, at most 1048576: the most the VM's QEMU process may hold, guest RAM and QEMU's own (`<memtune><hard_limit>`); over it the kernel kills that guest, never a neighbour. Default (vm-define): `memory_mib` + 256 + `memory_mib`/16 |
+| `io_weight` | optional, 10-1000: `<blkiotune><weight>`. Default: none. Best effort (see "Resource limits") |
+| `disks[].iops_max`, `disks[].mbps_max` | optional, per disk: QEMU throttling of that disk (`<iotune>` `total_iops_sec`, `total_bytes_sec` = MiB/s × 1048576). `iops_max` 1-99999999, `mbps_max` 1-999999. Default: no throttle |
 | compute host | the host of the VM's local legs (all on one host), else `compute_host`; neither: refused |
 | unknown fields | refused |
 
@@ -229,6 +234,70 @@ nothing). A node call that exits non-zero ends the run at once.
 
 `--vm` selects one VM (start, stop, status, console). `--allow-any-pool-name` (create,
 destroy) passes through to `HPS::Storage`: pools are named after the cluster.
+
+## Resource limits
+
+Owner, 2026-11-12: "can we set some limits inside the vm's so that they dont
+interfere with the base and neighbours. these can be declared in the config.
+vm host must be protected primarily so it has enough resource to manage the
+raid, on storage so they can run the zfs, and on vm host so it can manage its
+vm's." (Lab: a builder VM compiling a NixOS image drove the nested storage
+VMs to LOAD CRITICAL and the DL360 to 7-9 % memory available.)
+
+Two layers, both on by default:
+
+1. **The host first** (every node, at boot; `docs/CLUSTER-CONFIG.md` "Host
+   reserve"). `host-reserve-apply` keeps the first `host_reserve_cpus`
+   logical CPUs and `host_reserve_mem_mib` of RAM for the host and, on a
+   storage host, caps the ZFS ARC at `zfs_arc_max_pct` of RAM. Every libvirt
+   guest lives in `machine.slice`, which gets the other CPUs
+   (`AllowedCPUs`), `CPUWeight=50` and `IOWeight=50` (the host's
+   `system.slice` keeps 100) and `MemoryMax` = RAM - host reserve - ARC cap.
+   md resync, ZFS, iscsid, libvirtd, ctrl-exec and rsyslog always have
+   their CPUs and memory; the guests share the rest.
+2. **Per VM** (the definition fields above). Every VM gets a CPU weight in
+   proportion to its vCPUs and a memory hard limit a little above its RAM,
+   so one guest cannot take the others' share. A noisy guest (an image
+   builder, a batch job) is capped further by hand.
+
+`vm-start` refuses (3) to start a guest whose memory, with the memory of the
+guests already running on the host, is over `machine.slice`'s memory limit:
+the slice's OOM killer would otherwise kill a running guest. The check is at
+start, not at create, because a defined but stopped guest holds no memory;
+the way to fit more guests is a smaller `host_reserve_mem_mib` or a bigger
+host, never an override.
+
+A builder, capped (half a host CPU per vCPU, a quarter of the default weight,
+its disk at 200 MiB/s and 2000 IOPS):
+
+```json
+{"name": "bld-001", "memory_mib": 8192, "vcpus": 4, "image": "debian-13-generic-amd64",
+ "nets": ["mgmt"], "priority": 5,
+ "cpu_max_pct": 50, "cpu_weight": 100,
+ "disks": [{"name": "work", "size": "200G", "legs": [{"host": "$NODE", "pool": "$POOL"}],
+            "iops_max": 2000, "mbps_max": 200}]}
+```
+
+What each lever does, and what it does not:
+
+- `cpu_max_pct` is a hard cap (CFS bandwidth): the guest never gets more,
+  even on an idle host. `cpu_weight` only matters when the CPUs are
+  contended. The host's reserved CPUs are outside the guests' cpuset either
+  way.
+- `mem_hard_limit_mib` too low kills the guest when QEMU grows (libvirt
+  warns of this); the default leaves 256 MiB plus 1/16 of the RAM.
+- `iops_max` / `mbps_max` are enforced by QEMU itself and work on any disk.
+  `io_weight` and the slice's `IOWeight` are cgroup weights: the kernel
+  applies them only on a device whose scheduler is BFQ or with io.cost
+  configured, and the I/O of a zvol is issued by ZFS's own threads, not by
+  the guest. Treat them as best effort; throttle with `iops_max` /
+  `mbps_max`.
+- A limit is part of the vm-define arguments `create` records: changing it
+  on a created workload makes a later re-define refuse (the definition no
+  longer matches the record). Destroy and create to change it.
+
+`hps-node resources <host>` shows what a host applied and holds (node
+script `host-resources`, read-only).
 
 ## Stop order on a node
 

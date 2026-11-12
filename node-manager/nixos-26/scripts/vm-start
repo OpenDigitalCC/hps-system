@@ -27,6 +27,16 @@
 #   bridge vlan add dev <tap> vid <v>          (per tagged VLAN)
 # A guest with no such metadata gets no bridge call. Needs `bridge` (iproute2)
 # on the ctrl-exec script path.
+#
+# Guest memory budget. Before a shut-off guest starts, its memory plus the
+# memory of every running guest must fit the guests' budget: machine.slice's
+# memory.max (cgroup v2, $HPS_CGROUP_ROOT/machine.slice/memory.max), which
+# host-reserve-apply sets at boot to the host's RAM less host_reserve_mem_mib
+# and the ZFS ARC cap. Over it: refused (3), nothing started; the guest would
+# otherwise push the slice into its OOM killer, which kills a running guest.
+# No budget set (no file, or "max": host-reserve-apply has not run): no check,
+# one log line. Memory per guest: "Max memory" of virsh dominfo.
+#
 # Last line on success: VM <vm> running
 # Exit: 0 running, 2 usage, 3 refused, 4 not defined, 1 failed or not running in time.
 
@@ -35,6 +45,7 @@ set -euo pipefail
 : "${HPS_VM_WAIT:=30}"
 : "${HPS_VM_STEP:=1}"
 : "${HPS_GUEST_ORDER_DIR:=/run/hps/guests}"
+: "${HPS_CGROUP_ROOT:=/sys/fs/cgroup}"
 
 VM=""
 PRIORITY=3
@@ -96,6 +107,42 @@ record_order() {
   mkdir -p "$HPS_GUEST_ORDER_DIR" 2> /dev/null || true
   printf '%s %s\n' "$PRIORITY" "$PROVIDES_STORAGE" > "$HPS_GUEST_ORDER_DIR/$VM" 2> /dev/null \
     || log "cannot record the stop order in $HPS_GUEST_ORDER_DIR/$VM (continuing)"
+}
+
+# guest_mem_mib <vm>: the guest's memory in MiB ("Max memory: <n> KiB" of virsh dominfo).
+guest_mem_mib() {
+  local info kib
+  info=$(run virsh -c qemu:///system dominfo "$1")
+  kib=$(awk '/^Max memory:/ { print $3; exit }' <<< "$info")
+  [[ "$kib" =~ ^[0-9]+$ ]] || { log "no Max memory for $1 in virsh dominfo"; exit 1; }
+  printf '%s\n' $((kib / 1024))
+}
+
+# check_memory_budget: this guest plus the running ones within machine.slice's memory.max.
+check_memory_budget() {
+  local file="$HPS_CGROUP_ROOT/machine.slice/memory.max" max budget want used=0 others="" g m list
+  if [[ ! -r "$file" ]]; then
+    log "no guest memory budget ($file absent): not checked"
+    return 0
+  fi
+  max=$(< "$file")
+  if [[ ! "$max" =~ ^[0-9]+$ ]]; then
+    log "no guest memory budget (machine.slice memory.max is '$max'): not checked"
+    return 0
+  fi
+  budget=$((max / 1048576))
+  want=$(guest_mem_mib "$VM")
+  list=$(run virsh -c qemu:///system list --name)
+  while read -r g; do
+    [[ -n "$g" && "$g" != "$VM" ]] || continue
+    m=$(guest_mem_mib "$g")
+    used=$((used + m))
+    others+=" $g"
+  done <<< "$list"
+  if ((used + want > budget)); then
+    refuse "starting $VM ($want MiB) would put the running guests at $((used + want)) MiB, over the guest memory budget of $budget MiB (machine.slice memory.max: host RAM less host_reserve_mem_mib and the ZFS ARC cap); running:${others:- none}"
+  fi
+  log "guest memory: $((used + want)) of $budget MiB with $VM"
 }
 
 wait_running() {
@@ -186,6 +233,7 @@ main() {
     "shut off") ;;
     *) refuse "$VM is '$state', not shut off" ;;
   esac
+  check_memory_budget
   run virsh -c qemu:///system start "$VM"
   wait_running
   apply_vlans

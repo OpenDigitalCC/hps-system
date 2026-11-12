@@ -12,6 +12,39 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Resource isolation: the host first, then limits per VM (2026-11-12)
+
+Owner: "can we set some limits inside the vm's so that they dont interfere
+with the base and neighbours. these can be declared in the config. vm host
+must be protected primarily so it has enough resource to manage the raid, on
+storage so they can run the zfs, and on vm host so it can manage its vm's."
+In the lab a builder VM compiling a NixOS image drove the nested storage VMs
+to LOAD CRITICAL and the DL360 to 7-9 % memory available.
+
+- new: the host reserve. `host-reserve-apply` (allowlisted node script, run
+  at every boot by `hps-host-reserve.service`) keeps the first
+  `host_reserve_cpus` CPUs (default 1, 2 on 16+ CPUs) and
+  `host_reserve_mem_mib` of RAM (default 10 %, at least 2048) for the host;
+  on a storage host it caps the ZFS ARC at `zfs_arc_max_pct` of RAM
+  (default 25 %, at least 1024 MiB). `machine.slice` (every guest) gets the
+  other CPUs, `CPUWeight=50`, `IOWeight=50` and `MemoryMax` = RAM - reserve -
+  ARC cap. On by default; three new cluster keys.
+- new: per-VM limits in the workload definition: `cpu_weight`,
+  `cpu_max_pct`, `mem_hard_limit_mib`, `io_weight`, and per disk `iops_max`,
+  `mbps_max`, passed to `vm-define` as `<cputune>`, `<memtune>`,
+  `<blkiotune>`, `<iotune>`. Every guest now gets a memory hard limit
+  (RAM + 256 + RAM/16 MiB) and a CPU weight of 100 per vCPU by default.
+  Definitions without the fields are unchanged (no new `vm-define`
+  arguments, so their recorded create arguments still match).
+- new: `vm-start` refuses (3) a guest that would put the running guests'
+  memory over `machine.slice`'s limit.
+- new: `hps-node resources <host>` (node script `host-resources`,
+  read-only) shows the reserve as applied and what the guests hold.
+- needs a node image rebuild (two new allowlisted scripts, the boot unit,
+  the changed `vm-define` and `vm-start`) on every node. Tests:
+  `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
+  `t/225-resource-limits.t`.
+
 ## mirror-rejoin heals a leg md still lists as faulty (2026-11-12)
 
 - fix: with `--failfast` md keeps a lost leg listed as `faulty`, and when its

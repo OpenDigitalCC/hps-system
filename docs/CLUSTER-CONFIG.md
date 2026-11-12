@@ -204,6 +204,24 @@ MTU when lower. It refuses a VLAN link that is a bridge member: a storage
 network also attached through the layout (host key `nets`) has its bridge
 from `net-bridge-ensure`, and an address there would belong on the bridge.
 
+### Host reserve
+
+Three keys keep part of every node for the node itself, so its guests cannot
+starve the RAID, ZFS, iSCSI, libvirt and the agent (`docs/WORKLOADS.md`
+"Resource limits"). `host-reserve-apply` reads them at every node boot
+through `cmd=cluster_variable`; an empty, absent or out-of-range value takes
+the default, so the reserve is always on. A change applies at the node's
+next boot, or at once with `ced run host-reserve-apply` on that node.
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `host_reserve_cpus` | empty: 1 logical CPU, 2 on a host with 16 or more | the first N online CPUs are left out of `machine.slice` (`AllowedCPUs`); `0` keeps none; at least one CPU always stays with the guests |
+| `host_reserve_mem_mib` | empty: 10 % of RAM, at least 2048 | `machine.slice` `MemoryMax` = RAM - this - the ARC cap (at least 512 MiB) |
+| `zfs_arc_max_pct` | `25` | storage hosts (role SCH): `zfs_arc_max` = this percent of RAM, at least 1024 MiB, so the ARC and the guests do not compete |
+
+The guests' slice also gets `CPUWeight=50` and `IOWeight=50` against the
+host's `system.slice` (100); these are fixed, not keys.
+
 ## Catalogue
 
 Produced by `hps-cluster-config questions --json` (rows in menu order). The
@@ -259,6 +277,9 @@ keys may be empty.
 | `repo_host` | operator | The host that holds the site repository, its registry HOSTNAME or MAC (empty: none, `hps-repo` refuses; `docs/REPOSITORY.md`) | `regex:[A-Za-z0-9][A-Za-z0-9.:-]{0,62}` | (empty) | no |
 | `repo_nix_pubkey` | operator | The site repository's Nix cache public key, `<name>:<base64>` (`hps-repo status` stores it when empty) | `regex:[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[A-Za-z0-9+/]{43}=` | (empty) | no |
 | `repo_upstream` | operator | Whether repo build may also substitute from upstream caches through `egress_proxy` (false: the repository alone) | `bool` | `false` | no |
+| `host_reserve_cpus` | resources | Logical CPUs every node keeps from its guests for itself (0-1024; 0 = none; empty: 1, or 2 on a host with 16 or more) | `int0:1..1024` | (empty) | no |
+| `host_reserve_mem_mib` | resources | MiB of RAM every node keeps from its guests for itself (256-16777216; empty: 10% of RAM, at least 2048) | `int:256..16777216` | (empty) | no |
+| `zfs_arc_max_pct` | resources | ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90) | `int:1..90` | `25` | no |
 
 ## Exit codes
 

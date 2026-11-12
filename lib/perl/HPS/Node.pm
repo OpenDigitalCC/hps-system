@@ -339,6 +339,14 @@ sub net_status ($self) {
     return { rc => $r->{rc}, stdout => $r->{stdout} // '', stderr => $r->{stderr} // '' };
 }
 
+# resources(): the node's read-only host-resources (the host reserve and what
+# the guests hold: machine.slice, ZFS ARC, memory) through the runner. Returns
+# {rc, stdout, stderr}.
+sub resources ($self) {
+    my $r = $self->{runner}->call(mac => $self->{mac}, script => 'host-resources', args => [], input => undef);
+    return { rc => $r->{rc}, stdout => $r->{stdout} // '', stderr => $r->{stderr} // '' };
+}
+
 # Ping the agent until it answers or wait seconds pass (calls go ahead anyway).
 sub _await_agent ($self, $wait) {
     return 1 unless $wait > 0 && $self->{runner}->can('ping');

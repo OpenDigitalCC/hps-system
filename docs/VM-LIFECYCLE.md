@@ -34,7 +34,7 @@ and can run at any time.
 | `vm-define <vm> --memory <MiB> --vcpus <n> --disk <dev> [--disk <dev>...] --net <bridge> [--mac <mac>] [--net ...]... --image <qcow2> [--serial-log <path>] [--replace]` | Renders the domain XML (q35, OVMF, one raw disk per `--disk` (1 to 8, each path once; targets `vda`, `vdb`, ... in the order given, see `--disk-bus`), virtio NIC per bridge, serial console to a log, no graphics) and `virsh define`s it. Same definition again: no change. A different one: refused unless `--replace` (guest must be shut off). Never reads or copies `--image` (recorded in the metadata only). Last line `VM <vm> defined`. `--boot network` (CS-3.12a) instead: OVMF netboots from the first NIC (`<boot dev='network'/>`, then the disk if any), `--disk` and `--image` are optional (a guest may have no disk), `--mac` (lower-case unicast) fixes the MAC of the `--net` before it (else libvirt generates one) and the last lines are one `VM <vm> defined mac=<mac>` per NIC | 0, 2, 3 refused (bad argument, different definition, running with `--replace`), 1 |
 | `vm-image-write <vm> --disk <dev> --image <qcow2> [--force]` | `qemu-img convert -f qcow2 -O raw` onto the one disk named (a VM with several disks: the first, the boot disk; the others are never touched), only if its first 512 bytes are zero (or `--force`) and the guest is not running. Logs the image sha256. Last line `IMAGE <vm> <sha256> written` | 0, 2, 3 refused (data in first sector, guest in use, bad argument), 1 |
 | `vm-seed-write <vm> --disk <dev> [--partition 1]` | stdin (`input = raw`): `{"user_data": "...", "network_config": "...", "meta_data": "..."}`, `user_data` required. Finds the partition read-only (`partx -g`, no kernel change), checks it is ext4 (`blkid -p` at its offset), mounts it through a loop device at that offset (`mount -o loop,offset,sizelimit,nodev,nosuid,noexec`) on a private directory under `/run/hps`, writes `/var/lib/cloud/seed/nocloud/user-data`, `meta-data` (default `instance-id: <vm>`, `local-hostname: <vm>`) and `network-config` (only when given; an old one is removed), mode 0600 root, and unmounts. Refuses a symlink anywhere on that path and a partition with no `/etc`. Second run: the same files again. cloud-init reads the seed on the guest's first boot only, so a changed seed needs a fresh disk (destroy and create). Last line `SEED <vm> written user-data=<bytes> meta-data=<bytes> network-config=<bytes\|->` | 0, 2, 3 refused (guest not shut off, no such partition, not ext4, not a root filesystem, symlink, bad input or argument), 1 |
-| `vm-start <vm> [--priority <1-5>] [--provides-storage]` | `virsh start`, waits up to 30 s for running, then applies the fabric-port VLANs recorded by `vm-define` (below). Running already: nothing to start, VLANs re-applied. Then records the stop order (`<priority> <0\|1>`, default `3 0`) in `/run/hps/guests/<vm>` for `hps-shutdown-storage` (`docs/WORKLOADS.md` "Stop order on a node"). Last line `VM <vm> running` | 0, 2, 3 (paused or other odd state), 4 not defined, 1 not running in time |
+| `vm-start <vm> [--priority <1-5>] [--provides-storage]` | Checks the guest memory budget (below), then `virsh start`, waits up to 30 s for running, then applies the fabric-port VLANs recorded by `vm-define` (below). Running already: nothing to start, VLANs re-applied. Then records the stop order (`<priority> <0\|1>`, default `3 0`) in `/run/hps/guests/<vm>` for `hps-shutdown-storage` (`docs/WORKLOADS.md` "Stop order on a node"). Last line `VM <vm> running` | 0, 2, 3 (paused or other odd state, or over the guest memory budget: see "Resource limits and the host reserve"), 4 not defined, 1 not running in time |
 | `vm-stop <vm> [--timeout 60] [--force]` | `virsh shutdown`, waits. `virsh destroy` only with `--force` after the timeout. Last line `VM <vm> shut off` | 0, 2, 4 not defined, 1 still running |
 | `vm-disk-resize <vm> <target\|/dev/zvol/<pool>/enc/[vm/]<name>>` | After `storage-zvol-grow`: the disk (found in `virsh domblklist` by its target or its source) is set to its source device's size (`blockdev --getsize64`) with `virsh blockresize`, so a running guest sees the new size. A shut off guest needs nothing (it sees the size at start). Never larger than the device, so never a shrink of the zvol. Last line `VM-DISK <vm> <target> source=<device> bytes=<n> resized=<yes\|no>` | 0, 2, 3 (no such disk, not a device), 4 not defined, 1 |
 | `vm-disk-hotplug <vm> detach\|attach <target>` | Failure drills (the "pulled drive"): `detach` saves the running guest's `<disk>` element for that target (source, driver, serial) under `/run/hps/hotplug/` and unplugs it live; `attach` plugs back exactly that saved element. Live only: the persistent definition is unchanged, so a restart also brings the disk back. The boot disk is refused. |
@@ -42,6 +42,30 @@ and can run at any time.
 | `vm-undefine <vm>` | `virsh undefine --nvram` of a shut-off guest. Not defined: no-op. Does not touch disks (however many), mirrors or images. Last line `VM <vm> undefined` | 0, 2, 3 (not shut off), 1 |
 | `vm-console-log <vm> [--lines 200] [--qemu]` | Read-only tail of `/var/log/libvirt/qemu/<vm>-serial.log`; `--qemu` tails `<vm>.log`, the QEMU process log (where "process exited while connecting to monitor" explains itself) | 0, 2, 4 no log |
 | `vm-confinement-report [<vm>]` | Read-only confinement checks; see `CONFINEMENT.md`. Last line `CONFINEMENT model=... qemu_user=... seccomp=... apparmor_kernel=... label=...` | 0, 2 |
+
+## Resource limits and the host reserve
+
+`vm-define` writes, for every guest, `<memtune><hard_limit>` (default
+`--memory` + 256 + `--memory`/16 MiB) and `<cputune><shares>` (default 100
+per vCPU, at most 10000). Asked for, it also writes the vCPU cap
+(`--cpu-max-pct`: `<period>100000</period><quota>pct×1000</quota>`), the
+I/O weight (`--io-weight`: `<blkiotune><weight>`) and, per disk,
+`<iotune>` (`--disk-iops`, `--disk-mbps` after that `--disk`). They are part
+of the spec hash: another value is a different definition (3, or
+`--replace`). `hps-workload` passes them from the definition
+(`docs/WORKLOADS.md` "Resource limits").
+
+`vm-start` checks the guest memory budget before `virsh start`: the guest's
+"Max memory" plus that of every running guest must fit
+`machine.slice`'s `memory.max`; over it, refused (3). No limit on the slice
+(`max`, or host-reserve-apply has not run): not checked, logged.
+
+Two host scripts, profile `node`:
+
+| Script | Does | Exit codes |
+| --- | --- | --- |
+| `host-reserve-apply` | Reads `host_reserve_cpus`, `host_reserve_mem_mib`, `zfs_arc_max_pct` from the IPS (absent, unreadable or out of range: the default). Role SCH: writes the ARC cap to `/sys/module/zfs/parameters/zfs_arc_max` and `/run/modprobe.d/hps-zfs-arc.conf`. Role TCH: `systemctl set-property --runtime machine.slice AllowedCPUs=<the others> CPUWeight=50 IOWeight=50 MemoryMax=<budget>M`. Records the values in `/run/hps/host-reserve`. Run at every boot by `hps-host-reserve.service` (before `hps-node-init`); safe to run again. Last line `HOST-RESERVE roles=... cpus=... host_cpus=... guest_cpus=... mem_total_mib=... host_mem_mib=... arc_max_mib=... guest_mem_max_mib=...` | 0, 2, 1 (`systemctl` failed) |
+| `host-resources` | Read-only: the record, `machine.slice` as systemd and the cgroup hold it, the ARC (`arcstats`), memory, running guests and their memory. Through the operator API: `hps-node resources <host>` | 0, 2, 1 |
 
 ## Repeating a call
 

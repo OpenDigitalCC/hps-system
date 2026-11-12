@@ -39,14 +39,20 @@ my $MAX_DISKS = 8;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console);
 my %TOP = map { $_ => 1 } qw(name project access vms);
-my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware seed);
+my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware seed
+    cpu_weight cpu_max_pct mem_hard_limit_mib io_weight);
 my %NICK = map { $_ => 1 } qw(net pvid tagged model);
 my %HWK  = map { $_ => 1 } qw(disk_bus smbios);
 my %SMK  = map { $_ => 1 } qw(vendor product serial);
 my %NIC_MODELS = map { $_ => 1 } qw(virtio e1000e rtl8139);
 my %DISK_BUSES = map { $_ => 1 } qw(virtio scsi sata);
 my $SMBIOS_RE = qr/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\z/;
-my %DSK = map { $_ => 1 } qw(name size legs);
+my %DSK = map { $_ => 1 } qw(name size legs iops_max mbps_max);
+# Resource limits (docs/WORKLOADS.md "Resource limits"): field => [min, max] and
+# the vm-define option; per VM, then per disk.
+my @VM_LIMITS = ([ cpu_weight => 1, 10000, '--cpu-weight' ], [ cpu_max_pct => 1, 100, '--cpu-max-pct' ],
+    [ mem_hard_limit_mib => 384, 1048576, '--mem-hard-limit' ], [ io_weight => 10, 1000, '--io-weight' ]);
+my @DISK_LIMITS = ([ iops_max => 1, 99999999, '--disk-iops' ], [ mbps_max => 1, 999999, '--disk-mbps' ]);
 my %LEG = map { $_ => 1 } qw(host pool iqn portal);
 # A cloud-init NoCloud seed (vm-seed-write): the largest text of each field, in bytes.
 our %SEED_MAX = (user_data => 64 * 1024, network_config => 16 * 1024, meta_data => 4 * 1024);
@@ -86,6 +92,19 @@ sub _validate_leg ($where, $leg) {
     return { host => "$leg->{host}", iqn => "$leg->{iqn}", (exists $leg->{portal} ? (portal => "$leg->{portal}") : ()) };
 }
 
+# _limits($where, \%h, \@table): the limit fields of \%h that are present,
+# each a whole number in its range.
+sub _limits ($where, $h, $table) {
+    my %out;
+    for my $t (@$table) {
+        my ($k, $lo, $hi) = @$t;
+        next unless exists $h->{$k};
+        _bad($where, "$k must be a whole number $lo-$hi") unless _int_in($h->{$k}, $lo, $hi);
+        $out{$k} = $h->{$k} + 0;
+    }
+    return %out;
+}
+
 sub _validate_disk ($where, $disk) {
     _bad($where, 'a disk must be an object') unless ref $disk eq 'HASH';
     _only($where, $disk, \%DSK);
@@ -98,7 +117,8 @@ sub _validate_disk ($where, $disk) {
     my @local = grep { exists $_->{pool} } @l;
     _bad($where, 'a disk has at most one local leg (one zvol)') if @local > 1;
     _bad($where, 'a disk with one leg needs a local {host,pool} leg') if @l == 1 && !@local;
-    return { name => "$disk->{name}", size => "$disk->{size}", legs => \@l };
+    my %lim = _limits($where, $disk, \@DISK_LIMITS);
+    return { name => "$disk->{name}", size => "$disk->{size}", legs => \@l, %lim };
 }
 
 # A JSON string (not a number, boolean, null, list or object).
@@ -248,10 +268,13 @@ sub _validate_vm ($where, $vm, $layout_given, $layout) {
     my $provides = ($net_boot && @d) ? 1 : 0;
     $prio //= $provides ? 1 : 3;
     my $seed = exists $vm->{seed} ? _validate_seed($where, $vm->{seed}) : undef;
+    my %lim = _limits($where, $vm, \@VM_LIMITS);
+    _bad($where, "mem_hard_limit_mib must be at least memory_mib + 128 (QEMU needs room of its own)")
+        if exists $lim{mem_hard_limit_mib} && $lim{mem_hard_limit_mib} < $vm->{memory_mib} + 128;
     return { name => "$vm->{name}", memory_mib => $vm->{memory_mib} + 0, vcpus => $vm->{vcpus} + 0,
         boot => $boot, (defined $vm->{image} ? (image => "$vm->{image}") : ()), disks => \@d, nets => \@names,
         ($has_obj ? (nics => \@nics) : ()), (%hw ? (hardware => \%hw) : ()), ($seed ? (seed => $seed) : ()),
-        priority => $prio + 0, provides_storage => $provides, compute => $compute };
+        priority => $prio + 0, provides_storage => $provides, compute => $compute, %lim };
 }
 
 sub _validate_access ($access) {
@@ -510,7 +533,7 @@ sub _vm_info ($self, $def, $vm) {
         my $ds = $local ? _dataset($def->{name}, $vm->{name}, $d->{name}, $local->{pool}) : undef;
         my @specs = map { exists $_->{pool} ? "local:$ds" : 'iscsi:' . $self->_portal($_) . ":$_->{iqn}" } @{ $d->{legs} };
         push @disks, { name => $d->{name}, size => $d->{size}, mirror => $mirror, dataset => $ds,
-            specs => \@specs, mirrored => (@specs == 2 ? 1 : 0),
+            specs => \@specs, mirrored => (@specs == 2 ? 1 : 0), (map { exists $d->{$_} ? ($_ => $d->{$_}) : () } qw(iops_max mbps_max)),
             device => (@specs == 2 ? "/dev/md/$mirror" : "/dev/zvol/$ds") };
     }
     return { vm => $vm, name => $vm->{name}, host => $vm->{compute}, mac => $mac, pool => $pool, disks => \@disks,
@@ -577,6 +600,12 @@ sub _net_args ($self, $layout, $vm, $i, $mac = undef) {
         ($nic->{tagged} && @{ $nic->{tagged} } ? ('--vlan-tagged', join(',', @{ $nic->{tagged} })) : ()));
 }
 
+# The vm-define options of the limits \%h has (none: vm-define's defaults), so a
+# definition without limits keeps the argument list its create recorded.
+sub _limit_args ($h, $table) {
+    return map { exists $h->{ $_->[0] } ? ($_->[3], $h->{ $_->[0] }) : () } @$table;
+}
+
 # The VM-level hardware options of vm-define.
 sub _hardware_args ($vm) {
     my $hw = $vm->{hardware} or return ();
@@ -592,9 +621,10 @@ sub _define_args ($self, $layout, $vm, $in, $macs = undef) {
     my $net_boot = $vm->{boot} eq 'network';
     return [ $vm->{name}, '--memory', $vm->{memory_mib}, '--vcpus', $vm->{vcpus},
         ($net_boot ? ('--boot', 'network') : ()),
-        (map { ('--disk', $_->{device}) } @{ $in->{disks} }),
+        (map { ('--disk', $_->{device}, _limit_args($_, \@DISK_LIMITS)) } @{ $in->{disks} }),
         (map { $self->_net_args($layout, $vm, $_, $macs ? $macs->[$_] : undef) } 0 .. $#{ $vm->{nets} }),
-        ($net_boot ? () : ('--image', "$in->{image_dir}/$vm->{image}.qcow2")), _hardware_args($vm) ];
+        ($net_boot ? () : ('--image', "$in->{image_dir}/$vm->{image}.qcow2")), _hardware_args($vm),
+        _limit_args($vm, \@VM_LIMITS) ];
 }
 
 # The net-vxlan-ensure calls for the vxlan nets of a VM on its compute host

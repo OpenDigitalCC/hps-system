@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# host-resources - READ-ONLY view of the host reserve and what the guests hold.
+#
+# ctrl-exec allowlisted node script. Usage: host-resources    (no arguments)
+# Operator path: hps-node resources <host>. Changes nothing. Lines:
+#   RESERVE <key=value ...>   what host-reserve-apply decided this boot
+#                             ($HPS_RUN_DIR/host-reserve), or "RESERVE none"
+#   SLICE machine.slice <systemd properties AllowedCPUs CPUWeight IOWeight MemoryMax>
+#   CGROUP machine.slice cpus=<cpuset.cpus.effective> memory_max=<memory.max>
+#     memory_current_mib=<n>  (what the kernel enforces, read from the cgroup)
+#   ZFS arc_max_mib=<c_max> arc_size_mib=<size>   (arcstats), or "ZFS none"
+#   MEM total_mib=<n> available_mib=<n>
+#   GUESTS running=<n> memory_mib=<sum of Max memory>   (when virsh is present)
+# A missing source prints "-" for its values.
+#
+# Exit: 0 shown, 2 usage, 1 a command failed.
+#
+# Overrides for tests: HPS_RUN_DIR, HPS_CGROUP_ROOT, HPS_MEMINFO, HPS_ARCSTATS.
+
+set -euo pipefail
+
+: "${HPS_RUN_DIR:=/run/hps}"
+: "${HPS_CGROUP_ROOT:=/sys/fs/cgroup}"
+: "${HPS_MEMINFO:=/proc/meminfo}"
+: "${HPS_ARCSTATS:=/proc/spl/kstat/zfs/arcstats}"
+
+log() {
+  printf '[host-resources] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# file_or_dash <path>: the file's first line, else "-".
+file_or_dash() {
+  if [[ -r "$1" ]]; then
+    head -n 1 "$1"
+  else
+    printf -- '-\n'
+  fi
+}
+
+reserve() {
+  if [[ -r "$HPS_RUN_DIR/host-reserve" ]]; then
+    printf 'RESERVE %s\n' "$(paste -sd' ' "$HPS_RUN_DIR/host-reserve")"
+  else
+    printf 'RESERVE none (host-reserve-apply has not run this boot)\n'
+  fi
+}
+
+slice() {
+  local props
+  props=$(run systemctl show machine.slice -p AllowedCPUs -p CPUWeight -p IOWeight -p MemoryMax 2> /dev/null || true)
+  printf 'SLICE machine.slice %s\n' "$(paste -sd' ' <<< "${props:--}")"
+}
+
+cgroup() {
+  local d="$HPS_CGROUP_ROOT/machine.slice" cur
+  cur=$(file_or_dash "$d/memory.current")
+  [[ "$cur" =~ ^[0-9]+$ ]] && cur=$((cur / 1048576))
+  printf 'CGROUP machine.slice cpus=%s memory_max=%s memory_current_mib=%s\n' \
+    "$(file_or_dash "$d/cpuset.cpus.effective")" "$(file_or_dash "$d/memory.max")" "$cur"
+}
+
+zfs() {
+  if [[ ! -r "$HPS_ARCSTATS" ]]; then
+    printf 'ZFS none (module not loaded)\n'
+    return 0
+  fi
+  awk '$1 == "c_max" { m = int($3 / 1048576) } $1 == "size" { s = int($3 / 1048576) }
+    END { printf "ZFS arc_max_mib=%s arc_size_mib=%s\n", (m == "" ? "-" : m), (s == "" ? "-" : s) }' "$HPS_ARCSTATS"
+}
+
+mem() {
+  awk '/^MemTotal:/ { t = int($2 / 1024) } /^MemAvailable:/ { a = int($2 / 1024) }
+    END { printf "MEM total_mib=%s available_mib=%s\n", (t == "" ? "-" : t), (a == "" ? "-" : a) }' "$HPS_MEMINFO"
+}
+
+guests() {
+  local list g kib n=0 sum=0
+  command -v virsh > /dev/null 2>&1 || return 0
+  list=$(run virsh -c qemu:///system list --name)
+  while read -r g; do
+    [[ -n "$g" ]] || continue
+    kib=$(run virsh -c qemu:///system dominfo "$g" | awk '/^Max memory:/ { print $3; exit }')
+    n=$((n + 1))
+    [[ "$kib" =~ ^[0-9]+$ ]] && sum=$((sum + kib / 1024))
+  done <<< "$list"
+  printf 'GUESTS running=%s memory_mib=%s\n' "$n" "$sum"
+}
+
+main() {
+  if [[ $# -ne 0 ]]; then
+    log "takes no arguments"
+    exit 2
+  fi
+  reserve
+  slice
+  cgroup
+  zfs
+  mem
+  guests
+}
+
+main "$@"

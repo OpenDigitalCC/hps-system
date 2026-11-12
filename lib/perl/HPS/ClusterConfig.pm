@@ -189,6 +189,18 @@ my @CATALOGUE = (
     _q(key => 'repo_upstream', group => 'operator', menu => 0,
         prompt => 'Whether repo build may also substitute from upstream caches through egress_proxy (false: the repository alone)',
         rule => 'bool', default => 'false'),
+
+    # Host reserve (docs/CLUSTER-CONFIG.md "Host reserve"): read at every node
+    # boot by host-reserve-apply. Empty: the default sized from the host.
+    _q(key => 'host_reserve_cpus', group => 'resources', menu => 0,
+        prompt => 'Logical CPUs every node keeps from its guests for itself (0-1024; 0 = none; empty: 1, or 2 on a host with 16 or more)',
+        rule => 'int0:1..1024', default => ''),
+    _q(key => 'host_reserve_mem_mib', group => 'resources', menu => 0,
+        prompt => 'MiB of RAM every node keeps from its guests for itself (256-16777216; empty: 10% of RAM, at least 2048)',
+        rule => 'int:256..16777216', default => ''),
+    _q(key => 'zfs_arc_max_pct', group => 'resources', menu => 0,
+        prompt => 'ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90)',
+        rule => 'int:1..90', default => '25'),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

@@ -168,6 +168,11 @@ in
       # VXLAN workload networks over the transit VLAN (hps-node net-up, hps-workload).
       net-vxlan-ensure.source = mkScript "net-vxlan-ensure" (scriptsDir + "/net-vxlan-ensure");
       net-vxlan-ensure.options.profile = "node";
+      # Host reserve (docs/WORKLOADS.md "Resource limits"): machine.slice limits and the ZFS ARC cap (also run at boot by hps-host-reserve, hps-node.nix); the read-only view (hps-node resources).
+      host-reserve-apply.source = mkScript "host-reserve-apply" (scriptsDir + "/host-reserve-apply");
+      host-reserve-apply.options.profile = "node";
+      host-resources.source = mkScript "host-resources" (scriptsDir + "/host-resources");
+      host-resources.options.profile = "node";
     };
     # The executor runs on NixOS nodes (ctrl-exec-executor.service, root, plus
     # executor_socket in agent.conf). Without it the agent runs scripts itself

@@ -36,4 +36,27 @@
       ExecStart = "${pkgs.bash}/bin/bash /etc/hps/hps-node-init";
     };
   };
+
+  # The host reserve (owner 2026-11-12: the host first, so it can run its RAID,
+  # its ZFS and its guests): machine.slice gets the CPUs, weights and memory
+  # left after the host's share, and a storage host caps the ZFS ARC. Before
+  # hps-node-init, so it is in place before pairing and so before any guest
+  # starts. The allowlisted script itself (copied to /opt/ctrl-exec-scripts by
+  # the agent's activation) runs, so a `ced run host-reserve-apply` re-applies
+  # exactly this. A failure is logged and does not hold up the boot.
+  systemd.services.hps-host-reserve = {
+    description = "HPS host reserve: CPU, memory and IO kept for the host (machine.slice, ZFS ARC cap)";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "network-online.target" "hps-time.service" ];
+    wants = [ "network-online.target" ];
+    before = [ "hps-node-init.service" ];
+    path = with pkgs; [ bash coreutils curl gawk config.systemd.package ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
+      ExecStart = "${pkgs.bash}/bin/bash /opt/ctrl-exec-scripts/host-reserve-apply";
+    };
+  };
 }

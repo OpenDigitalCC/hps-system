@@ -21,6 +21,7 @@ Usage:
   hps-node power-off <host> [--force-after SECONDS]
   hps-node net-up <host> [--dry-run] [--json] [--wait SECONDS]
   hps-node net-status <host>
+  hps-node resources <host>
 <host> is a MAC (any format) or a registry HOSTNAME. power-off runs
 hps-storage <host> down, then the node script node-poweroff (the node stops
 guests and mirrors and exports its pools), then waits for the BMC to report
@@ -54,6 +55,11 @@ Exit: 0 every network done (or none for this host), 1 a node call failed,
 net-status shows the host's bridges, VLAN sub-interfaces, their members and
 addresses (the node script net-status, read-only). Exit: the node script's
 (0 shown, 1 a command failed), 2 usage, 4 not found.
+
+resources shows the host reserve and what the guests hold: the values
+host-reserve-apply set at boot, machine.slice's limits as systemd and the
+kernel hold them, the ZFS ARC cap and size, memory, running guests (the node
+script host-resources, read-only). Exit: as net-status.
 USAGE
     return 2;
 }
@@ -111,11 +117,11 @@ sub main {
     my @argv = @_;
     my $op = $argv[0];
     return usage('operation required') unless defined $op;
-    if ($op eq 'net-status') {
+    if ($op eq 'net-status' || $op eq 'resources') {
         shift @argv;
         my $host = shift @argv // return usage('host required');
-        return usage('net-status takes one host') if @argv;
-        my $r = eval { HPS::Node->new(host => $host)->net_status };
+        return usage("$op takes one host") if @argv;
+        my $r = eval { my $n = HPS::Node->new(host => $host); $op eq 'resources' ? $n->resources : $n->net_status };
         return fail_from($@) unless $r;
         print $r->{stdout};
         print STDERR $r->{stderr} if $r->{rc} && length $r->{stderr};

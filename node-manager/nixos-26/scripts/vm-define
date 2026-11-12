@@ -8,6 +8,8 @@
 #          --net <bridge> [--mac <mac>] [--net <bridge> [--mac <mac>]...]
 #          --image <base qcow2> [--serial-log <path>] [--replace]
 #          [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
+#          [--cpu-weight <n>] [--cpu-max-pct <pct>] [--mem-hard-limit <MiB>]
+#          [--io-weight <n>] per --disk: [--disk-iops <n>] [--disk-mbps <n>]
 #        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
 #          --net <bridge> [--mac <mac>] [--net ...] [--disk <dev>]
 #          [--serial-log <path>] [--replace]
@@ -52,6 +54,21 @@
 #             manufacturer, product name and serial (libvirt sysinfo smbios).
 #             Values: letters, digits, space, . _ - (first one alphanumeric).
 #   --serial-log  default /var/log/libvirt/qemu/<vm>-serial.log
+#
+# Resource limits (docs/WORKLOADS.md "Resource limits"; the host side is
+# host-reserve-apply). Each is optional; the two defaults are always written:
+#   --cpu-weight <1-10000>   <cputune><shares>: the guest's CPU weight against the
+#             other guests when the host CPUs are contended (cgroup v2 cpu.weight).
+#             Default 100 per vCPU (at most 10000), so every vCPU weighs the same.
+#   --cpu-max-pct <1-100>    <cputune><period>100000 <quota>: each vCPU may use at
+#             most this percent of one host CPU. Default: no cap.
+#   --mem-hard-limit <MiB>   <memtune><hard_limit>: the most the guest's QEMU process
+#             may hold (guest RAM plus QEMU's own); at least --memory + 128.
+#             Default --memory + 256 + --memory/16 (QEMU's overhead with room).
+#   --io-weight <10-1000>    <blkiotune><weight>. Default: none written.
+#   per --disk, after it: --disk-iops <n> and --disk-mbps <n> (MiB/s): the disk's
+#             <iotune> total_iops_sec / total_bytes_sec (QEMU throttling).
+#             Default: no throttle.
 #
 # The domain: q35, OVMF UEFI, host-passthrough CPU, virtio disk (raw, cache
 # none), virtio NIC (unless --nic-model) per bridge, serial console written to a log file, NO
@@ -104,6 +121,12 @@ SM_VENDOR=""
 SM_PRODUCT=""
 SM_SERIAL=""
 NIC_META=""
+DISK_IOPS=()
+DISK_MBPS=()
+CPU_WEIGHT=""
+CPU_MAX_PCT=""
+MEM_HARD=""
+IO_WEIGHT=""
 TMP=""
 MAX_DISKS=8
 SERIAL_MAX=20
@@ -132,6 +155,8 @@ Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device> [--disk <
          per --net: [--mac <mac>] [--nic-model virtio|e1000e|rtl8139]
                     [--vlan-pvid <1-4094>] [--vlan-tagged <v[,v...]>]
          [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
+         [--cpu-weight <1-10000>] [--cpu-max-pct <1-100>] [--mem-hard-limit <MiB>]
+         [--io-weight <10-1000>]  per --disk: [--disk-iops <n>] [--disk-mbps <MiB/s>]
        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
          --net <bridge> [--mac <mac>] [...] [--disk <dev>] [--serial-log <path>]
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
@@ -141,6 +166,23 @@ USAGE
 refuse() {
   log "refused: $*"
   exit 3
+}
+
+# set_disk_option <flag> <array name> <value>: a per-disk option, once, after its --disk.
+set_disk_option() {
+  local flag=$1 arr=$2 value=$3
+  local -n dref=$arr
+  if [[ ${#DISKS[@]} -eq 0 ]]; then
+    log "$flag must follow the --disk it belongs to"
+    usage
+    exit 2
+  fi
+  if [[ -n "${dref[-1]}" ]]; then
+    log "only one $flag per --disk"
+    usage
+    exit 2
+  fi
+  dref[-1]=$value
 }
 
 # set_nic_option <flag> <array name> <value>: a per-NIC option, once, after its --net.
@@ -175,12 +217,19 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --memory | --vcpus | --disk | --net | --image | --serial-log | --boot | --mac \
-        | --nic-model | --vlan-pvid | --vlan-tagged | --disk-bus | --smbios)
+        | --nic-model | --vlan-pvid | --vlan-tagged | --disk-bus | --smbios \
+        | --cpu-weight | --cpu-max-pct | --mem-hard-limit | --io-weight | --disk-iops | --disk-mbps)
         [[ $# -ge 2 ]] || { usage; exit 2; }
         case "$1" in
           --memory) MEMORY=$2 ;;
           --vcpus) VCPUS=$2 ;;
-          --disk) DISKS+=("$2") ;;
+          --disk) DISKS+=("$2"); DISK_IOPS+=(""); DISK_MBPS+=("") ;;
+          --disk-iops) set_disk_option "$1" DISK_IOPS "$2" ;;
+          --disk-mbps) set_disk_option "$1" DISK_MBPS "$2" ;;
+          --cpu-weight) CPU_WEIGHT=$2 ;;
+          --cpu-max-pct) CPU_MAX_PCT=$2 ;;
+          --mem-hard-limit) MEM_HARD=$2 ;;
+          --io-weight) IO_WEIGHT=$2 ;;
           --net) NETS+=("$2"); MACS+=(""); PVIDS+=(""); TAGGEDS+=(""); MODELS+=("") ;;
           --mac) set_nic_option "$1" MACS "$2" ;;
           --nic-model) set_nic_option "$1" MODELS "$2" ;;
@@ -285,6 +334,40 @@ check_hardware() {
   [[ -n "$SM_VENDOR" && -n "$SM_PRODUCT" ]] || refuse "--smbios needs vendor=<v> and product=<p>"
 }
 
+# check_limits: the resource limits in range; fills the defaults (CPU_WEIGHT,
+# MEM_HARD). Runs after MEMORY and VCPUS are checked.
+check_limits() {
+  local i v
+  if [[ -n "$CPU_WEIGHT" ]]; then
+    [[ "$CPU_WEIGHT" =~ ^[1-9][0-9]{0,4}$ ]] && ((CPU_WEIGHT <= 10000)) || refuse "--cpu-weight '$CPU_WEIGHT' is not 1-10000"
+  else
+    CPU_WEIGHT=$((VCPUS * 100))
+    ((CPU_WEIGHT <= 10000)) || CPU_WEIGHT=10000
+  fi
+  if [[ -n "$CPU_MAX_PCT" ]]; then
+    [[ "$CPU_MAX_PCT" =~ ^[1-9][0-9]{0,2}$ ]] && ((CPU_MAX_PCT <= 100)) || refuse "--cpu-max-pct '$CPU_MAX_PCT' is not 1-100"
+  fi
+  if [[ -n "$MEM_HARD" ]]; then
+    [[ "$MEM_HARD" =~ ^[1-9][0-9]{0,6}$ ]] || refuse "--mem-hard-limit '$MEM_HARD' is not a number of MiB"
+    ((MEM_HARD >= MEMORY + 128)) || refuse "--mem-hard-limit $MEM_HARD is below --memory $MEMORY + 128 MiB (QEMU needs room of its own)"
+  else
+    MEM_HARD=$((MEMORY + 256 + MEMORY / 16))
+  fi
+  if [[ -n "$IO_WEIGHT" ]]; then
+    [[ "$IO_WEIGHT" =~ ^[1-9][0-9]{1,3}$ ]] && ((IO_WEIGHT <= 1000)) || refuse "--io-weight '$IO_WEIGHT' is not 10-1000"
+  fi
+  for i in "${!DISKS[@]}"; do
+    v=${DISK_IOPS[$i]}
+    if [[ -n "$v" ]]; then
+      [[ "$v" =~ ^[1-9][0-9]{0,7}$ ]] || refuse "--disk-iops '$v' is not 1-99999999"
+    fi
+    v=${DISK_MBPS[$i]}
+    if [[ -n "$v" ]]; then
+      [[ "$v" =~ ^[1-9][0-9]{0,5}$ ]] || refuse "--disk-mbps '$v' is not 1-999999 (MiB/s)"
+    fi
+  done
+}
+
 check_args() {
   local n
   [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || refuse "vm name '$VM' does not match ^[a-z0-9][a-z0-9-]{0,31}\$"
@@ -294,6 +377,7 @@ check_args() {
   VCPUS=$((10#$VCPUS))
   ((MEMORY >= 64)) || refuse "--memory $MEMORY is below 64 MiB"
   ((VCPUS >= 1)) || refuse "--vcpus must be at least 1"
+  check_limits
   [[ "$BOOT" == "disk" || "$BOOT" == "network" ]] || refuse "--boot '$BOOT' is not disk or network"
   ((${#DISKS[@]} <= MAX_DISKS)) || refuse "${#DISKS[@]} --disk given; at most $MAX_DISKS per guest"
   local d seen=" "
@@ -344,6 +428,7 @@ check_serials() {
 # render_xml <uuid-or-empty>: the domain XML on stdout, the spec hash inside.
 render_xml() {
   local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml smbios_os="" sysinfo_xml="" ctl_xml="" dev m prefix=vd letters=abcdefgh
+  local tune_xml iotune_xml
   if [[ "$BOOT" == "network" ]]; then
     boot_xml="    <boot dev='network'/>"
     if ((${#DISKS[@]} > 0)); then
@@ -366,12 +451,41 @@ render_xml() {
       <driver name='qemu' type='raw' cache='none' io='native'/>
       <source dev='${DISKS[$i]}'/>
       <target dev='$dev' bus='$DISK_BUS'/>
-      <serial>$(disk_serial "$i")</serial>
+      <serial>$(disk_serial "$i")</serial>"
+      iotune_xml=""
+      if [[ -n "${DISK_IOPS[$i]}" ]]; then
+        iotune_xml+=$'\n'"        <total_iops_sec>${DISK_IOPS[$i]}</total_iops_sec>"
+      fi
+      if [[ -n "${DISK_MBPS[$i]}" ]]; then
+        iotune_xml+=$'\n'"        <total_bytes_sec>$((DISK_MBPS[i] * 1048576))</total_bytes_sec>"
+      fi
+      if [[ -n "$iotune_xml" ]]; then
+        disk_xml+=$'\n'"      <iotune>$iotune_xml"$'\n'"      </iotune>"
+      fi
+      disk_xml+="
     </disk>"
       if ((i < ${#DISKS[@]} - 1)); then
         disk_xml+=$'\n'
       fi
     done
+  fi
+  tune_xml="  <memtune>
+    <hard_limit unit='MiB'>$MEM_HARD</hard_limit>
+  </memtune>
+  <cputune>
+    <shares>$CPU_WEIGHT</shares>"
+  if [[ -n "$CPU_MAX_PCT" ]]; then
+    tune_xml+="
+    <period>100000</period>
+    <quota>$((CPU_MAX_PCT * 1000))</quota>"
+  fi
+  tune_xml+="
+  </cputune>"
+  if [[ -n "$IO_WEIGHT" ]]; then
+    tune_xml+="
+  <blkiotune>
+    <weight>$IO_WEIGHT</weight>
+  </blkiotune>"
   fi
   if [[ -n "$SM_VENDOR" ]]; then
     smbios_os="    <smbios mode='sysinfo'/>"
@@ -389,6 +503,7 @@ render_xml() {
   <memory unit='MiB'>$MEMORY</memory>
   <currentMemory unit='MiB'>$MEMORY</currentMemory>
   <vcpu placement='static'>$VCPUS</vcpu>
+$tune_xml
   <os>
     <type arch='x86_64' machine='q35'>hvm</type>
     <loader readonly='yes' type='pflash' format='raw'>$HPS_OVMF_CODE</loader>
