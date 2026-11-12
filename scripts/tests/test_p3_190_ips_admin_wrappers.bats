@@ -172,7 +172,7 @@ teardown() {
 
 @test "every allowlisted ips-admin name has an executable wrapper, and nothing else is in ips-admin/" {
   source "$ROOT/lib/functions.d/ips-admin-functions.sh"
-  [ "${#IPS_ADMIN_SCRIPTS[@]}" -eq 17 ]
+  [ "${#IPS_ADMIN_SCRIPTS[@]}" -eq 18 ]
   for s in "${IPS_ADMIN_SCRIPTS[@]}"; do
     [ -x "$W/$s" ] || { echo "no wrapper: $s"; false; }
     grep -qx "exec \"\${0%/\*}/ips-admin-exec\" $s \"\$@\"" "$W/$s"

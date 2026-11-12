@@ -152,7 +152,7 @@ EOF
 # supervisor_configure_core_services
 # ----------------------------------
 # Generate supervisord.conf with dnsmasq, lighttpd, rsyslog, chronyd, hps-jobs,
-# hps-monitor, ctrl-exec-api, OpenSVC and the one-shot hps-ips-check.
+# hps-monitor, hps-issue-watch, ctrl-exec-api, OpenSVC and the one-shot hps-ips-check.
 #
 # Usage:
 #   supervisor_configure_core_services
@@ -319,6 +319,22 @@ EOF
   _supervisor_append_once "program:hps-monitor" "$(cat <<EOF
 [program:hps-monitor]
 command=${HPS_SYSTEM_BASE}/bin/hps-monitor loop
+autostart=true
+autorestart=true
+startsecs=2
+stopsignal=TERM
+user=root
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
+  # --- hps-issue-watch (the issue register's triggers and healer; docs/ISSUES.md) ---
+  # Needs root: it reads every node's log and heals through hps-run.sh.
+  _supervisor_append_once "program:hps-issue-watch" "$(cat <<EOF
+[program:hps-issue-watch]
+command=${HPS_SYSTEM_BASE}/bin/hps-issue-watch loop
 autostart=true
 autorestart=true
 startsecs=2

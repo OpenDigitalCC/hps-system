@@ -1,0 +1,59 @@
+#!/usr/bin/env perl
+# hps-issue-watch: follows the nodes' syslog on the IPS, opens and resolves
+# issues by the trigger rules, and heals mirror-leg issues (docs/ISSUES.md).
+# `loop` runs under supervisor (program:hps-issue-watch).
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use HPS::Issues;
+use HPS::IssueWatch;
+use HPS::IssueHeal;
+
+$| = 1;
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-issue-watch: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-issue-watch loop [--interval S] [--no-heal] [--max-polls N]
+  hps-issue-watch check-rules [FILE]
+loop: every S seconds (default 2) reads the new lines of <log>/<sender ip>/
+  <date>.log, applies the rules, then runs the healer over the due mirror-leg
+  issues (--no-heal: record only). Starts at the end of every file unless its
+  state file (<issues dir>/.watch-state.json) is less than 300 s old.
+check-rules: parses the rules file (default lib/hps-issue-rules.conf, or
+  HPS_ISSUE_RULES) and prints the rule count, or the first bad line.
+Environment: HPS_LOG (default /srv/hps-log), HPS_CONFIG_BASE (the registry),
+HPS_ISSUE_RULES, HPS_RUN_CMD (the runner; default scripts/hps-run.sh).
+Exit: 0 ok, 1 failed, 2 usage.
+USAGE
+    return 2;
+}
+
+sub main {
+    my @argv = @_;
+    my $cmd = shift @argv // return usage();
+    my ($interval, $noheal, $max) = (2);
+    GetOptionsFromArray(\@argv, 'interval=i' => \$interval, 'no-heal' => \$noheal, 'max-polls=i' => \$max)
+        or return usage();
+    if ($cmd eq 'check-rules') {
+        return usage('check-rules takes at most one file') if @argv > 1;
+        my $path = $argv[0] // HPS::IssueWatch::default_rules_path();
+        my $r = eval { HPS::IssueWatch::load_rules($path) };
+        if (!$r) { print STDERR 'hps-issue-watch: ' . (ref $@ ? $@->message : $@) . "\n"; return 1 }
+        printf "%s: %d marker rule(s), %d line rule(s)\n", $path, scalar keys %{ $r->{marker} }, scalar @{ $r->{rules} };
+        return 0;
+    }
+    return usage("unknown command: $cmd") unless $cmd eq 'loop';
+    return usage('loop takes no arguments') if @argv || $interval < 1;
+    my $issues = HPS::Issues->new;
+    my $w = eval { HPS::IssueWatch->new(issues => $issues) };
+    if (!$w) { print STDERR 'hps-issue-watch: ' . (ref $@ ? $@->message : $@) . "\n"; return 1 }
+    my $heal = $noheal ? undef : HPS::IssueHeal->new(issues => $issues);
+    return $w->loop(interval => $interval, max_polls => $max, ($heal ? (tick => sub { $heal->tick }) : ()));
+}
+
+exit main(@ARGV);

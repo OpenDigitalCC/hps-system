@@ -24,7 +24,10 @@ package FakeCE {
         push @{ $self->{calls} }, { %c };
         my $rc = $self->{rc}{ $c{script} } // 0;
         $rc = shift @$rc if ref $rc eq 'ARRAY';
-        return { rc => $rc, stdout => $self->{out}{ $c{script} } // "out of $c{script}\n", stderr => $rc ? "boom from $c{script}\n" : '' };
+        $rc //= 0;
+        my $out = $self->{out}{ $c{script} };
+        $out = shift @$out if ref $out eq 'ARRAY';    # one answer per call, in order
+        return { rc => $rc, stdout => $out // "out of $c{script}\n", stderr => $rc ? "boom from $c{script}\n" : '' };
     }
     sub calls { return @{ $_[0]{calls} } }
     sub scripts { return map { $_->{script} } @{ $_[0]{calls} } }

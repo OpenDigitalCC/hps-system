@@ -122,7 +122,7 @@ ${FORWARD_BLOCK}
 # Route local IPS service logs to one file per program. The program names are a
 # fixed list (they become directory names); only local senders match, so a
 # node cannot write into the service tree.
-if (\$fromhost-ip == "127.0.0.1") and (\$programname == ["dnsmasq", "dnsmasq-dhcp", "dnsmasq-tftp", "lighttpd", "chronyd", "supervisord", "hps", "hps-jobs", "hps-monitor", "ctrl-exec-api", "ctrl-exec-agent", "ips-admin"]) then {
+if (\$fromhost-ip == "127.0.0.1") and (\$programname == ["dnsmasq", "dnsmasq-dhcp", "dnsmasq-tftp", "lighttpd", "chronyd", "supervisord", "hps", "hps-jobs", "hps-monitor", "hps-issue-watch", "ctrl-exec-api", "ctrl-exec-agent", "ips-admin"]) then {
   *.* action(type="omfile" dynaFile="IPSServiceLogFile" template="HPSLogFormat")
   stop
 }

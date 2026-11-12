@@ -40,6 +40,37 @@ forever (about 70 failed logins per storage host).
   issue watcher (`docs/WORKLOADS.md` "Losing a leg").
 - Needs a compute (TCH) node image rebuild and a reboot of the compute nodes.
 
+## Issue register, log triggers and mirror-leg self-healing (2026-11-12)
+
+A lost mirror leg was only a line in a node's log: nothing on the IPS recorded
+it as a problem still to be addressed, and nothing brought the leg back. The
+owner asked for a register of issues that may be fixed automatically but
+leave a trail, fed by urgent markers caught in the logs.
+
+- new: the issue register, `HPS::Issues`: one JSON record per issue in
+  `clusters/<cluster>/issues/<id>.json` (id `<YYYYMMDD>-<seq>`), keyed by kind
+  and key fields; a second report of an unresolved key adds to its trail (a
+  count, not a line per repeat), a report after resolve is a new issue naming
+  the previous one; resolved issues are kept. States open, healing,
+  needs-human, resolved; severity warning or urgent; an append-only trail.
+  Secret-looking texts are refused or stored as `[redacted]`.
+- new: `bin/hps-issues` (`list [--all] [--json]`, `show`, `open`, `resolve`,
+  `note`), an ips-admin tool open for all five verbs through `hps-op`.
+- new: `lib/hps-issue-rules.conf`, the triggers: the generic
+  `HPS-ISSUE open|resolve kind=<kind> k=v...` marker (mirror-leg keyed by host
+  and mirror), the kernel `md/raid1 ... Disk failure` line, and repeated iscsid
+  connect failures (storage-path) with their recovery line.
+- new: `bin/hps-issue-watch`, supervisor program `hps-issue-watch` (root):
+  follows every node's syslog file from its end (offsets kept in
+  `issues/.watch-state.json`, resumed when at most 300 s old; no replay of
+  older lines), applies the rules, and heals mirror-leg issues through the
+  runner: `mirror-status`, then `mirror-rejoin <mirror> --leg <spec>` of the
+  missing leg (specs from the workload record), first after 30 s, then 60 s,
+  2 min, 5 min, every 15 min (urgent at the cap); exit 3 (DIVERGED) is
+  needs-human and never retried; resolved by the node's resolve marker or by
+  `mirror-status clean`. rsyslog files its output under
+  `ips/hps-issue-watch/`. docs/ISSUES.md.
+
 ## Guest seed: cloud-init NoCloud for workload VMs (2026-11-12)
 
 The scale test's probe guests (Debian generic cloud image) booted with no

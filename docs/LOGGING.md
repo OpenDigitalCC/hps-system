@@ -46,6 +46,10 @@ Operator watching the IPS services (all of them, today):
 (`tail` over several files prints a header when the file changes. The
 date in the path rolls at midnight: restart the `tail`.)
 
+`hps-issue-watch` follows every node's file the same way and turns the
+`HPS-ISSUE` marker lines (and a few raw kernel and iSCSI lines) into entries of
+the issue register: docs/ISSUES.md.
+
 ## Reading a host's log: hps-log
 
 `hps-log` reads the newest lines of one host, or of the IPS itself, from

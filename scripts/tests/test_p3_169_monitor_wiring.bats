@@ -133,7 +133,7 @@ zpool_stub() {
 }
 
 @test "rsyslog files the hps-monitor program like the other IPS services" {
-  grep -q '"hps-jobs", "hps-monitor", "ctrl-exec-api"' "$ROOT/lib/functions.d/create-config-rsyslog.sh"
+  grep -q '"hps-jobs", "hps-monitor", ' "$ROOT/lib/functions.d/create-config-rsyslog.sh"
 }
 
 @test "bin/hps-monitor is executable and passes perl -c" {

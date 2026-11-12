@@ -1,0 +1,11 @@
+Nov 12 08:00:01 10.9.0.12 [tch-002] systemd[1]: Started something ordinary.
+Nov 12 08:00:02 10.9.0.12 [tch-002] hps-issue: HPS-ISSUE open kind=mirror-leg host=tch-002 mirror=probe-tch-002-root component=/dev/sdb event=Fail leg=iqn.2026-01.lab.nas:hpslab-root@192.0.2.50:3260
+Nov 12 08:00:03 10.9.0.12 [tch-002] kernel: md/raid1:md127: Disk failure on sdb, disabling device.
+Nov 12 08:00:04 10.9.0.12 [tch-002] hps-issue: HPS-ISSUE open kind=mirror-leg host=tch-002 mirror=probe-tch-002-root component=- event=DegradedArray
+Nov 12 08:00:05 10.9.0.12 [tch-002] iscsid: connect to 192.0.2.50:3260 failed (No route to host)
+Nov 12 08:00:06 10.9.0.12 [tch-002] iscsid: connect to 192.0.2.50:3260 failed (No route to host)
+Nov 12 08:00:07 10.9.0.12 [tch-002] hps-issue: HPS-ISSUE open kind=mirror-leg mirror=bad value
+Nov 12 08:00:08 10.9.0.12 [tch-002] app: api_key=0123 something HPS-ISSUE open kind=leak token=abc
+Nov 12 08:00:09 10.9.0.12 [tch-002] iscsid: connect to 192.0.2.50:3260 failed (No route to host)
+Nov 12 08:00:10 10.9.0.12 [tch-002] iscsid: connection1:0 is operational after recovery (2 attempts)
+Nov 12 08:00:11 10.9.0.12 [tch-002] hps-issue: HPS-ISSUE resolve kind=mirror-leg host=tch-002 mirror=probe-tch-002-root event=RebuildFinished

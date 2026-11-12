@@ -253,6 +253,12 @@ sub workload_dir ($self, $cluster = undef) {
     return $self->cluster_dir($cluster // $self->active_cluster) . '/workloads';
 }
 
+# issues_dir($cluster): <cluster dir>/issues, one <id>.json per issue
+# (HPS::Issues); the active cluster when no name is given.
+sub issues_dir ($self, $cluster = undef) {
+    return $self->cluster_dir($cluster // $self->active_cluster) . '/issues';
+}
+
 sub cluster_list_all ($self) {
     my $dir = $self->config_base . '/clusters';
     return grep { -d "$dir/$_/cluster.db" } _subdirs($dir, '');

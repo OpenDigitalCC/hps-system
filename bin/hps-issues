@@ -1,0 +1,169 @@
+#!/usr/bin/env perl
+# hps-issues: the IPS's issue register (docs/ISSUES.md): list, show, and file,
+# resolve or annotate an issue by hand. hps-issue-watch files and resolves them
+# from the nodes' log lines and heals what it can. An ips-admin tool: every verb
+# works through hps-op.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::Issues;
+use HPS::IssueWatch;
+
+my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-issues: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-issues list [--all] [--json]
+  hps-issues show <id> [--json]
+  hps-issues open --kind K --key-field k=v [--key-field k=v]... [--severity urgent|warning] [--summary S] [words...]
+  hps-issues resolve <id> --by TEXT [words...]
+  hps-issues resolve --kind K --key-field k=v... --by TEXT [words...]
+  hps-issues note <id> TEXT [words...]
+list: the issues not resolved (open, healing, needs-human); --all every one.
+show: one issue with its trail.
+open: files an issue (or adds to the unresolved one of the same key). The key is
+  the kind and the values of its key fields: those the rules file declares for
+  the kind (lib/hps-issue-rules.conf, marker rules), else every --key-field in
+  the order given. Default severity warning. A mirror-leg issue is healed by
+  hps-issue-watch as one it found itself.
+resolve: by id, or the unresolved issue of a key; --by says what resolved it.
+note: adds a note to the trail.
+Words after the options are joined to the summary, the --by text or the note
+with spaces (the ips-admin gate passes no space inside one argument). A text
+that looks like a secret is refused: the register is plain JSON.
+Environment: HPS_CONFIG_BASE (the registry), HPS_ISSUE_RULES (the rules file).
+Exit: 0 ok, 1 failed, 2 usage, 3 refused (already resolved), 4 no such issue.
+USAGE
+    return 2;
+}
+
+sub render_list {
+    my (@r) = @_;
+    return "no issues\n" unless @r;
+    return join '', map {
+        sprintf("%-13s %-11s %-7s %s seen=%d %s\n", $_->{id}, $_->{state}, $_->{severity}, $_->{key},
+            $_->{seen} // 1, $_->{summary})
+    } @r;
+}
+
+sub render_one {
+    my ($r) = @_;
+    my $out = "id        $r->{id}\nkey       $r->{key}\nkind      $r->{kind}\nstate     $r->{state}\n"
+        . "severity  $r->{severity}\nsummary   $r->{summary}\nopened    $r->{opened_at}\n"
+        . 'resolved  ' . ($r->{resolved_at} // '-') . "\nseen      " . ($r->{seen} // 1) . ' (last ' . ($r->{last_seen_at} // '-') . ")\n";
+    $out .= "previous  $r->{previous}\n" if $r->{previous};
+    $out .= 'fields    ' . join(' ', map { "$_=$r->{fields}{$_}" } sort keys %{ $r->{fields} // {} }) . "\n";
+    if (ref $r->{heal} eq 'HASH') {
+        my $h = $r->{heal};
+        $out .= sprintf("heal      attempts=%d%s%s\n", $h->{attempts} // 0,
+            defined $h->{next_at} ? ' next=' . HPS::Issues::iso($h->{next_at}) : '',
+            defined $h->{last_result} ? " last: $h->{last_result}" : '');
+    }
+    $out .= "trail\n";
+    for my $t (@{ $r->{trail} // [] }) {
+        $out .= "  $t->{at} $t->{event}" . (length($t->{detail} // '') ? " $t->{detail}" : '')
+            . ($t->{count} ? " (x$t->{count}, last $t->{last_at})" : '') . "\n";
+    }
+    return $out;
+}
+
+sub key_fields {
+    my (@kv) = @_;
+    my (%f, @order);
+    for my $kv (@kv) {
+        my ($k, $v) = $kv =~ /\A([^=]+)=(.*)\z/ or HPS::Issues::_fail(usage => "--key-field takes k=v, not '$kv'");
+        push @order, $k unless exists $f{$k};
+        $f{$k} = $v;
+    }
+    return (\%f, @order);
+}
+
+sub key_spec {
+    my ($kind, @kv) = @_;
+    HPS::Issues::check_kind($kind);
+    my ($f, @order) = key_fields(@kv);
+    HPS::Issues::_fail(usage => 'give at least one --key-field k=v') unless @order;
+    my $rules = eval { HPS::IssueWatch::load_rules(HPS::IssueWatch::default_rules_path()) };
+    my ($sev, @kf) = $rules && $rules->{marker}{$kind} ? HPS::IssueWatch::marker_keys($rules, $kind) : ('warning', @order);
+    return (HPS::Issues::check_fields($f), $sev, @kf);
+}
+
+sub text {
+    my ($first, @rest) = @_;
+    return join ' ', grep { defined && length } $first, @rest;
+}
+
+sub main {
+    my @argv = @_;
+    my $cmd = shift @argv;
+    return usage() if !defined $cmd || $cmd eq '--help' || $cmd eq '-h';
+    my (%o, @kv);
+    GetOptionsFromArray(\@argv, 'all' => \$o{all}, 'json' => \$o{json}, 'kind=s' => \$o{kind},
+        'key-field=s' => \@kv, 'severity=s' => \$o{severity}, 'summary=s' => \$o{summary}, 'by=s' => \$o{by})
+        or return usage();
+    my $who = $ENV{SUDO_USER} // $ENV{USER} // 'operator';
+    my $out = eval {
+        my $is = HPS::Issues->new;
+        if ($cmd eq 'list') {
+            HPS::Issues::_fail(usage => 'list takes no arguments') if @argv;
+            my @r = $is->list(all => $o{all});
+            return $o{json} ? { issues => \@r } : render_list(@r);
+        }
+        if ($cmd eq 'show') {
+            HPS::Issues::_fail(usage => 'show takes one issue id') unless @argv == 1;
+            my $r = $is->get($argv[0]);
+            return $o{json} ? $r : render_one($r);
+        }
+        if ($cmd eq 'open') {
+            HPS::Issues::_fail(usage => 'open needs --kind') unless defined $o{kind};
+            my ($f, $sev, @kf) = key_spec($o{kind}, @kv);
+            $sev = HPS::Issues::check_severity($o{severity}) if defined $o{severity};
+            my $summary = text($o{summary}, @argv);
+            $summary = HPS::Issues::caller_text('the summary', $summary) if length $summary;
+            my ($r, $new) = $is->open_issue(kind => $o{kind}, fields => $f, key_fields => \@kf, severity => $sev,
+                summary => $summary, detail => "filed by $who");
+            return $o{json} ? { new => $new ? JSON::PP::true : JSON::PP::false, issue => $r }
+                : ($new ? "opened $r->{id} $r->{key}\n" : "added to $r->{id} $r->{key} (already $r->{state})\n");
+        }
+        if ($cmd eq 'resolve') {
+            my $id = $o{kind} ? undef : shift @argv;
+            my $by = HPS::Issues::caller_text('--by', text($o{by}, @argv));
+            if (!defined $id) {
+                my ($f, undef, @kf) = key_spec($o{kind}, @kv);
+                my $key = HPS::Issues::make_key($o{kind}, $f, @kf);
+                my $open = $is->find_open($key) or HPS::Issues::_fail(notfound => "no unresolved issue $key");
+                $id = $open->{id};
+            }
+            HPS::Issues::_fail(usage => 'resolve needs an issue id or --kind with --key-field') unless defined $id;
+            my $r = $is->resolve($id, "$who: $by");
+            return $o{json} ? $r : "resolved $r->{id} $r->{key}\n";
+        }
+        if ($cmd eq 'note') {
+            my $id = shift @argv;
+            HPS::Issues::_fail(usage => 'note needs an issue id and a text') unless defined $id && @argv;
+            my $r = $is->note($id, HPS::Issues::caller_text('the note', text(@argv)), $who);
+            return $o{json} ? $r : "noted on $r->{id}\n";
+        }
+        HPS::Issues::_fail(usage => "unknown command '$cmd'");
+    };
+    if (!defined $out) {
+        my $err = $@;
+        if (ref $err && $err->can('kind')) {
+            return usage($err->message) if $err->kind eq 'usage';
+            print STDERR 'hps-issues: ' . $err->message . "\n";
+            return $EXIT{ $err->kind } // 1;
+        }
+        print STDERR "hps-issues: $err";
+        return 1;
+    }
+    print ref $out ? JSON::PP->new->canonical->encode($out) . "\n" : $out;
+    return 0;
+}
+
+exit main(@ARGV);

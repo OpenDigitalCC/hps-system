@@ -41,7 +41,7 @@
 # names take their stdin as confidential input (ips-admin/ips-admin-exec).
 IPS_ADMIN_SCRIPTS=(hps-onboard hps-cluster-config hps-cluster-config-apply hps-bmc hps-bmc-credential
   hps-node hps-storage hps-workload hps-workload-define hps-pins hps-ips-check hps-osvc hps-monitor
-  ips-syslog-forward hps-repo hps-log hps-metrics)
+  ips-syslog-forward hps-repo hps-log hps-metrics hps-issues)
 IPS_ADMIN_RAW_SCRIPTS=(hps-bmc-credential hps-cluster-config-apply hps-workload-define)
 
 _ips_admin_dir() {
