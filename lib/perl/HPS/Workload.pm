@@ -24,6 +24,7 @@ use HPS::Registry;
 use HPS::Keysafe;
 use HPS::Vxlan ();
 use HPS::Storage;
+use HPS::Metrics ();
 
 my $NAME_RE  = qr/^[a-z][a-z0-9-]{0,31}\z/;
 my $IMAGE_RE = qr/^[a-z0-9][a-z0-9._-]{0,63}\z/;
@@ -339,7 +340,7 @@ sub new ($class, %opt) {
     my $res = $ENV{HPS_RESOURCES} // (($ENV{HPS_BASE} // '/srv') . '/hps-resources');
     return bless {
         registry => $reg, keysafe => $ks, storage => $storage, runner => $runner,
-        logger => $logger, now => $now, any => $any, st_cache => {},
+        logger => $logger, now => $now, any => $any, st_cache => {}, metrics => $opt{metrics}, util_cache => {},
         images_dir => $opt{images_dir} // "$res/images", ips_url => $opt{ips_url},
         by => $opt{by} // $ENV{SUDO_USER} // $ENV{USER} // 'operator',
     }, $class;
@@ -1242,6 +1243,37 @@ sub _post_console ($self, $def, $out) {
     return;
 }
 
+# A VM's utilisation from its compute host's newest `vms` perfdata
+# (hps-metrics last): {cpu_pct, rss_mib, mem_mib, vcpus, rd_bps, wr_bps,
+# rx_bps, tx_bps, sampled_at} or undef, with the reason. Read-only; one read
+# per compute host.
+sub _utilisation ($self, $host, $vm) {
+    return (undef, 'no compute host recorded') unless defined $host && length $host;
+    my $h = $self->{util_cache}{$host} //= do {
+        my $m = $self->{metrics} //= HPS::Metrics->new;
+        my $r = eval { $m->latest($host) };
+        my $err = $@;
+        if ($r) {
+            my ($hh) = @{ $r->{hosts} };
+            my ($c) = $hh ? grep { $_->{check} eq 'vms' } @{ $hh->{checks} } : ();
+            $c ? { guests => HPS::Metrics::guest_perf($c->{perf}), epoch => $c->{epoch} } : { reason => "host $host has no vms check in its newest monitor run" };
+        }
+        else {
+            $err = $err->message if ref $err && $err->can('message');
+            $err =~ s/\s+\z//;
+            { reason => "no monitor sample for host $host: $err" };
+        }
+    };
+    return (undef, $h->{reason}) if $h->{reason};
+    my $g = $h->{guests}{$vm} or return (undef, "the newest vms sample of host ${host} does not list $vm");
+    my $mib = sub ($b) { defined $b ? 0 + sprintf('%.1f', $b / 1048576) : undef };
+    return ({
+        cpu_pct => $g->{cpu_pct}, rss_mib => $mib->($g->{rss}), mem_mib => $mib->($g->{mem}), vcpus => $g->{vcpus},
+        rd_bps => $g->{rd_Bps}, wr_bps => $g->{wr_Bps}, rx_bps => $g->{rx_Bps}, tx_bps => $g->{tx_Bps},
+        sampled_at => POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $h->{epoch}),
+    }, undef);
+}
+
 # Status: the recorded and the node-reported state per VM and mirror.
 sub _post_status ($self, $def, $out) {
     my $rec = $self->record($def->{name});
@@ -1270,8 +1302,14 @@ sub _post_status ($self, $def, $out) {
             : !defined $now ? 'written at create; the definition has none now'
             : $was eq $now ? 'as written' : 'changed since create (destroy and create to apply it)';
     }
+    for my $v (values %vms) {
+        my ($u, $why) = $self->_utilisation($v->{host}, $v->{vm});
+        $v->{utilisation} = $u;
+        $v->{utilisation_reason} = $why if defined $why;
+    }
     $out->{state} = $rec->{state};
-    $out->{vms} = [ map { $vms{ $_->{name} } } grep { $vms{ $_->{name} } } @{ $def->{vms} } ];
+    $out->{vms} = [ map { $vms{ $_->{name} } }
+ grep { $vms{ $_->{name} } } @{ $def->{vms} } ];
     return;
 }
 

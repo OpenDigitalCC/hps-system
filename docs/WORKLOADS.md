@@ -206,7 +206,17 @@ nothing). A node call that exits non-zero ends the run at once.
     the node-reported state. A failing node call makes the exit status 1 but
     the report is still printed. For a VM with a seed (now or at create) a
     `seed:` line: `as written`, or `changed since create` / `none written`
-    (destroy and create to apply it).
+    (destroy and create to apply it). Each VM also carries its latest
+    utilisation, read (read-only, once per compute host) from the host's newest
+    `hps-metrics last` `vms` perfdata (`docs/MONITORING.md`, "Per guest"):
+    `--json` gives per VM `"utilisation": {"cpu_pct", "rss_mib", "mem_mib",
+    "vcpus", "rd_bps", "wr_bps", "rx_bps", "tx_bps", "sampled_at"}` (`cpu_pct`
+    of one vCPU, memory in MiB with one decimal, rates in bytes per second,
+    `sampled_at` the check's time, ISO UTC), or `"utilisation": null` with
+    `"utilisation_reason"` (the host has no monitor sample in the newest
+    window, no `vms` check, or does not list the VM, e.g. it is stopped). The
+    text output has one `utilisation` line per VM. The other fields are
+    unchanged. A guest's history is `hps-metrics series <host> --guest <vm>`.
 
 `console <name> [--vm $VM] [--lines N]`
 :   Read-only: `vm-console-log <vm> [--lines N]` on each VM's compute host

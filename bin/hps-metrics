@@ -20,6 +20,7 @@ sub usage {
 Usage:
   hps-metrics last <mac|hostname|ips|all> [--json]
   hps-metrics series <mac|hostname|ips|all> [--hours N] [--step S] [--json]
+  hps-metrics series <mac|hostname> --guest <vm> [--hours N] [--step S] [--json]
 last: each host's latest hps-monitor result: the state, text and perfdata of
   every check of its newest run, its utilisation and compound, and "unreachable"
   when a newer line says it did not answer. Hosts with no line in the newest
@@ -27,6 +28,10 @@ last: each host's latest hps-monitor result: the state, text and perfdata of
 series: one host's utilisation per bucket of S seconds over the last N hours
   (the max in each bucket; for each check its last state), its raw throughput
   and load, and the compound. all: every host's compound only.
+  --guest VM  one guest of a compute host: its cpu_pct, rss, mem, vcpus, rd_Bps, wr_Bps,
+              rx_Bps, tx_Bps per bucket (the max), from the host's vms check; at most
+              64 guests per host are kept; exit 4 when the host has no sample of it.
+              Without --guest the host series lists the guests it has samples for.
   --hours N   1 to 168 (default 24)
   --step S    seconds per bucket, 30 to 86400 (default 300)
 Utilisation (%): cpu = busy; mem = 100 - available; load = load1 per core x 100,
@@ -73,6 +78,17 @@ sub label {
 sub render_series {
     my ($r) = @_;
     my $out = "# source $r->{source}, $r->{hours} h in ${\ $r->{step}} s buckets, times UTC\n";
+    if (defined $r->{guest}) {
+        my @l = grep { $r->{raw}{$_} } @HPS::Metrics::GUEST;
+        $out .= "# guest $r->{guest} on $r->{host}\n" . sprintf("%-11s %s\n", 'time', join(' ', map { sprintf('%12s', $_) } @l));
+        for my $i (0 .. $#{ $r->{t} }) {
+            next unless grep { defined $r->{raw}{$_}[$i] } @l;
+            $out .= sprintf("%-11s %s\n", strftime('%m-%d %H:%M', gmtime $r->{t}[$i]),
+                join(' ', map { sprintf('%12s', defined $r->{raw}{$_}[$i] ? $r->{raw}{$_}[$i] : '-') } @l));
+        }
+        $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
+        return $out;
+    }
     if ($r->{target} eq 'all') {
         for my $h (@{ $r->{hosts} }) {
             my @v = grep { defined } @{ $h->{compound} };
@@ -90,6 +106,7 @@ sub render_series {
             join(' ', map { sprintf('%6s', fmt($r->{util}{$_}[$i])) } @res));
     }
     $out .= "# * not in the compound\n" if grep { label($_) =~ /\*\z/ } @res;
+    $out .= "# guests with samples: " . join(' ', @{ $r->{guests} }) . " (--guest <vm> for one)\n" if @{ $r->{guests} // [] };
     $out .= "# no data in the window\n" unless $r->{lines};
     $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
     return $out;
@@ -100,16 +117,18 @@ sub main {
     my $cmd = shift @argv;
     return usage() if !defined $cmd || $cmd eq '--help' || $cmd eq '-h';
     my %o;
-    GetOptionsFromArray(\@argv, 'hours=s' => \$o{hours}, 'step=s' => \$o{step}, 'json' => \$o{json}) or return usage();
+    GetOptionsFromArray(\@argv, 'hours=s' => \$o{hours}, 'step=s' => \$o{step}, 'guest=s' => \$o{guest}, 'json' => \$o{json}) or return usage();
     my $json = delete $o{json};
     my %opt = map { defined $o{$_} ? ($_ => $o{$_}) : () } keys %o;
     my $r = eval {
         HPS::Metrics::_fail(usage => "$cmd needs one MAC, host name, ips or all") unless @argv == 1;
         my $m = HPS::Metrics->new;
         if ($cmd eq 'last') {
-            HPS::Metrics::_fail(usage => 'last takes no --hours or --step') if %opt;
+            HPS::Metrics::_fail(usage => 'last takes no --hours, --step or --guest') if %opt;
             $m->latest($argv[0]);
         } elsif ($cmd eq 'series') {
+            HPS::Metrics::_fail(usage => '--guest needs one host, not all or ips')
+                if defined $opt{guest} && ($argv[0] eq 'all' || lc $argv[0] eq 'ips');
             $m->series($argv[0], %opt);
         } else {
             HPS::Metrics::_fail(usage => "unknown command '$cmd'");

@@ -236,6 +236,7 @@ health badge's monitor row call it.
 
     hps-metrics last <mac|hostname|ips|all> [--json]
     hps-metrics series <mac|hostname|ips|all> [--hours N] [--step S] [--json]
+    hps-metrics series <mac|hostname> --guest <vm> [--hours N] [--step S] [--json]
 
 - `last`: each host's newest result: the checks of its newest run (the lines
   before its newest `checks=<n> worst=<state>` line) with state, text and
@@ -250,6 +251,33 @@ health badge's monitor row call it.
   an overview in one call.
 - `ips` is the IPS itself (`ips.<domain>`, its `disk_resources` and `disk_log`
   checks).
+- `series <host> --guest <vm>`: one guest's series, see "Per guest" below.
+
+### Per guest
+
+A compute host's `vms` check reports each running guest's `<vm>_cpu_pct`,
+`_rss`, `_mem`, `_vcpus`, `_rd_Bps`, `_wr_Bps`, `_rx_Bps` and `_tx_Bps`
+("The node's checks"). `series` records them as raw values under the guest's
+name, bucketed like the host's labels (the max within a bucket; empty buckets
+`null`). A guest that disappears simply stops: its buckets after the last
+sample are `null`.
+
+- `series <host> --json` lists the guests that have samples in the window as
+  `guests: [name, ...]` (names only; the values are not in this answer, so it
+  stays the size it was).
+- `series <host> --guest <vm> [--json]` answers for that guest:
+  `{target, host, name, mac, source, hours, step, start, t, guest, raw, units,
+  guests, lines, truncated}` where `raw` maps each label present
+  (`cpu_pct`, `rss`, `mem`, `vcpus`, `rd_Bps`, `wr_Bps`, `rx_Bps`, `tx_Bps`) to
+  an array of one value or `null` per bucket in `t`, and `units` gives `%` for
+  `cpu_pct`, `B` for `rss` and `mem`, `B/s` for the `_Bps` labels and an empty
+  string for `vcpus`. `cpu_pct` is of one vCPU (100 = one full vCPU, it can
+  exceed 100). A guest with no sample in the window exits 4 (`notfound`);
+  `--guest` with `all` or `ips`, or on `last`, is usage (2).
+- **Cap:** at most 64 guests per host (`HPS::Metrics::MAX_GUESTS`): in each
+  `vms` line the first 64 names in sorted order are read, so a guest past the
+  64th has no series and is not listed. Retention is the log tree's own; a
+  call reads at most 512 MiB as above and at most 168 hours.
 
 Utilisation, in percent:
 

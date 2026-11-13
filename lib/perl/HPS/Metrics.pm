@@ -63,6 +63,11 @@ use constant MAX_SCAN_BYTES => 512 * 1024 * 1024;  # per call
 use constant LAST_WINDOW    => 900;                # seconds `last` looks back, at least
 use constant WARN_PCT       => 70;
 use constant CRIT_PCT       => 90;
+use constant MAX_GUESTS     => 64;                 # guests per host a series keeps (the first 64 by name in each line)
+
+# The per-guest labels of a compute host's `vms` check: <vm>_<label>.
+our @GUEST       = qw(cpu_pct rss mem vcpus rd_Bps wr_Bps rx_Bps tx_Bps);
+our %GUEST_UNIT  = (cpu_pct => '%', rss => 'B', mem => 'B', vcpus => '', rd_Bps => 'B/s', wr_Bps => 'B/s', rx_Bps => 'B/s', tx_Bps => 'B/s');
 
 our @COMPOUND   = qw(cpu mem load disk pool);            # in the compound, in this order
 our @RESOURCES  = (@COMPOUND, 'diskio', 'swap');        # every utilisation; diskio and swap are not in the compound
@@ -115,7 +120,23 @@ sub parse_message ($msg) {
     return undef;
 }
 
+# guest_perf(\%perf): {vm => {label => value}} from the `vms` check's perfdata
+# (label values as numbers, or the {value, uom} of parse_perf), at most
+# MAX_GUESTS guests (the first by name).
+sub guest_perf ($p) {
+    my $alt = join '|', @GUEST;
+    my %g;
+    for my $l (sort keys %{ $p // {} }) {
+        my ($vm, $lab) = $l =~ /\A(.+)_($alt)\z/ or next;
+        next if !exists $g{$vm} && keys %g >= MAX_GUESTS;
+        my $v = $p->{$l};
+        $g{$vm}{$lab} = ref $v ? $v->{value} : $v;
+    }
+    return \%g;
+}
+
 sub _max (@v) {
+
     my $m;
     for (@v) { $m = $_ if defined $_ && (!defined $m || $_ > $m) }
     return $m;
@@ -393,16 +414,24 @@ sub _grid ($self, $opt) {
 # series($name, %opt): per-bucket utilisation of one host:
 #   {target, host, name, mac, source, hours, step, start, t => [bucket starts],
 #    util => {resource => [pct|null]}, compound => [...], raw => {name => [...]},
-#    units => {raw name => unit}, state => {check => [state|null], _host =>
+#    units => {raw name => unit}, guests => [names with a `vms` sample, at most MAX_GUESTS],
+#    state => {check => [state|null], _host =>
 #    [worst|UNREACHABLE|null]}, current, level, lines, truncated}
+# With guest => $vm: {target, host, name, mac, ..., t, guest => $vm, raw =>
+#    {cpu_pct|rss|mem|vcpus|rd_Bps|wr_Bps|rx_Bps|tx_Bps => [value|null]}, units,
+#    guests, lines}; notfound when the guest has no sample in the window.
 # all: {target => all, ..., t, hosts => [{host, name, mac, ips?, compound,
 #    current, level}]} (the compound only).
 sub series ($self, $name, %raw) {
+    my $guest = delete $raw{guest};
+    _fail(usage => '--guest needs a VM name (letters, digits, . _ -)')
+        if defined $guest && $guest !~ /\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z/;
     my $opt = options(%raw);
+
     my $t = $self->target($name);
     my ($start, $n) = $self->_grid($opt);
     my $step = $opt->{step};
-    my (%util, %rawv, %state, %all, $lines);
+    my (%util, %rawv, %state, %all, $lines, %gnames, %gseries);
     my $put_max = sub ($arr, $b, $v) { $arr->[$b] = $v if defined $v && (!defined $arr->[$b] || $v > $arr->[$b]) };
     my $src = $self->_scan($start, sub ($e, $m) {
         return 1 if $t && $m->{host} ne $t->{fqdn};
@@ -420,7 +449,15 @@ sub series ($self, $name, %raw) {
             my ($u, $r) = utilisation($m);
             $put_max->($util{$_} //= [], $b, $u->{$_}) for keys %$u;
             $put_max->($rawv{$_} //= [], $b, $r->{$_}) for keys %$r;
-            ($state{ $m->{check} } //= [])->[$b] //= $m->{state};    # newest first: the first seen is the last
+            if ($m->{check} eq 'vms') {
+                my $g = guest_perf($m->{perf});
+                $gnames{$_} = 1 for keys %$g;
+                if (defined $guest && $g->{$guest}) {
+                    $put_max->($gseries{$_} //= [], $b, $g->{$guest}{$_}) for keys %{ $g->{$guest} };
+                }
+            }
+            ($state{ $m->{check} } //= [])->[$b] //= $m->{state};
+    # newest first: the first seen is the last
         }
         elsif ($m->{kind} eq 'summary') { ($state{_host} //= [])->[$b] //= $m->{worst} }
         elsif ($m->{kind} eq 'unreachable') { ($state{_host} //= [])->[$b] //= 'UNREACHABLE' }
@@ -440,6 +477,18 @@ sub series ($self, $name, %raw) {
         }
         return { target => 'all', %head, hosts => \@hosts };
     }
+    if (defined $guest) {
+        _fail(notfound => "no `vms` sample of guest $guest on $t->{fqdn} in the window") unless %gseries;
+        $pad->($_) for values %gseries;
+        return {
+            target => $t->{fqdn}, %{ $self->_who($t->{fqdn}) }, %head,
+            guest  => $guest,
+            raw    => \%gseries,
+            units  => { map { $_ => $GUEST_UNIT{$_} } keys %gseries },
+            guests => [ sort keys %gnames ],
+            lines  => $lines // 0,
+        };
+    }
     $pad->($_) for values %util, values %rawv, values %state;
     my @cmp = map { my $i = $_; _max(map { $util{$_} ? $util{$_}[$i] : undef } @COMPOUND) } 0 .. $n - 1;
     my $cur = $current->(\@cmp);
@@ -455,6 +504,7 @@ sub series ($self, $name, %raw) {
         state    => \%state,
         current  => $cur,
         level    => level($cur),
+        guests   => [ sort keys %gnames ],
         lines    => $lines // 0,
     };
 }

@@ -12,6 +12,18 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Per-guest utilisation (2026-11-13)
+
+- **Added** `hps-metrics series <host> --guest <vm>`: per-guest history
+  (`cpu_pct`, `rss`, `mem`, `vcpus`, `rd_Bps`, `wr_Bps`, `rx_Bps`, `tx_Bps`) from
+  the compute host's `vms` check, bucketed like the host labels; at most 64
+  guests per host. `series <host>` lists the guests it has samples for
+  (`guests`).
+- **Added** `hps-workload status --json`: per VM `utilisation` (latest
+  `cpu_pct`, `rss_mib`, `mem_mib`, `vcpus`, `rd_bps`, `wr_bps`, `rx_bps`,
+  `tx_bps`, `sampled_at`) from the compute host's newest `vms` sample, or
+  `null` with `utilisation_reason` (IPS-35 #13).
+
 ## Operator-set boot_bridge (2026-11-13)
 
 - **Added** `hps-onboard assign --host-key NAME=VALUE` (repeatable) and
