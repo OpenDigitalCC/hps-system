@@ -41,6 +41,15 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
+@test "hps-onboard passes --host-key NAME=VALUE and set-key through the gate" {
+  run "$W/hps-onboard" assign 525400000009 --type TCH --host-key boot_bridge=br-prov
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"args=assign 525400000009 --type TCH --host-key boot_bridge=br-prov"* ]]
+  run "$W/hps-onboard" set-key 525400000009 --host-key boot_bridge=br-prov
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"args=set-key 525400000009 --host-key boot_bridge=br-prov"* ]]
+}
+
 @test "a wrapper passes its arguments through to its tool and returns its output" {
   run "$W/hps-onboard" list --json
   [ "$status" -eq 0 ]

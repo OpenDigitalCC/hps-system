@@ -12,6 +12,17 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Operator-set boot_bridge (2026-11-13)
+
+- **Added** `hps-onboard assign --host-key NAME=VALUE` (repeatable) and
+  `hps-onboard set-key <mac> --host-key NAME=VALUE`: an operator sets an
+  allowlisted host key through the operator API. The allowlist is `boot_bridge`
+  (`^br-[a-z0-9-]{1,12}$`); other keys are refused with a message naming the
+  allowed ones. `assign` writes the key before the node's first converged boot
+  (no reboot); `set-key` on an assigned host prints that boot_bridge needs a
+  reboot. This lets a nested test cluster host guests on its provisioning
+  network (`docs/CLUSTER-CONFIG.md`).
+
 ## om3-hb resolves by state; issue text through the input (2026-11-13)
 
 IPS-34 items 16 and 17 (s2 scale test).

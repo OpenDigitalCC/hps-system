@@ -20,6 +20,13 @@ package HPS::Onboard::Error {
 # CNH: container host (CS-3.11). BLD: image builder (docs/BUILDER.md).
 my %TYPES = map { $_ => 1 } qw(SCH TCH DRH CNH BLD);
 
+# Host keys an operator may set through hps-onboard (assign --host-key, set-key):
+# name => [value regex, what a value looks like, effect note].
+my %HOST_KEYS = (
+    boot_bridge => [ qr/^br-[a-z0-9-]{1,12}$/, 'br-NAME (br- and 1 to 12 of a-z 0-9 -)',
+                     'read at boot (hps-net): reboot the node for it to take effect' ],
+);
+
 sub new ($class, %opt) {
     my $reg = $opt{registry} // HPS::Registry->new(%{ $opt{registry_opts} // {} });
     return bless { registry => $reg, resources => $opt{resources}, forget_cmd => $opt{forget_cmd} }, $class;
@@ -175,6 +182,37 @@ sub _validate_args ($self, $a) {
     return 1;
 }
 
+# host_keys(\@specs): @specs are "name=value" strings; returns {name => value}.
+# Refuses (usage) a key outside the allowlist, a value that does not match it,
+# a malformed spec or a repeated name.
+sub host_keys ($self, $specs) {
+    my %out;
+    for my $s (@{ $specs // [] }) {
+        my ($k, $v) = $s =~ /^([^=]+)=(.*)$/s
+            or _fail('usage', "host key '$s' must be name=value");
+        my $spec = $HOST_KEYS{$k}
+            or _fail('usage', "host key '$k' is not settable here; allowed: " . join(', ', sort keys %HOST_KEYS));
+        _fail('usage', "host key $k: value '$v' must be $spec->[1]") unless $v =~ $spec->[0];
+        _fail('usage', "host key $k given twice") if exists $out{$k};
+        $out{$k} = $v;
+    }
+    return \%out;
+}
+
+# set_key($mac, \@specs): set allowlisted host keys on an existing host (any state).
+# Returns {mac, state, keys => {name => value}, notes => [..]}.
+sub set_key ($self, $mac, $specs) {
+    my $reg = $self->{registry};
+    my $m = eval { $reg->resolve_mac($mac) };
+    _fail('usage', "Invalid MAC address: $mac") unless defined $m;
+    my $keys = $self->host_keys($specs);
+    _fail('usage', 'set-key needs at least one --host-key name=value') unless %$keys;
+    _fail('notfound', "No such host: $mac") unless $reg->host_exists($m);
+    $reg->host_set($m, $_, $keys->{$_}) for sort keys %$keys;
+    return { mac => $m, state => $reg->host_get($m, 'STATE'), keys => $keys,
+             notes => [ map { "$_: $HOST_KEYS{$_}[2]" } sort keys %$keys ] };
+}
+
 sub assign ($self, $mac, $a) {
     my $reg = $self->{registry};
     $self->_validate_args($a);
@@ -185,6 +223,7 @@ sub assign ($self, $mac, $a) {
     $state = '(none)' unless defined $state;
     _fail('refused', "Host $m is in state $state; only HELD hosts can be assigned")
         unless $state eq 'HELD';
+    my $hk = $self->host_keys($a->{host_keys});
     _fail('notfound', "OS $a->{os} is not in the OS registry") unless $reg->os_exists($a->{os});
     # assign has never required the pin directory to exist; one that does is verified.
     $self->_verify_pin($a->{pin}) if -d $self->nixos_dir . "/$a->{pin}";
@@ -197,6 +236,7 @@ sub assign ($self, $mac, $a) {
     $reg->host_set($m, 'storage_note', $a->{storage_note})
         if defined $a->{storage_note} && length $a->{storage_note};
     $reg->host_set($m, 'assigned_at',  $reg->timestamp);
+    $reg->host_set($m, $_, $hk->{$_}) for sort keys %$hk;
 
     # IP/hostname allocation stays in Bash (host_network_configure). The hook
     # is a program path run as: $HPS_ONBOARD_NETCONF_CMD <mac>. It runs before

@@ -226,7 +226,15 @@ hps-op --cred FILE hps-storage sch-001 measure
 hps-op --cred FILE hps-storage sch-001 destroy s1
 hps-op --cred FILE hps-workload destroy t0 --dry-run
 hps-op --cred FILE hps-onboard forget 525400000009
+hps-op --cred FILE hps-onboard assign 525400000009 --type TCH --profile CONVERGED --os x86_64:nixos:26.05 --pin PIN --host-key boot_bridge=br-prov
+hps-op --cred FILE hps-onboard set-key 525400000009 --host-key boot_bridge=br-prov
 ```
+
+`--host-key NAME=VALUE` (repeatable) on `hps-onboard assign`, and `hps-onboard set-key`,
+set an allowlisted host key: today only `boot_bridge=br-NAME`, which a compute
+host needs to carry VMs on the provisioning network (`docs/CLUSTER-CONFIG.md`).
+`assign` writes it before the first converged boot; after `set-key` the node
+needs a reboot. Any other key is refused.
 
 Zvols and exports take the dataset as an argument (`<pool>/enc/vm/<name>` for
 a guest disk), which `ips-admin-exec` passes for `hps-storage`:

@@ -32,7 +32,13 @@ Usage:
       whether its last init succeeded (FAILED marks a failed init).
   hps-onboard show <mac> [--json]
   hps-onboard assign <mac> --type SCH,TCH,DRH,CNH,BLD --profile NAME \
-      --os arch:name:version --pin PIN [--storage "note"]
+      --os arch:name:version --pin PIN [--storage "note"] [--host-key NAME=VALUE ...]
+      --host-key (repeatable) sets a host key with the assignment, before the node's
+      first converged boot. Allowed: boot_bridge=br-NAME (the boot NIC bridge a VM on
+      the provisioning network needs).
+  hps-onboard set-key <mac> --host-key NAME=VALUE [--host-key ...]
+      Set an allowed host key on an already-assigned host (boot_bridge only for now).
+      boot_bridge is read at boot: reboot the node for it to take effect.
   hps-onboard repin <mac> (--pin PIN | --to-latest)
   hps-onboard reaudit <mac>
       Mark a held host's stored audit stale: its next boot request serves the audit
@@ -168,11 +174,12 @@ sub render_nets {
 
 sub main {
     my @argv = @_;
+    my @host_keys;
     my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach, $all, $dry);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
-        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all, 'dry-run' => \$dry,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all, 'dry-run' => \$dry, 'host-key=s' => \@host_keys,
     ) or return usage();
     my $ob = HPS::Onboard->new;
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
@@ -195,8 +202,14 @@ sub main {
         }
         elsif ($cmd eq 'assign') {
             return usage('assign needs one MAC') unless @argv == 1;
-            my $r = $ob->assign($argv[0], { type => $type, profile => $profile, os => $os, pin => $pin, storage_note => $storage });
+            my $r = $ob->assign($argv[0], { type => $type, profile => $profile, os => $os, pin => $pin, storage_note => $storage, host_keys => \@host_keys });
             print "Assigned $r->{mac}: state now $r->{state}\n";
+        }
+        elsif ($cmd eq 'set-key') {
+            return usage('set-key needs one MAC') unless @argv == 1;
+            my $r = $ob->set_key($argv[0], \@host_keys);
+            print "Set on $r->{mac}: " . join(', ', map { "$_=$r->{keys}{$_}" } sort keys %{ $r->{keys} }) . "\n";
+            print "  $_\n" for @{ $r->{notes} };
         }
         elsif ($cmd eq 'nets') {
             return usage('nets needs one MAC') unless @argv == 1;

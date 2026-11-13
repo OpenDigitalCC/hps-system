@@ -74,6 +74,7 @@ my @KEYS = (
     [ 'macs', 'host', 'json', 'node_audit CGI (host_audit_intake)', 'Array of the node\'s physical NIC MACs from its audit: {mac, ifname, driver, speed}, the host key MAC first. The MAC index is computed from these, so a boot from any listed port reaches this host. A MAC another host holds refuses the audit.' ],
     [ 'boot_mac_last', 'host', 'mac', 'ipxe_init_handler', 'The MAC the node last booted from (which port), as the host may boot from any of its macs.' ],
     [ 'storage_note', 'host', 'string', 'hps-onboard', 'Operator note about the node storage plan.' ],
+    [ 'boot_bridge', 'host', 'string', 'hps-onboard (assign --host-key, set-key)', 'Name of the bridge hps-net builds on the node\'s boot NIC (br-NAME, 1 to 12 of a-z 0-9 -), read at boot, so a change needs a reboot. A VM on the cluster provisioning network (a network_layout entry with uplink boot) needs it; the usual value is br-prov (docs/VM-LIFECYCLE.md).' ],
     [ 'poweroff_last', 'host', 'json', 'HPS::Node', 'Outcome of the last hps-node power-off: result (off, forced, no-bmc, failed), at, detail.' ],
     [ 'osvc_delivered_at', 'host', 'epoch', 'hps-osvc deliver', 'When the OpenSVC secret was last delivered to the node. Present means an om3 cluster member: after each pairing the API queues an osvc-deliver job for it (IPS-34).' ],
     [ 'storage_last', 'host', 'json', 'HPS::Storage', 'Outcome of the last storage operation: op, ok, at.' ],

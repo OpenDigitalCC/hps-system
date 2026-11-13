@@ -111,6 +111,17 @@ is `boot` only, and only with `purpose` `provisioning`, with no `vlan` and no
 segment itself; `net-bridge-ensure` only checks that it exists. VLANs and
 bridges may not repeat.
 
+A tenant VM on the provisioning network therefore needs two things: a `prov`
+entry in `network_layout` (`purpose` `provisioning`, `uplink` `boot`, a
+`br-prov` bridge) and the host key `boot_bridge=br-prov` on the compute host.
+An operator sets the host key through the operator API, with no step on the
+IPS: `hps-onboard assign <mac> ... --host-key boot_bridge=br-prov` writes it
+with the assignment, before the node's first converged boot, so no reboot is
+needed; `hps-onboard set-key <mac> --host-key boot_bridge=br-prov` sets it on
+an assigned host, which then needs a reboot (hps-net reads it at boot). Only
+allowlisted host keys are accepted (`boot_bridge`, value
+`^br-[a-z0-9-]{1,12}$`); anything else is refused.
+
 A fabric network (an emulated switch for the scale test) is
 `{"kind": "fabric", "purpose": "emulated-switch", "bridge": "br-fab", "mtu"?}`:
 no `cidr`, `vlan`, `nic` or `uplink`; `mtu` is 576 to 9216 (default 9000).
