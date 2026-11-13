@@ -43,6 +43,17 @@ package HPS::IssueHeal;
 # healer first sees the issue. Every attempt and check is in the trail with the
 # node's result line. Issues that are resolved or need a human are never touched.
 #
+# om3-hb (IPS-34 item 16): resolved by state. om3 prints "end a send error
+# period" only while its daemon runs; a daemon restarted in between never does,
+# and the issue would stay open (and turn urgent) while the peer beats. So each
+# open om3-hb issue, once OM3_QUIET seconds passed since it was last reported,
+# is checked every OM3_CHECK seconds (the watcher's tick): the node script
+# osvc-status runs on the issue's host (the reader of hps-monitor's osvc_hb
+# check and of `hps-osvc status`), and when the peer named in the key is not in
+# its stale list the issue resolves "by osvc_hb: peer <peer> beating". A peer
+# still stale, or a daemon not answering, leaves it open (a check in the trail).
+# The log's end line still resolves it as before.
+#
 # Storage back (IPS-34): when a portal's storage returns - a storage-path issue
 # that names it resolves (resolved(), from hps-issue-watch) or a storage host's
 # storage-up finishes (storage_back(), from hps-storage up with the host's
@@ -58,9 +69,12 @@ no warnings 'experimental::signatures';
 use HPS::Issues ();
 use HPS::Log ();
 use HPS::Registry ();
+use Time::Local ();
 
 use constant FIRST_DELAY => 30;
 use constant CHECK_DELAY => 30;
+use constant OM3_QUIET  => 30;    # seconds since the last report before the first state check
+use constant OM3_CHECK  => 60;    # seconds between state checks of one om3-hb issue
 our @DELAYS = (60, 120, 300, 900);    # after failed attempt 1, 2, 3, 4 and later
 
 # new(issues => HPS::Issues, runner => obj with call(mac, script, args), now => sub)
@@ -72,7 +86,7 @@ sub new ($class, %o) {
         $runner = HPS::Storage::Runner::HpsRun->new;
     }
     return bless { issues => $issues, runner => $runner, now => $o{now} // sub { time },
-        kinds => { 'mirror-leg' => 1, 'zfs-vdev' => 1 } }, $class;
+        kinds => { 'mirror-leg' => 1, 'zfs-vdev' => 1 }, om3_next => {} }, $class;
 }
 
 sub _now ($self) { return $self->{now}->() }
@@ -86,6 +100,10 @@ sub tick ($self) {
     my $n = 0;
     my $issues = $self->{issues};
     for my $rec ($issues->list) {
+        if ($rec->{kind} eq 'om3-hb' && $rec->{state} ne 'resolved') {
+            $n += $self->om3_check($rec);
+            next;
+        }
         next unless $self->{kinds}{ $rec->{kind} } && ($rec->{state} eq 'open' || $rec->{state} eq 'healing');
         my $h = $rec->{heal};
         if (ref $h ne 'HASH' || !defined $h->{next_at}) {
@@ -99,6 +117,60 @@ sub tick ($self) {
         $n++;
     }
     return $n;
+}
+
+# _epoch($iso): epoch of an ISO UTC time (YYYY-MM-DDTHH:MM:SSZ), 0 when unreadable.
+sub _epoch ($iso) {
+    my @p = ($iso // '') =~ /\A([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z\z/ or return 0;
+    return eval { Time::Local::timegm($p[5], $p[4], $p[3], $p[2], $p[1] - 1, $p[0]) } // 0;
+}
+
+# osvc_peer_state($stdout, $peer): 'beating', 'stale' or 'unknown' from the
+# summary line of osvc-status:
+#   OSVC <node> peers=<n> beating=<n> stale=<comma list or -> frozen=<yes|no>
+# beating: the peer is not in the stale list and at least one peer beats.
+sub osvc_peer_state ($stdout, $peer) {
+    my ($line) = grep { /\AOSVC \S+ peers=[0-9]+ / } reverse split /\n/, $stdout // '';
+    return ('unknown', '') unless defined $line;
+    my ($beating) = $line =~ /\bbeating=([0-9]+)/;
+    my ($stale)   = $line =~ /\bstale=(\S+)/;
+    return ('unknown', $line) unless defined $beating && defined $stale;
+    my %stale = map { HPS::Registry::short_name($_) => 1 } grep { $_ ne '-' } split /,/, $stale;
+    return ('stale', $line) if $stale{ HPS::Registry::short_name($peer) };
+    return ($beating > 0 ? 'beating' : 'unknown', $line);
+}
+
+# om3_check($rec): the state check of one open om3-hb issue when it is due.
+# Returns 1 when osvc-status was run.
+sub om3_check ($self, $rec) {
+    my $now = $self->_now;
+    my $id  = $rec->{id};
+    my $quiet = _epoch($rec->{last_seen_at}) + OM3_QUIET;
+    my $due = $self->{om3_next}{$id} // $quiet;
+    $due = $quiet if $quiet > $due;
+    return 0 if $due > $now;
+    $self->{om3_next}{$id} = $now + OM3_CHECK;
+    my $f = $rec->{fields} // {};
+    my ($host, $peer) = ($f->{host} // '', $f->{peer} // '');
+    my $mac = $self->find_host($host);
+    return 0 unless defined $mac && length $peer;
+    my $issues = $self->{issues};
+    my $r = $self->_call($mac, 'osvc-status');
+    my ($state, $line) = $r->{rc} == 1 ? ('unknown', '') : osvc_peer_state($r->{stdout}, $peer);
+    if ($state eq 'beating') {
+        delete $self->{om3_next}{$id};
+        $issues->resolve($id, "osvc_hb: peer $peer beating",
+            resolution => { by => 'healer', action => "osvc_hb check: osvc-status on $host",
+                result => "osvc_hb: peer $peer beating ($line)" });
+        return 1;
+    }
+    my $why = $state eq 'stale' ? "peer $peer stale ($line)"
+        : "osvc-status exit $r->{rc}: " . (length $line ? $line : result_line($r) || 'no summary line');
+    $issues->update($id, sub ($x) {
+        return if $x->{state} eq 'resolved';
+        $issues->trail($x, 'check', "osvc_hb: $why");
+    });
+    return 1;
 }
 
 # resolved($rec): an issue was resolved; a storage-path issue whose fields name

@@ -151,9 +151,43 @@ per failed I/O) and the om3 pairs (one per peer, each logged twice: with and
 without om's own time and level) add to one issue per key (`seen`). om3 ends a
 send error period and at once begins another when only the error changes (no
 route to host, then connection refused): `settle=30` keeps that from resolving
-and reopening the issue. om3-hb issues are not healed: the peer is down or
-unreachable, and hps-monitor's `osvc_hb` check grades the heartbeat
-(docs/MONITORING.md).
+and reopening the issue. om3-hb issues are not healed (the peer is down or
+unreachable; hps-monitor's `osvc_hb` check grades the heartbeat,
+docs/MONITORING.md) but they resolve by state too: see Resolving by state.
+
+## Resolving by state
+
+A rule that resolves on an "end" line depends on the node printing it. om3
+prints "end a send error period" only while its daemon runs: a daemon restarted
+in between (a node cycled, the cluster stopped and started) never does, and the
+`om3-hb` issue stayed open and turned urgent at `urgent_after` while om3 was
+healthy (s2, 2026-11-13: six issues, open about 4 hours). So `om3-hb` also
+resolves by state, in the healer (HPS::IssueHeal, run by `hps-issue-watch` after
+every poll, 2 s):
+
+- every unresolved `om3-hb` issue is checked once 30 s have passed since it was
+  last reported (`last_seen_at`), then every 60 s, for as long as it is
+  unresolved (the check does not need the issue to be `open`: a retry or note
+  does not stop it);
+- the check runs the node script `osvc-status` on the issue's host (the reader
+  behind hps-monitor's `osvc_hb` check and `hps-osvc status <host>`). Its
+  summary line `OSVC <node> peers=<n> beating=<n> stale=<list or -> ...` says
+  which peers are stale. The peer in the issue key is beating when it is not in
+  the stale list and at least one peer beats;
+- beating: the issue resolves `by osvc_hb: peer <peer> beating`, resolution
+  `by` healer, `action` `osvc_hb check: osvc-status on <host>`, `result`
+  `osvc_hb: peer <peer> beating (<the OSVC line>)`;
+- still stale, or `om` not answering, or no summary line: the issue stays as it
+  is (severity and `urgent_at` untouched) and the trail gets a `check` entry
+  (`osvc_hb: peer <peer> stale (...)`; the same entry again only counts up).
+
+The end line still resolves the issue (`settle=30`); whichever comes first wins.
+The other begin/end rules: `storage-path` (iscsid failed / operational) has no
+state reader on the node that is a reliable peer of that log line, so it keeps
+the end line only (a storage-path issue that resolves still makes its mirror-leg
+issues due at once, below); `zfs-pool` resolves by state already (hps-monitor's
+OK line, or its last vdev healed); `mirror-leg` and `zfs-vdev` are healed by
+reading state (`mirror-status`, `storage-vdev-online`).
 
 ## Following the logs
 
@@ -243,10 +277,10 @@ node's resolve marker does. An issue filed by hand is healed the same way.
 
     hps-issues list [--all] [--json]
     hps-issues show <id> [--json]
-    hps-issues open --kind K --key-field k=v [--key-field k=v]... [--severity urgent|warning] [--summary S] [words...]
-    hps-issues resolve <id> --by TEXT [words...]
-    hps-issues resolve --kind K --key-field k=v... --by TEXT [words...]
-    hps-issues note <id> TEXT [words...]
+    hps-issues open --kind K --key-field k=v [--key-field k=v]... [--severity urgent|warning] [--summary S|-] [words...]
+    hps-issues resolve <id> --by TEXT|- [words...]
+    hps-issues resolve --kind K --key-field k=v... --by TEXT|- [words...]
+    hps-issues note <id> TEXT|- [words...]
     hps-issues retry <id>
 
 `retry` puts an issue that needs a human (or one open or healing) back to
@@ -259,10 +293,26 @@ ones too, each as `<summary> → resolved by <by>: <action>`; `--json` is
 `{"issues": [<record>...]}`, the form a page can read (with `resolution`).
 `show` prints the issue, then its `resolution` block (at, by, action, result),
 then the trail.
-Words after the options are joined to the text with spaces: the ips-admin gate
-passes no space inside one argument. Through the operator API:
+The text of `open --summary`, `resolve --by` and `note` has two forms:
+
+- tokens: the words after the options, joined to the text with spaces. The
+  ips-admin gate passes no space inside one argument, and only plain tokens
+  (A-Z a-z 0-9 `_ . , : = @ + -`; a `/` only in an IPv4 CIDR), so this form
+  carries a short phrase of those characters;
+- input: `-` in place of the text (`--by -`, `--summary -`, `note <id> -`), or
+  the text left out of `resolve` and `note`, reads it from standard input: a
+  whole sentence with any characters (`/`, quotes, spaces), at most 4096
+  bytes, newlines made spaces. One text per call; an empty input is a usage
+  error. The secret rule applies to both forms. Through the operator API the
+  input is the run's confidential input, the script `hps-issues-input` (only
+  `resolve`, `note` and `open`; same options), reached with `hps-op --input`.
+  The plain `hps-issues` script has no input (its stdin is /dev/null).
+
+Through the operator API:
 
     hps-op --cred op.cred hps-issues list
     hps-op --cred op.cred hps-issues resolve 20261112-001 --by replaced the NAS disk
+    printf '%s\n' 'operator: om3 5/5 beating, checked by hand' | hps-op --cred op.cred --input hps-issues-input resolve 20261112-001 --by -
+    printf '%s\n' 'peer rebooted at 12:03 (cycle)' | hps-op --cred op.cred --input hps-issues-input note 20261112-001 -
 
 Exit: 0 ok, 1 failed, 2 usage, 3 refused (already resolved; retry of a resolved issue), 4 no such issue.

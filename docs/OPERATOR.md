@@ -80,6 +80,7 @@ executor.
 | `hps-storage` | `bin/hps-storage` | - |
 | `hps-workload` | `bin/hps-workload` | - |
 | `hps-workload-define` | `bin/hps-workload define <name>` | one workload name, `--dry-run`, `--replace`, `--json`; the JSON definition is the run's input (`input=raw`) |
+| `hps-issues-input` | `bin/hps-issues` | `resolve`, `note` or `open` with the text taken from the run's input (`input=raw`): `--by -`, `note <id> -`, `--summary -`; a whole sentence, any characters (docs/ISSUES.md) |
 | `hps-pins` | `bin/hps-pins` | - |
 | `hps-ips-check` | `bin/hps-ips-check` | - |
 | `hps-osvc` | `bin/hps-osvc` | - |
@@ -102,7 +103,7 @@ passes, and no argument can name a file. A value that does not fit (a
 description with spaces, a URL, a JSON layout) goes through
 `hps-cluster-config-apply`, whose input is not an argument; a workload
 definition goes through `hps-workload-define` the same way. The tool runs in an
-empty private directory with stdin `/dev/null`, except for the three `input=raw`
+empty private directory with stdin `/dev/null`, except for the four `input=raw`
 scripts. Without `input=raw` the agent writes the request context (the caller's
 token included) to the script's stdin: it never reaches a tool. Each call logs
 two syslog lines, tag `ips-admin`: the tool and its arguments, then its exit
@@ -195,12 +196,13 @@ ips.<domain> --script <tool> --json -- <args>`, with the token in the client's
 environment (`CTRL_EXEC_TOKEN`, never an argument), and prints the tool's
 stdout and stderr; its exit status is the tool's. `--input` sends stdin as the
 run's confidential input, for `hps-bmc-credential`, `hps-cluster-config-apply`
-and `hps-workload-define`:
+`hps-workload-define` and `hps-issues-input`:
 
 ```
 printf '%s\n%s\n' "$user" "$password" | hps-op --cred FILE --input hps-bmc-credential tch-003
 hps-op --cred FILE --input hps-cluster-config-apply < s1.conf
 hps-op --cred FILE --input hps-workload-define w1 < w1.json
+printf '%s\n' 'om3 5/5 beating, checked by hand' | hps-op --cred FILE --input hps-issues-input resolve 20261112-001 --by -
 ```
 
 A credential file readable by group or others, a plain `http://` URL, or a

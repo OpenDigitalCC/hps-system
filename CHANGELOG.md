@@ -12,6 +12,28 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## om3-hb resolves by state; issue text through the input (2026-11-13)
+
+IPS-34 items 16 and 17 (s2 scale test).
+
+- **Changed** `om3-hb` issues also resolve by state. om3 logs "end a send error
+  period" only while its daemon runs, so a restarted daemon left the issue open
+  and urgent while the peer beat (s2: six issues, about 4 hours). The healer
+  (`HPS::IssueHeal`, every watcher poll) runs the node script `osvc-status` on
+  the issue's host once 30 s after its last report, then every 60 s, and
+  resolves it `by osvc_hb: peer <peer> beating` (resolution by `healer`, action
+  `osvc_hb check: osvc-status on <host>`, result the OSVC summary line) when the
+  peer is not stale. A stale peer or a silent daemon leaves it open with a
+  `check` entry in the trail. The end line still resolves it. The other
+  begin/end rule, `storage-path`, has no node-side state reader and keeps the
+  end line.
+- **New** free text through the operator API: `hps-issues resolve --by -`,
+  `note <id> -` and `open --summary -` read the text from standard input (a
+  whole sentence, any characters, 4096 bytes at most); the text left out of
+  `resolve` and `note` does the same. The ips-admin script `hps-issues-input`
+  (`input=raw`: `hps-op --input`) carries it; the token form is unchanged.
+  docs/ISSUES.md, docs/OPERATOR.md.
+
 ## Zvol write properties, one-disk pools, host reserve by TYPE, link-speed floor (2026-11-12)
 
 Owner-approved zvol sync/logbias verb; IPS-34 items 12 and 13; the one-disk

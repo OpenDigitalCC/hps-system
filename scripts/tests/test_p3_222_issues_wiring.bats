@@ -104,3 +104,42 @@ gate() {
   grep -q 'clusters/<cluster>/issues/<id>.json' "$ROOT/docs/ISSUES.md"
   grep -q 'program:hps-issue-watch' "$ROOT/docs/ISSUES.md"
 }
+
+@test "hps-issues-input is allowlisted, input=raw, with its wrapper (IPS-34 item 17)" {
+  source "$ROOT/lib/functions.d/ips-admin-functions.sh"
+  [[ " ${IPS_ADMIN_SCRIPTS[*]} " == *" hps-issues-input "* ]]
+  [[ " ${IPS_ADMIN_RAW_SCRIPTS[*]} " == *" hps-issues-input "* ]]
+  [ -x "$ROOT/ips-admin/hps-issues-input" ]
+  grep -qxF 'exec "${0%/*}/ips-admin-exec" hps-issues-input "$@"' "$ROOT/ips-admin/hps-issues-input"
+  grep -q '^| `hps-issues-input` | `bin/hps-issues` |' "$ROOT/docs/OPERATOR.md"
+  grep -q 'hps-issues-input' "$ROOT/bin/hps-op"
+}
+
+@test "hps-issues-input: resolve, note and open pass with their stdin as the run's input, '-' as a token" {
+  printf '#!/bin/bash\necho "tool=${0##*/} args=$* stdin=$(cat)"\n' > "$TEST_DIR/sys/bin/hps-issues"
+  run bash -c "printf 'a whole sentence' | HPS_BASE='$TEST_DIR' PATH='$TEST_DIR/bin:$PATH' '$ROOT/ips-admin/hps-issues-input' resolve 20261112-001 --by -"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-issues args=resolve 20261112-001 --by - stdin=a whole sentence"* ]]
+  run bash -c "printf 'x/y' | HPS_BASE='$TEST_DIR' PATH='$TEST_DIR/bin:$PATH' '$ROOT/ips-admin/hps-issues-input' note 20261112-001 -"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"args=note 20261112-001 - stdin=x/y"* ]]
+  run bash -c "printf 'sum' | HPS_BASE='$TEST_DIR' PATH='$TEST_DIR/bin:$PATH' '$ROOT/ips-admin/hps-issues-input' open --kind disk --key-field host=n1 --summary -"
+  [ "$status" -eq 0 ]
+}
+
+@test "hps-issues-input: no other verb, and the arguments are still plain tokens" {
+  for v in list show retry watch; do
+    run bash -c "printf 'x' | HPS_BASE='$TEST_DIR' PATH='$TEST_DIR/bin:$PATH' '$ROOT/ips-admin/hps-issues-input' $v 20261112-001"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"only resolve, note and open take a text from the input"* ]]
+  done
+  run bash -c "printf 'x' | HPS_BASE='$TEST_DIR' PATH='$TEST_DIR/bin:$PATH' '$ROOT/ips-admin/hps-issues-input' note 20261112-001 'two words'"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not a plain token"* ]]
+}
+
+@test "the plain hps-issues gate carries '-' as a token (its stdin is /dev/null)" {
+  gate resolve 20261112-001 --by -
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"args=resolve 20261112-001 --by -"* ]]
+}

@@ -21,9 +21,9 @@
 #      last, series; hps-issues: list, show, open, resolve, note, retry);
 #   4. the tool runs from an empty private directory, as root (the agent's
 #      user), with the HPS paths from hps.conf. Its stdin is /dev/null, except
-#      for the three input=raw scripts (hps-bmc-credential,
-#      hps-cluster-config-apply, hps-workload-define), whose stdin is the run's
-#      confidential input.
+#      for the four input=raw scripts (hps-bmc-credential,
+#      hps-cluster-config-apply, hps-workload-define, hps-issues-input), whose
+#      stdin is the run's confidential input.
 #      Without input=raw the agent puts the request context (the caller's token
 #      included) on stdin: it never reaches a tool;
 #   5. one syslog line before (tag ips-admin: tool and arguments, never the
@@ -109,6 +109,14 @@ case "$TOOL" in
       esac
     done
     [[ $names -eq 1 ]] || refuse "hps-workload-define takes exactly one workload name" ;;
+  hps-issues-input)
+    # hps-issues <resolve|note|open> ...; stdin: the free text (--by -, note <id> -, --summary -).
+    BIN=hps-issues
+    INPUT=1
+    case "${1:-}" in
+      resolve | note | open) ;;
+      *) refuse "hps-issues-input: only resolve, note and open take a text from the input" ;;
+    esac ;;
   hps-monitor)
     BIN=hps-monitor
     [[ "${1:-}" == run ]] || refuse "hps-monitor: only run is open to ips-admin" ;;

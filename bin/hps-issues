@@ -9,6 +9,7 @@ use FindBin qw($RealBin);
 use lib "$RealBin/../lib/perl";
 use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
+use Encode ();
 use HPS::Issues;
 use HPS::IssueWatch;
 
@@ -21,10 +22,10 @@ sub usage {
 Usage:
   hps-issues list [--all] [--json]
   hps-issues show <id> [--json]
-  hps-issues open --kind K --key-field k=v [--key-field k=v]... [--severity urgent|warning] [--summary S] [words...]
-  hps-issues resolve <id> --by TEXT [words...]
-  hps-issues resolve --kind K --key-field k=v... --by TEXT [words...]
-  hps-issues note <id> TEXT [words...]
+  hps-issues open --kind K --key-field k=v [--key-field k=v]... [--severity urgent|warning] [--summary S|-] [words...]
+  hps-issues resolve <id> --by TEXT|- [words...]
+  hps-issues resolve --kind K --key-field k=v... --by TEXT|- [words...]
+  hps-issues note <id> TEXT|- [words...]
   hps-issues retry <id>
 list: the issues not resolved (open, healing, needs-human); --all every one,
   a resolved one as "<summary> → resolved by <by>: <action>".
@@ -39,9 +40,20 @@ note: adds a note to the trail.
 retry: an issue that needs a human (or is open or healing) back to open with
   its heal backoff reset: the healer tries again at its next tick. Refused for
   a resolved issue.
-Words after the options are joined to the summary, the --by text or the note
-with spaces (the ips-admin gate passes no space inside one argument). A text
-that looks like a secret is refused: the register is plain JSON.
+Two ways to give the summary, the --by text or the note:
+  tokens   the words after the options are joined with spaces (the ips-admin
+           gate passes no space inside one argument and only the characters
+           A-Z a-z 0-9 _ . , : = @ + -);
+  input    `-` in place of the text (--by -, --summary -, note <id> -), or the
+           text left out of resolve and note, reads it from standard input: a
+           whole sentence, any characters, up to 4096 bytes, newlines made
+           spaces. Through the operator API that is hps-issues-input, whose
+           stdin is the run's confidential input (hps-op --input):
+             printf '%s\n' 'om3 5/5 beating, checked by hand' |
+               hps-op --cred FILE --input hps-issues-input resolve 20261112-001 --by -
+           (the plain hps-issues gate has no input: the same words there are
+           an empty text, refused). One text per call.
+A text that looks like a secret is refused: the register is plain JSON.
 Environment: HPS_CONFIG_BASE (the registry), HPS_ISSUE_RULES (the rules file).
 Exit: 0 ok, 1 failed, 2 usage, 3 refused (already resolved; retry of a resolved issue), 4 no such issue.
 USAGE
@@ -116,13 +128,40 @@ sub text {
     return join ' ', grep { defined && length } $first, @rest;
 }
 
+use constant INPUT_MAX => 4096;
+
+# input_text($what): the text from standard input (the run's confidential input
+# through hps-op --input): at most INPUT_MAX bytes, decoded as UTF-8 when valid,
+# control characters and newlines made spaces. Usage error when empty or longer.
+sub input_text {
+    my ($what) = @_;
+    binmode STDIN;
+    my $got = read(STDIN, my $buf, INPUT_MAX + 1) // 0;
+    HPS::Issues::_fail(usage => "$what: no text on standard input") unless $got && $buf =~ /\S/;
+    HPS::Issues::_fail(usage => "$what: more than " . INPUT_MAX . " bytes on standard input") if $got > INPUT_MAX;
+    my $s = eval { Encode::decode('UTF-8', $buf, Encode::FB_CROAK | Encode::LEAVE_SRC) } // $buf;
+    $s =~ s/[\x00-\x1f\x7f]+/ /g;
+    return $s;
+}
+
+# text_arg($what, $opt, $optional, @words): the text of a verb: the tokens
+# (option value and words), or standard input when the value is `-` (alone), or
+# when there is no text at all and $optional is false and stdin is not a terminal.
+sub text_arg {
+    my ($what, $opt, $must, @words) = @_;
+    my $have = text($opt, @words);
+    if (defined $opt && $opt eq '-' && !grep { defined && length } @words) { return input_text($what) }
+    if (!length $have && $must && !-t STDIN) { return input_text($what) }
+    return $have;
+}
+
 sub main {
     my @argv = @_;
     my $cmd = shift @argv;
     return usage() if !defined $cmd || $cmd eq '--help' || $cmd eq '-h';
     my (%o, @kv);
     GetOptionsFromArray(\@argv, 'all' => \$o{all}, 'json' => \$o{json}, 'kind=s' => \$o{kind},
-        'key-field=s' => \@kv, 'severity=s' => \$o{severity}, 'summary=s' => \$o{summary}, 'by=s' => \$o{by})
+        'key-field=s' => \@kv, 'severity=s' => \$o{severity}, 'summary:s' => \$o{summary}, 'by:s' => \$o{by})
         or return usage();
     my $who = $ENV{SUDO_USER} // $ENV{USER} // 'operator';
     my $out = eval {
@@ -141,7 +180,7 @@ sub main {
             HPS::Issues::_fail(usage => 'open needs --kind') unless defined $o{kind};
             my ($f, $sev, @kf) = key_spec($o{kind}, @kv);
             $sev = HPS::Issues::check_severity($o{severity}) if defined $o{severity};
-            my $summary = text($o{summary}, @argv);
+            my $summary = text_arg('the summary', $o{summary}, 0, @argv);
             $summary = HPS::Issues::caller_text('the summary', $summary) if length $summary;
             my ($r, $new) = $is->open_issue(kind => $o{kind}, fields => $f, key_fields => \@kf, severity => $sev,
                 summary => $summary, detail => "filed by $who");
@@ -150,7 +189,7 @@ sub main {
         }
         if ($cmd eq 'resolve') {
             my $id = $o{kind} ? undef : shift @argv;
-            my $by = HPS::Issues::caller_text('--by', text($o{by}, @argv));
+            my $by = HPS::Issues::caller_text('--by', text_arg('--by', $o{by}, 1, @argv));
             if (!defined $id) {
                 my ($f, undef, @kf) = key_spec($o{kind}, @kv);
                 my $key = HPS::Issues::make_key($o{kind}, $f, @kf);
@@ -163,8 +202,8 @@ sub main {
         }
         if ($cmd eq 'note') {
             my $id = shift @argv;
-            HPS::Issues::_fail(usage => 'note needs an issue id and a text') unless defined $id && @argv;
-            my $r = $is->note($id, HPS::Issues::caller_text('the note', text(@argv)), $who);
+            HPS::Issues::_fail(usage => 'note needs an issue id and a text') unless defined $id;
+            my $r = $is->note($id, HPS::Issues::caller_text('the note', text_arg('the note', shift(@argv), 1, @argv)), $who);
             return $o{json} ? $r : "noted on $r->{id}\n";
         }
         if ($cmd eq 'retry') {
