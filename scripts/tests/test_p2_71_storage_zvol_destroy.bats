@@ -135,15 +135,27 @@ SHIM
   nothing_destroyed
 }
 
-@test "a mounted zvol and one with holders or partitions are refused (3)" {
+@test "a mounted zvol, a holder on it, or a mounted partition are refused (3)" {
   printf 'disk /mnt/x\n' > "$STATE/lsblk.t0"
   destroy
   [ "$status" -eq 3 ]
-  [[ "$stderr" == *"in use"* ]]
-  printf 'disk \npart \n' > "$STATE/lsblk.t0"
+  [[ "$stderr" == *"in use (mounted at /mnt/x)"* ]]
+  printf 'disk \npart \nraid1 \n' > "$STATE/lsblk.t0"
   destroy
   [ "$status" -eq 3 ]
+  [[ "$stderr" == *"in use (raid1 holder on the device)"* ]]
+  printf 'disk \npart /mnt/y\n' > "$STATE/lsblk.t0"
+  destroy
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"in use (partition mounted at /mnt/y)"* ]]
   nothing_destroyed
+}
+
+@test "partition nodes alone are not in use: a stopped guest's disk is destroyed" {
+  printf 'disk \npart \npart \n' > "$STATE/lsblk.t0"
+  destroy
+  [ "$status" -eq 0 ]
+  grep -q 'zfs destroy' "$SHIM_LOG"
 }
 
 @test "a failing zfs destroy (snapshots, clones) exits 1" {

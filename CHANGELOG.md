@@ -256,6 +256,16 @@ to LOAD CRITICAL and the DL360 to 7-9 % memory available.
   `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
   `t/225-resource-limits.t`.
 
+## storage-zvol-destroy: a guest disk's partition nodes are not "in use" (2026-11-13)
+
+- fix: `storage-zvol-destroy` refused any zvol with rows after the device in
+  `lsblk`, so a stopped guest's disk (a partition table, hence partition
+  nodes on the host) could never be destroyed: `cluster-down s2` stopped at
+  `s2-sch-001`'s first disk, "in use (holders or partitions on the device)".
+  Partition nodes alone are now fine; a mounted device or partition, or a
+  holder of another type (md, dm, loop) stacked on them, still refuses.
+  Needs the node image. Test: `test_p2_71_storage_zvol_destroy.bats`.
+
 ## image-fetch: the first create on a host no longer fails at the images dataset (2026-11-13)
 
 - fix: `image-fetch` set the mountpoint of an unmounted `<pool>/enc/images`

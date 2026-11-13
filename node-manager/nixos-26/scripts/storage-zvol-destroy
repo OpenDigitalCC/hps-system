@@ -101,12 +101,27 @@ refuse_if_in_use() {
   if [[ "$rows" == *$'\n'* ]]; then
     rest=${rows#*$'\n'}
   fi
-  if [[ -n "$rest" ]]; then
-    refuse "'$DATASET' is in use (holders or partitions on the device)"
-  fi
   if [[ "$first" == *" "* && -n "${first#* }" ]]; then
     refuse "'$DATASET' is in use (mounted at ${first#* })"
   fi
+  # The rows after the device are its partitions and anything stacked on them.
+  # A guest disk carries a partition table, so partition nodes alone are not
+  # "in use" (2026-11-13: a stopped SCH VM's zvol could not be destroyed); a
+  # mounted partition, or a holder of another type (md, dm, loop) stacked on
+  # the device or a partition, is.
+  local row type mp
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    type=${row%% *}
+    mp=${row#* }
+    [[ "$row" == *" "* ]] || mp=""
+    if [[ "$type" != part ]]; then
+      refuse "'$DATASET' is in use ($type holder on the device)"
+    fi
+    if [[ -n "$mp" ]]; then
+      refuse "'$DATASET' is in use (partition mounted at $mp)"
+    fi
+  done <<< "$rest"
 }
 
 main() {
