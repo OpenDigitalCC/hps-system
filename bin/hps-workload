@@ -20,7 +20,7 @@ sub usage {
     print STDERR "hps-workload: $msg\n" if $msg;
     print STDERR <<'USAGE';
 Usage:
-  hps-workload create  <name> [--resume] [--dry-run] [--json] [--allow-any-pool-name]
+  hps-workload create  <name> [--resume [--image-written]] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload start   <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload stop    <name> [--vm <vm>] [--force] [--dry-run] [--json]
   hps-workload suspend <name> [--vm <vm>] [--dry-run] [--json]
@@ -204,10 +204,10 @@ sub catalogue_verb {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
-        'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget,
+        'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget, 'image-written' => \$imgw,
         'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
@@ -229,6 +229,7 @@ sub main {
     }
     return usage("$op takes no further arguments") if @argv;
     return usage('--resume is only for create') if $resume && $op ne 'create';
+    return usage('--image-written is only for create --resume') if $imgw && !($op eq 'create' && $resume);
     return usage('--forget is only for destroy') if $forget && $op ne 'destroy';
     return usage('--force is only for stop') if $force && $op ne 'stop';
     return usage("--vm is not for $op") if defined $vm && ($op eq 'create' || $op eq 'destroy');
@@ -236,7 +237,7 @@ sub main {
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         my $wl = HPS::Workload->new(allow_any_pool_name => $any);
-        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, disk => $disk, size => $size, lines => $lines, force => $force);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, image_written => $imgw, disk => $disk, size => $size, lines => $lines, force => $force);
         if ($dry) {
             my $r = $wl->run($op, $name, %a);
             if ($json) { print $js->encode($r) }
@@ -257,7 +258,12 @@ sub main {
             return $r->{rc};
         }
         else {
-            print render_run($r) . join('', map {"note: $_\n"} @{ $r->{notes} // [] }) . "$op ok: workload $name\n";
+            print render_run($r) . join('', map {"note: $_\n"} @{ $r->{notes} // [] });
+            if ($r->{pending}) {
+                print "$op INCOMPLETE: workload $name is partly destroyed; run destroy $name again when the storage host is back\n";
+                return 1;
+            }
+            print "$op ok: workload $name\n";
             print $r->{forgotten} ? "definition workloads/$name.json removed (--forget)\n"
                 : "definition workloads/$name.json kept; create $name runs again from it, destroy --forget removes it\n"
                 if $op eq 'destroy';

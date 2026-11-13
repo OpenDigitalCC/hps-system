@@ -404,7 +404,7 @@ my $f = StorageFixture::setup_workload();
     my $r = $wl->run('destroy', 't0');
     ok($r->{ok}, 'destroy from creating ok');
     is_deeply([ script_list($g) ], ['storage-zvol-destroy'], 'only the zvol destroy ran');
-    is(scalar(@{ $r->{notes} }), 5, 'the rest is skipped with notes') or diag explain $r->{notes};
+    is(scalar(@{ $r->{notes} }), 7, 'the rest is skipped with notes') or diag explain $r->{notes};
     like($r->{notes}[0], qr/skipped .*never created/, 'a note says why');
     ok(!$g->{reg}->cluster_exists('lab', 'workload_t0'), 'record removed');
     ok(-e $g->{reg}->workload_dir('lab') . '/t0.json', 'definition kept');
@@ -418,7 +418,7 @@ my $f = StorageFixture::setup_workload();
     my $r = $wl->run('destroy', 't0');
     ok($r->{ok}, 'destroy ok');
     is(nodecalls($g), 0, 'no node call');
-    is(scalar @{ $r->{notes} }, 6, 'every step skipped with a note');
+    is(scalar @{ $r->{notes} }, 8, 'every step skipped with a note');
     ok(!$g->{reg}->cluster_exists('lab', 'workload_t0') && -e $g->{reg}->workload_dir('lab') . '/t0.json', 'only the record is removed; the definition stays');
 }
 {

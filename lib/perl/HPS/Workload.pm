@@ -774,6 +774,9 @@ sub _steps_create ($self, $def, %a) {
     _fail('refused', "workload '$name' is already created (state $rec->{state}); nothing to resume")
         if $rec && $rec->{state} ne 'creating';
     my $layout = $self->layout;
+    $self->{notes} = [];
+    my %rdone = map { $_ => 1 } @{ $rec->{done} // [] };
+    my $asserted = 0;
     my (@s, %fetched, %attached, %vx);
     for my $vm (@{ $def->{vms} }) {
         my $in = $self->_vm_info($def, $vm);
@@ -799,9 +802,23 @@ sub _steps_create ($self, $def, %a) {
         unless ($net_boot) {
             my ($mbps, $why) = $self->_derive('image_write_fraction', $vm->{disks}[0]{legs});
             my $vmn = $vm->{name};
-            push @s, _step($mac, 'vm-image-write', [ $vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path,
-                (defined $mbps ? ('--mbps-max', $mbps) : ()) ],
-                key => "write:$vm->{name}",
+            my @wargs = ($vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path, (defined $mbps ? ('--mbps-max', $mbps) : ()));
+            my %assume;
+            if ($a{image_written} && !$rdone{"write:$vmn"}) {
+                # An operator assertion (create --resume --image-written): the image on the root
+                # disk is complete, so vm-image-write (which refuses a disk with data) is skipped.
+                my $d0 = $in->{disks}[0];
+                my $prior = $d0->{mirrored} ? "mirror:$d0->{mirror}" : defined $d0->{dataset} ? "zvol:$d0->{dataset}" : undef;
+                _fail('refused', "--image-written: the root disk of $vmn was never created by this create, so no image can be on it")
+                    if defined $prior && !$rdone{$prior} && ($rec->{attempting} // '') ne $prior;
+                $asserted++;
+                %assume = (assume => 1, show => { script => 'vm-image-write', args => \@wargs,
+                    input => '<skipped: --image-written asserts the image on the root disk is complete>' });
+                push @{ $self->{notes} }, "vm-image-write of $vmn skipped: --image-written asserts the image on "
+                    . "$d0->{device} is complete; recorded as done (image_written_by: operator)";
+            }
+            # early_done: recorded the moment the node call returns, before any later step.
+            push @s, _step($mac, 'vm-image-write', \@wargs, key => "write:$vmn", early_done => 1, %assume,
                 before => sub { $self->_log('info', defined $mbps ? "image write of $vmn paced to $mbps MiB/s: $why" : "image write of $vmn is not paced: $why") });
         }
         push @s, $self->_seed_step($name, $vm, $in) if $vm->{seed};
@@ -830,6 +847,8 @@ sub _steps_create ($self, $def, %a) {
                 $self->_record_macs($wl, $vmname, $r) if $net_boot;
             });
     }
+    _fail('refused', '--image-written: no image write is pending (every image write is recorded as done, or no VM boots from a disk image)')
+        if $a{image_written} && !$asserted;
     return @s;
 }
 
@@ -1073,13 +1092,71 @@ sub _need_record ($self, $name, $op) {
     my $rec = $self->record($name) // _fail('notfound', "workload '$name' has not been created (no registry record)");
     _fail('refused', "workload '$name' is not fully created (state $rec->{state}); finish it with create --resume, or remove it with destroy")
         if $rec->{state} eq 'creating' && $op ne 'status' && $op ne 'destroy' && $op ne 'console';
+    _fail('refused', "workload '$name' is partly destroyed (iSCSI legs pending: "
+        . join(', ', map {"$_->{iqn} on $_->{host}"} @{ $rec->{destroy_pending} }) . '); finish it with destroy')
+        if $rec->{destroy_pending} && $op ne 'status' && $op ne 'destroy' && $op ne 'console';
     return $rec;
 }
 
+# The iSCSI legs of a VM's disks that destroy removes: the recorded ones (create wrote
+# host, iqn and the leg's zvol into the record), else those of the definition, the zvol
+# then taken from the storage host's export list. [{vm, disk, host, iqn, dataset}]
+sub _remote_legs ($self, $rec, $vm) {
+    my $rv = $rec->{vms}{ $vm->{name} };
+    my @out;
+    for my $d (@{ $vm->{disks} }) {
+        my $recd = ref $rv eq 'HASH' && ref $rv->{disks} eq 'HASH' ? $rv->{disks}{ $d->{name} } : undef;
+        my @legs = ref $recd eq 'HASH' && ref $recd->{remote} eq 'ARRAY' ? @{ $recd->{remote} }
+            : map { +{ host => $_->{host}, iqn => $_->{iqn}, dataset => undef } } grep { defined $_->{iqn} } @{ $d->{legs} };
+        for my $l (@legs) {
+            my $ds = $l->{dataset};
+            if (!defined $ds) {
+                my $st = eval { $self->_st($l->{host}) };
+                ($ds) = map { $_->{zvol} } grep { $_->{iqn} eq $l->{iqn} } (eval { $st->exports }) if $st;
+            }
+            push @out, { vm => $vm->{name}, disk => $d->{name}, host => $l->{host}, iqn => $l->{iqn}, dataset => $ds };
+        }
+    }
+    return @out;
+}
+
+# The steps removing one iSCSI leg on its storage host: iscsi-unexport of the iqn, then
+# storage-zvol-destroy of the leg's zvol (both through HPS::Storage). A host that is not
+# in the registry is not ours (an external NAS): its export and zvol are left alone, with
+# a note. Each step carries `leg` (an id) so run() can record a failure as pending.
+sub _leg_steps ($self, $l, $notes) {
+    my $st = eval { $self->_st($l->{host}) };
+    unless ($st) {
+        push @$notes, "iSCSI leg $l->{iqn}: host '$l->{host}' is not in the registry; its export and zvol are left alone";
+        return;
+    }
+    my $mac = $st->mac;
+    my $id = "$l->{iqn} on $l->{host}";
+    my @s = (_step($mac, 'iscsi-unexport', [ $l->{iqn} ], leg => $id, leg_info => $l,
+        storage => [ 'unexport', iqn => $l->{iqn} ]));
+    if (defined $l->{dataset}) {
+        push @s, _step($mac, 'storage-zvol-destroy', [ $l->{dataset} ], leg => $id, leg_info => $l,
+            storage => [ 'zvol-destroy', dataset => $l->{dataset} ]);
+    }
+    else {
+        push @$notes, "iSCSI leg $l->{iqn} on $l->{host}: no zvol is recorded or exported for it; only the export is removed";
+    }
+    return @s;
+}
+
 # The zvols of the local legs go through HPS::Storage (its zvol-destroy refusals hold).
+# The iSCSI legs (each on its storage host: iscsi-unexport, then storage-zvol-destroy)
+# follow; a leg that cannot be removed (its host down) is recorded as pending.
 sub _steps_destroy ($self, $def, %a) {
     $self->_need_record($def->{name}, 'destroy');
     my $rec = $self->record($def->{name});
+    if ($rec->{destroy_pending}) {
+        # A later destroy of a partly destroyed workload: only the pending legs.
+        my @n = ('only the iSCSI legs still pending from the earlier destroy are removed');
+        my @p = map { $self->_leg_steps($_, \@n) } @{ $rec->{destroy_pending} };
+        $self->{notes} = \@n;
+        return @p;
+    }
     # An unfinished create: only what it attempted exists (finished steps plus the
     # one that was running when it stopped); the rest is skipped with a note.
     my $partial = $rec->{state} eq 'creating';
@@ -1090,9 +1167,10 @@ sub _steps_destroy ($self, $def, %a) {
         push @notes, "skipped $what: never created (the create stopped before it)";
         return 0;
     };
-    my (@s, @zvols);
+    my (@s, @zvols, @legs);
     for my $vm (reverse $self->_ordered($def)) {
         my $in = $self->_vm_info($def, $vm);
+        push @legs, $self->_remote_legs($rec, $vm);
         if ($want->("define:$vm->{name}", "vm-stop and vm-undefine of $vm->{name}")) {
             # destroy throws the guest away: after vm-stop's graceful wait it is
             # forced off (a guest that ignores ACPI blocked destroy for good).
@@ -1107,12 +1185,13 @@ sub _steps_destroy ($self, $def, %a) {
         push @zvols, map { [ $in->{mac}, $_->{dataset} ] }
             grep { defined $_->{dataset} && $want->("zvol:$_->{dataset}", "zvol destroy of $_->{dataset}") } @{ $in->{disks} };
     }
-    $self->{notes} = \@notes;
     for my $z (@zvols) {
         my ($mac, $ds) = @$z;
         push @s, _step($mac, 'storage-zvol-destroy', [$ds], key => "zvol:$ds",
             storage => [ 'zvol-destroy', dataset => $ds ]);
     }
+    push @s, map { $self->_leg_steps($_, \@notes) } @legs;
+    $self->{notes} = \@notes;
     return @s;
 }
 
@@ -1150,6 +1229,7 @@ sub _prepare ($self, $op, $name, %a) {
     _fail('usage', '--vm is not for ' . $op) if defined $a{vm} && ($op eq 'create' || $op eq 'destroy');
     _fail('usage', '--resume is only for create') if $a{resume} && $op ne 'create';
     _fail('usage', '--forget is only for destroy') if $a{forget} && $op ne 'destroy';
+    _fail('usage', '--image-written is only for create --resume') if $a{image_written} && !($op eq 'create' && $a{resume});
     _fail('usage', '--disk and --size are only for grow-disk') if (defined $a{disk} || defined $a{size}) && $op ne 'grow-disk';
     _fail('usage', '--lines is only for console') if defined $a{lines} && $op ne 'console';
     my $def = $self->load($name);
@@ -1201,7 +1281,7 @@ sub run ($self, $op, $name, %a) {
     if ($a{dry_run}) {
         my $plan = eval { $self->plan($op, $name, %a) };
         if (my $e = $@) { $self->_log('warning', "$op $name refused: " . (ref $e ? $e->message : $e)); die $e }
-        return { dry_run => 1, op => $op, name => $name, plan => $plan, ($op eq 'destroy' || $op eq 'grow-disk' ? (notes => $self->{notes} // []) : ()) };
+        return { dry_run => 1, op => $op, name => $name, plan => $plan, ($op eq 'destroy' || $op eq 'grow-disk' || $op eq 'create' ? (notes => $self->{notes} // []) : ()) };
     }
     my ($def, @steps) = eval { $self->_prepare($op, $name, %a) };
     if (my $e = $@) {
@@ -1216,10 +1296,53 @@ sub run ($self, $op, $name, %a) {
         else { $self->_rec_set($name, $self->_new_record($def)) }
         $self->{registry}->cluster_unset($self->_cluster, _destroyed_key($name));
     }
-    my (@results, $n);
+    my (@results, $n, @pending, %legfail);
     $n = 0;
     for my $st (@steps) {
         $n++;
+        if ($st->{leg}) {
+            # An iSCSI leg of destroy: a failure (its storage host down) is recorded as pending,
+            # not fatal; the zvol step of a leg whose export step failed is not tried.
+            my $l = $st->{leg_info};
+            my $why = $legfail{ $st->{leg} };
+            if (!defined $why) {
+                my $r = eval { $self->_run_step($st, $n, scalar(@steps), $op) };
+                my $e = $@;
+                if ($e) { $why = ref $e ? $e->message : "$e" }
+                elsif ($r->{rc} != 0) {
+                    my ($last) = reverse grep { length } split /\n/, ($r->{stderr} // '');
+                    $why = "$st->{script} exited $r->{rc}" . (defined $last ? ": $last" : '');
+                }
+                else {
+                    push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => 0,
+                        stdout => $r->{stdout} // '', stderr => $r->{stderr} // '' };
+                    next;
+                }
+                $legfail{ $st->{leg} } = $why;
+                push @pending, { vm => $l->{vm}, disk => $l->{disk}, host => $l->{host}, iqn => $l->{iqn}, dataset => $l->{dataset}, error => $why };
+                $self->_log('err', "$op $name: iSCSI leg $st->{leg} pending: $why");
+                push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => 1,
+                    stdout => '', stderr => "$why\n", pending => 1 };
+            }
+            else {
+                push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => 0,
+                    stdout => '', stderr => '', skipped => 1, pending => 1 };
+            }
+            next;
+        }
+        if ($st->{assume} && $op eq 'create' && !$done{ $st->{key} }) {
+            $self->_log('info', "step $n skipped (--image-written): $st->{key}");
+            $done{ $st->{key} } = 1;
+            $self->_rec_update($name, sub ($rec) {
+                push @{ $rec->{done} }, $st->{key};
+                delete $rec->{attempting};
+                (my $vmn = $st->{key}) =~ s/^write://;
+                $rec->{vms}{$vmn}{image_written_by} = 'operator';
+            });
+            push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => 0,
+                stdout => '', stderr => '', skipped => 1, assumed => 1 };
+            next;
+        }
         if ($st->{key} && $op eq 'create' && $done{ $st->{key} }) {
             $self->_log('info', "step $n skipped (already done): $st->{key}");
             push @results, { n => $n, host => $st->{host}, script => $st->{script}, args => $st->{args}, rc => 0,
@@ -1259,25 +1382,46 @@ sub run ($self, $op, $name, %a) {
             $self->_log('err', "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}");
             _fail($kind, "$op: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
         }
+        if ($op eq 'create' && $st->{key} && $st->{early_done}) {
+            # The image write: on record before anything else can fail.
+            $done{ $st->{key} } = 1;
+            $self->_rec_update($name, sub ($rec) { push @{ $rec->{done} }, $st->{key}; delete $rec->{attempting} });
+        }
         $st->{seen}->($r) if $st->{seen};    # every accepted exit (ok_rc included)
         $st->{after}->($r) if $st->{after} && $r->{rc} == 0;
-        if ($op eq 'create' && $st->{key}) {
+        if ($op eq 'create' && $st->{key} && !$st->{early_done}) {
             $done{ $st->{key} } = 1;
             $self->_rec_update($name, sub ($rec) { push @{ $rec->{done} }, $st->{key}; delete $rec->{attempting} });
         }
     }
-    my $out = { op => $op, name => $name, ok => 1, steps => \@results, ($op eq 'destroy' || $op eq 'grow-disk' ? (notes => $self->{notes} // []) : ()) };
+    my $out = { op => $op, name => $name, ok => (@pending ? 0 : 1), steps => \@results,
+        ($op eq 'destroy' || $op eq 'grow-disk' || $op eq 'create' ? (notes => $self->{notes} // []) : ()) };
+    $out->{pending} = \@pending if @pending;
     $self->_post($op, $def, $out, %a);
     $self->_log('info', "$op $name ok");
     return $out;
+}
+
+# The zvol a storage host exports as an iqn (its storage_exports), else undef.
+sub _export_zvol ($self, $host, $iqn) {
+    my $st = eval { $self->_st($host) } or return undef;
+    my ($z) = map { $_->{zvol} } grep { $_->{iqn} eq $iqn } (eval { $st->exports });
+    return $z;
 }
 
 sub _new_record ($self, $def) {
     my %vms;
     for my $vm (@{ $def->{vms} }) {
         my $in = $self->_vm_info($def, $vm);
+        # remote: the iSCSI legs (host, iqn, and the zvol the storage host exports for the iqn,
+        # when it does): the IPS does not create those zvols, so destroy removes what is recorded here.
+        my %remote;
+        for my $d (@{ $vm->{disks} }) {
+            $remote{ $d->{name} } = [ map { +{ host => $_->{host}, iqn => $_->{iqn}, dataset => $self->_export_zvol($_->{host}, $_->{iqn}) } }
+                grep { defined $_->{iqn} } @{ $d->{legs} } ];
+        }
         $vms{ $vm->{name} } = { host => $vm->{compute}, state => 'creating',
-            disks => { map { $_->{name} => { md => $_->{device}, legs => $_->{specs} } } @{ $in->{disks} } } };
+            disks => { map { $_->{name} => { md => $_->{device}, legs => $_->{specs}, (@{ $remote{ $_->{name} } } ? (remote => $remote{ $_->{name} }) : ()) } } @{ $in->{disks} } } };
     }
     return { state => 'creating', vms => \%vms, created_at => $self->_stamp, by => $self->{by}, done => [] };
 }
@@ -1293,11 +1437,25 @@ sub _post ($self, $op, $def, $out, %a) {
         });
     }
     elsif ($op eq 'destroy') {
+        my $old = $self->record($name) // {};
+        my $forget = $a{forget} || $old->{destroy_forget};
+        if ($out->{pending}) {
+            # Not finished: the record stays, with what is left, until a later destroy completes it.
+            my @p = @{ $out->{pending} };
+            $self->_rec_update($name, sub ($r) {
+                $r->{destroy_pending} = [@p];
+                $r->{destroy_forget} = JSON::PP::true if $forget;
+            });
+            push @{ $out->{notes} }, 'destroy is INCOMPLETE: ' . scalar(@p) . ' iSCSI leg(s) could not be removed ('
+                . join('; ', map { "$_->{iqn} on $_->{host}" . (defined $_->{dataset} ? " (zvol $_->{dataset})" : '') . ": $_->{error}" } @p)
+                . "); the workload record is kept as 'partly destroyed' - run destroy $name again when the host is back";
+            return;
+        }
         $self->{registry}->cluster_unset($self->_cluster, _rec_key($name));
         $self->{registry}->cluster_set($self->_cluster, _destroyed_key($name),
-            { at => $self->_stamp, by => $self->{by}, forgotten => $a{forget} ? JSON::PP::true : JSON::PP::false });
+            { at => $self->_stamp, by => $self->{by}, forgotten => $forget ? JSON::PP::true : JSON::PP::false });
         # The definition is the operator's intent: it stays unless --forget.
-        if ($a{forget}) {
+        if ($forget) {
             unlink $self->definition_path($name);
             $out->{forgotten} = 1;
         }

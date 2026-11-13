@@ -182,7 +182,19 @@ nothing). A node call that exits non-zero ends the run at once.
     with a `seed` gets `vm-seed-write <vm> --disk <boot disk>` (the seed on
     stdin) right after its `vm-image-write`. Refuses (3) if the workload
     already exists. `--resume` continues a `creating` workload: steps already
-    recorded in `done` are skipped. The leg resolution itself happens on the node
+    recorded in `done` are skipped. The image write is recorded the moment
+    `vm-image-write` returns. `create --resume --image-written` is an operator
+    assertion that the image on the root disk is complete (the create was cut
+    off after `vm-image-write` wrote it but before the step was recorded, and a
+    plain resume is refused: `/dev/md/<vm>-root has data in its first sector`):
+    the resume skips `vm-image-write`, records it as done with
+    `image_written_by: operator` on the VM, and says what it skipped (a `note:`
+    line; `--dry-run` shows it too). Refused when no image write is pending, and
+    for a VM whose disk this create never made. The record also keeps each
+    iSCSI leg (`vms.<vm>.disks.<disk>.remote`: `host`, `iqn`, and `dataset`, the
+    zvol the storage host exports for that iqn); `create` does not make those
+    zvols (the operator does, with `hps-storage <host> zvol-create` and `export`),
+    so the record is what `destroy` removes. The leg resolution itself happens on the node
     (`mirror-create` calls `leg-resolve`).
 
 `start`
@@ -225,7 +237,18 @@ nothing). A node call that exits non-zero ends the run at once.
 `destroy`
 :   Allowed in every recorded state (who may run it is ctrl-exec's decision, ADR 0007). From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
     defined is tolerated), `vm-undefine`, `mirror-stop`; then
-    `storage-zvol-destroy` of every local leg (through `HPS::Storage`). The
+    `storage-zvol-destroy` of every local leg (through `HPS::Storage`); then, for
+    every iSCSI leg of every disk, on its storage host: `iscsi-unexport <iqn>` and
+    `storage-zvol-destroy <dataset>` (from `vms.<vm>.disks.<disk>.remote`; a record
+    from before that existed uses the zvol the host exports for the leg's iqn).
+    A leg whose host is not in the registry (an external NAS) is left alone, with
+    a `note:`. **A storage host that is down**: that leg is recorded as pending in
+    the record (`destroy_pending`), `destroy` prints `destroy INCOMPLETE` with the
+    leg and the reason and exits 1, and the record stays (the workload is
+    'partly destroyed': only `destroy` and `status` are accepted) until a later
+    `destroy` removes just the pending legs and completes; `--forget` given the
+    first time is kept for then. `--dry-run` lists every call, the leg removals
+    included. The
     registry record `workload_<name>` is removed last, only when every call
     succeeded, and replaced by `workload_<name>_destroyed` (`at`, `by`,
     `forgotten`) for audit; the next `create` removes that audit record. The

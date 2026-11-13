@@ -23,6 +23,18 @@ capabilities and removals are called out explicitly.
   `HPS::Workload::List`. IPS-35 items 2, 3 and 14.
 - **Changed** `hps-workload define` refuses a VM image that is not in the
   catalogue, naming `hps-workload images`.
+## Destroy removes iSCSI legs; resume after an interrupted create (2026-11-13)
+
+- **Changed** `hps-workload destroy` removes, for every iSCSI leg, the export
+  (`iscsi-unexport <iqn>`) and the zvol (`storage-zvol-destroy`) on the leg's
+  storage host; `create` records each leg (`host`, `iqn`, `dataset`) in the
+  workload record. A storage host that is down leaves its leg pending: destroy
+  says `INCOMPLETE`, exits 1 and keeps the record until a later `destroy`
+  completes it. Hosts outside the registry are left alone with a note.
+- **Added** `hps-workload create --resume --image-written`: the operator asserts
+  the image on the root disk is complete; the resume skips `vm-image-write` and
+  records it as done (`image_written_by: operator`). The image step is now
+  recorded as soon as `vm-image-write` returns.
 
 ## Suspend and resume (2026-11-13)
 
