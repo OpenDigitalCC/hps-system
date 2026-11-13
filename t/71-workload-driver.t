@@ -127,6 +127,14 @@ my $f = StorageFixture::setup_workload();
     is_deeply(\@c, [ [ 'vm-stop', 't0-app' ], [ 'mirror-stop', 't0-app-root' ], [ 'vm-stop', 't0-db' ], [ 'mirror-stop', 't0-db-root' ] ],
         'stop: reverse priority');
     is(rec($f, 't0')->{state}, 'stopped', 'registry: stopped');
+    ok(!(grep { grep { $_ eq '--force' } @{ $_->{args} } } $f->{ce}->calls), 'plain stop never passes --force to vm-stop');
+    $wl->run('start', 't0');
+    $f->{ce}{calls} = [];
+    $wl->run('stop', 't0', force => 1);
+    my @vs = grep { $_->{script} eq 'vm-stop' } $f->{ce}->calls;
+    is(scalar @vs, 2, 'stop --force: both VMs stopped');
+    is_deeply([ map { $_->{args} } @vs ], [ [ 't0-app', '--force' ], [ 't0-db', '--force' ] ], 'stop --force: vm-stop <vm> --force');
+    is(rec($f, 't0')->{state}, 'stopped', 'registry: stopped after the forced stop');
 
     my $e = err_of(sub { $wl->plan('start', 't0', vm => 'ghost') });
     is($e->kind, 'notfound', 'unknown --vm: notfound');

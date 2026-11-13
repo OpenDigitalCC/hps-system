@@ -22,7 +22,7 @@ sub usage {
 Usage:
   hps-workload create  <name> [--resume] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload start   <name> [--vm <vm>] [--dry-run] [--json]
-  hps-workload stop    <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload stop    <name> [--vm <vm>] [--force] [--dry-run] [--json]
   hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]
@@ -151,11 +151,11 @@ sub definition_verb {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget,
-        'replace' => \$replace, 'lines=s' => \$lines,
+        'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     my $name = shift @argv // return usage('workload name required');
@@ -176,12 +176,13 @@ sub main {
     return usage("$op takes no further arguments") if @argv;
     return usage('--resume is only for create') if $resume && $op ne 'create';
     return usage('--forget is only for destroy') if $forget && $op ne 'destroy';
+    return usage('--force is only for stop') if $force && $op ne 'stop';
     return usage("--vm is not for $op") if defined $vm && ($op eq 'create' || $op eq 'destroy');
     return usage('--allow-any-pool-name is only for create and destroy') if $any && $op ne 'create' && $op ne 'destroy';
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         my $wl = HPS::Workload->new(allow_any_pool_name => $any);
-        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, disk => $disk, size => $size, lines => $lines);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, disk => $disk, size => $size, lines => $lines, force => $force);
         if ($dry) {
             my $r = $wl->run($op, $name, %a);
             if ($json) { print $js->encode($r) }

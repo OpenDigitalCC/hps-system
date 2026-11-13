@@ -256,6 +256,14 @@ to LOAD CRITICAL and the DL360 to 7-9 % memory available.
   `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
   `t/225-resource-limits.t`.
 
+## hps-workload stop --force (2026-11-13)
+
+- new: `hps-workload stop <name> [--vm <vm>] --force` passes `vm-stop --force`,
+  so a guest that cannot shut down (its root filesystem gone read-only after
+  the 06:22 UTC storage stall; `vm-stop` waited 60 s and exited 1) is forced
+  off after the graceful wait. Without `--force`, stop still never forces;
+  `destroy` forces as before. Test: `t/71-workload-driver.t`.
+
 ## storage-zvol-destroy: a guest disk's partition nodes are not "in use" (2026-11-13)
 
 - fix: `storage-zvol-destroy` refused any zvol with rows after the device in

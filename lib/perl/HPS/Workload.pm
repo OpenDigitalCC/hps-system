@@ -826,7 +826,10 @@ sub _steps_stop ($self, $def, %a) {
     my @s;
     for my $vm (reverse $self->_ordered($def, %a)) {
         my $in = $self->_vm_info($def, $vm);
-        my @group = (_step($in->{mac}, 'vm-stop', [ $vm->{name} ]),
+        # --force: a guest that cannot shut down (a root filesystem gone
+        # read-only after a storage stall, 2026-11-13) is forced off after the
+        # graceful wait; without it stop never forces.
+        my @group = (_step($in->{mac}, 'vm-stop', [ $vm->{name}, ($a{force} ? ('--force') : ()) ]),
             map { _step($in->{mac}, 'mirror-stop', [ $_->{mirror} ]) } grep { $_->{mirrored} } @{ $in->{disks} });
         my $n = $def->{name};
         $group[-1]{after} = sub {

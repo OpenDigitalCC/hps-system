@@ -181,7 +181,7 @@ nothing). A node call that exits non-zero ends the run at once.
     be refused) and are shown `(skipped, not needed)` when the VM was defined.
 
 `stop`
-:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped`.
+:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped`. `vm-stop` waits for the guest's own shutdown and never forces; `stop --force` passes `vm-stop --force` (the graceful wait, then `virsh destroy`) for a guest that cannot shut down, such as one whose root filesystem went read-only.
 
 `destroy`
 :   Allowed in every recorded state (who may run it is ctrl-exec's decision, ADR 0007). From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
