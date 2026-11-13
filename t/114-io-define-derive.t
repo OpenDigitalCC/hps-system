@@ -132,6 +132,7 @@ sub err_of { my ($code) = @_; eval { $code->(); 1 } and return undef; return $@ 
     measured($f, $m1, 400);
     local $ENV{HPS_CONFIG_BASE}        = $f->{base};
     local $ENV{HPS_SYSTEM_REGISTRY}    = "$f->{base}/system.db";
+    local $ENV{HPS_RESOURCES}          = $f->{base};
     local $ENV{HPS_WORKLOAD_NO_SYSLOG} = 1;
     local $ENV{HPS_STORAGE_NO_SYSLOG}  = 1;
     local $ENV{SUDO_USER}              = 'tester';

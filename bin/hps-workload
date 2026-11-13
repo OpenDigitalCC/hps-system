@@ -31,6 +31,8 @@ Usage:
   hps-workload console <name> [--vm <vm>] [--lines N] [--dry-run] [--json]
   hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
   hps-workload show-definition <name>
+  hps-workload list   [--project <P>] [--json]
+  hps-workload images [--json]
 suspend saves each VM's memory to /<pool>/enc/state/<vm>.save on its compute host and
 stops it (a long job survives a planned host reboot); resume brings it back where it
 left off and removes the file. A 40 GB guest takes about 10 minutes each way. start and
@@ -54,6 +56,12 @@ console prints the tail of each VM's serial console log (vm-console-log on its
 compute host; read-only), --lines N of it (1-10000, default the node's 200);
 with --vm the log alone, else each under a "== <vm> on <host>" heading. Exit 4
 when the one VM asked for has no log, 1 when any VM's log could not be read.
+list prints every recorded workload: name, project (from its definition), state, compute
+host(s), VM count, the first address and created_at; --json gives every address. Addresses
+are DHCP leases of the IPS's dnsmasq matched by the VM's MAC (status --json carries them per
+VM as addresses: [{net, mac, ip, source}], empty when none). images lists the catalogue
+hps-resources/images/*.qcow2 with size, sha256 and date; define refuses an image that is not
+in it.
 --dry-run prints the node calls (define: checks the definition) and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
@@ -101,6 +109,7 @@ sub render_status {
         $out .= sprintf("    suspended since %s: memory in %s (%s bytes)\n", $v->{saved_at} // '-', $v->{state_file} // '-', $v->{size_bytes} // '-')
             if ($v->{recorded_state} // '') eq 'suspended';
         $out .= "    seed: $v->{seed}\n" if defined $v->{seed};
+        $out .= "    address $_->{ip} ($_->{net}, $_->{mac}, $_->{source})\n" for @{ $v->{addresses} // [] };
     }
     return $out;
 }
@@ -172,15 +181,37 @@ sub definition_verb {
     return defined $rc ? $rc : fail_exit($@);
 }
 
+sub catalogue_verb {
+    my ($op, $rest, %o) = @_;
+    return usage("$op takes no arguments") if @$rest;
+    return usage('--dry-run is not for ' . $op) if $o{dry_run};
+    return usage('--project is only for list') if defined $o{project} && $op ne 'list';
+    my $js = JSON::PP->new->canonical->pretty;
+    my $rc = eval {
+        my $wl = HPS::Workload->new;
+        if ($op eq 'list') {
+            my $rows = HPS::Workload::List::list($wl, project => $o{project});
+            print $o{json} ? $js->encode({ workloads => $rows }) : HPS::Workload::List::render_list($rows);
+        }
+        else {
+            my $rows = HPS::Workload::List::images($wl->{images_dir});
+            print $o{json} ? $js->encode({ images => $rows }) : HPS::Workload::List::render_images($rows);
+        }
+        return 0;
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget,
-        'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force,
+        'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
+    return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images';
     my $name = shift @argv // return usage('workload name required');
     return definition_verb($op, $name, \@argv, json => $json, dry_run => $dry, replace => $replace,
         other => ($resume || $any || defined $vm || $forget))

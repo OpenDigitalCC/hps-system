@@ -326,6 +326,21 @@ To change it later: `hps-workload destroy w1`, then `hps-workload-define w1
 (`vm-seed-write`, the seed as that node run's input), and cloud-init reads it
 once, so a changed seed needs destroy, define `--replace` and create.
 
+### Listing workloads, images and free guest memory
+
+`hps-workload list [--project P] [--json]`, `hps-workload images [--json]` and
+`hps-node resources <host>` (its `COMMITTED` line) are read-only and open
+through the `ips-admin` gate like `status`:
+
+```
+hps-op --cred FILE hps-workload list --project odoo-test
+hps-op --cred FILE hps-workload images --json
+hps-op --cred FILE hps-node resources sch-001
+```
+
+`status <name> --json` carries each VM's DHCP-lease addresses. See
+`docs/WORKLOADS.md` "Finding workloads, images and addresses".
+
 ### Reading a guest's console
 
 `hps-workload console <name> [--vm <vm>] [--lines N]` prints the tail of a

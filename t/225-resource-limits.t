@@ -120,7 +120,7 @@ refuses(sub { $_[0]{cpu_limit} = 1 }, qr/unknown field 'cpu_limit'/, 'an unknown
     is($r->{rc}, 0, 'resources: 0');
     is_deeply([ map { join ' ', $_->{script}, @{ $_->{args} } } $f->{ce}->calls ], ['host-resources'],
         'resources: one call of host-resources, no arguments');
-    is($r->{stdout}, "out of host-resources\nIOBUDGET not measured (hps-storage <host> measure)\n", 'resources: the node output kept');
+    is($r->{stdout}, "out of host-resources\nCOMMITTED vcpus=0 mem_mib=0 guests=0 free_mem_mib=- running_guests=0 running_mem_mib=0\nIOBUDGET not measured (hps-storage <host> measure)\n", 'resources: the node output kept');
 }
 {
     my $f   = StorageFixture::setup();
@@ -144,7 +144,7 @@ refuses(sub { $_[0]{cpu_limit} = 1 }, qr/unknown field 'cpu_limit'/, 'an unknown
     is($rc, 4, 'CLI resources: unknown host: not found');
     ($rc, $out) = $cli->('resources', 'sch-001');
     is($rc, 0, 'CLI resources: 0');
-    is($out, "node says hi\nIOBUDGET not measured (hps-storage <host> measure)\n", 'CLI resources prints the node output');
+    is($out, "node says hi\nCOMMITTED vcpus=0 mem_mib=0 guests=0 free_mem_mib=- running_guests=0 running_mem_mib=0\nIOBUDGET not measured (hps-storage <host> measure)\n", 'CLI resources prints the node output');
     open(my $fh, '<', "$tmp/args") or die;
     like(do { local $/; <$fh> }, qr/ host-resources\s*$/m, 'CLI resources runs host-resources');
 }

@@ -25,6 +25,7 @@ use HPS::Keysafe;
 use HPS::Vxlan ();
 use HPS::Storage;
 use HPS::Metrics ();
+use HPS::Workload::List ();
 
 my $NAME_RE  = qr/^[a-z][a-z0-9-]{0,31}\z/;
 my $IMAGE_RE = qr/^[a-z0-9][a-z0-9._-]{0,63}\z/;
@@ -510,6 +511,7 @@ sub define ($self, $name, $text, %a) {
     _fail('refused', 'no definition: the JSON definition is the input') unless defined $text && length $text;
     _fail('refused', "the definition is larger than $MAX_DEFINITION_BYTES bytes") if length $text > $MAX_DEFINITION_BYTES;
     my $def = $self->_checked($name, $text, 'the definition');
+    HPS::Workload::List::check_images($self, $def);
     my $derived = [];
     {
         my $raw = JSON::PP->new->utf8->decode($text);
@@ -1403,6 +1405,7 @@ sub _post_status ($self, $def, $out) {
     $out->{state} = $rec->{state};
     $out->{vms} = [ map { $vms{ $_->{name} } }
  grep { $vms{ $_->{name} } } @{ $def->{vms} } ];
+    HPS::Workload::List::annotate_status($self, $rec, $out->{vms});
     return;
 }
 

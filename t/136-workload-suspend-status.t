@@ -33,7 +33,7 @@ $wl->run('suspend', 't0', vm => 't0-db');
     is($r->{state}, 'partial', 'status: workload state');
     my ($app) = grep { $_->{vm} eq 't0-app' } @{ $r->{vms} };
     ok(!exists $app->{state_file}, 'a running VM carries no state_file');
-    is_deeply([ sort keys %$app ], [ sort qw(vm host recorded_state state mirrors ok utilisation utilisation_reason) ],
+    is_deeply([ sort keys %$app ], [ sort qw(vm host recorded_state state mirrors ok utilisation utilisation_reason addresses) ],
         'the other fields are as before') or diag join ',', sort keys %$app;
 }
 

@@ -29,6 +29,7 @@ use HPS::Registry;
 use HPS::Storage;
 use HPS::ClusterConfig ();
 use HPS::Vxlan ();
+use HPS::Workload::List ();
 
 our $DEFAULT_FORCE_AFTER = 120;
 
@@ -431,7 +432,10 @@ sub net_status ($self) {
 # {rc, stdout, stderr}.
 sub resources ($self) {
     my $r = $self->{runner}->call(mac => $self->{mac}, script => 'host-resources', args => [], input => undef);
-    return { rc => $r->{rc}, stdout => _nl($r->{stdout}) . $self->iobudget_line, stderr => $r->{stderr} // '' };
+    my $out = _nl($r->{stdout});
+    my $c = eval { HPS::Workload::List::committed($self->{registry}, $self->{registry}->active_cluster, $self->{mac}) };
+    $out .= HPS::Workload::List::committed_line($c, $out) if $c;
+    return { rc => $r->{rc}, stdout => $out . $self->iobudget_line, stderr => $r->{stderr} // '' };
 }
 
 # The host's I/O budget from its registry keys, one line (the figures

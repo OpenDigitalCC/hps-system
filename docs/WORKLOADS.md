@@ -115,6 +115,39 @@ everything and writes nothing. Exit 0 ok, 2 usage (a bad name), 3 refused.
 `show-definition` prints the stored file as it is (4 when there is none).
 Through the operator API: `hps-workload-define` (`docs/OPERATOR.md`).
 
+### Finding workloads, images and addresses
+
+```
+hps-workload list [--project <P>] [--json]
+hps-workload images [--json]
+hps-workload status <name> --json          (per VM: addresses)
+```
+
+`list` shows every recorded workload (a `workload_<name>` key of the cluster
+configuration; the `_destroyed` audit keys are not workloads): name, project
+(from the stored definition; `-` and null when the definition is gone), state,
+compute host(s), VM count, the first address and `created_at`. `--project P`
+keeps one project's. `--json` is `{"workloads": [{name, project, state, hosts,
+vms, addresses, created_at}]}` with every address as `{vm, net, mac, ip,
+source}`.
+
+An address is a DHCP lease: the IPS's dnsmasq leases file
+(`/var/lib/misc/dnsmasq.leases`, or `HPS_DNSMASQ_LEASES`; lines `expiry mac ip
+name client-id`) matched by the MAC of the VM's NIC (the recorded MACs, in NIC
+order, with the layout network of each NIC's bridge). An expired lease is none.
+`status --json` gives each VM `addresses: [{net, mac, ip, source:
+"dhcp-lease"}]`, the empty list when no NIC holds a lease (a VM on a network
+the IPS does not serve, or one that has not asked yet); an address is never
+inferred from anything else. The text `status` prints one `address` line per
+lease.
+
+`images` lists the catalogue the IPS holds: each `hps-resources/images/<name>.qcow2`
+with its size in bytes, modification time and the sha256 of `<name>.sha256`
+(null, and `no checksum` in the text, when that file is missing or malformed;
+such an image is not in the catalogue for `define` or `create`). `define`
+refuses (3), also with `--dry-run`, a VM whose `image` is not in the catalogue,
+and the message names `hps-workload images` and the images it holds.
+
 The zvol of a local leg is `<pool>/enc/vm/<workload>-<vm>-<disk>` (guest disks
 live under `<pool>/enc/vm`, where `leg-resolve` looks; `storage-zvol-create` makes
 that dataset when absent); the mirror is
@@ -329,7 +362,19 @@ What each lever does, and what it does not:
   longer matches the record). Destroy and create to change it.
 
 `hps-node resources <host>` shows what a host applied and holds (node
-script `host-resources`, read-only).
+script `host-resources`, read-only). It then prints, computed on the IPS from the
+workload records placed on that host (running or not), one line:
+
+```
+COMMITTED vcpus=<n> mem_mib=<n> guests=<n> free_mem_mib=<n> running_guests=<n> running_mem_mib=<n>
+```
+
+the sums of the recorded `--vcpus` and `--memory` of every defined guest on
+the host, and `guest_mem_max_mib` (the `RESERVE` line) less the committed
+memory (`-` when the node reported none; negative when over-committed). A VM
+sized to `free_mem_mib` is accepted by `vm-start` when the others are not
+started beyond their own sizes; `running_mem_mib` is the part held by guests the
+records say are running.
 
 ### The write caps come from discovery
 

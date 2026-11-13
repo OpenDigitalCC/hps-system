@@ -12,6 +12,18 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Workload list, images, addresses (2026-11-13)
+
+- **Added** `hps-workload list [--project P] [--json]` (every recorded workload:
+  name, project, state, hosts, VM count, first address, created_at), `hps-workload
+  images [--json]` (the image catalogue with sizes and sha256), per-VM
+  `addresses` in `status` (DHCP leases of the IPS by MAC; empty when none), and a
+  `COMMITTED` line in `hps-node resources <host>` (defined guests' vcpus and
+  memory on that host, and the free guest memory). New module
+  `HPS::Workload::List`. IPS-35 items 2, 3 and 14.
+- **Changed** `hps-workload define` refuses a VM image that is not in the
+  catalogue, naming `hps-workload images`.
+
 ## Suspend and resume (2026-11-13)
 
 - **Added** `hps-workload suspend <name> [--vm <vm>]` and `resume <name> [--vm
