@@ -68,9 +68,10 @@ IPS-34 items 18 and 18a (owner: caps from discovery, never fixed numbers).
   `hps-workload define` fills a disk's missing `mbps_max` and prints it with its
   source (`mbps_max_derived` in the stored definition; an explicit `mbps_max`
   wins).
-- **New** `vm-image-write --mbps-max N`: `qemu-img convert ... /dev/stdout`
-  into a loop of `dd` (16 MiB chunks, `oflag=direct`) that sleeps to hold the
-  average at N MiB/s. No new package.
+- **New** `vm-image-write --mbps-max N`: `qemu-img convert -r N*1048576`
+  (qemu-img's own rate limit). The first form, convert to `/dev/stdout` into
+  a loop of `dd`, wrote 0 bytes on a node (qemu-img cannot write raw to a
+  pipe) and failed s1's probe creates on 2026-11-13; replaced the same hour.
 - The audit image stays read-only and runs no read test (see
   `docs/CLUSTER-CONFIG.md` "I/O budget").
 

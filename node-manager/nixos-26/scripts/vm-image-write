@@ -19,15 +19,11 @@
 # --mbps-max N paces the write to at most N MiB/s (1-999999). The IPS derives N
 # from the storage hosts' measured pool write speed (cluster key
 # image_write_fraction, docs/CLUSTER-CONFIG.md "I/O budget"); the script holds no
-# number of its own. Paced, the image is not written by qemu-img directly:
-#   qemu-img convert -f qcow2 -O raw <image> /dev/stdout | (loop of dd, one chunk)
-# where each chunk (HPS_PACE_CHUNK bytes, default 16 MiB) is one dd reading the
-# pipe with iflag=fullblock and writing the disk at its offset with
-# oflag=direct (so the pace is the disk's, not the page cache's), and after each
-# chunk the loop sleeps until the elapsed time is at least bytes written / N
-# MiB/s. qemu-img stalls on the full pipe while the loop sleeps. Without
-# --mbps-max the write is the plain convert and one log line says it is not
-# paced. HPS_DD_OFLAG (default direct) is a test override.
+# number of its own. Paced, the write is qemu-img's own rate limit:
+#   qemu-img convert -f qcow2 -O raw -r <N*1048576> <image> <disk>
+# (the first form, convert to /dev/stdout into a dd loop, wrote 0 bytes on a
+# real node: qemu-img cannot write raw to a pipe). Without --mbps-max the
+# write is the plain convert and one log line says it is not paced.
 # Logs the image's sha256 and, last, the line:  IMAGE <vm> <sha256> written
 #
 # Calls, in order: virsh domstate (undefined is fine); sha256sum; qemu-img convert.
@@ -125,51 +121,19 @@ first_sector_zero() {
   [[ "$nonzero" -eq 0 ]]
 }
 
-now_us() {
-  local t=$EPOCHREALTIME
-  printf '%s\n' "${t/./}"
-}
-
-# paced_copy: stdin (the raw image) to the disk, a chunk at a time, no faster
-# than MBPS MiB/s on average.
-paced_copy() {
-  local chunk=${HPS_PACE_CHUNK:-16777216} oflag=${HPS_DD_OFLAG:-direct}
-  local start total=0 i=0 got errf want now wait
-  errf=$(mktemp "${TMPDIR:-/tmp}/vm-image-write.XXXXXX")
-  start=$(now_us)
-  while :; do
-    printf '+ dd of=%s bs=%s count=1 iflag=fullblock seek=%s oflag=%s conv=notrunc\n' "$DISK" "$chunk" "$i" "$oflag" >&2
-    if ! dd "of=$DISK" "bs=$chunk" count=1 iflag=fullblock "seek=$i" "oflag=$oflag" conv=notrunc 2> "$errf"; then
-      cat "$errf" >&2
-      rm -f -- "$errf"
-      return 1
-    fi
-    got=$(awk '/bytes.*copied/ { print $1; exit }' "$errf")
-    got=${got:-0}
-    total=$((total + got))
-    i=$((i + 1))
-    if ((got < chunk)); then
-      break
-    fi
-    now=$(now_us)
-    want=$((total * 1000000 / (MBPS * 1048576)))
-    if ((want > now - start)); then
-      wait=$(awk -v us=$((want - (now - start))) 'BEGIN { printf "%.3f", us / 1000000 }')
-      sleep "$wait"
-    fi
-  done
-  rm -f -- "$errf"
-  log "paced write: $total bytes at no more than $MBPS MiB/s"
-}
-
+# write_image: qemu-img convert, paced by its own rate limit (-r bytes/s)
+# when --mbps-max is given. 2026-11-13: the first paced form (convert to
+# /dev/stdout into a dd loop) wrote 0 bytes on a real node — qemu-img cannot
+# write raw to a pipe — so the limit is qemu-img's.
 write_image() {
   if [[ -z "$MBPS" ]]; then
     log "not paced: no --mbps-max (the storage host has no measured write speed; see hps-storage <host> measure)"
     run qemu-img convert -f qcow2 -O raw "$IMAGE" "$DISK"
     return 0
   fi
-  log "pacing the write to $MBPS MiB/s"
-  run qemu-img convert -f qcow2 -O raw "$IMAGE" /dev/stdout | paced_copy
+  log "pacing the write to $MBPS MiB/s (qemu-img -r)"
+  run qemu-img convert -f qcow2 -O raw -r $((MBPS * 1048576)) "$IMAGE" "$DISK"
+  log "paced write done at no more than $MBPS MiB/s"
 }
 
 main() {
