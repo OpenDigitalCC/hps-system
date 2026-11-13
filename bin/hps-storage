@@ -26,8 +26,9 @@ sub usage {
     print STDERR <<'USAGE';
 Usage:
   hps-storage <host> up|down|trim-check|status [--dry-run] [--json] [--wait SECONDS]
+  hps-storage <host> measure [--dry-run] [--json]
   hps-storage <host> create <pool> --disk <by-id> [--disk <by-id>]... [--wipe]
-      [--dry-run] [--json] [--allow-any-pool-name]
+      [--no-measure] [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> destroy <pool> [--dry-run] [--json] [--allow-any-pool-name]
   hps-storage <host> zvol-create <pool>/enc/[vm/]<name> <size> [--dry-run] [--json]
   hps-storage <host> zvol-destroy <pool>/enc/[vm/]<name> [--dry-run] [--json] [--allow-any-pool-name]
@@ -52,6 +53,16 @@ the host's registry IP); up exports every recorded target again.
 vdev-online brings a returned pool disk back (zpool online, zpool clear; never
 replace): <vdev> is its /dev/disk/by-id name as zpool status shows it. While
 the disk is still away it is refused (exit 3, "not present").
+create measures what the disks can do before the pool is created (a raw
+read, write and fsync-latency test on each disk, which is about to be wiped) and
+once the pool is up (a write test on a temporary zvol), and records it in the
+host registry (storage_read_mbps, storage_write_mbps, storage_fsync_ms,
+storage_fsync_max_ms, storage_pool_write_mbps, storage_measured_at); --no-measure
+skips it. measure does the pool part, and a read test of the pool's disks, on a
+host whose pool exists: a temporary zvol <pool>/enc/hps-measure (1 GiB) is made,
+written and destroyed; the pool must be up (refused while <pool>/enc is locked or
+the zvol exists). status prints the recorded figures. The caps derived from them:
+docs/CLUSTER-CONFIG.md "I/O budget".
 zfs-set changes the write properties of <pool>/enc or a zvol under it, and
 only these: sync=standard|always|disabled, logbias=latency|throughput. New
 zvols take the cluster keys storage_zvol_sync and storage_zvol_logbias
@@ -72,6 +83,17 @@ sub render_plan {
     return $out;
 }
 
+sub render_io {
+    my ($io) = @_;
+    return '' unless ref $io eq 'HASH';
+    return "I\/O budget: not measured (hps-storage <host> measure)\n" unless %$io;
+    my $v = sub { defined $io->{ $_[0] } ? $io->{ $_[0] } : '-' };
+    return "I/O budget (measured " . $v->('storage_measured_at') . "):\n"
+        . '  disk read ' . $v->('storage_read_mbps') . ' MiB/s, disk write ' . $v->('storage_write_mbps') . " MiB/s\n"
+        . '  fsync p50 ' . $v->('storage_fsync_ms') . ' ms, max ' . $v->('storage_fsync_max_ms') . " ms\n"
+        . '  pool (zvol) write ' . $v->('storage_pool_write_mbps') . " MiB/s\n";
+}
+
 sub render_run {
     my ($r) = @_;
     my $out = '';
@@ -79,6 +101,7 @@ sub render_run {
         $out .= "== $s->{n}. $s->{script}" . join('', map {" $_"} @{ $s->{args} }) . " (exit $s->{rc})\n";
         $out .= $s->{stdout} . ($s->{stdout} =~ /\n\z/ || !length $s->{stdout} ? '' : "\n");
     }
+    $out .= render_io($r->{io}) if $r->{io};
     return $out . "$r->{op} ok: host $r->{mac}, pool $r->{pool}\n";
 }
 
@@ -102,11 +125,11 @@ sub storage_back {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $any, $yes, $wait, $iqn, $initiator, $portal, @disks, $wipe);
+    my ($json, $dry, $any, $yes, $wait, $iqn, $initiator, $portal, @disks, $wipe, $no_measure);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'allow-any-pool-name' => \$any,
         'yes' => \$yes, 'wait=i' => \$wait, 'iqn=s' => \$iqn, 'initiator=s' => \$initiator, 'portal=s' => \$portal,
-        'disk=s' => \@disks, 'wipe' => \$wipe,
+        'disk=s' => \@disks, 'wipe' => \$wipe, 'no-measure' => \$no_measure,
     ) or return usage();
     my $host = shift @argv // return usage('host required');
     my $op   = shift @argv // return usage('operation required');
@@ -139,10 +162,12 @@ sub main {
     }
     return usage("$op takes no further arguments") if @argv;
     return usage('--allow-any-pool-name is only for create, destroy and zvol-destroy') if $any && !$needs_pool && $op ne 'zvol-destroy';
+    return usage('--no-measure is only for create') if $no_measure && $op ne 'create';
     return usage('--disk and --wipe are only for create') if $op ne 'create' && (@disks || $wipe);
     if ($op eq 'create') {
         $opt{disks} = [@disks];
         $opt{wipe} = $wipe ? 1 : 0;
+        $opt{measure} = $no_measure ? 0 : 1;
     }
     return usage('--yes is only for forget-key') if $yes && $op ne 'forget-key';
     return usage('--wait must be 0 or more seconds') if defined $wait && $wait < 0;
@@ -164,6 +189,8 @@ sub main {
             else {
                 print "Dry run: $op on host " . $st->mac . ", pool " . $st->pool . "; nothing is sent or changed.\n";
                 print "Node calls:\n" . (@$plan ? render_plan($plan) : "  (none)\n");
+                print "On the node: read 256 MiB from each disk of the pool; create the zvol " . $st->pool . "/enc/hps-measure (1 GiB), write 256 MiB and 20 x 4 KiB synchronous writes to it, destroy it.\n"
+                    if $op eq 'measure';
             }
             return 0;
         }

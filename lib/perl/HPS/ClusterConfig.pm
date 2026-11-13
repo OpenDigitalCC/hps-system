@@ -212,6 +212,16 @@ my @CATALOGUE = (
         prompt => 'ZFS logbias of new zvols: latency (uses the log device) or throughput (writes go to the pool)',
         rule => 'enum:latency,throughput', default => 'latency'),
 
+    # I/O budget (docs/CLUSTER-CONFIG.md "I/O budget"): fractions of the write
+    # speed a storage host measured (hps-storage create and measure), never
+    # MiB/s figures of their own.
+    _q(key => 'image_write_fraction', group => 'resources', menu => 0,
+        prompt => 'Fraction (above 0, below 1) of a storage host\'s measured pool write speed (host key storage_pool_write_mbps) that vm-image-write may use while it writes a guest image; no measurement, no pacing',
+        rule => 'regex:0\.[0-9]{0,2}[1-9]0{0,2}', default => '0.5'),
+    _q(key => 'tenant_write_fraction', group => 'resources', menu => 0,
+        prompt => 'Fraction (above 0, below 1) of the lowest measured pool write speed of a disk\'s storage hosts that hps-workload define fills into mbps_max for a disk whose definition sets none',
+        rule => 'regex:0\.[0-9]{0,2}[1-9]0{0,2}', default => '0.25'),
+
     # Link speed floor (IPS-34 item 12; docs/CLUSTER-CONFIG.md "Host addresses on
     # storage and transit networks"): hps-node net-up refuses a storage or transit
     # network on a boot NIC audited slower.

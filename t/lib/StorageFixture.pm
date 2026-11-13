@@ -90,6 +90,8 @@ fi
 case "$2" in
   vm-status) out="VM ${3} running" ;;
   mirror-status) out="MIRROR ${3} clean" ;;
+  storage-io-measure) out=$'IOREAD ata-SSD1 600\nIOPOOL '"${3}"' 321 0.50 2.50' ;;
+  storage-pool-create) out="IODISK ata-SSD1 600 450 0.40 1.00" ;;
   *) out="node says hi" ;;
 esac
 jq -n --argjson e "${FAKE_NODE_EXIT:-0}" --arg o "$out

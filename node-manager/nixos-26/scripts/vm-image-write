@@ -4,7 +4,7 @@
 #
 # ctrl-exec allowlisted node script.
 #
-# Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force]
+# Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force] [--mbps-max N]
 #
 # Writes ONE disk. For a VM with several disks the IPS passes the first (the
 # boot disk); the other disks are never touched.
@@ -16,6 +16,18 @@
 # --force skips that check and overwrites a disk that has data. The IPS never
 # passes it on its own; it exists for an operator re-imaging a disk by hand.
 # Also refused (3): the VM is defined and not shut off (the disk is in use).
+# --mbps-max N paces the write to at most N MiB/s (1-999999). The IPS derives N
+# from the storage hosts' measured pool write speed (cluster key
+# image_write_fraction, docs/CLUSTER-CONFIG.md "I/O budget"); the script holds no
+# number of its own. Paced, the image is not written by qemu-img directly:
+#   qemu-img convert -f qcow2 -O raw <image> /dev/stdout | (loop of dd, one chunk)
+# where each chunk (HPS_PACE_CHUNK bytes, default 16 MiB) is one dd reading the
+# pipe with iflag=fullblock and writing the disk at its offset with
+# oflag=direct (so the pace is the disk's, not the page cache's), and after each
+# chunk the loop sleeps until the elapsed time is at least bytes written / N
+# MiB/s. qemu-img stalls on the full pipe while the loop sleeps. Without
+# --mbps-max the write is the plain convert and one log line says it is not
+# paced. HPS_DD_OFLAG (default direct) is a test override.
 # Logs the image's sha256 and, last, the line:  IMAGE <vm> <sha256> written
 #
 # Calls, in order: virsh domstate (undefined is fine); sha256sum; qemu-img convert.
@@ -29,6 +41,8 @@ VM=""
 DISK=""
 IMAGE=""
 FORCE=0
+MBPS=""
+MBPS_SET=0
 
 log() {
   printf '[vm-image-write] %s\n' "$*" >&2
@@ -42,7 +56,7 @@ run() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force]
+Usage: vm-image-write <vm> --disk <block device> --image <qcow2> [--force] [--mbps-max N]
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
 USAGE
 }
@@ -66,6 +80,12 @@ parse_args() {
         if [[ "$1" == "--disk" ]]; then DISK=$2; else IMAGE=$2; fi
         shift 2
         ;;
+      --mbps-max)
+        [[ $# -ge 2 ]] || { usage; exit 2; }
+        MBPS=$2
+        MBPS_SET=1
+        shift 2
+        ;;
       --force) FORCE=1; shift ;;
       *) log "unknown argument: $1"; usage; exit 2 ;;
     esac
@@ -83,6 +103,9 @@ check_args() {
   [[ -e "$DISK" && ! -d "$DISK" ]] || refuse "--disk '$DISK' does not exist"
   [[ "$IMAGE" =~ ^/[A-Za-z0-9/_.-]+\.qcow2$ && "$IMAGE" != *..* ]] || refuse "--image '$IMAGE' is not an absolute path ending .qcow2"
   [[ -f "$IMAGE" ]] || refuse "--image '$IMAGE' does not exist"
+  if ((MBPS_SET)); then
+    [[ "$MBPS" =~ ^[1-9][0-9]{0,5}$ ]] || refuse "--mbps-max '$MBPS' is not a whole number of MiB/s from 1 to 999999"
+  fi
 }
 
 check_not_in_use() {
@@ -102,6 +125,53 @@ first_sector_zero() {
   [[ "$nonzero" -eq 0 ]]
 }
 
+now_us() {
+  local t=$EPOCHREALTIME
+  printf '%s\n' "${t/./}"
+}
+
+# paced_copy: stdin (the raw image) to the disk, a chunk at a time, no faster
+# than MBPS MiB/s on average.
+paced_copy() {
+  local chunk=${HPS_PACE_CHUNK:-16777216} oflag=${HPS_DD_OFLAG:-direct}
+  local start total=0 i=0 got errf want now wait
+  errf=$(mktemp "${TMPDIR:-/tmp}/vm-image-write.XXXXXX")
+  start=$(now_us)
+  while :; do
+    printf '+ dd of=%s bs=%s count=1 iflag=fullblock seek=%s oflag=%s conv=notrunc\n' "$DISK" "$chunk" "$i" "$oflag" >&2
+    if ! dd "of=$DISK" "bs=$chunk" count=1 iflag=fullblock "seek=$i" "oflag=$oflag" conv=notrunc 2> "$errf"; then
+      cat "$errf" >&2
+      rm -f -- "$errf"
+      return 1
+    fi
+    got=$(awk '/bytes.*copied/ { print $1; exit }' "$errf")
+    got=${got:-0}
+    total=$((total + got))
+    i=$((i + 1))
+    if ((got < chunk)); then
+      break
+    fi
+    now=$(now_us)
+    want=$((total * 1000000 / (MBPS * 1048576)))
+    if ((want > now - start)); then
+      wait=$(awk -v us=$((want - (now - start))) 'BEGIN { printf "%.3f", us / 1000000 }')
+      sleep "$wait"
+    fi
+  done
+  rm -f -- "$errf"
+  log "paced write: $total bytes at no more than $MBPS MiB/s"
+}
+
+write_image() {
+  if [[ -z "$MBPS" ]]; then
+    log "not paced: no --mbps-max (the storage host has no measured write speed; see hps-storage <host> measure)"
+    run qemu-img convert -f qcow2 -O raw "$IMAGE" "$DISK"
+    return 0
+  fi
+  log "pacing the write to $MBPS MiB/s"
+  run qemu-img convert -f qcow2 -O raw "$IMAGE" /dev/stdout | paced_copy
+}
+
 main() {
   local sum
   parse_args "$@"
@@ -113,7 +183,7 @@ main() {
   sum=$(run sha256sum -- "$IMAGE")
   sum=${sum%% *}
   log "image sha256 $sum"
-  run qemu-img convert -f qcow2 -O raw "$IMAGE" "$DISK"
+  write_image
   printf 'IMAGE %s %s written\n' "$VM" "$sum"
 }
 

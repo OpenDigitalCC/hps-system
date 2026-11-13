@@ -40,7 +40,10 @@ the filesystem inside the guest is grown there (cnh-disk-grow on a CNH).
 define checks the JSON on stdin as create checks a definition and writes it to
 workloads/<name>.json; an existing definition is replaced only with --replace,
 and never while the workload exists (destroy it first). show-definition prints
-the stored JSON.
+the stored JSON. A disk whose definition sets no mbps_max gets one derived from the
+measured write speed of its storage hosts (cluster key tenant_write_fraction); it
+is written into the stored definition with an mbps_max_derived text naming the
+source, and printed. An mbps_max in the definition always wins.
 console prints the tail of each VM's serial console log (vm-console-log on its
 compute host; read-only), --lines N of it (1-10000, default the node's 200);
 with --vm the log alone, else each under a "== <vm> on <host>" heading. Exit 4
@@ -112,6 +115,12 @@ sub fail_exit {
 
 # define <name> (the JSON on stdin) and show-definition <name>: the definition
 # file itself, no node call.
+# The disk write caps define filled in or found (docs/WORKLOADS.md "Resource limits").
+sub render_derived {
+    my ($r) = @_;
+    return join('', map { "  disk $_->{vm}/$_->{disk}: mbps_max " . (defined $_->{mbps_max} ? $_->{mbps_max} : '-') . " ($_->{source})\n" } @{ $r->{derived} // [] });
+}
+
 sub definition_verb {
     my ($op, $name, $rest, %o) = @_;
     return usage("$op takes no further arguments") if @$rest;
@@ -144,6 +153,7 @@ sub definition_verb {
             print 'define ok: workload ' . $name . ' ' . ($r->{replaced} ? 'replaced' : 'defined')
                 . " in $r->{path} (VMs: " . join(', ', @{ $r->{vms} }) . ")\n";
         }
+        print render_derived($r) unless $o{json};
         return 0;
     };
     return defined $rc ? $rc : fail_exit($@);

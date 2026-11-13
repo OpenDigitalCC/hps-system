@@ -47,7 +47,7 @@ my %SMK  = map { $_ => 1 } qw(vendor product serial);
 my %NIC_MODELS = map { $_ => 1 } qw(virtio e1000e rtl8139);
 my %DISK_BUSES = map { $_ => 1 } qw(virtio scsi sata);
 my $SMBIOS_RE = qr/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\z/;
-my %DSK = map { $_ => 1 } qw(name size legs iops_max mbps_max);
+my %DSK = map { $_ => 1 } qw(name size legs iops_max mbps_max mbps_max_derived);
 # Resource limits (docs/WORKLOADS.md "Resource limits"): field => [min, max] and
 # the vm-define option; per VM, then per disk.
 my @VM_LIMITS = ([ cpu_weight => 1, 10000, '--cpu-weight' ], [ cpu_max_pct => 1, 100, '--cpu-max-pct' ],
@@ -118,6 +118,11 @@ sub _validate_disk ($where, $disk) {
     _bad($where, 'a disk has at most one local leg (one zvol)') if @local > 1;
     _bad($where, 'a disk with one leg needs a local {host,pool} leg') if @l == 1 && !@local;
     my %lim = _limits($where, $disk, \@DISK_LIMITS);
+    if (exists $disk->{mbps_max_derived}) {
+        _bad($where, 'mbps_max_derived must be a string (hps-workload define writes it; leave it out)')
+            unless _plain($disk->{mbps_max_derived}) && !ref $disk->{mbps_max_derived} && length $disk->{mbps_max_derived} <= 400;
+        _bad($where, 'mbps_max_derived without mbps_max') unless exists $disk->{mbps_max};
+    }
     return { name => "$disk->{name}", size => "$disk->{size}", legs => \@l, %lim };
 }
 
@@ -361,6 +366,89 @@ sub _st ($self, $host) { return $self->{st_cache}{$host} //= $self->{storage}->(
 
 sub _mac ($self, $host) { return $self->_st($host)->mac }
 
+#=== I/O budget =======================================================================
+# The write caps are fractions of what the storage hosts measured (hps-storage
+# create and measure: host key storage_pool_write_mbps), never numbers of their
+# own (docs/CLUSTER-CONFIG.md "I/O budget").
+
+my $FRACTION_RE = qr/^0\.[0-9]{0,2}[1-9]0{0,2}\z/;
+our %FRACTION_DEFAULT = (image_write_fraction => '0.5', tenant_write_fraction => '0.25');
+
+# The cluster key's fraction, else its default: ($fraction, 'cluster key'|'default').
+sub _fraction ($self, $key) {
+    my $reg = $self->{registry};
+    my $v = $reg->cluster_exists($self->_cluster, $key) ? $reg->cluster_get($self->_cluster, $key) : undef;
+    return ($FRACTION_DEFAULT{$key}, 'default') unless defined $v && !ref $v && length $v;
+    _fail('refused', "cluster key $key is '$v'; it must be a fraction above 0 and below 1, like 0.5 (hps-cluster-config set $key 0.5)")
+        unless $v =~ $FRACTION_RE;
+    return ($v, 'cluster key');
+}
+
+# The lowest measured pool write speed across the hosts of \@legs:
+# {mbps, host, measured_at, legs, measured}; undef when no leg host has a figure.
+sub _leg_budget ($self, $legs) {
+    my $reg = $self->{registry};
+    my ($best, $measured, %seen);
+    my @hosts = grep { !$seen{$_}++ } map { $_->{host} } @$legs;
+    for my $host (@hosts) {
+        my $mac = eval { $self->_mac($host) } // next;
+        next unless $reg->host_exists($mac, 'storage_pool_write_mbps');
+        my $m = $reg->host_get($mac, 'storage_pool_write_mbps');
+        next unless defined $m && !ref $m && $m =~ /^[0-9]+\z/ && $m > 0;
+        $measured++;
+        $best = { mbps => $m + 0, host => $host,
+            measured_at => ($reg->host_exists($mac, 'storage_measured_at') ? $reg->host_get($mac, 'storage_measured_at') : '?') }
+            if !$best || $m < $best->{mbps};
+    }
+    return undef unless $best;
+    return { %$best, legs => scalar(@hosts), measured => $measured };
+}
+
+# derive($key, \@legs): (MiB/s, text saying where it comes from), or
+# (undef, why not). The figure is the fraction of the lowest budget, whole MiB/s,
+# at least 1.
+sub _derive ($self, $key, $legs) {
+    my ($f, $fsrc) = $self->_fraction($key);
+    my $b = $self->_leg_budget($legs);
+    return (undef, 'no storage host of the disk has a measured storage_pool_write_mbps (hps-storage <host> measure)') unless $b;
+    my $n = int($b->{mbps} * $f);
+    $n = 1 if $n < 1;
+    return ($n, "$key $f ($fsrc) x storage_pool_write_mbps $b->{mbps} of $b->{host}"
+        . ($b->{legs} > 1 ? " (lowest of $b->{measured} measured of $b->{legs} hosts)" : '') . ", measured $b->{measured_at}");
+}
+
+# fill_limits(\%raw_definition): for each disk without mbps_max, derive it from
+# tenant_write_fraction and the leg hosts' budget; a disk with an
+# mbps_max_derived marker (a figure define filled earlier) is derived again; an
+# explicit mbps_max always wins. Returns [{vm, disk, mbps_max, source, derived}]
+# and changes \%raw in place.
+sub _fill_limits ($self, $raw) {
+    my @out;
+    for my $vm (@{ $raw->{vms} // [] }) {
+        for my $d (@{ $vm->{disks} // [] }) {
+            next unless ref $d eq 'HASH';
+            my $row = { vm => $vm->{name}, disk => $d->{name} };
+            if (exists $d->{mbps_max} && !exists $d->{mbps_max_derived}) {
+                push @out, { %$row, mbps_max => $d->{mbps_max} + 0, derived => 0, source => 'set in the definition' };
+                next;
+            }
+            my $had = exists $d->{mbps_max_derived};
+            my ($n, $src) = $self->_derive('tenant_write_fraction', $d->{legs} // []);
+            if (defined $n) {
+                @$d{qw(mbps_max mbps_max_derived)} = ($n, $src);
+                push @out, { %$row, mbps_max => $n, derived => 1, source => $src };
+            }
+            elsif ($had) {    # keep the earlier figure rather than drop a cap
+                push @out, { %$row, mbps_max => $d->{mbps_max} + 0, derived => 0, source => "kept (not re-derived: $src): $d->{mbps_max_derived}" };
+            }
+            else {
+                push @out, { %$row, mbps_max => undef, derived => 0, source => "none: $src" };
+            }
+        }
+    }
+    return \@out;
+}
+
 #=== definitions on disk and records =================================================
 
 sub definition_path ($self, $name) {
@@ -421,6 +509,15 @@ sub define ($self, $name, $text, %a) {
     _fail('refused', 'no definition: the JSON definition is the input') unless defined $text && length $text;
     _fail('refused', "the definition is larger than $MAX_DEFINITION_BYTES bytes") if length $text > $MAX_DEFINITION_BYTES;
     my $def = $self->_checked($name, $text, 'the definition');
+    my $derived = [];
+    {
+        my $raw = JSON::PP->new->utf8->decode($text);
+        $derived = $self->_fill_limits($raw);
+        if (grep { $_->{derived} } @$derived) {
+            $text = JSON::PP->new->utf8->canonical->pretty->encode($raw);
+            $def = $self->_checked($name, $text, 'the definition with its derived limits');
+        }
+    }
     my $exists = -e $path || -l $path;
     _fail('refused', "workload '$name' is already defined ($path); give --replace to overwrite it")
         if $exists && !$a{replace};
@@ -431,7 +528,7 @@ sub define ($self, $name, $text, %a) {
     }
     _fail('refused', "$path is not a regular file") if $exists && (-l $path || !-f $path);
     my $out = { name => $name, path => $path, replaced => $exists ? 1 : 0, dry_run => $a{dry_run} ? 1 : 0,
-        written => 0, vms => [ map { $_->{name} } @{ $def->{vms} } ] };
+        written => 0, vms => [ map { $_->{name} } @{ $def->{vms} } ], derived => $derived };
     return $out if $a{dry_run};
 
     $text .= "\n" unless $text =~ /\n\z/;
@@ -696,8 +793,14 @@ sub _steps_create ($self, $def, %a) {
             push @s, _step($mac, 'mirror-create', [ $d->{mirror}, map { ('--leg', $_) } @{ $d->{specs} } ],
                 key => "mirror:$d->{mirror}");
         }
-        push @s, _step($mac, 'vm-image-write', [ $vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path ],
-            key => "write:$vm->{name}") unless $net_boot;
+        unless ($net_boot) {
+            my ($mbps, $why) = $self->_derive('image_write_fraction', $vm->{disks}[0]{legs});
+            my $vmn = $vm->{name};
+            push @s, _step($mac, 'vm-image-write', [ $vm->{name}, '--disk', $in->{disks}[0]{device}, '--image', $path,
+                (defined $mbps ? ('--mbps-max', $mbps) : ()) ],
+                key => "write:$vm->{name}",
+                before => sub { $self->_log('info', defined $mbps ? "image write of $vmn paced to $mbps MiB/s: $why" : "image write of $vmn is not paced: $why") });
+        }
         push @s, $self->_seed_step($name, $vm, $in) if $vm->{seed};
         my $have = $attached{$mac} //= $self->_attached($mac);
         # vxlan nets are not host nets: net-vxlan-ensure builds them (below).

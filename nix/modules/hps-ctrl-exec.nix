@@ -87,6 +87,8 @@ in
       storage-status.options.profile = "node";
       storage-vdev-online.source = mkScript "storage-vdev-online" (scriptsDir + "/storage-vdev-online");
       storage-vdev-online.options.profile = "node";
+      storage-io-measure.source = mkScript "storage-io-measure" (scriptsDir + "/storage-io-measure");
+      storage-io-measure.options.profile = "node";
       # CS-3.1
       net-bridge-ensure.source = mkScript "net-bridge-ensure" (scriptsDir + "/net-bridge-ensure");
       net-bridge-ensure.options.profile = "node";

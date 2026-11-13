@@ -294,6 +294,48 @@ zvol under them, nothing else and nowhere else (a pool root is refused, exit
 last lines. Through the operator API: `hps-op --cred FILE hps-storage sch-001
 zfs-set c1/enc/vm/probe-a sync=disabled logbias=throughput`.
 
+## I/O budget
+
+IPS-34 items 18 and 18a (owner 2026-11-13): the write caps come from what the
+storage hosts measured, never from a number written down. Two cluster keys hold
+**fractions** (a decimal above 0 and below 1, like `0.5`); the figures they
+multiply are host registry keys written by `hps-storage`:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `image_write_fraction` | `0.5` | `vm-image-write` (the image of a workload create) is paced to this fraction of the lowest `storage_pool_write_mbps` of the boot disk's leg hosts. A disk whose leg hosts have no measurement is written at full speed, and the run log says so |
+| `tenant_write_fraction` | `0.25` | `hps-workload define` fills a disk's `mbps_max` with this fraction of the lowest `storage_pool_write_mbps` of the disk's leg hosts when the definition leaves it unset (an explicit `mbps_max` wins) |
+
+What is measured, where, and the keys it lands in (`docs/REGISTRY-KEYS.md`):
+
+- **`hps-storage <host> create`** (the pool disks are about to be wiped; skip
+  with `--no-measure`): `storage-pool-create --measure` reads 256 MiB from each
+  disk (`iflag=direct`, 4 MiB blocks) and writes 256 MiB of incompressible data
+  (from `/dev/urandom`, held in a tmpfs file) with `oflag=direct`, then 20
+  writes of 4 KiB with `oflag=direct,dsync`; then, with the pool up and
+  `<pool>/enc` unlocked, `storage-io-measure` writes 256 MiB to a temporary
+  1 GiB zvol `<pool>/enc/hps-measure` (it takes the sync and logbias of the
+  cluster keys above) and destroys it. A failed measurement is a warning; the
+  create stands.
+- **`hps-storage <host> measure`**, for a host whose pool exists: the zvol test
+  and a read test of the pool's disks. Needs the pool up; refused while
+  `<pool>/enc` is locked or `<pool>/enc/hps-measure` exists (an interrupted
+  run: `zfs destroy` it). `--dry-run` says what it would do.
+- Several disks: the lowest speed and the highest latency are kept (the pool is
+  as slow as its slowest disk). The raw write and fsync figures of `create` are
+  not overwritten by a later `measure` (a disk under a pool cannot be tested
+  raw); a host built before the measurement existed gets its fsync figures from
+  the zvol test.
+- The audit image is not used: it is strictly read-only (nothing in it may
+  run `dd`, and its report is one JSON document stored whole, not registry
+  keys), so the sequential read test of the disks is made by `create` (each
+  disk, in the same pass as the write test) and by `measure` (the pool's disks).
+
+A figure is a measurement of one moment, dated by `storage_measured_at`; run
+`hps-storage <host> measure` again after a disk is replaced or a controller or
+cache setting changes, and `hps-node resources <host>` shows what is held.
+The owner verifies the discovery on the next hardware device added.
+
 ## Catalogue
 
 Produced by `hps-cluster-config questions --json` (rows in menu order). The
@@ -355,6 +397,8 @@ keys may be empty.
 | `zfs_arc_max_pct` | resources | ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90) | `int:1..90` | `25` | no |
 | `storage_zvol_sync` | resources | ZFS `sync` of new zvols: `standard` (every sync write journalled) or `disabled` (acknowledged at once, flushed per transaction group; a storage host crash loses its last transaction group, the other mirror leg has it) | `enum:standard,disabled` | `standard` | no |
 | `storage_zvol_logbias` | resources | ZFS `logbias` of new zvols: `latency` (uses the log device) or `throughput` (writes go to the pool) | `enum:latency,throughput` | `latency` | no |
+| `image_write_fraction` | resources | Fraction (above 0, below 1) of a storage host's measured pool write speed (host key `storage_pool_write_mbps`) that `vm-image-write` may use while it writes a guest image; no measurement, no pacing | `regex:0\.[0-9]{0,2}[1-9]0{0,2}` | `0.5` | no |
+| `tenant_write_fraction` | resources | Fraction (above 0, below 1) of the lowest measured pool write speed of a disk's storage hosts that `hps-workload define` fills into `mbps_max` for a disk whose definition sets none | `regex:0\.[0-9]{0,2}[1-9]0{0,2}` | `0.25` | no |
 
 ## Exit codes
 

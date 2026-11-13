@@ -221,6 +221,8 @@ the `ips-admin` start and end lines). For example:
 hps-op --cred FILE hps-storage sch-001 status
 hps-op --cred FILE hps-storage sch-001 create s1 --disk ata-SSD_A --disk ata-SSD_B --dry-run
 hps-op --cred FILE hps-storage sch-001 create s1 --disk ata-SSD_A --disk ata-SSD_B --disk ata-SSD_C
+hps-op --cred FILE hps-storage sch-001 measure --dry-run
+hps-op --cred FILE hps-storage sch-001 measure
 hps-op --cred FILE hps-storage sch-001 destroy s1
 hps-op --cred FILE hps-workload destroy t0 --dry-run
 hps-op --cred FILE hps-onboard forget 525400000009
@@ -239,6 +241,9 @@ hps-op --cred FILE hps-storage sch-001 vdev-online c1 virtio-c1-sch-001-d3
 hps-op --cred FILE hps-storage sch-001 zfs-set c1/enc/vm/probe-a sync=disabled logbias=throughput
 hps-op --cred FILE hps-storage sch-001 zvol-destroy c1/enc/vm/probe-a
 ```
+
+`create` measures the disks and the new pool unless `--no-measure`; `measure` does it
+for a host whose pool exists (`docs/CLUSTER-CONFIG.md` "I/O budget").
 
 `zfs-set` changes only `sync` and `logbias`, on `<pool>/enc` or a zvol under
 it; its `<prop>=<value>` tokens are plain tokens to the gate. New zvols take

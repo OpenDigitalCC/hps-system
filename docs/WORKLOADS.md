@@ -304,6 +304,44 @@ What each lever does, and what it does not:
 `hps-node resources <host>` shows what a host applied and holds (node
 script `host-resources`, read-only).
 
+### The write caps come from discovery
+
+Owner ruling 2026-11-13 (IPS-34 items 18 and 18a): the caps are never fixed
+numbers, "so we don't set the live systems too low". Each storage host
+measures what its pool can take (`hps-storage create`, or `hps-storage <host>
+measure` on a host that has a pool; `docs/CLUSTER-CONFIG.md` "I/O budget",
+host keys `storage_pool_write_mbps` and the others in `docs/REGISTRY-KEYS.md`),
+and two cluster keys hold fractions of that figure:
+
+- **The image write of a create** (`vm-image-write`) is paced to
+  `image_write_fraction` (default 0.5) of the lowest `storage_pool_write_mbps`
+  among the hosts of the boot disk's legs. The IPS works the figure out
+  (the VM's compute host does not know its storage hosts' figures) and passes
+  it as `vm-image-write --mbps-max N`; the run log says `image write of <vm>
+  paced to N MiB/s: <fraction> x <figure> of <host>`. A disk none of whose
+  leg hosts has a measurement is written unpaced, and the log says so
+  (`image write of <vm> is not paced: ...`).
+- **A tenant disk's `mbps_max`**: when `hps-workload define` finds a disk with
+  no `mbps_max` it writes one into the stored definition, `tenant_write_fraction`
+  (default 0.25) of the same lowest figure, whole MiB/s, at least 1, and a
+  text `mbps_max_derived` naming the source (fraction, figure, host, date of
+  the measurement). `define` (and `--dry-run`) prints the figure and its source
+  per disk; `show-definition` shows both in the stored JSON. An `mbps_max` in
+  the definition always wins and is never changed. A definition that holds an
+  `mbps_max_derived` (it was derived earlier) is derived again at the next
+  `define --replace`; when no leg host has a measurement any more the earlier
+  figure is kept, not dropped. Do not write `mbps_max_derived` yourself: it
+  is refused without an `mbps_max`.
+
+A disk's `mbps_max` is part of the `vm-define` arguments `create` records, so
+the derived figure is what a create uses; a definition defined before any
+measurement exists has no cap until it is replaced with `define --replace`
+(after a destroy) once the hosts are measured. `iops_max` is not derived.
+
+`hps-node resources <host>` prints the host's figures as an `IOBUDGET` line;
+`hps-storage <host> status` prints them in full.
+
+
 ## Stop order on a node
 
 A compute host stops its guests when it powers off or reboots, however that

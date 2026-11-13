@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+#
+# storage-io-measure - measure what a storage host's pool can take.
+#
+# ctrl-exec allowlisted node script. A straight sequence of standard commands,
+# every command logged to stderr as "+ <command>" before it runs, no library
+# sourcing. The IPS records the result in the host's registry
+# (docs/REGISTRY-KEYS.md storage_read_mbps ... storage_measured_at); the caps
+# of docs/CLUSTER-CONFIG.md "I/O budget" are fractions of those figures.
+#
+# Usage: storage-io-measure <pool>
+#
+#   <pool>  ^[a-z][a-z0-9_.-]*$, an imported pool with <pool>/enc unlocked
+#
+# 1. READ (non-destructive): for each whole disk under the pool's vdevs,
+#    256 MiB read with iflag=direct in 4 MiB blocks into /dev/null.
+# 2. WRITE on the pool: a temporary zvol <pool>/enc/hps-measure (1 GiB; it
+#    takes the sync and logbias <pool>/enc holds, the cluster's policy),
+#    256 MiB of incompressible data (pre-generated from /dev/urandom into a
+#    tmpfs file) written with oflag=direct in 4 MiB blocks, then 20 x 4 KiB
+#    writes with oflag=direct,dsync timed one by one. The zvol is destroyed
+#    afterwards, also on failure or interrupt.
+# Nothing else is written. Overrides for tests: HPS_IO_MIB (data size, default
+# 256), HPS_IO_SYNC_COUNT (default 20), HPS_IO_TMP (tmpfs directory, default
+# /dev/shm), HPS_DEV (default /dev), HPS_IO_WAIT (seconds to wait for the zvol
+# device node, default 15).
+#
+# Output (stdout):
+#   IOREAD <by-id> <MiB/s>                          one per pool disk
+#   IOPOLICY <pool> sync=<v> logbias=<v>
+#   IOPOOL <pool> <write MiB/s> <fsync p50 ms> <fsync max ms>
+#
+# Exit: 0 measured, 2 usage, 3 refused (a bad name, the pool not imported, the
+# enc dataset locked, the temporary zvol already there, not enough room: the
+# message names the fix), 1 a command failed.
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+: "${HPS_IO_MIB:=256}"
+: "${HPS_IO_SYNC_COUNT:=20}"
+: "${HPS_IO_TMP:=/dev/shm}"
+: "${HPS_IO_WAIT:=15}"
+
+POOL=""
+ZVOL_MIB=1024
+TMPFILE=""
+DS=""
+CREATED=0
+
+log() {
+  printf '[storage-io-measure] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: storage-io-measure <pool>
+Exit: 0 measured, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+cleanup() {
+  if [[ -n "$TMPFILE" ]]; then
+    rm -f -- "$TMPFILE"
+  fi
+  if [[ "$CREATED" == 1 ]]; then
+    printf '+ zfs destroy %s\n' "$DS" >&2
+    zfs destroy "$DS" || log "could not destroy $DS; destroy it by hand (zfs destroy $DS)"
+  fi
+}
+
+parse_args() {
+  if [[ $# -ne 1 || "$1" == -* ]]; then
+    usage
+    exit 2
+  fi
+  POOL=$1
+  if [[ ! "$POOL" =~ ^[a-z][a-z0-9_.-]*$ ]]; then
+    refuse "pool name '$POOL' does not match ^[a-z][a-z0-9_.-]*\$"
+  fi
+  DS="$POOL/enc/hps-measure"
+  if [[ ! "$HPS_IO_MIB" =~ ^[1-9][0-9]{0,4}$ || $((HPS_IO_MIB % 4)) -ne 0 || ! "$HPS_IO_SYNC_COUNT" =~ ^[1-9][0-9]{0,3}$ ]]; then
+    refuse "HPS_IO_MIB and HPS_IO_SYNC_COUNT must be positive whole numbers, HPS_IO_MIB a multiple of 4"
+  fi
+}
+
+now_us() {
+  local t=$EPOCHREALTIME
+  printf '%s\n' "${t/./}"
+}
+
+# mibs <MiB> <microseconds>: whole MiB/s, at least 1.
+mibs() {
+  awk -v m="$1" -v us="$2" 'BEGIN { if (us < 1) us = 1; v = int(m * 1000000 / us + 0.5); if (v < 1) v = 1; print v }'
+}
+
+# read_disk <by-id>: sequential read MiB/s of a whole disk, direct.
+read_disk() {
+  local d=$1 t0 t1
+  t0=$(now_us)
+  run dd "if=$HPS_DEV/disk/by-id/$d" of=/dev/null bs=4M "count=$((HPS_IO_MIB / 4))" iflag=direct status=none
+  t1=$(now_us)
+  printf 'IOREAD %s %s\n' "$d" "$(mibs "$HPS_IO_MIB" $((t1 - t0)))"
+}
+
+# The by-id names of the pool's disks (partition suffix removed), one per line.
+pool_disks() {
+  zpool status -P "$POOL" | grep -o '/dev/disk/by-id/[^ 	]*' | sed -e 's|^/dev/disk/by-id/||' -e 's/-part[0-9]*$//' | LC_ALL=C sort -u
+}
+
+read_pool_disks() {
+  local d
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    if [[ -e "$HPS_DEV/disk/by-id/$d" ]]; then
+      read_disk "$d" || log "read test of $d failed; carrying on"
+    else
+      log "$d is not present under $HPS_DEV/disk/by-id; not read"
+    fi
+  done < <(pool_disks)
+}
+
+check_pool() {
+  if ! zpool list -H -o name "$POOL" > /dev/null 2>&1; then
+    refuse "pool '$POOL' is not imported (hps-storage <host> up)"
+  fi
+  if ! zfs list -H -o name "$POOL/enc" > /dev/null 2>&1; then
+    refuse "$POOL/enc does not exist; the pool was not created by HPS"
+  fi
+  if [[ "$(zfs get -H -o value keystatus "$POOL/enc" 2> /dev/null)" != "available" ]]; then
+    refuse "$POOL/enc is locked; hps-storage <host> up unlocks it, then measure again"
+  fi
+  if zfs list -H -o name "$DS" > /dev/null 2>&1; then
+    refuse "$DS already exists (a measurement running, or one that was interrupted); destroy it with 'zfs destroy $DS' and run again"
+  fi
+  local avail need
+  avail=$(zfs list -Hp -o available "$POOL/enc")
+  need=$((ZVOL_MIB * 1048576 + 536870912))
+  if [[ ! "$avail" =~ ^[0-9]+$ ]] || ((avail < need)); then
+    refuse "$POOL/enc has ${avail:-0} bytes available; the test zvol needs 1 GiB plus 512 MiB of headroom"
+  fi
+}
+
+make_data() {
+  TMPFILE="$HPS_IO_TMP/hps-io-measure.$$"
+  run dd if=/dev/urandom "of=$TMPFILE" bs=1M "count=$HPS_IO_MIB" status=none
+}
+
+# wait_node <path>: the zvol's device node appears a moment after zfs create.
+wait_node() {
+  local n=0
+  run udevadm settle --timeout=10 || true
+  while [[ ! -e "$1" ]]; do
+    n=$((n + 1))
+    if ((n > HPS_IO_WAIT * 4)); then
+      log "device node $1 did not appear within ${HPS_IO_WAIT}s"
+      exit 1
+    fi
+    sleep 0.25
+  done
+}
+
+# fsync_probe <device>: COUNT x 4 KiB oflag=direct,dsync writes; prints
+# "<p50 ms> <max ms>" with two decimals.
+fsync_probe() {
+  local dev=$1 i t0 t1
+  local -a us=()
+  for ((i = 0; i < HPS_IO_SYNC_COUNT; i++)); do
+    t0=$(now_us)
+    dd "if=$TMPFILE" "of=$dev" bs=4096 count=1 "skip=$i" "seek=$i" oflag=direct,dsync conv=notrunc status=none || return 1
+    t1=$(now_us)
+    us+=($((t1 - t0)))
+  done
+  printf '+ dd if=<data> of=%s bs=4096 count=1 oflag=direct,dsync  (x%s)\n' "$dev" "$HPS_IO_SYNC_COUNT" >&2
+  printf '%s\n' "${us[@]}" | LC_ALL=C sort -n | awk '{ v[NR] = $1 } END { printf "%.2f %.2f\n", v[int((NR + 1) / 2)] / 1000, v[NR] / 1000 }'
+}
+
+measure_zvol() {
+  local dev p50 mx t0 t1 pol fsync
+  run zfs create -V "${ZVOL_MIB}M" "$DS"
+  CREATED=1
+  dev="$HPS_DEV/zvol/$DS"
+  wait_node "$dev"
+  pol=$(zfs get -H -o value sync,logbias "$DS" | paste -sd' ' -)
+  log "zvol policy: $pol"
+  printf 'IOPOLICY %s sync=%s logbias=%s\n' "$POOL" "${pol%% *}" "${pol##* }"
+  t0=$(now_us)
+  run dd "if=$TMPFILE" "of=$dev" bs=4M "count=$((HPS_IO_MIB / 4))" oflag=direct conv=notrunc status=none
+  t1=$(now_us)
+  local w
+  w=$(mibs "$HPS_IO_MIB" $((t1 - t0)))
+  fsync=$(fsync_probe "$dev") || { log "the synchronous write test failed"; exit 1; }
+  read -r p50 mx <<< "$fsync"
+  printf 'IOPOOL %s %s %s %s\n' "$POOL" "$w" "$p50" "$mx"
+}
+
+main() {
+  parse_args "$@"
+  trap cleanup EXIT
+  check_pool
+  read_pool_disks
+  make_data
+  measure_zvol
+}
+
+main "$@"

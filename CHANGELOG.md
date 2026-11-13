@@ -33,6 +33,35 @@ IPS-34 items 16 and 17 (s2 scale test).
   `resolve` and `note` does the same. The ips-admin script `hps-issues-input`
   (`input=raw`: `hps-op --input`) carries it; the token form is unchanged.
   docs/ISSUES.md, docs/OPERATOR.md.
+## I/O discovery: the write caps come from measurement (2026-11-13)
+
+IPS-34 items 18 and 18a (owner: caps from discovery, never fixed numbers).
+
+- **New** `hps-storage <host> create` measures each pool disk before it is
+  wiped into the pool (node script `storage-pool-create --measure`: 256 MiB
+  read, 256 MiB incompressible write with `oflag=direct`, 20 x 4 KiB
+  `oflag=direct,dsync` writes) and the new pool (`storage-io-measure`: a
+  temporary zvol `<pool>/enc/hps-measure`, 256 MiB write, the same fsync
+  probe). `--no-measure` skips it; a failed measurement never fails the create.
+- **New** `hps-storage <host> measure` (node script `storage-io-measure`,
+  allowlisted, profile node): the pool test and a read test of the pool's disks
+  on a host whose pool exists; `--dry-run` says what it would do.
+- **New** host registry keys `storage_read_mbps`, `storage_write_mbps`,
+  `storage_fsync_ms`, `storage_fsync_max_ms`, `storage_pool_write_mbps`,
+  `storage_measured_at` (new type `number`); `hps-storage <host> status` prints
+  them, `hps-node resources <host>` prints an `IOBUDGET` line.
+- **New** cluster keys `image_write_fraction` (default 0.5) and
+  `tenant_write_fraction` (default 0.25): fractions of the lowest
+  `storage_pool_write_mbps` of a disk's leg hosts. `hps-workload create` passes
+  `vm-image-write --mbps-max N` (no measurement: no pacing and a log line);
+  `hps-workload define` fills a disk's missing `mbps_max` and prints it with its
+  source (`mbps_max_derived` in the stored definition; an explicit `mbps_max`
+  wins).
+- **New** `vm-image-write --mbps-max N`: `qemu-img convert ... /dev/stdout`
+  into a loop of `dd` (16 MiB chunks, `oflag=direct`) that sleeps to hold the
+  average at N MiB/s. No new package.
+- The audit image stays read-only and runs no read test (see
+  `docs/CLUSTER-CONFIG.md` "I/O budget").
 
 ## Zvol write properties, one-disk pools, host reserve by TYPE, link-speed floor (2026-11-12)
 

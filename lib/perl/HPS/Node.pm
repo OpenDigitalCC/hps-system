@@ -431,7 +431,25 @@ sub net_status ($self) {
 # {rc, stdout, stderr}.
 sub resources ($self) {
     my $r = $self->{runner}->call(mac => $self->{mac}, script => 'host-resources', args => [], input => undef);
-    return { rc => $r->{rc}, stdout => $r->{stdout} // '', stderr => $r->{stderr} // '' };
+    return { rc => $r->{rc}, stdout => _nl($r->{stdout}) . $self->iobudget_line, stderr => $r->{stderr} // '' };
+}
+
+# The host's I/O budget from its registry keys, one line (the figures
+# hps-storage create and measure recorded; docs/REGISTRY-KEYS.md):
+#   IOBUDGET read_mibs=N write_mibs=N pool_write_mibs=N fsync_ms=X fsync_max_ms=X measured_at=ISO
+# A figure never measured is "-"; a host with none: "IOBUDGET not measured".
+sub _nl ($t) {
+    $t //= '';
+    return $t eq '' || $t =~ /\n\z/ ? $t : "$t\n";
+}
+
+sub iobudget_line ($self) {
+    my $b = HPS::Storage->io_budget($self->{registry}, $self->{mac});
+    return "IOBUDGET not measured (hps-storage <host> measure)\n" unless %$b;
+    my $v = sub { defined $b->{ $_[0] } ? $b->{ $_[0] } : '-' };
+    return 'IOBUDGET read_mibs=' . $v->('storage_read_mbps') . ' write_mibs=' . $v->('storage_write_mbps')
+        . ' pool_write_mibs=' . $v->('storage_pool_write_mbps') . ' fsync_ms=' . $v->('storage_fsync_ms')
+        . ' fsync_max_ms=' . $v->('storage_fsync_max_ms') . ' measured_at=' . $v->('storage_measured_at') . "\n";
 }
 
 # Ping the agent until it answers or wait seconds pass (calls go ahead anyway).
