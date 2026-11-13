@@ -111,7 +111,12 @@ ensure_images_dataset() {
     # a dataset made without one is never mounted).
     if [[ "$(zfs get -H -o value mounted "$pool/enc/images")" != "yes" ]]; then
       run zfs set mountpoint="$DEST" "$pool/enc/images"
-      run zfs mount "$pool/enc/images"
+      # Setting a mountpoint on an unmounted dataset mounts it; a `zfs mount`
+      # after that fails "already mounted" (the first create on every host
+      # failed at this step until 2026-11-13). Mount only when it still is not.
+      if [[ "$(zfs get -H -o value mounted "$pool/enc/images")" != "yes" ]]; then
+        run zfs mount "$pool/enc/images"
+      fi
     fi
     return 0
   fi

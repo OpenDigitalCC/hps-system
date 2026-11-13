@@ -256,6 +256,16 @@ to LOAD CRITICAL and the DL360 to 7-9 % memory available.
   `test_p3_250_resource_limits.bats`, `test_p3_251_host_reserve.bats`,
   `t/225-resource-limits.t`.
 
+## image-fetch: the first create on a host no longer fails at the images dataset (2026-11-13)
+
+- fix: `image-fetch` set the mountpoint of an unmounted `<pool>/enc/images`
+  (which mounts it) and then ran `zfs mount`, which failed "filesystem
+  already mounted", so the first `hps-workload create` on every host failed
+  at step 2/5 and needed `create --resume` (the demo rehearsal on the lab,
+  2026-11-12 21:02 UTC). It now mounts only when the dataset is still
+  unmounted after the set. Test: `test_p3_22_image_fetch.bats` (the zfs shim
+  now mounts on set and refuses a second mount, as ZFS does).
+
 ## hps-op prints the reply's text as UTF-8 (2026-11-12)
 
 - fix: `hps-op` decoded the API's JSON reply to characters and printed the

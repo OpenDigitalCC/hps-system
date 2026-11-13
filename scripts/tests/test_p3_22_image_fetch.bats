@@ -131,8 +131,8 @@ echo "zfs $*" >> "$SHIM_LOG"
 case "$1" in
   list) [[ -d "$HPS_POOL_ROOT/${*: -1}" || -f "$HPS_POOL_ROOT/${*: -1}.unmounted" ]] && exit 0; exit 1 ;;
   get) [[ -f "$HPS_POOL_ROOT/${*: -1}.unmounted" ]] && echo no || echo yes; exit 0 ;;
-  set) exit 0 ;;
-  mount) rm -f "$HPS_POOL_ROOT/$2.unmounted"; mkdir -p "$HPS_POOL_ROOT/$2"; exit 0 ;;
+  set) [[ -n "${FAKE_ZFS_SET_NO_MOUNT:-}" ]] || { rm -f "$HPS_POOL_ROOT/${*: -1}.unmounted"; mkdir -p "$HPS_POOL_ROOT/${*: -1}"; }; exit 0 ;;
+  mount) [[ -f "$HPS_POOL_ROOT/$2.unmounted" ]] || { echo "cannot mount '$2': filesystem already mounted" >&2; exit 1; }; rm -f "$HPS_POOL_ROOT/$2.unmounted"; mkdir -p "$HPS_POOL_ROOT/$2"; exit 0 ;;
   create) mkdir -p "$HPS_POOL_ROOT/${*: -1}"; exit 0 ;;
 esac
 exit 1
@@ -151,14 +151,14 @@ SH
   [ -f "$HPS_POOL_ROOT/lab/enc/images/base.qcow2" ]
 }
 
-@test "--dest /<pool>/enc/images: the dataset exists but is unmounted (pool mountpoint=none): mountpoint set, mounted, used" {
+@test "--dest /<pool>/enc/images: the dataset exists but is unmounted: mountpoint set (which mounts it), no second mount, used" {
   body
   zfs_shim
   : > "$HPS_POOL_ROOT/lab/enc/images.unmounted"
   PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/images"
   [ "$status" -eq 0 ]
   grep -qF "zfs set mountpoint=$HPS_POOL_ROOT/lab/enc/images lab/enc/images" "$SHIM_LOG"
-  grep -qF "zfs mount lab/enc/images" "$SHIM_LOG"
+  run ! grep -qF "zfs mount lab/enc/images" "$SHIM_LOG"
   run ! grep -q "zfs create" "$SHIM_LOG"
   [ -f "$HPS_POOL_ROOT/lab/enc/images/base.qcow2" ]
 }
@@ -196,4 +196,15 @@ SH
   export HPS_RUN_ROOT="$TEST_DIR/rr"
   run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_RUN_ROOT/run/hps/other"
   [ "$status" -eq 3 ]
+}
+
+@test "--dest /<pool>/enc/images: a mountpoint set that leaves the dataset unmounted is followed by zfs mount" {
+  body
+  zfs_shim
+  : > "$HPS_POOL_ROOT/lab/enc/images.unmounted"
+  FAKE_ZFS_SET_NO_MOUNT=1 PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/images"
+  [ "$status" -eq 0 ]
+  grep -qF "zfs set mountpoint=$HPS_POOL_ROOT/lab/enc/images lab/enc/images" "$SHIM_LOG"
+  grep -qF "zfs mount lab/enc/images" "$SHIM_LOG"
+  [ -f "$HPS_POOL_ROOT/lab/enc/images/base.qcow2" ]
 }
