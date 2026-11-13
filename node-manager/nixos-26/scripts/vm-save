@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#
+# vm-save - save a running guest's RAM to a file and stop it (suspend).
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-save <vm> --state <path>
+#        vm-save <vm> --state <path> --discard
+#
+#   <vm>      ^[a-z0-9][a-z0-9-]{0,31}$
+#   <path>    /<pool>/enc/state/<vm>.save - the state file, on the compute
+#             host's pool; the dataset <pool>/enc/state is created on first use
+#             (zfs create under <pool>/enc, so it inherits the pool's
+#             encryption)
+#
+#   virsh save --running <vm> <path>
+# writes the guest's memory and device state to the file and stops the guest:
+# the VM is gone from libvirt afterwards, its definition stays (vm-restore
+# brings it back running, where it left off). Nothing else stops: the disks and
+# any mirror stay as they are, and must not be written to while it is saved.
+#
+# Refused (3): the VM is not running, the state file exists, the state dataset
+# has less free space than the guest's memory (the figures are named), the
+# pool has no <pool>/enc. --discard removes the state file (destroy of a
+# suspended workload) and does nothing else.
+#
+# Last line: VM-SAVE <vm> <path> <bytes>   (--discard: VM-SAVE <vm> <path> discarded)
+# Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 a command failed.
+
+set -euo pipefail
+
+# Override for tests: HPS_STATE_ROOT, a prefix for every path the script touches.
+: "${HPS_STATE_ROOT:=}"
+
+VM=""
+STATE_FILE=""
+DISCARD=0
+
+log() {
+  printf '[vm-save] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-save <vm> --state /<pool>/enc/state/<vm>.save [--discard]
+Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 failed.
+USAGE
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state) [[ $# -ge 2 ]] || { usage; exit 2; }; STATE_FILE=$2; shift 2 ;;
+      --discard) DISCARD=1; shift ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+  [[ -n "$STATE_FILE" ]] || { log "--state is required"; usage; exit 2; }
+  [[ "$STATE_FILE" =~ ^/([a-z][a-z0-9_.-]*)/enc/state/([a-z0-9][a-z0-9-]{0,31})\.save$ ]] \
+    || { log "--state must be /<pool>/enc/state/<vm>.save"; usage; exit 2; }
+  POOL=${BASH_REMATCH[1]}
+  [[ "${BASH_REMATCH[2]}" == "$VM" ]] || { log "the state file must be named for the VM ($VM.save)"; usage; exit 2; }
+}
+
+# state_dataset: make sure <pool>/enc/state exists (inherits the encryption of
+# <pool>/enc).
+state_dataset() {
+  local ds="$POOL/enc/state"
+  if zfs list -H -o name "$ds" > /dev/null 2>&1; then
+    return 0
+  fi
+  zfs list -H -o name "$POOL/enc" > /dev/null 2>&1 || refuse "pool $POOL has no $POOL/enc dataset to keep the saved memory in"
+  run zfs create "$ds" >&2 || { log "cannot create $ds"; exit 1; }
+}
+
+# used_bytes: the guest's memory in bytes, from virsh dominfo.
+used_bytes() {
+  local key rest kib=""
+  while IFS=: read -r key rest; do
+    if [[ "$key" == "Used memory" ]]; then
+      kib=${rest//[!0-9]/}
+    fi
+  done < <(run virsh -c qemu:///system dominfo "$VM")
+  [[ -n "$kib" ]] || { log "cannot read the memory of $VM from virsh dominfo"; exit 1; }
+  printf '%s\n' "$((kib * 1024))"
+}
+
+main() {
+  local state need have bytes file
+  parse_args "$@"
+  file="$HPS_STATE_ROOT$STATE_FILE"
+  if [[ "$DISCARD" == 1 ]]; then
+    run rm -f "$file"
+    log "$STATE_FILE removed"
+    printf 'VM-SAVE %s %s discarded\n' "$VM" "$STATE_FILE"
+    return 0
+  fi
+  if ! state=$(run virsh -c qemu:///system domstate "$VM" 2> /dev/null); then
+    log "$VM is not defined"
+    exit 4
+  fi
+  [[ "$state" == running ]] || refuse "$VM is $state: only a running guest can be saved"
+  [[ ! -e "$file" ]] || refuse "$STATE_FILE already exists: $VM is already saved, or an earlier state file is left; resume it, or remove the file"
+  state_dataset
+  need=$(used_bytes)
+  have=$(run df -B1 --output=avail "${file%/*}" | tail -n 1 | tr -d ' ')
+  [[ "$have" =~ ^[0-9]+$ ]] || { log "cannot read the free space of ${file%/*}"; exit 1; }
+  if ((have < need)); then
+    refuse "not enough free space for $VM's memory on $POOL/enc/state: needs $need bytes, has $have bytes"
+  fi
+  run virsh -c qemu:///system save --running "$VM" "$file" >&2 || { log "virsh save of $VM failed"; exit 1; }
+  bytes=$(stat -c %s "$file")
+  log "$VM saved to $STATE_FILE ($bytes bytes); it is off until vm-restore"
+  printf 'VM-SAVE %s %s %s\n' "$VM" "$STATE_FILE" "$bytes"
+}
+
+main "$@"

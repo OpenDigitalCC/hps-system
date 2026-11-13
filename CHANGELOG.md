@@ -12,6 +12,25 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Suspend and resume (2026-11-13)
+
+- **Added** `hps-workload suspend <name> [--vm <vm>]` and `resume <name> [--vm
+  <vm>]` (both with `--dry-run`, `--json`): a long CPU job in a VM survives a
+  planned host reboot. Node scripts `vm-save <vm> --state <path>` (`virsh save
+  --running`; refuses a guest that is not running, an existing state file and
+  too little free space on the state dataset) and `vm-restore <vm> --state
+  <path>` (`virsh restore`, then removes the file; refuses no state file and a
+  running guest), both on the ctrl-exec allowlist (needs a node image
+  rebuild). The state file is `/<pool>/enc/state/<vm>.save` on the compute
+  host's pool (the dataset is created on first use and inherits the
+  encryption); a host with no pool refuses. A 40 GB guest takes about 10
+  minutes each way on the lab pool.
+- **Added** the recorded and reported VM state `suspended` (with `state_file`,
+  `saved_at`, `size_bytes`; `status --json` fields otherwise unchanged).
+  `start` and `stop` of a suspended VM refuse and point to `resume`; a mirror
+  stays assembled while suspended; `resume` runs the VXLAN, mirror-assemble
+  and re-define steps `start` runs; `destroy` removes the state file too.
+
 ## Per-guest utilisation (2026-11-13)
 
 - **Added** `hps-metrics series <host> --guest <vm>`: per-guest history

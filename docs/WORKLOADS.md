@@ -183,6 +183,12 @@ nothing). A node call that exits non-zero ends the run at once.
 `stop`
 :   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped`. `vm-stop` waits for the guest's own shutdown and never forces; `stop --force` passes `vm-stop --force` (the graceful wait, then `virsh destroy`) for a guest that cannot shut down, such as one whose root filesystem went read-only.
 
+`suspend [--vm <vm>]`
+:   Saves each VM's memory to a file and stops it, so a planned host reboot does not end a long job (see "Suspend and resume"). Per VM, consumers first like `stop`: `vm-save <vm> --state /<pool>/enc/state/<vm>.save`. Nothing else stops. Records `suspended` with `state_file`, `saved_at` and `size_bytes`. A suspended VM refuses `suspend`, `start` and `stop` (3), each pointing to `resume`.
+
+`resume [--vm <vm>]`
+:   Per VM in start order: the VXLAN links and `mirror-assemble` (a rebooted host lost both), `vm-status` and, when the host lost libvirt's definition, `vm-define` from the definition and the record (as `start` does, with the same refusal when the definition has changed), then `vm-restore <vm> --state <file>`, which removes the state file. Records `running`. A VM that is not suspended refuses (3).
+
 `destroy`
 :   Allowed in every recorded state (who may run it is ctrl-exec's decision, ADR 0007). From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
     defined is tolerated), `vm-undefine`, `mirror-stop`; then
@@ -247,6 +253,17 @@ nothing). A node call that exits non-zero ends the run at once.
 
 `--vm` selects one VM (start, stop, status, console). `--allow-any-pool-name` (create,
 destroy) passes through to `HPS::Storage`: pools are named after the cluster.
+
+## Suspend and resume
+
+`hps-workload suspend <name> [--vm <vm>]` writes a running guest's memory and device state to a file on its compute host (`virsh save --running`) and stops it; `hps-workload resume <name> [--vm <vm>]` loads it back (`virsh restore`), and the guest carries on where it left off: a CPU job that was mid-computation continues, with open TCP connections timing out as they would in any pause. The use is a planned reboot of the compute host (an image update, maintenance) under a job that must not start over.
+
+- **Where the state is.** The compute host's pool, dataset `<pool>/enc/state`, file `/<pool>/enc/state/<vm>.save`. `vm-save` creates the dataset on first use under `<pool>/enc`, so it inherits the pool's encryption. The pool is the host's `storage_pool` identity, the same one the local disks use. A host with no pool of its own refuses `suspend` (3) with a message saying what to set. The state survives a reboot of the host (it is on the pool); it does not survive the loss of the pool.
+- **Size and time.** The file is about the guest's memory. A 40 GB guest takes about 10 minutes to save and about 10 minutes to restore on the lab pool; the guest is stopped for all of it. `vm-save` refuses (3) when the state dataset has less free space than the guest's memory, naming both figures. Run `suspend --dry-run` and check `zfs list <pool>/enc/state` first for a large guest.
+- **Mirrors stay assembled.** `suspend` stops nothing but the guest: a mirror stays assembled while the host is up, and its legs are not touched. The disks must not change while the guest is saved, or the restored memory disagrees with them. After a host reboot the md device is gone; `resume` assembles it again before restoring.
+- **A reboot of the host.** `suspend`, reboot, then `resume`. The definition the host lost is defined again from the record (the recorded MACs), exactly as `start` does after a reboot.
+- **While suspended.** `status` shows the VM as `suspended` with the state file, when it was saved and its size (`state_file`, `saved_at`, `size_bytes` in `status --json`; the node state is `shut off`). `start` and `stop` refuse and point to `resume`.
+- **`destroy` of a suspended workload** removes the state file too (`vm-save <vm> --state <file> --discard`), after the VM is stopped and undefined and before the zvols go.
 
 ## Resource limits
 
@@ -466,9 +483,9 @@ identity the IPS sees when the VM netboots. A `boot: disk` VM gets `macs` from
 since the re-define landed also has `"define": [...]`, the `vm-define`
 arguments `create` used, against which a re-define checks the definition.
 
-States. VM: `creating`, `defined`, `running`, `stopped`. Workload: `creating`
+States. VM: `creating`, `defined`, `running`, `stopped`, `suspended` (with `state_file`, `saved_at`, `size_bytes`). Workload: `creating`
 (an unfinished create; carries `done`, the finished step keys), `created`,
-`running`, `stopped`, or `partial` when the VMs differ. `start` and `stop` refuse (3) a workload still `creating` (finish it with `create --resume`, or remove it with `destroy`); a workload with no record
+`running`, `stopped`, `suspended`, or `partial` when the VMs differ. `start` and `stop` refuse (3) a workload still `creating` (finish it with `create --resume`, or remove it with `destroy`); a workload with no record
 is not found (4).
 
 ## Authorisation

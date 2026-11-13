@@ -23,12 +23,18 @@ Usage:
   hps-workload create  <name> [--resume] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload start   <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload stop    <name> [--vm <vm>] [--force] [--dry-run] [--json]
+  hps-workload suspend <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload resume  <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]   (per VM: its latest utilisation from the hypervisor)
   hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]
   hps-workload console <name> [--vm <vm>] [--lines N] [--dry-run] [--json]
   hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
   hps-workload show-definition <name>
+suspend saves each VM's memory to /<pool>/enc/state/<vm>.save on its compute host and
+stops it (a long job survives a planned host reboot); resume brings it back where it
+left off and removes the file. A 40 GB guest takes about 10 minutes each way. start and
+stop of a suspended VM refuse and point to resume; destroy removes the saved state.
 <name> is the workload: workloads/<name>.json under the cluster's config directory.
 create refuses a workload that already exists unless --resume (continue an
 unfinished create). destroy removes the instance (VMs, zvols, mirrors, record) and
@@ -92,6 +98,8 @@ sub render_status {
                 $u->{sampled_at}, map { $_ // '-' } @$u{qw(cpu_pct rss_mib mem_mib vcpus rd_bps wr_bps rx_bps tx_bps)});
         }
         elsif (defined $v->{utilisation_reason}) { $out .= "    utilisation: none ($v->{utilisation_reason})\n" }
+        $out .= sprintf("    suspended since %s: memory in %s (%s bytes)\n", $v->{saved_at} // '-', $v->{state_file} // '-', $v->{size_bytes} // '-')
+            if ($v->{recorded_state} // '') eq 'suspended';
         $out .= "    seed: $v->{seed}\n" if defined $v->{seed};
     }
     return $out;

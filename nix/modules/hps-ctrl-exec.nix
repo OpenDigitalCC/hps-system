@@ -130,6 +130,11 @@ in
       vm-disk-resize.options.profile = "node";
       vm-disk-hotplug.source = mkScript "vm-disk-hotplug" (scriptsDir + "/vm-disk-hotplug");
       vm-disk-hotplug.options.profile = "node";
+      # Suspend and resume: the guest's RAM to a file on the compute host's pool, and back.
+      vm-save.source = mkScript "vm-save" (scriptsDir + "/vm-save");
+      vm-save.options.profile = "node";
+      vm-restore.source = mkScript "vm-restore" (scriptsDir + "/vm-restore");
+      vm-restore.options.profile = "node";
       vm-status.source = mkScript "vm-status" (scriptsDir + "/vm-status");
       vm-status.options.profile = "node";
       vm-undefine.source = mkScript "vm-undefine" (scriptsDir + "/vm-undefine");

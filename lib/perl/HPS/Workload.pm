@@ -38,7 +38,7 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 # vm-define takes --disk 1..8 times.
 my $MAX_DISKS = 8;
 
-my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console);
+my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console suspend resume);
 my %TOP = map { $_ => 1 } qw(name project access vms);
 my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware seed
     cpu_weight cpu_max_pct mem_hard_limit_mib io_weight);
@@ -634,7 +634,7 @@ sub _vm_info ($self, $def, $vm) {
             specs => \@specs, mirrored => (@specs == 2 ? 1 : 0), (map { exists $d->{$_} ? ($_ => $d->{$_}) : () } qw(iops_max mbps_max)),
             device => (@specs == 2 ? "/dev/md/$mirror" : "/dev/zvol/$ds") };
     }
-    return { vm => $vm, name => $vm->{name}, host => $vm->{compute}, mac => $mac, pool => $pool, disks => \@disks,
+    return { vm => $vm, name => $vm->{name}, host => $vm->{compute}, mac => $mac, pool => $pool, has_pool => ($has_pool ? 1 : 0), disks => \@disks,
         # A thin compute host (every leg remote, no pool of its own) caches the
         # base image in RAM: it is read once, by vm-image-write (scale test
         # probes, 2026-11-12: "cannot create 's1/enc/images': no such pool").
@@ -866,6 +866,37 @@ sub _status_macs ($stdout, $vm) {
     return map { $m{$_} } sort { $a <=> $b } keys %m;
 }
 
+# vm-status, then vm-define when the compute host does not have the VM (see start).
+sub _define_if_missing ($self, $rec, $def, $vm, $in, $op = 'start') {
+    my $layout = $self->layout;
+    my @s;
+    my ($n, $host) = ($def->{name}, $vm->{compute});
+    my $vname = $vm->{name};
+    my $rv = $rec->{vms}{$vname};
+    my $macs = ref $rv eq 'HASH' && ref $rv->{macs} eq 'ARRAY' && @{ $rv->{macs} } ? [ @{ $rv->{macs} } ] : undef;
+    my $why = $self->_redefine_mismatch($rv, $vm, $in, $self->_define_args($layout, $vm, $in));
+    my $missing = 0;
+    my $keep_macs = sub ($r) {
+        my @m = _status_macs($r->{stdout}, $vname);
+        $self->_rec_update($n, sub ($x) { $x->{vms}{$vname}{macs} = [@m] }) if @m && $r->{rc} == 0;
+    };
+    push @s, _step($in->{mac}, 'vm-status', [$vname], ok_rc => [4], seen => sub ($r) {
+        $missing = $r->{rc} == 4 ? 1 : 0;
+        $keep_macs->($r) unless $missing || $macs;
+    });
+    my $only = "only if vm-status reports $vname not defined (its compute host rebooted)";
+    push @s, _step($in->{mac}, 'vm-define', $self->_define_args($layout, $vm, $in, $macs),
+        when => sub { $missing },
+        only => $only . ($macs ? '; with the recorded MACs' : '; no MACs recorded: libvirt makes new ones')
+            . (defined $why ? "; refused then: $why" : ''),
+        (defined $why ? (refuse => "$op: VM $vname is not defined on its compute host and cannot be re-defined: $why. "
+            . 'Put back the definition it was created with, or destroy and create the workload') : ()),
+        before => sub { $self->_log('notice', "$op $n: VM $vname is not defined on $host; re-defining it from the definition and the record") });
+    push @s, _step($in->{mac}, 'vm-status', [$vname], when => sub { $missing }, seen => $keep_macs,
+        only => "$only, and no MACs were recorded: records the new ones") unless $macs;
+    return @s;
+}
+
 # start: per VM, mirror-assemble (mirrored disks only), then vm-status
 # (read-only). A VM its compute host does not have defined (vm-status exit 4:
 # the node runs from RAM and lost libvirt's definitions in a reboot; the zvols
@@ -880,6 +911,7 @@ sub _steps_start ($self, $def, %a) {
     my $layout = $self->layout;
     my (@s, %vx);
     for my $vm ($self->_ordered($def, %a)) {
+        _refuse_suspended($rec, $vm->{name}, 'start');
         my $in = $self->_vm_info($def, $vm);
         # The compute host runs from RAM: a reboot lost its VXLAN links, and the
         # peers may have changed. Idempotent, so every start runs it.
@@ -888,29 +920,7 @@ sub _steps_start ($self, $def, %a) {
             push @s, _step($in->{mac}, 'mirror-assemble', [ $d->{mirror}, map { ('--leg', $_) } @{ $d->{specs} } ]);
         }
         my ($n, $host) = ($def->{name}, $vm->{compute});
-        my $vname = $vm->{name};
-        my $rv = $rec->{vms}{$vname};
-        my $macs = ref $rv eq 'HASH' && ref $rv->{macs} eq 'ARRAY' && @{ $rv->{macs} } ? [ @{ $rv->{macs} } ] : undef;
-        my $why = $self->_redefine_mismatch($rv, $vm, $in, $self->_define_args($layout, $vm, $in));
-        my $missing = 0;
-        my $keep_macs = sub ($r) {
-            my @m = _status_macs($r->{stdout}, $vname);
-            $self->_rec_update($n, sub ($x) { $x->{vms}{$vname}{macs} = [@m] }) if @m && $r->{rc} == 0;
-        };
-        push @s, _step($in->{mac}, 'vm-status', [$vname], ok_rc => [4], seen => sub ($r) {
-            $missing = $r->{rc} == 4 ? 1 : 0;
-            $keep_macs->($r) unless $missing || $macs;
-        });
-        my $only = "only if vm-status reports $vname not defined (its compute host rebooted)";
-        push @s, _step($in->{mac}, 'vm-define', $self->_define_args($layout, $vm, $in, $macs),
-            when => sub { $missing },
-            only => $only . ($macs ? '; with the recorded MACs' : '; no MACs recorded: libvirt makes new ones')
-                . (defined $why ? "; refused then: $why" : ''),
-            (defined $why ? (refuse => "start: VM $vname is not defined on its compute host and cannot be re-defined: $why. "
-                . 'Put back the definition it was created with, or destroy and create the workload') : ()),
-            before => sub { $self->_log('notice', "start $n: VM $vname is not defined on $host; re-defining it from the definition and the record") });
-        push @s, _step($in->{mac}, 'vm-status', [$vname], when => sub { $missing }, seen => $keep_macs,
-            only => "$only, and no MACs were recorded: records the new ones") unless $macs;
+        push @s, $self->_define_if_missing($rec, $def, $vm, $in);
         # The priority and role go to the node: hps-shutdown-storage stops its
         # guests in that order (docs/WORKLOADS.md "Stop order on a node").
         push @s, _step($in->{mac}, 'vm-start', [ $vm->{name}, '--priority', $vm->{priority},
@@ -926,9 +936,10 @@ sub _steps_start ($self, $def, %a) {
 }
 
 sub _steps_stop ($self, $def, %a) {
-    $self->_need_record($def->{name}, 'stop');
+    my $rec = $self->_need_record($def->{name}, 'stop');
     my @s;
     for my $vm (reverse $self->_ordered($def, %a)) {
+        _refuse_suspended($rec, $vm->{name}, 'stop');
         my $in = $self->_vm_info($def, $vm);
         # --force: a guest that cannot shut down (a root filesystem gone
         # read-only after a storage stall, 2026-11-13) is forced off after the
@@ -943,6 +954,80 @@ sub _steps_stop ($self, $def, %a) {
             });
         };
         push @s, @group;
+    }
+    return @s;
+}
+
+# A suspended VM is not running: start and stop would act on a guest that is
+# only a file; the way back is resume.
+sub _refuse_suspended ($rec, $vname, $op) {
+    my $rv = $rec->{vms}{$vname};
+    return unless ref $rv eq 'HASH' && ($rv->{state} // '') eq 'suspended';
+    _fail('refused', "$op: VM $vname is suspended (its memory is saved in " . ($rv->{state_file} // 'a state file')
+        . "); run resume to carry on where it left off, or destroy the workload to throw the saved state away");
+}
+
+# The guest-memory state file of a VM: /<pool>/enc/state/<vm>.save on the
+# compute host's pool (vm-save creates the dataset <pool>/enc/state on first use).
+sub _state_file ($self, $in, $op) {
+    _fail('refused', "$op: the compute host $in->{host} of VM $in->{name} has no storage pool of its own, so there is nowhere to keep the "
+        . 'saved memory. Give the host a pool (its storage_pool identity, hps-storage pool-create) or put a local disk leg of the VM on it, then run it again')
+        unless $in->{has_pool};
+    return "/$in->{pool}/enc/state/$in->{name}.save";
+}
+
+# suspend: per VM (consumers first, like stop), vm-save writes the guest's RAM
+# to <state file> and the VM leaves libvirt (the definition stays). Nothing else
+# stops: a mirror stays assembled while the host is up. The record becomes
+# suspended with state_file, saved_at and size_bytes (vm-save's last line).
+sub _steps_suspend ($self, $def, %a) {
+    my $rec = $self->_need_record($def->{name}, 'suspend');
+    my @s;
+    for my $vm (reverse $self->_ordered($def, %a)) {
+        _refuse_suspended($rec, $vm->{name}, 'suspend');
+        my $in = $self->_vm_info($def, $vm);
+        my $file = $self->_state_file($in, 'suspend');
+        my $n = $def->{name};
+        push @s, _step($in->{mac}, 'vm-save', [ $vm->{name}, '--state', $file ], after => sub ($r) {
+            my ($bytes) = ($r->{stdout} // '') =~ /^VM-SAVE \S+ \S+ ([0-9]+)\s*$/m;
+            $self->_rec_update($n, sub ($x) {
+                my $v = $x->{vms}{ $vm->{name} };
+                @$v{qw(state state_file saved_at)} = ('suspended', $file, $self->_stamp);
+                $v->{size_bytes} = defined $bytes ? $bytes + 0 : undef;
+                $x->{state} = _state_of($x);
+            });
+        });
+    }
+    return @s;
+}
+
+# resume: per VM (start order), what start does before vm-start (VXLAN links,
+# mirror-assemble, define when the host lost the definition), then vm-restore,
+# which removes the state file. A host that rebooted lost its md devices and
+# libvirt definitions; the state file is on its pool and survives.
+sub _steps_resume ($self, $def, %a) {
+    my $rec = $self->_need_record($def->{name}, 'resume');
+    my (@s, %vx);
+    for my $vm ($self->_ordered($def, %a)) {
+        my $rv = $rec->{vms}{ $vm->{name} };
+        _fail('refused', "resume: VM $vm->{name} is not suspended (state " . ($rv->{state} // 'unknown') . ')')
+            unless ref $rv eq 'HASH' && ($rv->{state} // '') eq 'suspended';
+        my $in = $self->_vm_info($def, $vm);
+        my $file = $rv->{state_file} // $self->_state_file($in, 'resume');
+        push @s, map { _step($in->{mac}, $_->{script}, $_->{args}) } $self->_vxlan_calls($vm, $in->{mac}, \%vx);
+        for my $d (grep { $_->{mirrored} } @{ $in->{disks} }) {
+            push @s, _step($in->{mac}, 'mirror-assemble', [ $d->{mirror}, map { ('--leg', $_) } @{ $d->{specs} } ]);
+        }
+        push @s, $self->_define_if_missing($rec, $def, $vm, $in, 'resume');
+        my ($n, $host) = ($def->{name}, $vm->{compute});
+        push @s, _step($in->{mac}, 'vm-restore', [ $vm->{name}, '--state', $file ], after => sub {
+            $self->_rec_update($n, sub ($x) {
+                my $v = $x->{vms}{ $vm->{name} };
+                @$v{qw(state last_owner resumed_at)} = ('running', $host, $self->_stamp);
+                delete @$v{qw(state_file saved_at size_bytes)};
+                $x->{state} = _state_of($x);
+            });
+        });
     }
     return @s;
 }
@@ -1012,6 +1097,9 @@ sub _steps_destroy ($self, $def, %a) {
             push @s, _step($in->{mac}, 'vm-stop', [ $vm->{name}, '--force' ], ok_rc => [4]),
                 _step($in->{mac}, 'vm-undefine', [ $vm->{name} ]);
         }
+        my $rv = $rec->{vms}{ $vm->{name} };
+        push @s, _step($in->{mac}, 'vm-save', [ $vm->{name}, '--state', $rv->{state_file}, '--discard' ])
+            if ref $rv eq 'HASH' && ($rv->{state} // '') eq 'suspended' && defined $rv->{state_file};
         push @s, map { _step($in->{mac}, 'mirror-stop', [ $_->{mirror} ]) }
             grep { $_->{mirrored} && $want->("mirror:$_->{mirror}", "mirror-stop of $_->{mirror}") } @{ $in->{disks} };
         push @zvols, map { [ $in->{mac}, $_->{dataset} ] }
@@ -1053,7 +1141,7 @@ sub _steps_grow_disk ($self, $def, %a) {
 
 my %STEPS = (create => '_steps_create', start => '_steps_start', stop => '_steps_stop',
     destroy => '_steps_destroy', status => '_steps_status', 'grow-disk' => '_steps_grow_disk',
-    console => '_steps_console');
+    console => '_steps_console', suspend => '_steps_suspend', resume => '_steps_resume');
 
 sub _prepare ($self, $op, $name, %a) {
     my $m = $STEPS{ $op // '' } // _fail('usage', 'unknown operation; one of: ' . join(', ', ops()));
@@ -1291,6 +1379,11 @@ sub _post_status ($self, $def, $out) {
             push @{ $v->{mirrors} }, { name => $r->{mirror}, state => (defined $l ? $l =~ s/^MIRROR \S+ //r : 'unknown'), rc => $r->{rc} };
         }
         if ($r->{rc} != 0) { $v->{ok} = 0; $out->{ok} = 0 }
+    }
+    for my $v (values %vms) {
+        my $rv = $rec->{vms}{ $v->{vm} };
+        next unless ($rv->{state} // '') eq 'suspended';
+        @$v{qw(state_file saved_at size_bytes)} = @$rv{qw(state_file saved_at size_bytes)};
     }
     # The seed reaches the guest once, at create: a definition whose seed
     # differs from the one written needs destroy and create to take effect.

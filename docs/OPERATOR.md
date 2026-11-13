@@ -225,6 +225,8 @@ hps-op --cred FILE hps-storage sch-001 measure --dry-run
 hps-op --cred FILE hps-storage sch-001 measure
 hps-op --cred FILE hps-storage sch-001 destroy s1
 hps-op --cred FILE hps-workload destroy t0 --dry-run
+hps-op --cred FILE hps-workload suspend t0 --dry-run
+hps-op --cred FILE hps-workload resume t0
 hps-op --cred FILE hps-onboard forget 525400000009
 hps-op --cred FILE hps-onboard assign 525400000009 --type TCH --profile CONVERGED --os x86_64:nixos:26.05 --pin PIN --host-key boot_bridge=br-prov
 hps-op --cred FILE hps-onboard set-key 525400000009 --host-key boot_bridge=br-prov
@@ -271,6 +273,16 @@ mounted disk, a disk with a holder or a member of an imported pool is refused
 even with `--wipe`. Run `--dry-run` first: it prints the node calls and
 changes nothing. A long `create` returns its output within the IPS agent's read
 timeout (`ips_admin_read_timeout`, default 900 s).
+
+### Suspending a workload across a host reboot
+
+`hps-workload suspend <name> [--vm <vm>]` saves each guest's memory to a file
+on its compute host's pool and stops it; `hps-workload resume <name> [--vm
+<vm>]` brings it back where it left off, also after the host rebooted. A long
+CPU job survives a planned reboot this way. `--dry-run` prints the node calls.
+A large guest takes minutes each way (about 10 minutes for 40 GB on the lab
+pool). `start` and `stop` of a suspended VM refuse and point to `resume`;
+`destroy` removes the saved state. See `docs/WORKLOADS.md` "Suspend and resume".
 
 ### Defining and creating a workload
 

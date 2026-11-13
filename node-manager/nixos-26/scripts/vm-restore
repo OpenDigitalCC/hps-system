@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# vm-restore - bring a saved guest back, running where it left off (resume).
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-restore <vm> --state <path>
+#
+#   <vm>      ^[a-z0-9][a-z0-9-]{0,31}$
+#   <path>    /<pool>/enc/state/<vm>.save, the file vm-save wrote
+#
+#   virsh restore <path>
+# loads the guest's memory and device state; it carries on running. The VM's
+# definition must exist (the caller defines it first when the host lost it in
+# a reboot), and its disks must be as they were when it was saved. On success
+# the state file is removed.
+#
+# Refused (3): no state file, the VM is already running. Not defined: 4.
+#
+# Last line: VM-RESTORE <vm> running
+# Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 a command failed.
+
+set -euo pipefail
+
+# Override for tests: HPS_STATE_ROOT, a prefix for every path the script touches.
+: "${HPS_STATE_ROOT:=}"
+
+VM=""
+STATE_FILE=""
+
+log() {
+  printf '[vm-restore] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-restore <vm> --state /<pool>/enc/state/<vm>.save
+Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 failed.
+USAGE
+}
+
+parse_args() {
+  [[ $# -eq 3 && "$2" == --state ]] || { usage; exit 2; }
+  VM=$1
+  STATE_FILE=$3
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+  [[ "$STATE_FILE" =~ ^/[a-z][a-z0-9_.-]*/enc/state/([a-z0-9][a-z0-9-]{0,31})\.save$ ]] \
+    || { log "--state must be /<pool>/enc/state/<vm>.save"; usage; exit 2; }
+  [[ "${BASH_REMATCH[1]}" == "$VM" ]] || { log "the state file must be named for the VM ($VM.save)"; usage; exit 2; }
+}
+
+main() {
+  local state file
+  parse_args "$@"
+  file="$HPS_STATE_ROOT$STATE_FILE"
+  [[ -f "$file" ]] || refuse "no state file $STATE_FILE: $VM was not saved here"
+  if ! state=$(run virsh -c qemu:///system domstate "$VM" 2> /dev/null); then
+    log "$VM is not defined: define it first (the caller does, from the workload definition)"
+    exit 4
+  fi
+  [[ "$state" != running ]] || refuse "$VM is already running"
+  run virsh -c qemu:///system restore "$file" >&2 || { log "virsh restore of $VM failed; $STATE_FILE is kept"; exit 1; }
+  run rm -f "$file"
+  log "$VM restored and running"
+  printf 'VM-RESTORE %s running\n' "$VM"
+}
+
+main "$@"
