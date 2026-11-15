@@ -226,7 +226,7 @@ nothing). A node call that exits non-zero ends the run at once.
     be refused) and are shown `(skipped, not needed)` when the VM was defined.
 
 `stop`
-:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped`. `vm-stop` waits for the guest's own shutdown and never forces; `stop --force` passes `vm-stop --force` (the graceful wait, then `virsh destroy`) for a guest that cannot shut down, such as one whose root filesystem went read-only.
+:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped` and `stopped_at`. A VM that is itself a cluster node (the builder) is then stopped, not down: `hps-monitor` does not call it while its record says `stopped` or `suspended` (docs/MONITORING.md). `vm-stop` waits for the guest's own shutdown and never forces; `stop --force` passes `vm-stop --force` (the graceful wait, then `virsh destroy`) for a guest that cannot shut down, such as one whose root filesystem went read-only.
 
 `suspend [--vm <vm>]`
 :   Saves each VM's memory to a file and stops it, so a planned host reboot does not end a long job (see "Suspend and resume"). Per VM, consumers first like `stop`: `vm-save <vm> --state /<pool>/enc/state/<vm>.save`. Nothing else stops. Records `suspended` with `state_file`, `saved_at` and `size_bytes`. A suspended VM refuses `suspend`, `start` and `stop` (3), each pointing to `resume`.

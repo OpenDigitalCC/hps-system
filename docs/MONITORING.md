@@ -220,7 +220,20 @@ hps-monitor: tick hosts=3 duration=1.9
   the IPS gave up pairing the host (registry `pair_failed_at`, ADR 0002
   amendment 2026-11-12). It is not paired, so it is not checked; the loop logs
   the line when it first sees it and then every 10 minutes.
-- `tick hosts=<n> duration=<s>`: one per run, so the cadence is visible.
+- `host=<fqdn> state=STOPPED workload=<name> vm=<vm> recorded state
+  <stopped|suspended>; not checked` (`info`): the node is a VM of a workload
+  (the builder), and the workload's record (cluster key `workload_<name>`)
+  says that VM is `stopped` or `suspended`: `hps-workload stop` or `suspend`
+  did it on purpose. Such a node is not called (a call to a node that is off
+  makes ctrl-exec log an error each time) and is not UNREACHABLE; the loop
+  logs the line when it first sees it and then every 10 minutes. The VM is
+  matched by the MACs in its record (`vms.<vm>.macs`) against the registry
+  hosts. Only a recorded `stopped` or `suspended` counts: with any other
+  state, no record, an unreadable record or no MACs the node is checked as
+  before, and after `hps-workload start` or `resume` it is a target again at
+  the next tick. `hps-monitor run --host <host>` calls a node it is given by
+  name whatever its record says.
+- `tick hosts=<n> duration=<s>`: one per run (the hosts called), so the cadence is visible.
 - `tick skipped missed=<k> run=<s>s interval=<n>s`: a run took longer than the
   interval; the ticks it covered are skipped (runs never overlap).
 - `disabled (monitor_interval_seconds=0)` and `enabled interval=<n>s`.
@@ -241,12 +254,15 @@ health badge's monitor row call it.
 - `last`: each host's newest result: the checks of its newest run (the lines
   before its newest `checks=<n> worst=<state>` line) with state, text and
   perfdata values, its utilisation and compound, and `unreachable` when a newer
-  `UNREACHABLE` or `PAIR_FAILED` line says it was not answered. Hosts with no
+  `UNREACHABLE` or `PAIR_FAILED` line says it was not answered, or `stopped`
+  and `stopped_at` (worst `STOPPED`) when a newer `STOPPED` line says it is a
+  VM of a stopped workload. Hosts with no
   line in the newest 15 minutes (or 3 intervals, when longer) are left out.
 - `series`: the host's utilisation per bucket of `--step` seconds (30 to 86400,
   default 300) over the last `--hours` (1 to 168, default 24), at most 10080
   buckets: the max of each utilisation and raw value within a bucket, the last
-  state of each check, and `_host` (the host's worst, or `UNREACHABLE`).
+  state of each check, and `_host` (the host's worst, `UNREACHABLE` or
+  `STOPPED`).
   Empty buckets are `null`. `series all` gives every host's compound only, for
   an overview in one call.
 - `ips` is the IPS itself (`ips.<domain>`, its `disk_resources` and `disk_log`

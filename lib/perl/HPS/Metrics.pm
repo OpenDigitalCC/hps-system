@@ -102,7 +102,7 @@ sub parse_perf ($text) {
 # parse_message($msg): the hps-monitor line as a record, or undef:
 #   {kind => check,  host, check, state, text, perf}
 #   {kind => summary, host, checks, worst}
-#   {kind => unreachable | pair_failed | reachable, host, text}
+#   {kind => unreachable | pair_failed | reachable | stopped, host, text}
 sub parse_message ($msg) {
     return undef unless defined $msg;
     my ($host, $rest) = $msg =~ /\Ahps-monitor: host=(\S+) (.*)\z/s or return undef;
@@ -114,7 +114,7 @@ sub parse_message ($msg) {
     if (my ($n, $worst) = $rest =~ /\Achecks=([0-9]+) worst=([A-Z_]+)/) {
         return { kind => 'summary', host => $host, checks => $n + 0, worst => $worst };
     }
-    if (my ($st, $text) = $rest =~ /\Astate=(UNREACHABLE|PAIR_FAILED|REACHABLE) ?(.*)\z/s) {
+    if (my ($st, $text) = $rest =~ /\Astate=(UNREACHABLE|PAIR_FAILED|REACHABLE|STOPPED) ?(.*)\z/s) {
         return { kind => lc $st, host => $host, text => $text };
     }
     return undef;
@@ -333,9 +333,12 @@ sub _iso ($e) { return strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $e) }
 
 # latest($name): {target, source, now, window, hosts => [{host, name, mac, ips?,
 # time, epoch, worst, checks => [{check, state, text, epoch, perf}], util,
-# compound, level, unreachable?, unreachable_at?}], in_compound, truncated}. A host's checks
+# compound, level, unreachable?, unreachable_at?, stopped?, stopped_at?}], in_compound,
+# truncated}. A host's checks
 # are those of its newest complete run (the lines before its newest summary
-# line); a newer UNREACHABLE or PAIR_FAILED line is given as unreachable.
+# line); a newer UNREACHABLE or PAIR_FAILED line is given as unreachable. A
+# STOPPED line (the node is a VM of a stopped workload: not called) newer than
+# both is given as stopped, worst STOPPED; the newest of the three kinds wins.
 sub latest ($self, $name) {
     my $t = $self->target($name);
     my $window = $self->{last_window} // do {
@@ -362,7 +365,10 @@ sub latest ($self, $name) {
         }
         elsif ($m->{kind} eq 'unreachable' || $m->{kind} eq 'pair_failed') {
             $s->{unreachable} //= { text => ($m->{kind} eq 'pair_failed' ? 'PAIR_FAILED ' : '') . $m->{text}, epoch => $e }
-                unless $s->{run};
+                unless $s->{run} || $s->{stopped};
+        }
+        elsif ($m->{kind} eq 'stopped') {
+            $s->{stopped} //= { text => $m->{text}, epoch => $e } unless $s->{run} || $s->{unreachable};
         }
         return 1;
     });
@@ -375,19 +381,20 @@ sub latest ($self, $name) {
             $u{$_} = _max($u{$_}, $cu->{$_}) for keys %$cu;
             $raw{$_} = $cr->{$_} for keys %$cr;
         }
-        my $epoch = _max($s->{epoch}, $s->{unreachable} ? $s->{unreachable}{epoch} : undef);
+        my $epoch = _max($s->{epoch}, $s->{unreachable} ? $s->{unreachable}{epoch} : undef, $s->{stopped} ? $s->{stopped}{epoch} : undef);
         my $cmp = compound(\%u);
         push @hosts, {
             %{ $self->_who($fqdn) },
             epoch    => $epoch,
             time     => _iso($epoch),
-            worst    => $s->{unreachable} ? 'UNREACHABLE' : $s->{worst} // 'UNKNOWN',
+            worst    => $s->{unreachable} ? 'UNREACHABLE' : $s->{stopped} ? 'STOPPED' : $s->{worst} // 'UNKNOWN',
             checks   => $s->{checks},
             util     => \%u,
             raw      => \%raw,
             compound => $cmp,
             level    => level($cmp),
             ($s->{unreachable} ? (unreachable => $s->{unreachable}{text}, unreachable_at => _iso($s->{unreachable}{epoch})) : ()),
+            ($s->{stopped} ? (stopped => $s->{stopped}{text}, stopped_at => _iso($s->{stopped}{epoch})) : ()),
         };
     }
     _fail(notfound => "no hps-monitor result for $t->{fqdn} in the newest ${window}s") if $t && !@hosts;
@@ -461,6 +468,7 @@ sub series ($self, $name, %raw) {
         }
         elsif ($m->{kind} eq 'summary') { ($state{_host} //= [])->[$b] //= $m->{worst} }
         elsif ($m->{kind} eq 'unreachable') { ($state{_host} //= [])->[$b] //= 'UNREACHABLE' }
+        elsif ($m->{kind} eq 'stopped') { ($state{_host} //= [])->[$b] //= 'STOPPED' }
         return 1;
     });
     my $pad = sub ($a) { $#$a = $n - 1; return $a };

@@ -12,6 +12,21 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A node of a stopped workload is stopped, not down (2026-11-15)
+
+- **Changed** `hps-monitor` does not call a node that is a VM of a workload
+  whose record says the VM is `stopped` or `suspended` (the builder after
+  `hps-workload stop builder`): no ctrl-exec error per call and no
+  `UNREACHABLE`. It logs `hps-monitor: host=<fqdn> state=STOPPED
+  workload=<name> vm=<vm> ...` at `info` when it first sees it and then every 10
+  minutes. After `start` or `resume` the node is a target again. Any other
+  recorded state, a missing or unreadable record, or a VM with no MACs
+  recorded leaves the node checked as before. New pure functions
+  `HPS::Monitor::stopped_hosts`, `workload_records` and `stopped_lines`.
+- **Changed** `hps-metrics last` gives such a host `worst` `STOPPED` with
+  `stopped` and `stopped_at`; `series` gives `STOPPED` in `_host`.
+- **Added** `hps-workload stop` records `stopped_at` for each VM it stops.
+
 ## Workload list, images, addresses (2026-11-13)
 
 - **Added** `hps-workload list [--project P] [--json]` (every recorded workload:

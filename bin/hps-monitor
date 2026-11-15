@@ -38,7 +38,9 @@ Usage:
   hps-monitor interval
 run checks every paired node (or the named hosts: MAC, registry HOSTNAME or FQDN)
 once, logs one line per check and one summary line per host to syslog and prints the
-same lines; a run of every node also checks the IPS's own resources and log
+same lines; a node that is a VM of a stopped or suspended workload is not called in
+a run of every node ("state=STOPPED workload=<name> ..."; a named --host is called);
+a run of every node also checks the IPS's own resources and log
 filesystems (host=ips.<domain>: disk_resources, disk_log; space and inodes); then
 "hps-monitor: tick hosts=<n> duration=<s>". Disk checks (the IPS's, and the nodes'
 disk_<mount>, disk_other and zpool_cap) are graded WARNING at monitor_disk_warn_pct
@@ -138,8 +140,14 @@ sub run_once {
     @THRESH = ($warn, $crit);
     emit('warning', "hps-monitor: $twarn") if defined $twarn && (!$memo || ($memo->{_twarn} // '') ne $twarn);
     $memo->{_twarn} = $twarn // '' if $memo;
+    my @stopped;
     if (!@hosts) {
         @hosts = HPS::Monitor::targets([ agent_names() ], $reg);
+        # A node that is a VM of a stopped or suspended workload is stopped, not
+        # down: it is not called (a named --host is: the operator asked).
+        my $st = HPS::Monitor::stopped_hosts($reg, HPS::Monitor::workload_records($reg));
+        @stopped = HPS::Monitor::stopped_lines($st, \@hosts, time, $memo);
+        @hosts = grep { !$st->{$_} } @hosts;
     } else {
         @hosts = map { resolve_name($reg, $_) } @hosts;
     }
@@ -199,6 +207,7 @@ sub run_once {
         my @checks = ips_checks($warn, $crit);
         emit(@$_) for HPS::Monitor::host_lines(ips_name($reg), { checks => \@checks }, time - $t1);
     }
+    emit(@$_) for @stopped;
     # Hosts the IPS gave up pairing are not targets (not paired): say so here.
     emit(@$_) for HPS::Monitor::pair_failed_lines($reg, time, $memo);
     emit('info', sprintf('hps-monitor: tick hosts=%d duration=%.1f', scalar @hosts, time - $t0));

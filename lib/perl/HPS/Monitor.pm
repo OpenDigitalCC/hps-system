@@ -287,6 +287,89 @@ sub pair_failed_lines ($reg, $now, $memo = undef, $every = 600) {
     return @out;
 }
 
+#--- nodes stopped on purpose (a node that is a workload VM) ------------------------
+# A node can itself be a VM of a workload (the builder). `hps-workload stop`
+# or `suspend` of that workload records the VM's state in the workload record
+# (cluster key workload_<name>: vms.<vm>.state, vms.<vm>.macs); the node is
+# then stopped, not down: hps-monitor does not call it (each call to a node
+# that is off makes ctrl-exec log an error) and logs a STOPPED line instead.
+
+my %STOPPED = (stopped => 1, suspended => 1);
+
+# workload_records($reg): {name => record} of the active cluster's workload
+# records. A record that cannot be read or is not an object is left out (its
+# VMs are then checked as before); the _destroyed notes are not records.
+sub workload_records ($reg) {
+    my %out;
+    my $c = eval { $reg->active_cluster } // return \%out;
+    for my $key (eval { $reg->cluster_list($c) }) {
+        my ($name) = $key =~ /\Aworkload_([a-z][a-z0-9-]{0,31})\z/ or next;
+        my $rec = eval { $reg->cluster_get_json($c, $key) };
+        $out{$name} = $rec if ref $rec eq 'HASH';
+    }
+    return \%out;
+}
+
+# stopped_hosts($reg, $records): {fqdn => {workload, vm, state}}: the registry
+# hosts that are a VM of a workload whose record says the VM is stopped or
+# suspended. $records: {name => record} (workload_records). A VM's MACs
+# (vms.<vm>.macs, as vm-define reported them) are matched to registry hosts
+# (resolve_mac: a host key or one of a host's recorded MACs). Only a recorded
+# state of stopped or suspended counts: a record that is missing or
+# unreadable, a VM with no state, no macs, or a MAC that is no registry host
+# with a HOSTNAME gives nothing, and a host that any record names with
+# another state (running, creating, ...) is never stopped.
+sub stopped_hosts ($reg, $records) {
+    my (%out, %live);
+    return \%out unless ref $records eq 'HASH';
+    for my $name (sort keys %$records) {
+        my $rec = $records->{$name};
+        next unless ref $rec eq 'HASH' && ref $rec->{vms} eq 'HASH';
+        for my $vm (sort keys %{ $rec->{vms} }) {
+            my $v = $rec->{vms}{$vm};
+            next unless ref $v eq 'HASH' && ref $v->{macs} eq 'ARRAY';
+            my $state = defined $v->{state} && !ref $v->{state} ? $v->{state} : '';
+            for my $raw (@{ $v->{macs} }) {
+                next unless defined $raw && !ref $raw;
+                my $mac = eval { $reg->resolve_mac($raw) } // next;
+                my $f = eval { $reg->fqdn($mac) } // next;
+                if ($STOPPED{$state}) { $out{$f} //= { workload => $name, vm => $vm, state => $state } }
+                else { $live{$f} = 1 }
+            }
+        }
+    }
+    delete @out{ keys %live };
+    return \%out;
+}
+
+# stopped_lines($stopped, $hosts, $now, $memo, $every): one info line for each
+# of @$hosts (the targets) that is in $stopped (stopped_hosts):
+# "hps-monitor: host=<fqdn> state=STOPPED workload=<name> vm=<vm> recorded
+# state <stopped|suspended>; not checked". With a memo (the loop) a host is
+# logged when first seen stopped and then once every $every seconds (600 by
+# default); what the memo holds of the host as unreachable is dropped, and a
+# host no longer stopped is forgotten, so it is a normal target again and a
+# later stop is logged at once.
+sub stopped_lines ($stopped, $hosts, $now, $memo = undef, $every = 600) {
+    my @out;
+    my %is;
+    for my $host (@$hosts) {
+        my $s = $stopped->{$host} or next;
+        next if $is{$host}++;
+        if ($memo) {
+            delete $memo->{$host};
+            my $m = $memo->{"stopped:$host"};
+            next if defined $m && $now - $m < $every;
+            $memo->{"stopped:$host"} = $now;
+        }
+        push @out, [ 'info', "hps-monitor: host=$host state=STOPPED workload=$s->{workload} vm=$s->{vm} recorded state $s->{state}; not checked" ];
+    }
+    if ($memo) {
+        delete @{$memo}{ grep { /\Astopped:(.+)\z/ && !$stopped->{$1} } keys %$memo };
+    }
+    return @out;
+}
+
 # targets($agents, $registry): the paired nodes to check: agent names known to
 # the dispatcher that are also hosts of the registry (by FQDN). The IPS and
 # anything else that is not a registered host is never a target.

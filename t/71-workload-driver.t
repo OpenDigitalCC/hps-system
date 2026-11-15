@@ -115,6 +115,8 @@ my $f = StorageFixture::setup_workload();
     is_deeply(\@c, [ [ 'vm-stop', 't0-db' ], [ 'mirror-stop', 't0-db-root' ] ], 'stop --vm: vm-stop then mirror-stop, that VM only');
     $rec = rec($f, 't0');
     is($rec->{vms}{'t0-db'}{state}, 'stopped', 'registry: vm stopped');
+    like($rec->{vms}{'t0-db'}{stopped_at}, qr/UTC$/, 'registry: stopped_at');
+    ok(!exists $rec->{vms}{'t0-app'}{stopped_at}, 'registry: the VM still running has no stopped_at');
     is($rec->{state}, 'partial', 'registry: one VM running, one stopped = partial');
 
     $f->{ce}{calls} = [];

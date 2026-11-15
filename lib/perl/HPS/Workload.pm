@@ -970,7 +970,7 @@ sub _steps_stop ($self, $def, %a) {
         my $n = $def->{name};
         $group[-1]{after} = sub {
             $self->_rec_update($n, sub ($r) {
-                $r->{vms}{ $vm->{name} }{state} = 'stopped';
+                @{ $r->{vms}{ $vm->{name} } }{qw(state stopped_at)} = ('stopped', $self->_stamp);
                 $r->{state} = _state_of($r);
             });
         };
