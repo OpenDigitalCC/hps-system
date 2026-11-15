@@ -312,9 +312,21 @@ The options are common. `--lines` is 1 to 500, default 50, newest last.
 `2d`); rotated and compressed files are read as far back as it asks. `--grep` is
 one word, case-insensitive. `--min-level warning` keeps the warnings and errors,
 `--min-level error` the errors; `--lines` then counts the lines that pass (the
-browser's "Recent log" opens on this). A call reads at most 64 MiB of log
-(`truncated` says when it stopped there); of a gzipped file the newest 64 MiB
-are read.
+browser's "Recent log" opens on this).
+
+Newest first. `--lines N` without `--since` is the newest N matching lines, and it
+is found without reading the whole log: each source (an address directory, `ips/`,
+`ips/hps/`, `ips/dnsmasq-dhcp/`, a view) is read newest file first and from the end of
+each file backwards, and stops at N. With `--grep` a block of the file that holds
+no such word is skipped without being split into lines. The read of each source
+has a budget of its own of 64 MiB (of a gzipped file the newest 64 MiB are read),
+so the large day file of one source (the IPS's own lines, tens of MiB) cannot use
+up the budget the DHCP leases are searched with: `hps-log ips --lines 200 --grep
+DHCPACK`, the call the browser makes, returns the newest 200 leases. When a source
+reaches its budget before it has N lines, `truncated` is true and `scanned_back_to`
+(also the text line `# stopped early: the scan limit was reached; searched back to
+<time>`) says how far back the read got: every line newer than that time was searched
+in every source, older lines were not. A narrower `--since` or `--grep` reads less.
 
 `level` (error, warning, info) of a line is read from the text: the day files keep
 no syslog priority. An event line says its own: urgent is error, warning is

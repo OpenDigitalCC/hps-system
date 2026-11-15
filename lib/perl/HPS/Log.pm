@@ -24,6 +24,7 @@ no warnings 'experimental::signatures';
 
 use Fcntl qw(SEEK_SET);
 use JSON::PP ();
+use List::Util ();
 use Time::Local qw(timegm);
 use POSIX qw(strftime);
 use HPS::ClusterConfig ();
@@ -33,7 +34,7 @@ use HPS::Registry ();
 use constant DEFAULT_LINES  => 50;
 use constant MAX_LINES      => 500;
 use constant MAX_SINCE      => 43200;              # minutes (30 days)
-use constant MAX_SCAN_BYTES => 64 * 1024 * 1024;   # per call, over all files
+use constant MAX_SCAN_BYTES => 64 * 1024 * 1024;   # per source (a host address, ips/, ips/hps/, a view), over its files
 use constant BLOCK          => 65536;
 use constant GZ_WINDOW      => 64 * 1024 * 1024;   # of a .gz file, the newest bytes kept in memory
 use constant ATTENTION_SINCE => 60;                # minutes: longer than the emitters' reminder (50 min)
@@ -233,10 +234,14 @@ sub view_files ($log_dir, $name) {
     return @out;
 }
 
-# _each_line_backwards($file, $cb): calls $cb->($line) for each line, last line
-# first, until $cb returns false or the call's byte budget is spent. Returns
-# false when it stopped early (the caller stops reading older files too).
-sub _each_line_backwards ($self, $file, $cb) {
+# _each_line_backwards($file, $cb, $needle, $epoch_of): calls $cb->($line) for each line,
+# last line first, until $cb returns false or the byte budget is spent. Returns false when
+# it stopped early (the caller stops reading older files too).
+# $needle (lower case): a block that holds no such text has no line that can match, so its
+# lines are not split or parsed (a grep over a day file of many MiB); of such a block
+# $epoch_of->($line) reads the time of one line, so that the caller can say how far back the
+# scan got. The caller leaves it out when it stops at a time (--since).
+sub _each_line_backwards ($self, $file, $cb, $needle = undef, $epoch_of = undef) {
     return $self->_each_line_backwards_gz($file, $cb) if $file =~ /\.gz\z/;
     my $fh;
     unless (open($fh, '<:raw', $file)) {
@@ -253,6 +258,17 @@ sub _each_line_backwards ($self, $file, $cb) {
         my $got = read($fh, my $buf, $len) // 0;
         $self->{scanned} += $got;
         $buf .= $tail;
+        if (defined $needle && index(lc $buf, $needle) < 0) {
+            # no line of this block can match: only the cut first line goes on to the next block
+            my $nl = index($buf, "\n");
+            if ($nl >= 0 && $epoch_of) {
+                my $end = index($buf, "\n", $nl + 1);
+                my $e = $epoch_of->($end >= 0 ? substr($buf, $nl + 1, $end - $nl - 1) : substr($buf, $nl + 1));
+                $self->{back_epoch} = $e if defined $e;
+            }
+            $tail = $pos > 0 ? ($nl >= 0 ? substr($buf, 0, $nl) : $buf) : '';
+            next;
+        }
         my @lines = split /\n/, $buf, -1;
         $tail = $pos > 0 ? shift @lines : '';
         for my $l (reverse @lines) {
@@ -348,18 +364,27 @@ sub _matches ($e, $opt) {
 sub _collect ($self, $files, $parse, $source, $opt, $keep = undef) {
     my @out;
     my $cutoff = defined $opt->{since} ? $self->_now - $opt->{since} * 60 : undef;
+    # One byte budget per source: the big day file of one source (the IPS's own lines) must
+    # not use up the budget the others (the DHCP leases) are searched with.
+    @$self{qw(scanned budget_spent back_epoch)} = (0, 0, undef);
+    # The word is looked for in the block first, unless it could match the redaction marker
+    # (--grep is matched after redaction, so "redacted" finds lines whose text is withheld).
+    my $needle = defined $opt->{grep} && !defined $cutoff && index('[redacted]', lc $opt->{grep}) < 0 ? lc $opt->{grep} : undef;
     for my $f (@$files) {
         my ($path, @ym) = @$f;
         my $more = $self->_each_line_backwards($path, sub ($line) {
             my $rec = $parse->($line, @ym) or return 1;
+            $self->{back_epoch} = $rec->{epoch};
             return 0 if defined $cutoff && $rec->{epoch} < $cutoff;
             return 1 if $keep && !$keep->($rec);
             my $e = _entry($rec, $source);
             push @out, $e if _matches($e, $opt);
             return @out < $opt->{lines};
-        });
+        }, $needle, sub ($line) { my $r = $parse->($line, @ym); return $r ? $r->{epoch} : undef });
         last unless $more;
     }
+    # Stopped for want of budget before N lines were found: remember how far back it got.
+    push @{ $self->{truncated_at} }, ($self->{back_epoch} // $self->_now) if $self->{budget_spent};
     return @out;
 }
 
@@ -589,13 +614,17 @@ sub attention ($self, %raw) {
 
 sub _result ($self, $head, $sources, $opt, @lists) {
     my @lines = _merge($opt->{lines}, @lists);
+    my $cut = delete $self->{truncated_at};
     return {
         %$head,
         sources   => $sources,
         lines     => \@lines,
         count     => scalar @lines,
         redacted  => scalar(grep { $_->{redacted} } @lines),
-        truncated => $self->{budget_spent} ? JSON::PP::true() : JSON::PP::false(),
+        truncated => $cut && @$cut ? JSON::PP::true() : JSON::PP::false(),
+        # of the sources that ran out of budget, the newest point they reached: every line
+        # newer than this was searched in every source
+        ($cut && @$cut ? (scanned_back_to => _iso(List::Util::max(@$cut))) : ()),
         limit     => $opt->{lines},
         (defined $opt->{since} ? (since_minutes => $opt->{since}) : ()),
         (defined $opt->{grep}  ? (grep => $opt->{grep}) : ()),

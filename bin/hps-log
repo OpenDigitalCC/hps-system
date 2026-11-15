@@ -38,7 +38,11 @@ host: the newest lines the IPS received from the host, from every address the
   merged by time.
 ips: the IPS's own lines: ips/<date>.log, ips/hps/<date>.log and
   ips/dnsmasq-dhcp/<date>.log (hps-monitor's per-check results left out).
-  --lines N        how many lines, newest last (default 50, at most 500)
+  --lines N        how many lines, newest last (default 50, at most 500). Without
+                   --since the newest N matching lines are found: the newest file
+                   is read first, from its end backwards, and the read stops at N
+                   (a byte limit applies to each source; if it is reached the read
+                   says how far back it got)
   --since T        only lines of the last T: MINUTES (1 to 43200), or a number
                    with m, h or d (30m, 1h, 2d). Rotated and compressed files
                    are read as far back as that.
@@ -49,7 +53,8 @@ ips: the IPS's own lines: ips/<date>.log, ips/hps/<date>.log and
   --json           {target, host, mac, addresses, sources, lines:[{time, epoch,
                    host, tag, message, level, source; of an event line also pri,
                    kind, subject, state, text}], count, redacted, truncated,
-                   limit, and since_minutes, grep, min_level when given};
+                   limit, scanned_back_to when the scan limit was reached, and since_minutes,
+                   grep, min_level when given};
                    attention: {status, window_minutes, events, counts,
                    problems, more, newest, reason}
 A line that names a secret (a word matching the cluster-config secret-name
@@ -78,7 +83,7 @@ sub render {
             $out .= sprintf("%s %-7s %s %s: %s\n", $l->{time}, $l->{level}, $l->{host}, $l->{tag}, $l->{message});
         }
     }
-    $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
+    $out .= "# stopped early: the scan limit was reached" . (defined $r->{scanned_back_to} ? "; searched back to $r->{scanned_back_to}, older lines were not read" : '') . "\n" if $r->{truncated};
     $out .= '# could not read: ' . join(', ', map { s{.*/}{}r } @{ $r->{unreadable} }) . "\n" if @{ $r->{unreadable} // [] };
     return $out;
 }
