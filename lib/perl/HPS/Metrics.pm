@@ -4,7 +4,8 @@ package HPS::Metrics;
 # utilisation series bucketed in time.
 #
 # Sources, the first that exists:
-#   <log>/metrics.log         the lab collector's file (lab/syslog-lab.pl):
+#   <log>/metrics.log         the IPS's rsyslog view (docs/LOGGING.md), and its rotated
+#                             files metrics-<date>.log[.gz] (hps-log-rotate):
 #                             "<rfc3339> metric <syslog host> <tag> <msg>"; on a
 #                             collector it also holds the lines forwarded from
 #                             inner IPSs, which are left out (see own hosts)
@@ -105,6 +106,7 @@ sub parse_perf ($text) {
 #   {kind => unreachable | pair_failed | reachable | stopped, host, text}
 sub parse_message ($msg) {
     return undef unless defined $msg;
+    $msg =~ s/\AHPS-(?:EVENT|ALERT) pri=\S+ kind=\S+ subject=\S+ state=\S+ //;    # a marked host-state line (HPS::Monitor::mark): the line after the marker
     my ($host, $rest) = $msg =~ /\Ahps-monitor: host=(\S+) (.*)\z/s or return undef;
     if (my ($check, $state, $tail) = $rest =~ /\Acheck=(\S+) state=([A-Z_]+) ?(.*)\z/s) {
         my ($text, $perf) = split / \| /, $tail, 2;
@@ -257,9 +259,9 @@ sub own ($self, $fqdn) {
 
 # source(): (name, [[path, year, month], ...] newest first, parser).
 sub source ($self) {
-    my $m = $self->log_dir . '/metrics.log';
-    if (-f $m) {
-        return ('metrics.log', [ [$m] ], sub ($l, @x) {
+    my @m = HPS::Log::view_files($self->log_dir, 'metrics');
+    if (@m) {
+        return ('metrics.log', \@m, sub ($l, @x) {
             my $r = HPS::Log::parse_event($l) or return undef;
             return $r->{event} eq 'metric' ? $r : undef;
         });

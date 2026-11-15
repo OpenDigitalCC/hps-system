@@ -5,10 +5,15 @@ package HPS::Log;
 #   <log>/<sender ip>/<YYYY-MM-DD>.log    every remote sender, one dir per address
 #   <log>/ips/<YYYY-MM-DD>.log            the IPS's own messages (not a listed service)
 # in the format "%TIMESTAMP% %fromhost-ip% [%HOSTNAME%] %syslogtag% %msg%", and
-# the lab's collector adds <log>/events.log ("<rfc3339> <event> <host> <tag>
-# <msg>", lab/syslog-lab.pl). This module finds the newest lines of a host (all
-# the addresses the registry knows for it) or of the IPS, newest last, and
-# never returns the text of a line that looks like it carries a secret.
+# three views beside that tree: <log>/events.log (the event lines, HPS::Event),
+# <log>/audit.log (ctrl-exec and operator-call records) and <log>/metrics.log
+# (hps-monitor's results). hps-log-rotate renames a view to <name>-<date>.log
+# each day and compresses older files (.gz); every read here follows the
+# rotated and compressed files. This module finds the newest lines of a host
+# (all the addresses the registry knows for it), of the IPS, of the events or
+# of the audit view, newest last, answers "is anything wrong" from the events
+# (attention), and never returns the text of a line that looks like it carries
+# a secret.
 #
 # Nothing here writes, and no path is built from caller text: an address is a
 # dotted IPv4 and a file name is a date.
@@ -22,6 +27,7 @@ use JSON::PP ();
 use Time::Local qw(timegm);
 use POSIX qw(strftime);
 use HPS::ClusterConfig ();
+use HPS::Event ();
 use HPS::Registry ();
 
 use constant DEFAULT_LINES  => 50;
@@ -29,6 +35,9 @@ use constant MAX_LINES      => 500;
 use constant MAX_SINCE      => 43200;              # minutes (30 days)
 use constant MAX_SCAN_BYTES => 64 * 1024 * 1024;   # per call, over all files
 use constant BLOCK          => 65536;
+use constant GZ_WINDOW      => 64 * 1024 * 1024;   # of a .gz file, the newest bytes kept in memory
+use constant ATTENTION_SINCE => 60;                # minutes: longer than the emitters' reminder (50 min)
+use constant ATTENTION_ROWS  => 20;                # problems listed (a screenful)
 
 {
     package HPS::Log::Error;
@@ -44,7 +53,7 @@ sub _fail ($kind, $msg) { die HPS::Log::Error->new($kind, $msg) }
 my %MON = (Jan => 1, Feb => 2, Mar => 3, Apr => 4, May => 5, Jun => 6,
            Jul => 7, Aug => 8, Sep => 9, Oct => 10, Nov => 11, Dec => 12);
 my $IP_RE   = qr/\A(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\z/;
-my $DAY_RE  = qr/\A([0-9]{4})-([0-9]{2})-([0-9]{2})\.log\z/;
+my $DAY_RE  = qr/\A([0-9]{4})-([0-9]{2})-([0-9]{2})\.log(\.gz)?\z/;
 my $WORD_RE = qr/\A[A-Za-z0-9_.,:=@+-]{1,64}\z/;
 
 #--- the secret rule -------------------------------------------------------------
@@ -76,6 +85,9 @@ my $WARN_RE = qr/(?:(?<!\b0 )\b(?:warn|warning|degraded|timeout|retrying)\b(?!=0
 
 sub level ($message, $event = '') {
     $event //= '';
+    if (my $ev = HPS::Event::parse($message)) {    # an event line says its own priority
+        return $ev->{pri} eq 'urgent' ? 'error' : $ev->{pri} eq 'warning' ? 'warning' : 'info';
+    }
     return 'error'   if $event eq 'error' || $message =~ $ERR_RE;
     return 'warning' if $event eq 'warning' || $message =~ $WARN_RE;
     return 'info';
@@ -112,19 +124,57 @@ sub parse_syslog ($line, $fy, $fm) {
     return { epoch => $t, from => $ip, host => $host, tag => $tag, message => $msg, event => '' };
 }
 
-# parse_event($line): one line of events.log; undef when not in its format.
-sub parse_event ($line) {
-    my ($y, $mo, $d, $hh, $mm, $ss, $tz, $ev, $host, $rest) =
-        $line =~ /\A([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2}) (\S+) (\S+) ?(.*)\z/s
-        or return undef;
+# _rfc3339($line): (epoch, rest of the line) of a line that starts with an
+# RFC 3339 time; () when it does not.
+sub _rfc3339 ($line) {
+    my ($y, $mo, $d, $hh, $mm, $ss, $tz, $rest) =
+        $line =~ /\A([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2}) (.*)\z/s
+        or return ();
     my $t = eval { timegm($ss, $mm, $hh, $d, $mo - 1, $y) };
-    return undef unless defined $t;
+    return () unless defined $t;
     if ($tz =~ /\A([+-])([0-9]{2}):([0-9]{2})\z/) {
         my $off = ($2 * 3600 + $3 * 60) * ($1 eq '+' ? 1 : -1);
         $t -= $off;
     }
-    my ($tag, $msg) = _split_tag($rest);
-    return { epoch => $t, from => '', host => $host, tag => $tag, message => $msg, event => $ev };
+    return ($t, $rest);
+}
+
+# The event words of the lab collector's old events.log and metrics.log
+# ("<rfc3339> <event> <host> <tag> <msg>", lab/syslog-lab.pl). metrics.log keeps
+# that form (event "metric").
+my %LAB_EVENT = map { $_ => 1 } qw(dhcp ipxe boot up init pair held job bmc node storage down off metric error);
+
+# parse_event($line): one line of events.log or metrics.log; undef when in
+# neither form. An event line (docs/LOGGING.md) is
+#   <rfc3339> <host> HPS-EVENT|HPS-ALERT pri= kind= subject= state= <text>
+# and gives event "event", ev (HPS::Event::parse), message (the line from its
+# marker on) and tag (of a line rsyslog derived: the tag of the line it was
+# derived from, the first word of the text). A line of the lab collector's old
+# form gives its event word, and never ev.
+sub parse_event ($line) {
+    my ($t, $rest) = _rfc3339($line) or return undef;
+    my ($w1, $after) = $rest =~ /\A(\S+) ?(.*)\z/s or return undef;
+    if ($LAB_EVENT{$w1}) {
+        my ($host, $body) = $after =~ /\A(\S+) ?(.*)\z/s or return undef;
+        my ($tag, $msg) = _split_tag($body);
+        return { epoch => $t, from => '', host => $host, tag => $tag, message => $msg, event => $w1 };
+    }
+    my $at = index($after, 'HPS-');
+    return undef if $at < 0;
+    my $msg = substr($after, $at);
+    $msg =~ s/#033\[[0-9;]*[A-Za-z]//g;
+    my $ev = HPS::Event::parse($msg) or return undef;
+    my $tag = $ev->{text} =~ /\A(\S+?)(?:\[[0-9]+\])?: / ? $1 : '';
+    return { epoch => $t, from => '', host => $w1, tag => $tag, message => $msg, event => 'event', ev => $ev };
+}
+
+# parse_audit($line): one line of audit.log
+# ("<rfc3339> <sender ip> [<host>] <tag> <msg>"); undef when not in its form.
+sub parse_audit ($line) {
+    my ($t, $rest) = _rfc3339($line) or return undef;
+    my ($ip, $host, $body) = $rest =~ /\A(\S+) \[([^\]]*)\] ?(.*)\z/s or return undef;
+    my ($tag, $msg) = _split_tag($body);
+    return { epoch => $t, from => $ip, host => $host, tag => $tag, message => $msg, event => '' };
 }
 
 #--- reading ---------------------------------------------------------------------------
@@ -136,6 +186,7 @@ sub new ($class, %opt) {
         now      => $opt{now},
         max_scan => $opt{max_scan} // MAX_SCAN_BYTES,    # bytes per call (HPS::Metrics reads more)
         scanned  => 0,
+        gz_window => $opt{gz_window},
     }, $class;
     return $self;
 }
@@ -144,24 +195,54 @@ sub log_dir ($self) { return $self->{log_dir} }
 sub _now ($self)    { return $self->{now} // time }
 sub registry ($self) { return $self->{registry} //= HPS::Registry->new }
 
-# _day_files($dir): [path, year, month] of the <date>.log files, newest first.
+# _day_files($dir): [path, year, month] of the <date>.log and <date>.log.gz
+# files, newest first. Of a day that has both (hps-log-rotate is compressing
+# it) the plain file is taken.
 sub _day_files ($dir) {
     opendir(my $dh, $dir) or return ();
-    my @f;
+    my %f;
     for my $n (readdir $dh) {
         my @ymd = $n =~ $DAY_RE or next;
         next unless -f "$dir/$n";
-        push @f, [ "$dir/$n", $ymd[0] + 0, $ymd[1] + 0, "$ymd[0]$ymd[1]$ymd[2]" ];
+        my $day = "$ymd[0]$ymd[1]$ymd[2]";
+        next if $f{$day} && $ymd[3];    # the plain file is already there
+        $f{$day} = [ "$dir/$n", $ymd[0] + 0, $ymd[1] + 0 ];
     }
     closedir $dh;
-    return map { [ @$_[0 .. 2] ] } sort { $b->[3] cmp $a->[3] } @f;
+    return map { $f{$_} } sort { $b cmp $a } keys %f;
+}
+
+# view_files($log_dir, $name): [path] of a view (events, audit, metrics),
+# newest first: <name>.log, then the rotated <name>-<date>[.<n>].log[.gz]
+# (hps-log-rotate). Of a rotated file that is there plain and compressed the
+# plain one is taken.
+sub view_files ($log_dir, $name) {
+    my @out;
+    push @out, ["$log_dir/$name.log"] if -f "$log_dir/$name.log";
+    opendir(my $dh, $log_dir) or return @out;
+    my %f;
+    for my $n (readdir $dh) {
+        my ($y, $m, $d, $seq, $gz) = $n =~ /\A\Q$name\E-([0-9]{4})-([0-9]{2})-([0-9]{2})(?:\.([0-9]{1,3}))?\.log(\.gz)?\z/ or next;
+        next unless -f "$log_dir/$n";
+        my $k = sprintf '%s%s%s.%03d', $y, $m, $d, $seq // 0;
+        next if $f{$k} && $gz;
+        $f{$k} = "$log_dir/$n";
+    }
+    closedir $dh;
+    push @out, map { [ $f{$_} ] } sort { $b cmp $a } keys %f;
+    return @out;
 }
 
 # _each_line_backwards($file, $cb): calls $cb->($line) for each line, last line
 # first, until $cb returns false or the call's byte budget is spent. Returns
 # false when it stopped early (the caller stops reading older files too).
 sub _each_line_backwards ($self, $file, $cb) {
-    open(my $fh, '<:raw', $file) or return 1;
+    return $self->_each_line_backwards_gz($file, $cb) if $file =~ /\.gz\z/;
+    my $fh;
+    unless (open($fh, '<:raw', $file)) {
+        push @{ $self->{unreadable} }, $file if -e $file;    # there, and not readable: said, never "no lines"
+        return 1;
+    }
     my $pos = -s $fh // 0;
     my $tail = '';
     while ($pos > 0) {
@@ -183,6 +264,52 @@ sub _each_line_backwards ($self, $file, $cb) {
     return 1;
 }
 
+# _each_line_backwards_gz($file, $cb): the same for a compressed file. gzip has
+# no way to read from the end, so the file is read through once and its newest
+# bytes are kept (what is left of the call's budget, at most GZ_WINDOW); when
+# the file holds more, its older lines are not read and the call is truncated.
+sub _each_line_backwards_gz ($self, $file, $cb) {
+    my $left = $self->{max_scan} - $self->{scanned};
+    if ($left <= 0) { $self->{budget_spent} = 1; return 0 }
+    my $cap = $self->{gz_window} // GZ_WINDOW;
+    my $window = $left < $cap ? $left : $cap;
+    require IO::Uncompress::Gunzip;
+    my $z = IO::Uncompress::Gunzip->new($file, MultiStream => 1, Transparent => 0);
+    unless ($z) {
+        push @{ $self->{unreadable} }, $file if -e $file;
+        return 1;
+    }
+    my (@chunks, $dropped);
+    my $kept = 0;
+    while (1) {
+        my $got = $z->read(my $buf, BLOCK);
+        if (!defined $got || $got < 0) {    # a damaged file: what was read stands, and it is said
+            push @{ $self->{unreadable} }, $file;
+            last;
+        }
+        last if $got == 0;
+        push @chunks, $buf;
+        $kept += $got;
+        while (@chunks > 1 && $kept - length($chunks[0]) >= $window) {
+            $kept -= length(shift @chunks);
+            $dropped = 1;
+        }
+    }
+    $z->close;
+    my $text = join '', @chunks;
+    @chunks = ();
+    if (length $text > $window) { $text = substr($text, -$window); $dropped = 1 }
+    $self->{scanned} += length $text;
+    my @lines = split /\n/, $text, -1;
+    shift @lines if $dropped;    # the first kept line may be cut
+    for my $l (reverse @lines) {
+        next unless length $l;
+        return 0 unless $cb->($l);
+    }
+    if ($dropped) { $self->{budget_spent} = 1; return 0 }
+    return 1;
+}
+
 # _entry($rec, $source): the record as the caller sees it, redacted.
 sub _entry ($rec, $source) {
     my $raw = join ' ', $rec->{host}, $rec->{tag}, $rec->{message};
@@ -196,6 +323,10 @@ sub _entry ($rec, $source) {
     } else {
         $e{message} = $rec->{message};
         $e{level}   = level($rec->{message}, $rec->{event});
+        if (my $ev = $rec->{ev}) {    # an event line: its fields, for the compact view and --json
+            @e{qw(pri kind subject state)} = @$ev{qw(pri kind subject state)};
+            $e{text} = $ev->{text};
+        }
     }
     return \%e;
 }
@@ -255,9 +386,11 @@ sub options (%raw) {
         $o{lines} = $raw{lines} + 0;
     }
     if (defined $raw{since}) {
-        _fail(usage => "--since must be a whole number of minutes from 1 to " . MAX_SINCE)
-            unless $raw{since} =~ /\A[1-9][0-9]{0,5}\z/ && $raw{since} <= MAX_SINCE;
-        $o{since} = $raw{since} + 0;
+        my ($n, $u) = $raw{since} =~ /\A([1-9][0-9]{0,5})([mhd]?)\z/ ? ($1, $2) : (0, '');
+        my $min = $n * ($u eq 'd' ? 1440 : $u eq 'h' ? 60 : 1);
+        _fail(usage => "--since must be a number of minutes from 1 to " . MAX_SINCE . ", or a number with m, h or d (1h, 2d)")
+            unless $n && $min <= MAX_SINCE;
+        $o{since} = $min;
     }
     if (defined $raw{grep}) {
         _fail(usage => '--grep takes one word: 1 to 64 of A-Z a-z 0-9 _ . , : = @ + -')
@@ -339,30 +472,119 @@ sub host_log ($self, $name, %raw) {
     return $self->_result({ target => 'host', host => $hn, mac => $mac, addresses => \@addr }, \@sources, $opt, @lists);
 }
 
-# ips_log(%opt): the IPS's own lines: ips/<date>.log (rsyslogd, OpenSVC, the
-# auth hook: everything local that is not a listed service), ips/hps/<date>.log
-# (hps_log: the CGI, API scripts and tools), and the events.log lines whose host
-# is "ips". Left out: hps-monitor's results (a line per check per node every
-# tick; metrics.log keeps them), and the events.log lines tagged hps, which are
-# copies of ips/hps lines.
+# ips_log(%opt): the IPS's own lines: ips/<date>.log (rsyslogd, OpenSVC: every
+# local program that has no file of its own), ips/hps/<date>.log (hps_log: the
+# CGI, API scripts and tools) and ips/dnsmasq-dhcp/<date>.log (the DHCP leases
+# the browser greps for). Left out: hps-monitor's results (a line per check per
+# node every tick; metrics.log keeps them). The events and the audit records
+# are their own verbs (events_log, audit_log).
 sub _not_monitor ($r) { return $r->{message} !~ /\Ahps-monitor: (?:host=|tick )/ }
 
 sub ips_log ($self, %raw) {
     my $opt = options(%raw);
     my (@lists, @sources);
-    for my $src ([ 'ips', '/ips' ], [ 'ips/hps', '/ips/hps' ]) {
+    for my $src ([ 'ips', '/ips' ], [ 'ips/hps', '/ips/hps' ], [ 'ips/dnsmasq-dhcp', '/ips/dnsmasq-dhcp' ]) {
         my @files = _day_files($self->log_dir . $src->[1]);
         next unless @files;
         push @sources, $src->[0];
         push @lists, [ $self->_collect(\@files, \&parse_syslog, $src->[0], $opt, \&_not_monitor) ];
     }
-    my $ev = $self->log_dir . '/events.log';
-    if (-f $ev) {
-        push @sources, 'events';
-        push @lists, [ $self->_collect([ [$ev] ], sub ($l, @x) { parse_event($l) }, 'events', $opt,
-            sub ($r) { $r->{host} eq 'ips' && $r->{event} ne 'metric' && $r->{tag} ne 'hps' && _not_monitor($r) }) ];
-    }
     return $self->_result({ target => 'ips', host => 'ips', addresses => [] }, \@sources, $opt, @lists);
+}
+
+# _view_log($name, $parse, %opt): the newest lines of a view (events, audit).
+sub _view_log ($self, $name, $parse, %raw) {
+    my $opt   = options(%raw);
+    my @files = view_files($self->log_dir, $name);
+    my @lists = @files ? ([ $self->_collect(\@files, sub ($l, @x) { $parse->($l) }, $name, $opt) ]) : ();
+    my $r = $self->_result({ target => $name, host => $name, addresses => [] }, [ @files ? $name : () ], $opt, @lists);
+    $r->{unreadable} = [ @{ $self->{unreadable} // [] } ];
+    return $r;
+}
+
+# events_log(%opt): the event lines (HPS-EVENT, HPS-ALERT) of events.log and its
+# rotated files, newest last.
+sub events_log ($self, %raw) { return $self->_view_log('events', \&parse_event, %raw) }
+
+# audit_log(%opt): the audit records of audit.log and its rotated files.
+sub audit_log ($self, %raw) { return $self->_view_log('audit', \&parse_audit, %raw) }
+
+#--- attention ----------------------------------------------------------------------------
+
+# attention(since => 1h|minutes): is anything wrong, from the events view alone.
+# The newest event line of each (kind, subject) decides: a line whose priority
+# needs attention and whose state is not a clearing one (docs/LOGGING.md) is an
+# open problem; a later line of the same kind and subject that does not need
+# attention (resolved, ok, an info or notice line) closes it. Emitters repeat a
+# standing problem every HPS::Event::REMIND seconds, so one hour holds it.
+# Returns {status, window_minutes, events, counts => {urgent, warning},
+# problems => [{pri, kind, subject, state, time, first, host, text, lines}],
+# more, newest, reason?}. status is
+#   clear       the file was read, has lines in the window, none open a problem
+#   attention   at least one problem
+#   absent      no events.log (nor a rotated file)
+#   empty       it exists and holds no line at all
+#   unreadable  a file could not be opened or decompressed
+#   silent      readable, but no event line in the window (the emitters repeat
+#               a heartbeat, so something is not running)
+# Never "clear" when the answer could not be read.
+sub attention ($self, %raw) {
+    my $since = defined $raw{since} ? options(since => $raw{since})->{since} : ATTENTION_SINCE;
+    my $now   = $self->_now;
+    my $cutoff = $now - $since * 60;
+    my %r = (window_minutes => $since, events => 0, counts => { urgent => 0, warning => 0 },
+             problems => [], more => 0, newest => undef);
+    my @files = view_files($self->log_dir, 'events');
+    unless (@files) { $r{status} = 'absent'; $r{reason} = 'no events.log in ' . $self->log_dir; return \%r }
+    my $bytes = 0;
+    $bytes += (-s $_->[0]) // 0 for @files;
+    $self->{unreadable} = [];
+    my (%seen, @order);
+    for my $f (@files) {
+        my $more = $self->_each_line_backwards($f->[0], sub ($line) {
+            my $rec = parse_event($line) or return 1;
+            return 0 if $rec->{epoch} < $cutoff;
+            $r{events}++;
+            $r{newest} //= _iso($rec->{epoch});
+            my $ev = $rec->{ev} or return 1;
+            my $key = "$ev->{kind} $ev->{subject}";
+            my $p = $seen{$key};
+            my $open = $ev->{attention} && $ev->{class} ne 'clearing';
+            if (!$p) {
+                $p = $seen{$key} = { open => $open, closed => !$open };
+                if ($open) {
+                    push @order, $key;
+                    @$p{qw(pri kind subject state host epoch first text lines)} =
+                        ($ev->{pri}, $ev->{kind}, $ev->{subject}, $ev->{state}, $rec->{host}, $rec->{epoch}, $rec->{epoch}, $ev->{text}, 1);
+                }
+            } elsif ($p->{open} && !$p->{closed}) {
+                if ($open) { $p->{first} = $rec->{epoch}; $p->{lines}++ }
+                else       { $p->{closed} = 1 }    # an older line that was fine: the run started after it
+            }
+            return 1;
+        });
+        last unless $more;
+    }
+    if (@{ $self->{unreadable} }) {
+        $r{status} = 'unreadable';
+        $r{reason} = 'cannot read ' . join(', ', map { s{.*/}{}r } @{ $self->{unreadable} });
+        return \%r;
+    }
+    if (!$bytes)         { $r{status} = 'empty';  $r{reason} = 'events.log holds no lines'; return \%r }
+    if (!$r{events})     { $r{status} = 'silent'; $r{reason} = "no event line in the last $since minutes"; return \%r }
+    my @open = sort { HPS::Event::rank($b->{pri}) <=> HPS::Event::rank($a->{pri}) || $b->{epoch} <=> $a->{epoch} || $a->{kind} cmp $b->{kind} || $a->{subject} cmp $b->{subject} }
+               map { $seen{$_} } @order;
+    $r{counts}{ $_->{pri} }++ for @open;
+    $r{more} = @open > ATTENTION_ROWS ? @open - ATTENTION_ROWS : 0;
+    splice(@open, ATTENTION_ROWS) if @open > ATTENTION_ROWS;
+    for my $p (@open) {
+        my $text = is_secret(join ' ', $p->{subject}, $p->{text}) ? '[redacted]' : $p->{text};
+        $text = substr($text, 0, 117) . '...' if length $text > 120;
+        push @{ $r{problems} }, { pri => $p->{pri}, kind => $p->{kind}, subject => $p->{subject}, state => $p->{state},
+            host => $p->{host}, time => _iso($p->{epoch}), first => _iso($p->{first}), lines => $p->{lines}, text => $text };
+    }
+    $r{status} = ($r{counts}{urgent} || $r{counts}{warning}) ? 'attention' : 'clear';
+    return \%r;
 }
 
 sub _result ($self, $head, $sources, $opt, @lists) {

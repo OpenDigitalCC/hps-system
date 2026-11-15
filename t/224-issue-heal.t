@@ -197,7 +197,7 @@ my $calls = scalar $ce->calls;
 $now += 86400;
 $h->tick;
 is(scalar $ce->calls, $calls, 'needs-human: never retried');
-ok((grep { /\Aerr hps-issue: heal \Q$id\E human/ } @log), 'logged as an error');
+ok((grep { /\Aerr HPS-ALERT pri=urgent kind=issue subject=\S+ state=needs-human hps-issue: heal \Q$id\E human/ } @log), 'logged as an error');
 $is->resolve($id, 'test');
 
 #--- cannot heal ----------------------------------------------------------------------------

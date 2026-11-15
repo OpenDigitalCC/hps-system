@@ -87,7 +87,7 @@ executor.
 | `hps-monitor` | `bin/hps-monitor run` | `run` |
 | `ips-syslog-forward` | `bin/hps-syslog-forward` | `<ipv4> <prefix>`, `off`, `show` |
 | `hps-repo` | `bin/hps-repo` | - (`seed` from the IPS's own cache only: a URL has a `/`; `--profiles a,b`) |
-| `hps-log` | `bin/hps-log` | `host`, `ips` (read-only: the newest syslog lines of a host or of the IPS, secret lines redacted; `--min-level warning` (or `error`) for the warnings and errors only; docs/LOGGING.md) |
+| `hps-log` | `bin/hps-log` | `host`, `ips`, `events`, `audit`, `attention` (read-only: the newest syslog lines of a host or of the IPS, the event lines, the audit records, and `attention`, whether anything needs attention in the last hour (exit 0 nothing, 10 attention, 11 could not read); secret lines redacted; `--min-level warning` (or `error`) for the warnings and errors only; docs/LOGGING.md) |
 | `hps-metrics` | `bin/hps-metrics` | `last`, `series` (read-only: hps-monitor's latest result and utilisation series per host; docs/MONITORING.md) |
 | `hps-issues` | `bin/hps-issues` | `list`, `show`, `open`, `resolve`, `note`, `retry` (the issue register: what the IPS found wrong, what it healed, what needs a human; texts as words after the options; docs/ISSUES.md) |
 

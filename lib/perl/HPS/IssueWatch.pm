@@ -401,7 +401,7 @@ sub escalate ($self) {
             $rec->{severity} = 'urgent';
             $issues->trail($rec, 'escalated', 'still unresolved at its urgent_after deadline');
         });
-        $self->_log('err', "hps-issue: escalated $r->{id} $r->{key}: still unresolved, now urgent");
+        $issues->event(pri => 'urgent', subject => $r->{key}, state => 'escalated', text => "hps-issue: escalated $r->{id} $r->{key}: still unresolved, now urgent");
     }
     return;
 }
@@ -449,6 +449,7 @@ sub loop ($self, %o) {
     $self->start;
     while (!$stop) {
         eval { $self->poll; 1 } or $self->_log('err', 'hps-issue: poll failed: ' . (ref $@ ? $@->message : $@ =~ s/\s+/ /gr));
+        eval { $self->{issues}->remind($self->{remind} //= {}); 1 } or $self->_log('err', 'hps-issue: reminder failed: ' . (ref $@ ? $@->message : $@ =~ s/\s+/ /gr));
         if ($o{tick}) {
             eval { $o{tick}->(); 1 } or $self->_log('err', 'hps-issue: heal failed: ' . (ref $@ ? $@->message : $@ =~ s/\s+/ /gr));
         }

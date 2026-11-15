@@ -1,0 +1,123 @@
+#!/usr/bin/env perl
+# hps-log-rotate: the IPS's daily log rotation, compression and retention
+# (docs/LOGGING.md "Rotation"). `loop` runs under supervisor
+# (program:hps-log-rotate); there is no cron in the container.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use HPS::ClusterConfig;
+use HPS::Event;
+use HPS::LogRotate;
+
+$| = 1;
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-log-rotate: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage:
+  hps-log-rotate run [--dry-run] [--force]
+  hps-log-rotate loop [--interval S] [--max-ticks N]
+run: one pass. Renames events.log, metrics.log and audit.log that hold lines to
+  <name>-<yesterday>.log when the day has changed since the last rotation (or
+  never rotated; --force: now), sends rsyslogd HUP, gzips rotated files and day
+  files of earlier days that have been untouched for 10 minutes, and deletes
+  files older than their retention. --dry-run lists what it would do.
+loop: run every S seconds (default 60, 5 to 3600).
+Retention (cluster keys, days): log_events_retention_days 365,
+  log_metrics_retention_days 30, log_audit_retention_days 14,
+  log_retention_days 7 (the day files).
+Environment: HPS_LOG (default /srv/hps-log), HPS_CONFIG_BASE (the registry),
+HPS_LOG_ROTATE_HUP (command that reopens rsyslog's files; default pkill -HUP -x rsyslogd),
+HPS_LOG_ROTATE_LOGGER (command called as <cmd> <level> <line>; default logger -t hps).
+Exit: 0 ok, 1 failed (an error is also an event), 2 usage.
+USAGE
+    return 2;
+}
+
+my $QUIET = 0;
+
+sub logger {
+    my ($level, $line) = @_;
+    print "$line\n" unless $QUIET;
+    my $cmd = $ENV{HPS_LOG_ROTATE_LOGGER};
+    my @argv = defined $cmd && length $cmd ? ($cmd, $level, $line) : ('logger', '-t', 'hps', '-p', "local0.$level", '--', $line);
+    local $SIG{__WARN__} = sub { };
+    system { $argv[0] } @argv;
+    return;
+}
+
+sub keep_days {
+    my $cc = eval { HPS::ClusterConfig->new(logger => sub { }) };
+    my ($keep, @bad) = HPS::LogRotate::keep_days(sub { $cc ? $cc->get($_[0]) : undef });
+    return ($keep, @bad);
+}
+
+sub hup {
+    my $cmd = $ENV{HPS_LOG_ROTATE_HUP};
+    return defined $cmd && length $cmd ? (system($cmd) == 0 ? 1 : 0) : HPS::LogRotate::_default_hup();
+}
+
+# pass(%opt): one run; the events it logs. Returns 0, or 1 when it had an error.
+sub pass {
+    my (%o) = @_;
+    my ($keep, @bad) = keep_days();
+    HPS::Event::log_event(\&logger, pri => 'warning', kind => 'log', subject => 'hps-log-rotate', state => 'error',
+        text => "hps-log-rotate: $_") for @bad;
+    my $r = HPS::LogRotate->new(log_dir => $ENV{HPS_LOG} || '/srv/hps-log', keep => $keep,
+        dry_run => $o{dry_run}, hup => \&hup)->run_once(force => $o{force});
+    my $text = sprintf('hps-log-rotate: rotated %d view(s), compressed %d file(s), deleted %d file(s)',
+        scalar @{ $r->{rotated} }, scalar @{ $r->{compressed} }, scalar @{ $r->{pruned} });
+    if ($o{dry_run}) {
+        print "$_\n" for map { "would rotate $_" } @{ $r->{rotated} };
+        print "would compress $_\n" for @{ $r->{compressed} };
+        print "would delete $_\n" for @{ $r->{pruned} };
+        return 0;
+    }
+    if (@{ $r->{rotated} } || @{ $r->{compressed} } || @{ $r->{pruned} }) {
+        HPS::Event::log_event(\&logger, pri => 'notice', kind => 'log', subject => 'hps-log-rotate', state => 'rotated', text => $text);
+    }
+    if (@{ $r->{errors} }) {
+        HPS::Event::log_event(\&logger, pri => 'warning', kind => 'log', subject => 'hps-log-rotate', state => 'error',
+            text => 'hps-log-rotate: ' . join('; ', map { s/\s+/ /gr } @{ $r->{errors} }));
+        return 1;
+    }
+    return 0;
+}
+
+sub loop {
+    my ($interval, $max) = @_;
+    my $stop = 0;
+    $QUIET = 1;
+    $SIG{TERM} = $SIG{INT} = sub { $stop = 1 };
+    my $n = 0;
+    while (!$stop) {
+        eval { pass(); 1 } or HPS::Event::log_event(\&logger, pri => 'warning', kind => 'log', subject => 'hps-log-rotate', state => 'error',
+            text => 'hps-log-rotate: pass failed: ' . ($@ =~ s/\s+/ /gr));
+        $n++;
+        last if defined $max && $n >= $max;
+        my $end = time + $interval;
+        while (!$stop && time < $end) { sleep 1 }
+    }
+    return 0;
+}
+
+sub main {
+    my @argv = @_;
+    my $cmd = shift @argv // return usage();
+    my ($dry, $force, $interval, $max) = (0, 0, 60);
+    GetOptionsFromArray(\@argv, 'dry-run' => \$dry, 'force' => \$force, 'interval=i' => \$interval, 'max-ticks=i' => \$max)
+        or return usage();
+    return usage() if @argv;
+    if ($cmd eq 'run')  { return usage('--interval is for loop') if $interval != 60; return pass(dry_run => $dry, force => $force) }
+    if ($cmd eq 'loop') {
+        return usage('loop takes no --dry-run or --force') if $dry || $force;
+        return usage('--interval is 5 to 3600') if $interval < 5 || $interval > 3600;
+        return loop($interval, $max);
+    }
+    return usage("unknown command: $cmd");
+}
+
+exit main(@ARGV);

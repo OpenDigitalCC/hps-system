@@ -39,6 +39,71 @@ _rsyslog_forward_block() {
   printf '*.* action(type="omfwd" target="%s" port="514" protocol="tcp" template="HPSForward" action.resumeRetryCount="-1" queue.type="LinkedList" queue.size="10000")\n' "$ip"
 }
 
+# The programs whose lines are the audit trail (docs/LOGGING.md): every
+# ctrl-exec call and every operator call. They go to audit.log, from any
+# sender, and are not filed in the per-host or per-service day files.
+RSYSLOG_AUDIT_PROGRAMS=(ctrl-exec-api ctrl-exec-agent ctrl-exec-dispatcher hps-auth-hook ips-admin)
+
+# Lines that cannot carry a marker yet (docs/LOGGING.md "Derived lines"):
+# "<name>|<rsyslog condition>|<priority>|<kind>|<state>". rsyslog writes each
+# match to events.log as an event line of that priority, kind and state, subject
+# "-" and the original text after it. The first match wins. A tool that grows
+# its own marker leaves this table: its line then carries HPS-EVENT already and
+# is never derived.
+RSYSLOG_DERIVED_EVENTS=(
+  'ipxe-init|$msg contains "iPXE Initialisation requested"|info|boot|requested'
+  'boot|$msg contains "NixOS network boot:" or $msg contains "held: booting audit image"|info|boot|started'
+  'init|$msg contains "host_init_result stored"|info|boot|done'
+  'up|$msg contains "Reached target Multi-User System"|info|node|up'
+  'off|$msg contains "reboot: Power down" or $msg contains "Reached target System Power Off"|info|node|off'
+  'down|$msg contains "Stopping HPS: stop guests"|info|node|down'
+  'held|$msg contains " is HELD " or ($programname startswith "console-" and $msg contains "held for onboarding")|notice|pairing|held'
+  'bmc|$msg contains "hps-bmc: action=" and not ($msg contains "action=status")|notice|power|done'
+  'node-fault|$msg contains "hps-node:" and $msg contains "FAULT"|warning|node|error'
+  'node|$msg contains "hps-node:"|notice|node|done'
+  'storage|$msg contains "hps-storage:" and $msg contains " exit "|notice|storage|done'
+  'ips-check|$programname == "hps-ips-check" and ($msg contains "FAIL " or $msg contains "summary:")|warning|service|failed'
+  'error|$syslogseverity <= 3 and not ($msg contains "hps-monitor: ")|warning|log|error'
+)
+
+# _rsyslog_log_views_block <log dir>: the three views beside the day tree:
+#   audit.log    the audit programs (routing, in the block below, stops them)
+#   metrics.log  hps-monitor's per-check and tick lines, "<rfc3339> metric <host> <tag> <msg>"
+#   events.log   a marker line (HPS-EVENT / HPS-ALERT) of a local program, or else
+#                the first matching derived line
+# Written before the routing rules, which stop each message.
+_rsyslog_log_views_block() {
+  local dir="$1" row name cond pri kind state progs="" p
+  for p in "${RSYSLOG_AUDIT_PROGRAMS[@]}"; do
+    progs+="${progs:+, }\"$p\""
+  done
+  printf '## # Audit: the ctrl-exec and operator-call records, in audit.log only\n'
+  printf 'template(name="HPSAuditFormat" type="string" string="%%timegenerated:::date-rfc3339%% %%fromhost-ip%% [%%HOSTNAME%%] %%syslogtag%% %%msg%%\\n")\n'
+  printf 'if ($programname == [%s]) then {\n' "$progs"
+  printf '  action(type="omfile" file="%s/audit.log" template="HPSAuditFormat")\n' "$dir"
+  printf '  stop\n}\n\n'
+  printf '## # Metrics: hps-monitor results, in the form hps-metrics reads\n'
+  printf 'template(name="HPSMetricFormat" type="string" string="%%timegenerated:::date-rfc3339%% metric %%hostname%% %%syslogtag%%%%msg:::sp-if-no-1st-sp%%%%msg%%\\n")\n'
+  printf 'if ($msg contains "hps-monitor: host=" or $msg contains "hps-monitor: tick ") then {\n'
+  printf '  action(type="omfile" file="%s/metrics.log" template="HPSMetricFormat")\n}\n\n' "$dir"
+  printf '## # Events: marker lines of the IPS'"'"'s own programs, and the derived lines\n'
+  printf 'template(name="HPSEventFormat" type="string" string="%%timegenerated:::date-rfc3339%% %%hostname%%%%msg:::sp-if-no-1st-sp%%%%msg%%\\n")\n'
+  for row in "${RSYSLOG_DERIVED_EVENTS[@]}"; do
+    IFS='|' read -r name cond pri kind state <<< "$row"
+    local marker=HPS-EVENT
+    [[ "$pri" == warning || "$pri" == urgent ]] && marker=HPS-ALERT
+    printf 'template(name="HPSDerived_%s" type="string" string="%%timegenerated:::date-rfc3339%% %%hostname%% %s pri=%s kind=%s subject=- state=%s %%syslogtag%%%%msg:::sp-if-no-1st-sp%%%%msg%%\\n")\n' \
+      "${name//-/_}" "$marker" "$pri" "$kind" "$state"
+  done
+  printf 'if ($fromhost-ip == "127.0.0.1" and ($msg contains "HPS-EVENT pri=" or $msg contains "HPS-ALERT pri=")) then {\n'
+  printf '  action(type="omfile" file="%s/events.log" template="HPSEventFormat")\n}' "$dir"
+  for row in "${RSYSLOG_DERIVED_EVENTS[@]}"; do
+    IFS='|' read -r name cond pri kind state <<< "$row"
+    printf ' else if (%s) then {\n  action(type="omfile" file="%s/events.log" template="HPSDerived_%s")\n}' "$cond" "$dir" "${name//-/_}"
+  done
+  printf '\n'
+}
+
 create_config_rsyslog () {
 
 local RSYSLOG_CONF
@@ -58,6 +123,8 @@ hps_log info "Configuring rsyslog"
 # Before the routing rules, which stop each message.
 local FORWARD_BLOCK
 FORWARD_BLOCK=$(_rsyslog_forward_block)
+local VIEWS_BLOCK
+VIEWS_BLOCK=$(_rsyslog_log_views_block "${RSYSLOG_LOG_DIR}")
 if [[ -n "$FORWARD_BLOCK" ]]; then
   hps_log info "rsyslog: forwarding everything ($(printf '%s' "$FORWARD_BLOCK" | grep -o 'target="[^"]*"'))"
 fi
@@ -116,13 +183,15 @@ template(name="IPSServiceLogFile" type="string"
 
 ${FORWARD_BLOCK}
 
+${VIEWS_BLOCK}
+
 
 ## # Log message routing
 
 # Route local IPS service logs to one file per program. The program names are a
 # fixed list (they become directory names); only local senders match, so a
 # node cannot write into the service tree.
-if (\$fromhost-ip == "127.0.0.1") and (\$programname == ["dnsmasq", "dnsmasq-dhcp", "dnsmasq-tftp", "lighttpd", "chronyd", "supervisord", "hps", "hps-jobs", "hps-monitor", "hps-issue-watch", "ctrl-exec-api", "ctrl-exec-agent", "ips-admin"]) then {
+if (\$fromhost-ip == "127.0.0.1") and (\$programname == ["dnsmasq", "dnsmasq-dhcp", "dnsmasq-tftp", "lighttpd", "chronyd", "supervisord", "hps", "hps-jobs", "hps-monitor", "hps-issue-watch", "hps-log-rotate"]) then {
   *.* action(type="omfile" dynaFile="IPSServiceLogFile" template="HPSLogFormat")
   stop
 }

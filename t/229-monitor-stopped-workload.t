@@ -121,10 +121,10 @@ sub reset_logs { unlink "$base/log", "$base/run-args" }
 my ($rc, $out) = monitor('run');
 is($rc, 0, 'run exits 0');
 is(slurp("$base/run-args"), "--json sch-001.hps.test nagios-check --all\n", 'run: the stopped node is not called; the others are');
-like($out, qr/^hps-monitor: host=\Q$F\E state=STOPPED workload=builder vm=bld-001 recorded state stopped; not checked$/m, 'run: one STOPPED line for it');
+like($out, qr/^HPS-EVENT pri=info kind=monitor subject=\Q$F\E state=stopped hps-monitor: host=\Q$F\E state=STOPPED workload=builder vm=bld-001 recorded state stopped; not checked$/m, 'run: one STOPPED line for it');
 unlike($out, qr/UNREACHABLE/, 'run: and no UNREACHABLE line');
 like($out, qr/^hps-monitor: tick hosts=1 duration=/m, 'run: the tick counts the hosts called');
-like(slurp("$base/log"), qr/^info hps-monitor: host=\Q$F\E state=STOPPED /m, 'run: logged at info');
+like(slurp("$base/log"), qr/^info HPS-EVENT pri=info kind=monitor subject=\Q$F\E state=stopped hps-monitor: host=\Q$F\E state=STOPPED /m, 'run: logged at info');
 is(slurp("$base/stderr"), '', 'run: nothing on stderr');
 
 reset_logs();

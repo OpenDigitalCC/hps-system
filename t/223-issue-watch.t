@@ -159,8 +159,8 @@ is($sp->{state}, 'resolved', 'the operational line resolved it');
 ok(!$by_key{'leak:tch-002'}, 'a marker with a secret-looking field opens nothing');
 is(scalar(grep { /ignored a line from tch-002/ } @log), 2, 'the two bad markers are logged as ignored');
 ok(!(grep { /abc|0123/ } @log), 'the ignored lines\' text is not logged');
-ok((grep { /\Awarning hps-issue: opened \S+ mirror-leg:tch-002:probe-tch-002-root\z/ } @log), 'opened logged');
-ok((grep { /\Anotice hps-issue: resolved \S+ by log tch-002/ } @log), 'resolved logged');
+ok((grep { /\Awarning HPS-ALERT pri=warning kind=issue subject=\S+ state=open hps-issue: opened \S+ mirror-leg:tch-002:probe-tch-002-root\z/ } @log), 'opened logged');
+ok((grep { /\Anotice HPS-EVENT pri=notice kind=issue subject=\S+ state=resolved hps-issue: resolved \S+ by log tch-002/ } @log), 'resolved logged');
 is(scalar $is->list, 0, 'no unresolved issue left');
 
 # a partial line waits for its newline
@@ -312,6 +312,7 @@ $now += 600;
 $w3->poll;
 is($is->get($hb[0]{id})->{severity}, 'urgent', 'still open after 10 minutes: urgent');
 is(scalar(grep { $_->{event} eq 'escalated' } @{ $is->get($hb[0]{id})->{trail} }), 1, 'escalated once');
+ok((grep { /\Aerr HPS-ALERT pri=urgent kind=issue subject=om3-hb:sch-001:tch-003 state=escalated hps-issue: escalated \S+ om3-hb:sch-001:tch-003: still unresolved, now urgent\z/ } @log), 'the escalation is an urgent event line');
 $now += 60;
 $w3->poll;
 is(scalar(grep { $_->{event} eq 'escalated' } @{ $is->get($hb[0]{id})->{trail} }), 1, 'and only once');

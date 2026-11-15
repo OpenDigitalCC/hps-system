@@ -85,7 +85,7 @@ gate() {
 }
 
 @test "rsyslog files the hps-issue-watch program like the other IPS services" {
-  grep -q '"hps-monitor", "hps-issue-watch", "ctrl-exec-api"' "$ROOT/lib/functions.d/create-config-rsyslog.sh"
+  grep -q '"hps-monitor", "hps-issue-watch", "hps-log-rotate"' "$ROOT/lib/functions.d/create-config-rsyslog.sh"
 }
 
 @test "the shipped rules parse, and the tools pass perl -c" {

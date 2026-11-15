@@ -45,6 +45,27 @@
 #   [ips] [ERROR] [validate_storage] [create_host:45 → provision_node:120 → main:15] Storage pool not available
 #
 #===============================================================================
+# hps_event <pri> <kind> <subject> <state> <text...>
+# An event line (docs/LOGGING.md, HPS::Event): the marker HPS-EVENT (pri info or
+# notice) or HPS-ALERT (warning or urgent), the four fixed fields, then text.
+# rsyslog copies it to events.log. The words are the fixed lists of
+# lib/perl/HPS/Event.pm (scripts/tests check every use against it). A subject
+# has no space or "=": other characters become "_".
+hps_event() {
+  local pri="${1:-}" kind="${2:-}" subject="${3:-}" state="${4:-}"
+  shift 4 || return 1
+  local marker=HPS-EVENT level=info
+  case "$pri" in
+    urgent)  marker=HPS-ALERT; level=error ;;
+    warning) marker=HPS-ALERT; level=warn ;;
+    notice | info) ;;
+    *) return 1 ;;
+  esac
+  subject="${subject//[^A-Za-z0-9_.:@\/+-]/_}"
+  [[ -n "$subject" ]] || subject="-"
+  hps_log "$level" "${marker} pri=${pri} kind=${kind} subject=${subject} state=${state} $*"
+}
+
 hps_log() {
   local level="${1^^}"
   shift

@@ -21,6 +21,7 @@ no warnings 'experimental::signatures';
 use Fcntl qw(:flock);
 use JSON::PP ();
 use POSIX qw(strftime);
+use HPS::Event ();
 use HPS::Registry ();
 use HPS::Log ();
 
@@ -69,6 +70,33 @@ sub _default_logger ($level, $msg) {
 }
 
 sub _log ($self, $level, $msg) { $self->{logger}->($level, $msg); return }
+
+# event(pri =>, subject =>, state =>, text =>): an event line of kind issue
+# (HPS::Event, docs/LOGGING.md) through the logger.
+sub event ($self, %f) {
+    HPS::Event::log_event(sub ($l, $m) { $self->_log($l, $m) }, kind => 'issue', %f);
+    return;
+}
+
+# remind($memo): the standing problems again. Every unresolved issue is logged
+# as an event line at most once per HPS::Event::REMIND seconds (the first call
+# logs them all), so the events view always holds what is open: urgent and
+# needs-human issues as urgent, the others as warning.
+sub remind ($self, $memo) {
+    my $now = $self->now;
+    my $n = 0;
+    for my $r ($self->list) {
+        next if $r->{state} eq 'resolved';
+        next unless HPS::Event::remind_due($memo, $r->{id}, $now);
+        my ($pri, $state) = $r->{state} eq 'needs-human' ? ('urgent', 'needs-human')
+                          : $r->{severity} eq 'urgent'   ? ('urgent', 'escalated')
+                          :                                ('warning', 'open');
+        $self->event(pri => $pri, subject => $r->{key}, state => $state,
+            text => "hps-issue: still $r->{state} $r->{id} $r->{key}: $r->{summary}");
+        $n++;
+    }
+    return $n;
+}
 sub now ($self) { return $self->{now}->() }
 sub registry ($self) { return $self->{registry} }
 
@@ -293,7 +321,7 @@ sub open_issue ($self, %a) {
         $self->trail($rec, 'opened', $detail);
         $self->trail($rec, 'reoccurred', "previous issue $prev->{id} (resolved $prev->{resolved_at})") if $prev;
         $self->_write($rec);
-        $self->_log($sev eq 'urgent' ? 'err' : 'warning', "hps-issue: opened $rec->{id} $key");
+        $self->event(pri => $sev eq 'urgent' ? 'urgent' : 'warning', subject => $key, state => 'open', text => "hps-issue: opened $rec->{id} $key");
         return ($rec, 1);
     });
 }
@@ -332,7 +360,7 @@ sub resolve ($self, $id, $by, %o) {
         $self->trail($rec, 'resolved', "by $by");
     });
     my $r = $rec->{resolution};
-    $self->_log('notice', "hps-issue: resolved $id by $by; issue: $rec->{key}: $rec->{summary}; "
+    $self->event(pri => 'notice', subject => $rec->{key}, state => 'resolved', text => "hps-issue: resolved $id by $by; issue: $rec->{key}: $rec->{summary}; "
         . "resolution by $r->{by}: $r->{action}; result: $r->{result}");
     return $rec;
 }

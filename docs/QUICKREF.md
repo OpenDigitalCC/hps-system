@@ -327,14 +327,27 @@ Read-only results of `hps-monitor`. The target is `<mac|hostname|ips|all>`.
 
 Read-only syslog lines, newest last, secrets shown as `[redacted]`.
 
-`hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]`
+`hps-log attention [--since 1h] [--json]`
+: Is anything wrong: the open problems from the event lines, at most a
+  screenful. Exit 0 nothing needs attention, 10 attention, 11 the events could
+  not be read (never "no problems").
+
+`hps-log events [--lines N] [--since T] [--grep WORD] [--min-level LEVEL] [--json]`
+: The event lines (what happened, in a fixed vocabulary).
+
+`hps-log audit [--lines N] [--since T] [--grep WORD] [--json]`
+: The audit records: ctrl-exec and operator calls with identity.
+
+`hps-log host <mac|hostname> [--lines N] [--since T] [--grep WORD] [--min-level LEVEL] [--json]`
 : The lines the IPS received from a host.
 
-`hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]`
-: The IPS's own lines.
+`hps-log ips [--lines N] [--since T] [--grep WORD] [--min-level LEVEL] [--json]`
+: The IPS's own lines (and its DHCP lines).
 
-`--lines` defaults to 50 (at most 500). `--since` is 1 to 43200 minutes.
-`--min-level` is `warning` or `error`. `--grep` takes one word.
+`--lines` defaults to 50 (at most 500). `--since` is 1 to 43200 minutes, or a
+number with `m`, `h` or `d` (`30m`, `1h`, `2d`); rotated and compressed files
+are read. `--min-level` is `warning` or `error`. `--grep` takes one word.
+Files, markers and retention: `docs/LOGGING.md`.
 
 ## hps-pins
 
@@ -512,6 +525,10 @@ Tool-specific codes:
 : 0 – done, or the host was not drained; 5 – some guests not brought back,
   kept in the record.
 
+`hps-log attention`
+: 0 – nothing needs attention; 10 – attention; 11 – the events could not be read
+  (no `events.log`, an empty one, an unreadable one, or no event line in the window).
+
 `hps-osvc status`
 : 2 – a peer is stale.
 
@@ -529,7 +546,9 @@ pool, `define` over an existing definition, a disk with a signature without
 
 ## Logs and the issue register
 
-- `hps-log host <host>` reads what a host sent to the IPS; `hps-log ips` reads
+- `hps-log attention` answers "is anything wrong" in a few lines; `hps-log
+  events` shows what happened; `hps-log audit` shows who called what;
+  `hps-log host <host>` reads what a host sent to the IPS; `hps-log ips` reads
   the IPS's own lines.
 - `hps-metrics last <host>` shows the latest check results.
 - `hps-issues list` shows what is unresolved; `hps-issues show <id>` shows the

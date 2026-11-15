@@ -11,6 +11,7 @@ no warnings 'experimental::signatures';
 
 use JSON::PP ();
 use POSIX ();
+use HPS::Event ();
 use HPS::Registry;
 
 use constant DEFAULT_INTERVAL => 60;
@@ -201,6 +202,79 @@ sub fs_check ($name, $path, $fs, $warn, $crit, $why = 'df failed') {
     $perf .= " used=$fs->{used}B size=$fs->{size}B";
     return { name => $name, state => $s, summary => $sum, perf => $perf,
              pcts => [ $fs->{pct}, defined $fs->{ipct} ? $fs->{ipct} : () ] };
+}
+
+#--- event lines (docs/LOGGING.md) ---------------------------------------------------------
+# The host-state lines (UNREACHABLE, REACHABLE, PAIR_FAILED, STOPPED) carry the
+# marker so events.log holds them; the line itself stays as the readers
+# (HPS::Metrics) parse it, after the marker. A check that is not OK is an event
+# when its state changes and again every HPS::Event::REMIND seconds while it
+# holds; OK after a bad state is the clearing line.
+
+my %MARK = (
+    UNREACHABLE => [ 'warning', 'unreachable' ],
+    REACHABLE   => [ 'notice',  'reachable' ],
+    PAIR_FAILED => [ 'urgent',  'pair-failed' ],
+    STOPPED     => [ 'info',    'stopped' ],
+);
+
+# mark([level, line]): the pair with the marker in front of a host-state line,
+# at the syslog level of its priority; any other pair unchanged.
+sub mark ($pair) {
+    my ($level, $line) = @$pair;
+    my ($host, $st) = $line =~ /\Ahps-monitor: host=(\S+) state=(UNREACHABLE|REACHABLE|PAIR_FAILED|STOPPED)\b/ or return $pair;
+    my ($pri, $state) = @{ $MARK{$st} };
+    return [ HPS::Event::syslog_level($pri),
+        HPS::Event::line(pri => $pri, kind => 'monitor', subject => $host, state => $state, text => $line) ];
+}
+
+my %CHECK_EVENT = (WARNING => [ 'warning', 'warning' ], CRITICAL => [ 'urgent', 'critical' ], UNKNOWN => [ 'warning', 'unknown' ]);
+
+# check_events($memo, $now, @pairs): the extra event lines ([level, line]) for the
+# check lines of @pairs ("hps-monitor: host=<h> check=<c> state=<S> <text>").
+# $memo (the loop's hash; undef in a one-off run, which logs every bad state)
+# remembers each check's last state and when it was last logged.
+sub check_events ($memo, $now, @pairs) {
+    my $m = $memo ? ($memo->{_check} //= {}) : {};
+    my @out;
+    for my $p (@pairs) {
+        my ($host, $name, $state, $text) = $p->[1] =~ /\Ahps-monitor: host=(\S+) check=(\S+) state=([A-Z]+) ?(.*)\z/s or next;
+        $text =~ s/ \| .*\z//s;
+        $text = substr($text, 0, 157) . '...' if length $text > 160;
+        my $key = "$host/$name";
+        my $prev = $m->{$key};
+        if ($state eq 'OK') {
+            next unless $prev;
+            delete $m->{$key};
+            push @out, _event('notice', $key, 'ok', "hps-monitor: $name on $host is OK again: $text");
+            next;
+        }
+        my $c = $CHECK_EVENT{$state} or next;
+        next if $prev && $prev->{state} eq $state && $now - $prev->{at} < HPS::Event::REMIND;
+        $m->{$key} = { state => $state, at => $now };
+        push @out, _event($c->[0], $key, $c->[1], "hps-monitor: $name on $host is $state: $text");
+    }
+    return @out;
+}
+
+sub _event ($pri, $subject, $state, $text) {
+    return [ HPS::Event::syslog_level($pri),
+        HPS::Event::line(pri => $pri, kind => 'monitor', subject => $subject, state => $state, text => $text) ];
+}
+
+# service_event($state, $text, $pri): the monitor's own line (started, stopped,
+# failed, ok = alive) as an event of kind service.
+sub service_event ($state, $text, $pri = 'info') {
+    return [ HPS::Event::syslog_level($pri),
+        HPS::Event::line(pri => $pri, kind => 'service', subject => 'hps-monitor', state => $state, text => "hps-monitor: $text") ];
+}
+
+# heartbeat($memo, $now, $interval): "alive" every HPS::Event::REMIND seconds,
+# so a quiet cluster still has event lines in the last hour (hps-log
+# attention reads silence as "cannot tell"); () between.
+sub heartbeat ($memo, $now, $interval) {
+    return () unless HPS::Event::remind_due($memo, '_heartbeat', $now);
+    return (service_event('ok', $interval ? "alive interval=${interval}s" : 'alive, checks off'));
 }
 
 # host_lines($host, $parsed, $duration): list of [priority, line] for one host.

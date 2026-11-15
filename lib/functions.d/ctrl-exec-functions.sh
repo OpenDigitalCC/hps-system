@@ -468,6 +468,16 @@ _ce_within_pair_window() {
 _ce_pair_answer() {
   CE_PAIR_REASON="$1"
   CE_PAIR_DETAIL="$2"
+  # A pairing that ended (approved) or was turned away is an event (docs/LOGGING.md);
+  # the answers that only ask the node to retry are not. $mac is the caller's.
+  # An event that cannot be written never changes the answer.
+  declare -F hps_event > /dev/null || return 0
+  case "$1" in
+    paired)
+      hps_event notice pairing "${mac:-unknown}" paired "ce_approve: ${mac:-?} approved: $2" || true ;;
+    refused | reboots_exhausted)
+      hps_event warning pairing "${mac:-unknown}" refused "ce_approve: ${mac:-?} refused: $2" || true ;;
+  esac
 }
 
 #===============================================================================

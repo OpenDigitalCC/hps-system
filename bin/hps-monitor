@@ -70,6 +70,17 @@ sub emit {
     return;
 }
 
+# The same, without a line on stdout: the extra event lines of a check
+# (HPS::Monitor::check_events), which only the log carries.
+sub emit_log_only {
+    my ($prio, $line) = @_;
+    my $quiet = $QUIET;
+    $QUIET = 1;
+    emit($prio, $line);
+    $QUIET = $quiet;
+    return;
+}
+
 sub registry { return HPS::Registry->new }
 
 # paired agent names, one per line from HPS_MONITOR_AGENTS, else the dispatcher.
@@ -200,16 +211,19 @@ sub run_once {
             close $fh;
         }
         my @emit = $memo ? HPS::Monitor::throttle($memo, $hosts[$idx], $lines, time) : @$lines;
-        emit(@$_) for @emit;
+        emit(@{ HPS::Monitor::mark($_) }) for @emit;
+        emit_log_only(@$_) for HPS::Monitor::check_events($memo, time, @emit);
     }
     if ($all) {
         my $t1 = time;
         my @checks = ips_checks($warn, $crit);
-        emit(@$_) for HPS::Monitor::host_lines(ips_name($reg), { checks => \@checks }, time - $t1);
+        my @own = HPS::Monitor::host_lines(ips_name($reg), { checks => \@checks }, time - $t1);
+        emit(@$_) for @own;
+        emit_log_only(@$_) for HPS::Monitor::check_events($memo, time, @own);
     }
-    emit(@$_) for @stopped;
+    emit(@{ HPS::Monitor::mark($_) }) for @stopped;
     # Hosts the IPS gave up pairing are not targets (not paired): say so here.
-    emit(@$_) for HPS::Monitor::pair_failed_lines($reg, time, $memo);
+    emit(@{ HPS::Monitor::mark($_) }) for HPS::Monitor::pair_failed_lines($reg, time, $memo);
     emit('info', sprintf('hps-monitor: tick hosts=%d duration=%.1f', scalar @hosts, time - $t0));
     return;
 }
@@ -280,23 +294,24 @@ sub loop {
     $SIG{TERM} = $SIG{INT} = sub { $stop = 1 };
     my ($n, $last_warn, $was_disabled) = (0, '', 0);
     my %memo;
-    emit('info', 'hps-monitor: started');
+    emit(@{ HPS::Monitor::service_event('started', 'started') });
     while (!$stop) {
         my ($iv, $warn) = current_interval();
         if (defined $warn && $warn ne $last_warn) { emit('warning', "hps-monitor: $warn") }
         $last_warn = $warn // '';
         $n++;
         my $wait = 60;
+        emit(@$_) for HPS::Monitor::heartbeat(\%memo, time, $iv);
         if ($iv == 0) {
             emit('info', 'hps-monitor: disabled (monitor_interval_seconds=0)') unless $was_disabled;
             $was_disabled = 1;
         } else {
             if ($was_disabled) { emit('info', "hps-monitor: enabled interval=${iv}s"); $was_disabled = 0 }
             my $t0 = time;
-            eval { run_once(\%memo); 1 } or emit('err', 'hps-monitor: run failed: ' . ($@ =~ s/\s+/ /gr));
+            eval { run_once(\%memo); 1 } or emit(@{ HPS::Monitor::service_event('failed', 'run failed: ' . ($@ =~ s/\s+/ /gr), 'warning') });
             my $el     = time - $t0;
             my $missed = HPS::Monitor::missed_ticks($el, $iv);
-            emit('warning', sprintf('hps-monitor: tick skipped missed=%d run=%.1fs interval=%ds', $missed, $el, $iv)) if $missed;
+            emit(@{ HPS::Monitor::service_event('failed', sprintf('tick skipped missed=%d run=%.1fs interval=%ds', $missed, $el, $iv), 'warning') }) if $missed;
             $wait = $t0 + $iv * ($missed + 1) - time;
         }
         last if defined $max && $n >= $max;
@@ -304,7 +319,7 @@ sub loop {
         my $end = time + $wait;
         while (!$stop && time < $end) { sleep(($end - time) < 1 ? ($end - time) : 1) }
     }
-    emit('info', 'hps-monitor: stopped');
+    emit(@{ HPS::Monitor::service_event('stopped', 'stopped') });
     return 0;
 }
 

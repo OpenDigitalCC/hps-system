@@ -84,7 +84,7 @@ sub reset_logs { unlink "$base/log", "$base/run-args" }
 my ($rc, $out) = monitor('run');
 is($rc, 0, 'run exits 0');
 my @lines = split /\n/, $out;
-my @logged = map { s/^\S+ //r } split /\n/, slurp("$base/log");
+my @logged = grep { !/ hps-monitor: \S+ on \S+ is / } map { s/^\S+ //r } split /\n/, slurp("$base/log");
 is_deeply(\@logged, \@lines, 'stdout carries exactly the lines that went to the logger');
 
 my $d = qr/\d+\.\d/;
@@ -94,14 +94,14 @@ like($lines[2], qr/^hps-monitor: host=sch-001\.hps\.test checks=2 worst=OK durat
 is($lines[3], 'hps-monitor: host=tch-001.hps.test check=load state=WARNING LOAD WARNING - total load average: 1.60, 1.10, 0.90 | load1=1.6 load5=1.1', 'WARNING check line');
 is($lines[4], 'hps-monitor: host=tch-001.hps.test check=procs state=OK PROCS OK: 120 processes', 'no perfdata: no separator');
 like($lines[5], qr/^hps-monitor: host=tch-001\.hps\.test checks=2 worst=WARNING duration=$d$/, 'host summary, worst is WARNING');
-like($lines[6], qr/^hps-monitor: host=tch-002\.hps\.test state=UNREACHABLE hps-run exit 4: hps-run: no registered agent for tch-002\.hps\.test/, 'unreachable host: one line with the reason');
+like($lines[6], qr/^HPS-ALERT pri=warning kind=monitor subject=tch-002\.hps\.test state=unreachable hps-monitor: host=tch-002\.hps\.test state=UNREACHABLE hps-run exit 4: hps-run: no registered agent for tch-002\.hps\.test/, 'unreachable host: one line with the reason');
 is($lines[7], "hps-monitor: host=ips.hps.test check=disk_resources state=OK DISK OK - $base/res 40% used (0.0 MiB of 0.0 MiB), inodes 10% on /srv | used_pct=40% inode_pct=10% used=400B size=1000B", 'the IPS: its resources filesystem');
 like($lines[8], qr/^hps-monitor: host=ips\.hps\.test check=disk_log state=OK DISK OK - \Q$base\E\/hpslog 40% used/, 'the IPS: its log filesystem');
 like($lines[9], qr/^hps-monitor: host=ips\.hps\.test checks=2 worst=OK duration=$d$/, 'the IPS: summary line');
 like($lines[10], qr/^hps-monitor: tick hosts=3 duration=$d$/, 'tick line');
 is(scalar @lines, 11, 'nothing else');
 is_deeply([ map { (split ' ')[0] } split /\n/, slurp("$base/log") ],
-    [ qw(info info info warning info warning err info info info info) ], 'priorities: OK info, WARNING warning, unreachable err');
+    [ qw(info info info warning info warning warning warning info info info info) ], 'priorities: OK info, WARNING warning (and its event), unreachable warning');
 my @args = split /\n/, slurp("$base/run-args");
 is_deeply([ sort @args ], [ '--json sch-001.hps.test nagios-check --all', '--json tch-001.hps.test nagios-check --all', '--json tch-002.hps.test nagios-check --all' ],
     'the node is sent the script name and --all only; IPS, unpaired and stale hosts are not called');
@@ -152,6 +152,7 @@ is($rc, 0, 'loop with 0 exits cleanly after its tick limit');
 ok(!-e "$base/run-args", 'interval 0: no node is called');
 is(scalar(() = slurp("$base/log") =~ /disabled \(monitor_interval_seconds=0\)/g), 1, 'disabled is logged once');
 is($out, '', 'loop prints nothing (supervisor logs stdout; the logger has the lines)');
+like(slurp("$base/log"), qr/info HPS-EVENT pri=info kind=service subject=hps-monitor state=started hps-monitor: started\n.*info HPS-EVENT pri=info kind=service subject=hps-monitor state=ok hps-monitor: alive, checks off\n/s, 'loop: a started event, then a heartbeat even when the checks are off');
 
 reset_logs();
 $reg->cluster_set('lab', 'monitor_interval_seconds', '10');
@@ -171,7 +172,7 @@ chmod 0755, $slow;
     chmod 0755, "$base/agents-one.sh";
     ($rc, $out) = monitor('loop', '--max-ticks', 1);
 }
-like(slurp("$base/log"), qr/warning hps-monitor: tick skipped missed=1 run=11\.\d+s interval=10s/, 'a run longer than the interval logs one skipped-tick line');
+like(slurp("$base/log"), qr/warning HPS-ALERT pri=warning kind=service subject=hps-monitor state=failed hps-monitor: tick skipped missed=1 run=11\.\d+s interval=10s/, 'a run longer than the interval logs one skipped-tick line');
 
 ($rc, $out) = monitor('frobnicate');
 is($rc, 2, 'unknown command is a usage error');

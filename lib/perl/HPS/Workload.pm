@@ -20,6 +20,7 @@ use Encode ();
 use Digest::SHA ();
 use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX qw(strftime);
+use HPS::Event ();
 use HPS::Registry;
 use HPS::Keysafe;
 use HPS::Vxlan ();
@@ -367,7 +368,7 @@ sub new ($class, %opt) {
 }
 
 sub _default_logger ($level, $msg) {
-    print STDERR "hps-workload: $msg\n";
+    print STDERR 'hps-workload: ' . ($msg =~ s/\AHPS-(?:EVENT|ALERT) pri=\S+ kind=\S+ subject=\S+ state=\S+ //r) . "\n";    # the marker is for syslog
     return if $ENV{HPS_WORKLOAD_NO_SYSLOG};
     eval {
         local $SIG{__WARN__} = sub { };
@@ -377,6 +378,13 @@ sub _default_logger ($level, $msg) {
 }
 
 sub _log ($self, $level, $msg) { $self->{logger}->($level, $msg); return }
+
+# _event($pri, $name, $state, $text): a result of an operation as an event line
+# (HPS::Event, docs/LOGGING.md): kind workload, the workload's name as subject.
+sub _event ($self, $pri, $name, $state, $text) {
+    HPS::Event::log_event(sub ($l, $m) { $self->_log($l, $m) }, pri => $pri, kind => 'workload', subject => $name, state => $state, text => $text);
+    return;
+}
 
 sub _stamp ($self) { return strftime('%Y-%m-%d %H:%M:%S UTC', gmtime($self->{now}->())) }
 
@@ -1357,7 +1365,7 @@ sub run ($self, $op, $name, %a) {
     }
     my ($def, @steps) = eval { $self->_prepare($op, $name, %a) };
     if (my $e = $@) {
-        $self->_log('warning', "$op $name refused: " . (ref $e ? $e->message : $e));
+        $self->_event('notice', $name, 'refused', "$op $name refused: " . (ref $e ? $e->message : $e));
         die $e;
     }
     $self->_log('info', "$op $name: " . scalar(@steps) . ' step(s)');
@@ -1451,7 +1459,8 @@ sub run ($self, $op, $name, %a) {
             my $last = (grep { length } split /\n/, ($r->{stderr} // ''))[-1] // '';
             my $kind = $r->{rc} == 3 ? 'refused' : $r->{rc} == 4 ? 'notfound' : 'failed';
             $st->{undo}->() if $st->{undo};
-            $self->_log('err', "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}");
+            $self->_event($kind eq 'refused' ? 'notice' : 'warning', $name, $kind eq 'refused' ? 'refused' : 'failed',
+                "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}");
             _fail($kind, "$op: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
         }
         if ($op eq 'create' && $st->{key} && $st->{early_done}) {
@@ -1470,7 +1479,8 @@ sub run ($self, $op, $name, %a) {
         ($op eq 'destroy' || $op eq 'grow-disk' || $op eq 'create' ? (notes => $self->{notes} // []) : ()) };
     $out->{pending} = \@pending if @pending;
     $self->_post($op, $def, $out, %a);
-    $self->_log('info', "$op $name ok");
+    if ($op eq 'status' || $op eq 'console') { $self->_log('info', "$op $name ok") }
+    else { $self->_event('notice', $name, 'done', "$op $name ok") }
     return $out;
 }
 

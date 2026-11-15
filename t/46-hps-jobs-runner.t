@@ -87,6 +87,8 @@ sub calls { return split /\n/, slurp("$_[0]/calls.log") }
     is($j->result($id{up})->{stdout}, "storage said: 525400000001 up --wait 120\n", 'stdout is in the result');
     like($log, qr/job $id{up}: start lane=work kind=storage-up args=\[525400000001\] requested_by=\d+\//, 'the start of a job is logged with its id, kind and requester');
     like($log, qr/job $id{up}: end lane=work kind=storage-up exit=0 duration=[\d.]+s result=done/, 'the end is logged with exit and duration');
+    like($log, qr/^HPS-EVENT pri=notice kind=job subject=storage-up:525400000001 state=ended hps-jobs: info: job \Q$id{up}\E: end /m,
+        'a job that ended well is an event line of kind job: notice, ended');
 }
 
 # --- --replace follows what the dispatcher supports
@@ -106,7 +108,8 @@ sub calls { return split /\n/, slurp("$_[0]/calls.log") }
     spit("$root/ced.out", "approving...\n");
     spit("$root/ced.err", "refused: no such request\n");
     my $id = $j->submit('pairing-approve', 'ab12');
-    run_once($root, $j);
+    my $flog = run_once($root, $j);
+    like($flog, qr/^HPS-ALERT pri=warning kind=job subject=pairing-approve:ab12 state=failed hps-jobs: info: job \Q$id\E: end .* exit=3 /m, 'a job that exited non-zero is an alert event: warning, failed');
     my $r = $j->result($id);
     is($r->{exit}, 3, 'the exit of the command');
     is($r->{stdout}, "approving...\n", 'stdout');

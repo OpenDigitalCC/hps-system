@@ -39,7 +39,7 @@ is($r->{summary}, $r->{key}, 'summary defaults to the key');
 is($r->{fields}{component}, 'sdb', 'the other fields are kept');
 is($r->{trail}[0]{event}, 'opened', 'trail starts with opened');
 ok(-f "$base/clusters/lab/issues/20261112-001.json", 'one JSON file per issue');
-like($log[-1], qr/\Awarning hps-issue: opened 20261112-001 mirror-leg:tch-002:probe-tch-002-root\z/, 'opening is logged');
+like($log[-1], qr/\Awarning HPS-ALERT pri=warning kind=issue subject=mirror-leg:tch-002:probe-tch-002-root state=open hps-issue: opened 20261112-001 mirror-leg:tch-002:probe-tch-002-root\z/, 'opening is logged');
 
 # a second open of the same key: same issue, trail and counter
 $now += 10;

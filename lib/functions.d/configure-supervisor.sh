@@ -346,6 +346,22 @@ environment=$(_get_hps_environment)
 EOF
 )" || return 3
 
+  # --- hps-log-rotate (daily rotation, compression and retention of $HPS_LOG; docs/LOGGING.md) ---
+  # Needs root: it renames and deletes the files rsyslog wrote, and sends it HUP.
+  _supervisor_append_once "program:hps-log-rotate" "$(cat <<EOF
+[program:hps-log-rotate]
+command=${HPS_SYSTEM_BASE}/bin/hps-log-rotate loop
+autostart=true
+autorestart=true
+startsecs=2
+stopsignal=TERM
+user=root
+stdout_logfile=syslog
+stderr_logfile=syslog
+environment=$(_get_hps_environment)
+EOF
+)" || return 3
+
   # --- ctrl-exec-api (unix socket for ctrl-exec-cli: hps-run.sh --input) ---
   # Starts as root only to create /run/ctrl-exec-api, then drops to the
   # ctrl-exec service user with its groups (hps, so the socket can be group
