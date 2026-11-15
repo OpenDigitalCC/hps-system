@@ -77,3 +77,12 @@ No secret is read or printed.
 `bin/`), `CTRL_EXEC_DISPATCHER_CONF` (default
 `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`), `HPS_IPS_CHECK_SYSLOG_WAIT`
 (seconds the rsyslog check waits, default 5).
+
+# Boot readiness
+
+`hps-ips-check --boot-ready [--wait SECONDS] [--json]` runs only the question
+"do this IPS's boot services answer": dnsmasq running, DHCP and TFTP bound, the
+first-stage files present, the HTTP boot path answering. Exit 0 ready, 1 not
+ready, 3 cannot tell, 2 usage. It is the gate that `hps-workload start` of a
+network-boot VM and `hps-bmc on` and `pxe-once` run first; see
+`docs/BOOT-RELIABILITY.md`.

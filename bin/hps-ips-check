@@ -25,6 +25,9 @@
 #   9 pairing: a host with pair_failed_at (the IPS gave up pairing it) is a
 #       WARN naming it
 #
+# hps-ips-check --boot-ready [--wait SECONDS] [--json] runs only the boot-services
+# readiness check (bin/hps-boot-ready): exit 0 ready, 1 not ready, 3 cannot tell.
+#
 # Result: one syslog line per check (tag hps-ips-check), a summary line, and
 # <cluster services dir>/ips-check.json. Exit 0 no FAIL, 1 any FAIL, 2 usage.
 # WARNs do not fail. --json prints the JSON on stdout instead of the text lines.
@@ -42,7 +45,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: hps-ips-check [--json] [--wait SECONDS] [--no-logger]" >&2
+  echo "usage: hps-ips-check [--json] [--wait SECONDS] [--no-logger] | --boot-ready [--wait SECONDS] [--json]" >&2
 }
 
 JSON=0
@@ -50,10 +53,12 @@ WAIT=0
 # --no-logger: under supervisord stdout already goes to syslog (the rule for
 # every program); the tool then does not log each line a second time.
 LOGGER=1
+BOOT_READY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON=1; shift ;;
     --no-logger) LOGGER=0; shift ;;
+    --boot-ready) BOOT_READY=1; shift ;;
     --wait)
       if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
         usage
@@ -66,6 +71,17 @@ while [[ $# -gt 0 ]]; do
     *) usage; exit 2 ;;
   esac
 done
+
+# --boot-ready: only the boot-services readiness check (docs/BOOT-RELIABILITY.md),
+# done by bin/hps-boot-ready; exit 0 ready, 1 not ready, 3 cannot tell, 2 usage.
+if [[ $BOOT_READY -eq 1 ]]; then
+  READY_BIN="$(dirname "${BASH_SOURCE[0]}")/hps-boot-ready"
+  READY_ARGS=(--wait "$WAIT")
+  if [[ $JSON -eq 1 ]]; then
+    READY_ARGS+=(--json)
+  fi
+  exec "$READY_BIN" "${READY_ARGS[@]}"
+fi
 
 HPS_BASE="${HPS_BASE:-/srv}"
 export HPS_BASE

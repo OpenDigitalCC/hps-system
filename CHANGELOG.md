@@ -12,6 +12,41 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A netboot node that misses its one PXE pass is noticed and reset (IPS-40, 2026-11-15)
+
+A VM started 20 seconds after the lab IPS came up sat in the OVMF shell for 28
+minutes while its workload said `running`. Layers 3 and 2 of `docs/BOOT-RELIABILITY.md`
+close that on the IPS; layer 1 (an iPXE that retries for ever) is a design there,
+not built.
+
+- **Added** Readiness gate. `HPS::BootReady` checks that dnsmasq runs, DHCP (UDP
+  67) is bound on the provisioning address, TFTP (UDP 69) is bound with
+  `snponly.efi` and `undionly.kpxe` in place, and the HTTP boot path answers.
+  `hps-ips-check --boot-ready [--wait S] [--json]` (also `bin/hps-boot-ready`)
+  exits 0 ready, 1 not ready, 3 cannot tell, 2 usage.
+- **Changed** `hps-workload start` of a workload with a network-boot VM, and
+  `hps-bmc on` and `pxe-once`, first wait up to cluster key
+  `boot_ready_wait_seconds` (default 60) and refuse with exit 3, naming what does
+  not answer. `--no-boot-wait` skips it. A verdict of cannot tell goes ahead with a
+  warning.
+- **Added** Boot-stalled watch. `HPS::BootWatch`, a tick of `hps-issue-watch`: a
+  network-boot VM recorded `running`, or a node powered on through its BMC, with
+  no iPXE init (`last_boot_at`) within `boot_stall_window_seconds` (default 180)
+  is reset (a VM: `stop --force` then `start`; metal: BMC reset, only with
+  `boot_stall_metal_reset` true), at most `boot_stall_max_resets` times (default 3),
+  one window apart, then a `boot-stalled` issue names it, the tries and the
+  console command. A stopped, suspended or otherwise not running VM is never
+  reset; a missing or unreadable record, start time, MAC or `last_boot_at` opens
+  a `boot-watch-blind` issue and never a reset; no reset is made while the boot
+  services do not answer. The state is `vms.<vm>.boot_watch` in the workload
+  record and the host key `boot_watch`.
+- **Added** `hps-workload status` shows `no netboot seen since start (N s)` for a
+  running network-boot VM that has not reached iPXE since its start.
+- **Added** Host key `bmc_power_on_at`, set by `hps-bmc on` and `reset`, removed by
+  `off` and `force-off`. Cluster keys `boot_ready_wait_seconds`,
+  `boot_stall_window_seconds`, `boot_stall_max_resets`, `boot_stall_metal_reset`.
+- **Added** `docs/BOOT-RELIABILITY.md`, with the firmware retry setting for metal.
+
 ## A node of a stopped workload is stopped, not down (2026-11-15)
 
 - **Changed** `hps-monitor` does not call a node that is a VM of a workload

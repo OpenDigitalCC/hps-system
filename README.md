@@ -159,6 +159,9 @@ The usual sequence, with placeholders:
 Where to read more:
 
 - `docs/LOGGING.md` – where every IPS service and every node logs.
+- `docs/BOOT-RELIABILITY.md` – why a node can miss its one PXE pass and the three
+  layers against it: the boot-services gate, the boot-stalled watch and reset,
+  the firmware retry setting.
 - `docs/IPS-CHECK.md` – the IPS self-check run after every start
   (`bin/hps-ips-check`) and how to read its result.
 - `docs/SECURITY.md` – *Node identity at boot* (MAC on the provisioning

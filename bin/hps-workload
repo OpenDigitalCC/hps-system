@@ -8,6 +8,8 @@ use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::Keysafe;
 use HPS::Workload;
+use HPS::BootReady;
+use HPS::BootWatch;
 
 # 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, node refusal), 4 not found
 my %EXIT = (
@@ -21,7 +23,7 @@ sub usage {
     print STDERR <<'USAGE';
 Usage:
   hps-workload create  <name> [--resume [--image-written]] [--dry-run] [--json] [--allow-any-pool-name]
-  hps-workload start   <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload start   <name> [--vm <vm>] [--no-boot-wait] [--dry-run] [--json]
   hps-workload stop    <name> [--vm <vm>] [--force] [--dry-run] [--json]
   hps-workload suspend <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload resume  <name> [--vm <vm>] [--dry-run] [--json]
@@ -33,6 +35,10 @@ Usage:
   hps-workload show-definition <name>
   hps-workload list   [--project <P>] [--json]
   hps-workload images [--json]
+start of a VM that boots from the network first waits (cluster key boot_ready_wait_seconds,
+default 60 s) for this IPS's DHCP, TFTP and HTTP boot services to answer, and refuses (exit 3)
+naming what does not; --no-boot-wait skips that. status shows "no netboot seen since start (N s)"
+for such a VM that has not reached iPXE since it was started (docs/BOOT-RELIABILITY.md).
 suspend saves each VM's memory to /<pool>/enc/state/<vm>.save on its compute host and
 stops it (a long job survives a planned host reboot); resume brings it back where it
 left off and removes the file. A 40 GB guest takes about 10 minutes each way. start and
@@ -109,6 +115,7 @@ sub render_status {
         $out .= sprintf("    suspended since %s: memory in %s (%s bytes)\n", $v->{saved_at} // '-', $v->{state_file} // '-', $v->{size_bytes} // '-')
             if ($v->{recorded_state} // '') eq 'suspended';
         $out .= "    seed: $v->{seed}\n" if defined $v->{seed};
+        $out .= "    $v->{netboot_note}\n" if defined $v->{netboot_note};
         $out .= "    address $_->{ip} ($_->{net}, $_->{mac}, $_->{source})\n" for @{ $v->{addresses} // [] };
     }
     return $out;
@@ -204,11 +211,12 @@ sub catalogue_verb {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw, $nobw);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget, 'image-written' => \$imgw,
         'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
+        'no-boot-wait' => \$nobw,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images';
@@ -232,6 +240,7 @@ sub main {
     return usage('--image-written is only for create --resume') if $imgw && !($op eq 'create' && $resume);
     return usage('--forget is only for destroy') if $forget && $op ne 'destroy';
     return usage('--force is only for stop') if $force && $op ne 'stop';
+    return usage('--no-boot-wait is only for start') if $nobw && $op ne 'start';
     return usage("--vm is not for $op") if defined $vm && ($op eq 'create' || $op eq 'destroy');
     return usage('--allow-any-pool-name is only for create and destroy') if $any && $op ne 'create' && $op ne 'destroy';
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
@@ -248,7 +257,13 @@ sub main {
             }
             return 0;
         }
+        if ($op eq 'start' && !$nobw && HPS::BootWatch::netboot_vms(eval { $wl->load($name) } // {}, $vm)) {
+            my $g = HPS::BootReady::gate();
+            print STDERR "hps-workload: $_\n" for @{ $g->{warnings} };
+            if (!$g->{ok}) { print STDERR "hps-workload: start $name refused: $g->{message}\n"; return $EXIT{refused} }
+        }
         my $r = $wl->run($op, $name, %a);
+        HPS::BootWatch->annotate_status($wl, $name, $r) if $op eq 'status';
         if ($json) { print $js->encode($r) }
         elsif ($op eq 'status') { print render_status($r) }
         elsif ($op eq 'console') {

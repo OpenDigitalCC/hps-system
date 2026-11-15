@@ -156,6 +156,15 @@ my @CATALOGUE = (
     # Resource monitor (docs/MONITORING.md): hps-monitor loop, run under supervisor.
     _q(key => 'monitor_interval_seconds', group => 'monitoring', menu => 0,
         prompt => 'Seconds between resource checks of the paired nodes (10-86400; 0 disables)', rule => 'int0:10..86400', default => '60'),
+    # Boot reliability (docs/BOOT-RELIABILITY.md): read afresh by hps-workload, hps-bmc and hps-issue-watch.
+    _q(key => 'boot_ready_wait_seconds', group => 'monitoring', menu => 0,
+        prompt => 'Seconds hps-workload start and hps-bmc on/pxe-once wait for the IPS boot services to answer before refusing (0-600; 0 checks once)', rule => 'int:0..600', default => '60'),
+    _q(key => 'boot_stall_window_seconds', group => 'monitoring', menu => 0,
+        prompt => 'Seconds after a netboot VM starts or a node is powered on with no iPXE init before it is boot-stalled (30-86400; 0 turns the watch off)', rule => 'int0:30..86400', default => '180'),
+    _q(key => 'boot_stall_max_resets', group => 'monitoring', menu => 0,
+        prompt => 'Resets of a boot-stalled node or VM before the IPS gives up and opens an issue (0-20; 0 only reports)', rule => 'int:0..20', default => '3'),
+    _q(key => 'boot_stall_metal_reset', group => 'monitoring', menu => 0,
+        prompt => 'Let the IPS power-cycle a boot-stalled metal node through its BMC (false: it opens the issue only)', rule => 'bool', default => 'false'),
     # Persistent filesystems and pools (docs/MONITORING.md): hps-monitor grades the
     # nodes' disk_*, zpool_cap and the IPS's own disks with these; hps-ips-check too.
     _q(key => 'monitor_disk_warn_pct', group => 'monitoring', menu => 0,
