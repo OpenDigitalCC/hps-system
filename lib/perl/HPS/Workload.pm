@@ -40,7 +40,12 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 my $MAX_DISKS = 8;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console suspend resume);
-my %TOP = map { $_ => 1 } qw(name project access vms);
+my %TOP = map { $_ => 1 } qw(name project access vms class);
+# The workload's class (docs/WORKLOADS.md "Classes"): what
+# happens to it when its host must go down (hps-workload drain). Not the
+# per-VM priority, which is the start and stop order inside one workload.
+our $CLASS_DEFAULT = 3;
+our $CLASS_RULE = 'a whole number 1 to 4 (1 core, 2 customer-facing, 3 ordinary, 4 batch and test; default 3)';
 my %VMK = map { $_ => 1 } qw(name memory_mib vcpus image disks nets priority compute_host boot hardware seed
     cpu_weight cpu_max_pct mem_hard_limit_mib io_weight);
 my %NICK = map { $_ => 1 } qw(net pvid tagged model);
@@ -310,6 +315,12 @@ sub validate ($def, %o) {
     _bad('workload', "name must match $NAME_RE") unless _plain($def->{name}) && $def->{name} =~ $NAME_RE;
     _bad('workload', 'project must be a non-empty string') unless _plain($def->{project}) && length $def->{project};
     my $access = _validate_access($def->{access});
+    my $class = $CLASS_DEFAULT;
+    if (exists $def->{class}) {
+        my $p = $def->{class};
+        _bad('workload', "class must be $CLASS_RULE, as a JSON number") unless _int_in($p, 1, 4) && !_json_string($p);
+        $class = $p + 0;
+    }
     _bad('workload', 'vms must be a non-empty list') unless ref $def->{vms} eq 'ARRAY' && @{ $def->{vms} };
     my (%seen, @vms);
     for my $v (@{ $def->{vms} }) {
@@ -317,7 +328,15 @@ sub validate ($def, %o) {
         _bad('workload', "vm name '$nv->{name}' is used twice") if $seen{ $nv->{name} }++;
         push @vms, $nv;
     }
-    return { name => "$def->{name}", project => "$def->{project}", access => $access, vms => \@vms };
+    return { name => "$def->{name}", project => "$def->{project}", access => $access, class => $class, vms => \@vms };
+}
+
+# class_of(\%record): the class a workload record carries. A record
+# without the key (created before the key existed) reads as the default and is
+# not rewritten; a value that is not 1 to 4 gives undef (the caller says so).
+sub class_of ($rec) {
+    return $CLASS_DEFAULT unless ref $rec eq 'HASH' && exists $rec->{class};
+    return _int_in($rec->{class}, 1, 4) ? $rec->{class} + 0 : undef;
 }
 
 #=== construction ====================================================================
@@ -534,6 +553,16 @@ sub define ($self, $name, $text, %a) {
         written => 0, vms => [ map { $_->{name} } @{ $def->{vms} } ], derived => $derived };
     return $out if $a{dry_run};
 
+    $self->_write_definition($name, $path, $text, $exists);
+    $out->{written} = 1;
+    $self->_log('info', ($exists ? 'replaced' : 'defined') . " workload $name: $path");
+    return $out;
+}
+
+# Write the definition text to $path through a temporary file and a rename
+# (define, set_class). $exists: the file is there and keeps its mode, owner
+# and group; a new file is 0664 with the directory's group.
+sub _write_definition ($self, $name, $path, $text, $exists) {
     $text .= "\n" unless $text =~ /\n\z/;
     my $dir = $self->{registry}->workload_dir($self->_cluster);
     HPS::Registry::mkdir_p($dir);
@@ -562,9 +591,49 @@ sub define ($self, $name, $text, %a) {
         $err =~ s/\s+\z//;
         _fail('failed', $err);
     }
-    $out->{written} = 1;
-    $self->_log('info', ($exists ? 'replaced' : 'defined') . " workload $name: $path");
+    return;
+}
+
+# set_class($name, $class, dry_run => 0|1): change the class of a
+# workload after it was defined or created: the stored definition (so a later
+# create keeps it) and the registry record (what list, status and drain read).
+# Either may be absent, not both. Nothing on a node changes. Returns {name,
+# class, was, definition, record, dry_run}; logged as one event.
+sub set_class ($self, $name, $class, %a) {
+    my $path = $self->definition_path($name);
+    _fail('usage', "class must be $CLASS_RULE") unless defined $class && !ref $class && $class =~ /^[1-4]\z/;
+    my $rec = $self->record($name);
+    my $has_def = -f $path ? 1 : 0;
+    _fail('notfound', "no workload '$name': no definition ($path) and no registry record") unless $rec || $has_def;
+    my ($text, $def_was);
+    if ($has_def) {
+        my (undef, $old) = $self->_read_definition($name);
+        my $raw = eval { JSON::PP->new->utf8->decode($old) };
+        _fail('refused', "$path is not a JSON object; put the definition right first (hps-workload define $name --replace)") unless ref $raw eq 'HASH';
+        $def_was = exists $raw->{class} && !ref $raw->{class} ? $raw->{class} : undef;
+        $raw->{class} = $class + 0;
+        $text = JSON::PP->new->utf8->canonical->pretty->encode($raw);
+        $self->_checked($name, $text, "$path with class $class");
+    }
+    my $was = $rec ? class_of($rec) : (defined $def_was ? $def_was : $CLASS_DEFAULT);
+    my $out = { name => $name, class => $class + 0, was => $was, definition => $has_def, record => ($rec ? 1 : 0), dry_run => ($a{dry_run} ? 1 : 0) };
+    return $out if $a{dry_run};
+    $self->_write_definition($name, $path, $text, 1) if $has_def && !(defined $def_was && $def_was eq $class);
+    $self->_rec_update($name, sub ($r) { $r->{class} = $class + 0 }) if $rec;
+    $self->_log('notice', "set-class $name: class " . ($was // 'unreadable') . " -> $class by $self->{by} ("
+        . ($has_def ? 'definition' : 'no definition') . ', ' . ($rec ? 'record' : 'not created') . ')');
     return $out;
+}
+
+# Nothing is placed, started or resumed on a host that is being drained
+# (HPS::Workload::Drain: host key drain). undrain's own start and resume pass
+# undrain => 1.
+sub _refuse_draining ($self, $op, $host, %a) {
+    return if $a{undrain};
+    my $mac = $self->_mac($host);
+    return unless $self->{registry}->host_exists($mac, 'drain');
+    _fail('refused', "$op: compute host $host is draining (host key drain): nothing is placed, started or resumed on it. "
+        . "Run hps-workload undrain $host when its maintenance is over");
 }
 
 sub _rec_key ($name) { return "workload_$name" }
@@ -779,6 +848,7 @@ sub _steps_create ($self, $def, %a) {
     my $asserted = 0;
     my (@s, %fetched, %attached, %vx);
     for my $vm (@{ $def->{vms} }) {
+        $self->_refuse_draining('create', $vm->{compute}, %a);
         my $in = $self->_vm_info($def, $vm);
         my $mac = $in->{mac};
         for my $d (grep { defined $_->{dataset} } @{ $in->{disks} }) {
@@ -933,6 +1003,7 @@ sub _steps_start ($self, $def, %a) {
     my (@s, %vx);
     for my $vm ($self->_ordered($def, %a)) {
         _refuse_suspended($rec, $vm->{name}, 'start');
+        $self->_refuse_draining('start', $vm->{compute}, %a);
         my $in = $self->_vm_info($def, $vm);
         # The compute host runs from RAM: a reboot lost its VXLAN links, and the
         # peers may have changed. Idempotent, so every start runs it.
@@ -1033,6 +1104,7 @@ sub _steps_resume ($self, $def, %a) {
         my $rv = $rec->{vms}{ $vm->{name} };
         _fail('refused', "resume: VM $vm->{name} is not suspended (state " . ($rv->{state} // 'unknown') . ')')
             unless ref $rv eq 'HASH' && ($rv->{state} // '') eq 'suspended';
+        $self->_refuse_draining('resume', $vm->{compute}, %a);
         my $in = $self->_vm_info($def, $vm);
         my $file = $rv->{state_file} // $self->_state_file($in, 'resume');
         push @s, map { _step($in->{mac}, $_->{script}, $_->{args}) } $self->_vxlan_calls($vm, $in->{mac}, \%vx);
@@ -1423,7 +1495,7 @@ sub _new_record ($self, $def) {
         $vms{ $vm->{name} } = { host => $vm->{compute}, state => 'creating',
             disks => { map { $_->{name} => { md => $_->{device}, legs => $_->{specs}, (@{ $remote{ $_->{name} } } ? (remote => $remote{ $_->{name} }) : ()) } } @{ $in->{disks} } } };
     }
-    return { state => 'creating', vms => \%vms, created_at => $self->_stamp, by => $self->{by}, done => [] };
+    return { state => 'creating', class => $def->{class}, vms => \%vms, created_at => $self->_stamp, by => $self->{by}, done => [] };
 }
 
 sub _post ($self, $op, $def, $out, %a) {
@@ -1561,6 +1633,7 @@ sub _post_status ($self, $def, $out) {
         $v->{utilisation_reason} = $why if defined $why;
     }
     $out->{state} = $rec->{state};
+    $out->{class} = class_of($rec);
     $out->{vms} = [ map { $vms{ $_->{name} } }
  grep { $vms{ $_->{name} } } @{ $def->{vms} } ];
     HPS::Workload::List::annotate_status($self, $rec, $out->{vms});

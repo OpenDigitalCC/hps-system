@@ -284,6 +284,17 @@ A large guest takes minutes each way (about 10 minutes for 40 GB on the lab
 pool). `start` and `stop` of a suspended VM refuse and point to `resume`;
 `destroy` removes the saved state. See `docs/WORKLOADS.md` "Suspend and resume".
 
+### Draining a host before a reboot
+
+`hps-workload drain <host> [--dry-run]` marks a compute host not placeable and
+stops or suspends its running guests by class; `hps-workload undrain
+<host>` brings back exactly those and clears the mark. Both pass the
+`ips-admin` gate as they are (the host is a plain token), so `hps-op --cred
+FILE hps-workload drain sch-001 --dry-run` works. Exit 0 drained, 5 guests
+still running (not ready for reboot), 3 refused; a host with no running guest
+also exits 0 (`nothing-to-do` in `--json`). See
+`docs/WORKLOADS.md` "Drain and undrain".
+
 ### Defining and creating a workload
 
 A workload's definition is the file `workloads/<name>.json` in the cluster's

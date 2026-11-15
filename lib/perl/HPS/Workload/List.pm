@@ -95,7 +95,7 @@ sub list ($wl, %a) {
         for my $vm (sort keys %$vms) {
             push @addr, map { +{ vm => $vm, %$_ } } @{ addresses($vms->{$vm}, $layout, $leases) };
         }
-        push @out, { name => $name, project => $project, state => $rec->{state}, hosts => [ sort keys %host ],
+        push @out, { name => $name, project => $project, state => $rec->{state}, class => HPS::Workload::class_of($rec), hosts => [ sort keys %host ],
             vms => scalar(keys %$vms), addresses => \@addr, created_at => $rec->{created_at} };
     }
     return \@out;
@@ -103,8 +103,8 @@ sub list ($wl, %a) {
 
 sub render_list ($rows) {
     return "no workloads\n" unless @$rows;
-    my @h = qw(NAME PROJECT STATE HOST VMS ADDRESS CREATED);
-    my @r = map { [ $_->{name}, $_->{project} // '-', $_->{state} // '-', join(',', @{ $_->{hosts} }) || '-', $_->{vms},
+    my @h = qw(NAME PROJECT STATE CLASS HOST VMS ADDRESS CREATED);
+    my @r = map { [ $_->{name}, $_->{project} // '-', $_->{state} // '-', $_->{class} // '?', join(',', @{ $_->{hosts} }) || '-', $_->{vms},
         (@{ $_->{addresses} } ? $_->{addresses}[0]{ip} : '-'), $_->{created_at} // '-' ] } @$rows;
     my @w = map { my $c = $_; (sort { $b <=> $a } map { length $_->[$c] } \@h, @r)[0] } 0 .. $#h;
     my $line = sub ($r) { return join('  ', map { sprintf('%-*s', $w[$_], $r->[$_]) } 0 .. $#h) =~ s/\s+\z//r . "\n" };
