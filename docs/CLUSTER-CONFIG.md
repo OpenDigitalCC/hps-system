@@ -271,6 +271,21 @@ full budget; an SCH or `SCH,TCH` host is unchanged.
 The guests' slice also gets `CPUWeight=50` and `IOWeight=50` against the
 host's `system.slice` (100); these are fixed, not keys.
 
+### Storage faults
+
+Four keys keep a stalled or memory-starved iSCSI target from becoming guest
+EIO (`docs/STORAGE-FAULTS.md`: the incident, the reasoning and what is still to
+be measured). The compute-side keys are read by the node script that acts on
+them, from the IPS over the boot channel, like the host reserve above; an absent
+or out-of-range key takes the default.
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `vm_disk_error_policy` | `stop` | `vm-define` writes `error_policy` and `rerror_policy` of every guest disk. `stop` pauses the guest on an I/O error of its disk, so it never sees EIO and never remounts read-only; `report` hands the error to the guest. Only `report` is passed to `vm-define` (`--disk-error-policy report`); a guest already defined keeps its definition until it is shut off and redefined with `--replace` |
+| `iscsi_max_sectors_kb` | `256` | `leg-resolve` lowers `queue/max_sectors_kb` of an iSCSI leg's device to this after login (never raises it, never beyond `max_hw_sectors_kb`); `0` keeps the kernel's limit. Applies to legs resolved after the node runs the new script |
+| `iscsi_replacement_timeout` | `15` | `leg-resolve` writes it as `node.session.timeo.replacement_timeout` of the node record before each login. 15 is the owner ruling of 2026-11-12; the key exists so the lab can measure other values without an image build |
+| `storage_min_free_pct` | `2` | storage hosts (role SCH): `host-reserve-apply` raises `vm.min_free_kbytes` to this percent of RAM, at least 128 and at most 2048 MiB, never lowering the kernel's own value; `0` leaves it |
+
 ### Zvol write properties
 
 Two keys are the cluster's write policy for guest disks. `hps-storage <host>
@@ -406,6 +421,10 @@ keys may be empty.
 | `host_reserve_cpus` | resources | Logical CPUs every node keeps from its guests for itself (0-1024; 0 = none; empty: 1, or 2 on a host with 16 or more) | `int0:1..1024` | (empty) | no |
 | `host_reserve_mem_mib` | resources | MiB of RAM every node keeps from its guests for itself (256-16777216; empty: 10% of RAM, at least 2048) | `int:256..16777216` | (empty) | no |
 | `zfs_arc_max_pct` | resources | ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90) | `int:1..90` | `25` | no |
+| `storage_min_free_pct` | resources | `vm.min_free_kbytes` of a storage host as a percent of RAM (0-10; 0 = the kernel's value), at least 128 and at most 2048 MiB (`docs/STORAGE-FAULTS.md`) | `int0:1..10` | `2` | no |
+| `vm_disk_error_policy` | resources | What QEMU does with an I/O error of a guest disk: `stop` (pause the guest) or `report` (hand the error to it) (`docs/STORAGE-FAULTS.md`) | `enum:stop,report` | `stop` | no |
+| `iscsi_max_sectors_kb` | resources | Largest command, in KiB, of an iSCSI leg's block device on a compute node (64-4096; 0 = the kernel's limit) | `int0:64..4096` | `256` | no |
+| `iscsi_replacement_timeout` | resources | Seconds an iSCSI leg queues I/O while its session is re-established before the error goes up to md (5-600) | `int:5..600` | `15` | no |
 | `storage_zvol_sync` | resources | ZFS `sync` of new zvols: `standard` (every sync write journalled) or `disabled` (acknowledged at once, flushed per transaction group; a storage host crash loses its last transaction group, the other mirror leg has it) | `enum:standard,disabled` | `standard` | no |
 | `storage_zvol_logbias` | resources | ZFS `logbias` of new zvols: `latency` (uses the log device) or `throughput` (writes go to the pool) | `enum:latency,throughput` | `latency` | no |
 | `image_write_fraction` | resources | Fraction (above 0, below 1) of a storage host's measured pool write speed (host key `storage_pool_write_mbps`) that `vm-image-write` may use while it writes a guest image; no measurement, no pacing | `regex:0\.[0-9]{0,2}[1-9]0{0,2}` | `0.5` | no |

@@ -70,7 +70,7 @@ setprop() { grep '^systemctl set-property' "$SHIM_LOG"; }
   grep -qx "options zfs zfs_arc_max=$((16384 * 1048576))" "$HPS_MODPROBE_DIR/hps-zfs-arc.conf"
   grep -qx "guest_mem_max_mib=42599" "$HPS_RUN_DIR/host-reserve"
   grep -qx "roles_from=image" "$HPS_RUN_DIR/host-reserve"
-  [ "$(grep -c 'cmd=cluster_variable&name=' "$SHIM_LOG")" -eq 3 ]
+  [ "$(grep -c 'cmd=cluster_variable&name=' "$SHIM_LOG")" -eq 4 ]
   [ "$(grep -c 'cmd=host_variable&name=TYPE' "$SHIM_LOG")" -eq 1 ]
   [[ "$output" == *"no TYPE assigned in the registry: roles from the image (SCH,TCH)"* ]]
 }

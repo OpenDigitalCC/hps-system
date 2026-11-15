@@ -42,7 +42,7 @@ p240_mirror() {
   grep -qxF '  "node.conn[0].timeo.noop_out_interval=5"' "$f"
   grep -qxF '  "node.conn[0].timeo.noop_out_timeout=5"' "$f"
   grep -qxF '  "node.conn[0].timeo.login_timeout=15"' "$f"
-  run ! grep -nE 'replacement_timeout|noop_out|login_timeout' <(grep -vE '^#|^  "node\.' "$f")
+  run ! grep -nE 'replacement_timeout|noop_out|login_timeout' <(grep -vE '^#|^  "node\.|^REPLACEMENT_NAME=|^  REPL_OVERRIDE=' "$f")
 }
 
 @test "leg-resolve: each timeout is written to the node record after discovery, before login" {

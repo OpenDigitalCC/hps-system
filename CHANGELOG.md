@@ -12,6 +12,30 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A stalled storage target no longer becomes guest EIO (2026-11-15)
+
+Prompted by the dev host's iSCSI project disk failing on 2026-11-15 (the
+target's order-4 allocations failed on 1 MB writes, the guest saw EIO and went
+read-only). Design and measurement plan: `docs/STORAGE-FAULTS.md`. All of it
+needs a node image build and takes effect at a node's next boot or next run of
+the script.
+
+- **New** `vm_disk_error_policy` (default `stop`): `vm-define` writes
+  `error_policy` and `rerror_policy` on every disk, so a disk error pauses the
+  guest instead of reaching it as EIO. `--disk-error-policy stop|report` on
+  `vm-define`; `hps-workload` passes it only for `report`. A guest defined
+  earlier is not refused; `--replace` applies the policy.
+- **New** `iscsi_max_sectors_kb` (default 256): `leg-resolve` lowers the leg
+  device's `max_sectors_kb` after login.
+- **New** `iscsi_replacement_timeout` (default 15, the 2026-11-12 ruling):
+  `leg-resolve` writes it to the node record, so the lab can measure other
+  values without an image build. The default is unchanged.
+- **New** `storage_min_free_pct` (default 2): `host-reserve-apply` raises
+  `vm.min_free_kbytes` on storage hosts (128 to 2048 MiB, never lowered); the
+  record `/run/hps/host-reserve` gains `min_free_mib=`.
+- **Not done** A monitor check and issue rule for paused guests, and `vm-resume`:
+  specified in the note.
+
 ## A node of a stopped workload is stopped, not down (2026-11-15)
 
 - **Changed** `hps-monitor` does not call a node that is a VM of a workload
