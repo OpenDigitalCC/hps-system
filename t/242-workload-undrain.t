@@ -38,7 +38,7 @@ sub drained {
     is($r->{exit}, 0, 'exit 0');
     is(scalar(() = $f->{ce}->calls), 0, 'no node call');
     is(HPS::Workload::Drain::render($r), "undrain: sch-001 is not drained (no host key drain); nothing to do\n", 'text says so');
-    is_deeply([ DrainFixture::events($f) ], ['info undrain sch-001: the host is not drained (no host key drain); nothing to do'], 'event');
+    is_deeply([ DrainFixture::events($f) ], [ DrainFixture::ev('info', 'node', 'sch-001', 'done', 'undrain sch-001: the host is not drained (no host key drain); nothing to do') ], 'event');
     is(DrainFixture::state($f, 'plain'), 'running', 'the running guest is untouched');
 }
 
@@ -63,10 +63,10 @@ sub drained {
     is(DrainFixture::state($f, 'held'), 'suspended', 'a guest suspended before the drain is left suspended');
     ok(!DrainFixture::mark($f), 'the mark is cleared');
     my @ev = DrainFixture::events($f);
-    is($ev[0], 'notice undrain sch-001: by tester; 3 guest(s) to bring back', 'event: the start');
-    ok(scalar(grep { $_ eq 'info undrain sch-001: resume of core/core-vm (class 1) ok' } @ev), 'event: a resume');
-    ok(scalar(grep { $_ eq 'info undrain sch-001: start of batch/batch-vm (class 4) ok' } @ev), 'event: the start of a guest');
-    is($ev[-1], 'notice undrain sch-001: mark cleared (host key drain removed); the host is placeable again', 'event: the end');
+    is($ev[0], DrainFixture::ev('notice', 'node', 'sch-001', 'started', 'undrain sch-001: by tester; 3 guest(s) to bring back'), 'event: the start');
+    ok(scalar(grep { $_ eq DrainFixture::ev('info', 'workload', 'core', 'done', 'undrain sch-001: resume of core/core-vm (class 1) ok') } @ev), 'event: a resume');
+    ok(scalar(grep { $_ eq DrainFixture::ev('info', 'workload', 'batch', 'done', 'undrain sch-001: start of batch/batch-vm (class 4) ok') } @ev), 'event: the start of a guest');
+    is($ev[-1], DrainFixture::ev('notice', 'node', 'sch-001', 'done', 'undrain sch-001: mark cleared (host key drain removed); the host is placeable again'), 'event: the end');
     like(HPS::Workload::Drain::render($r), qr/^undrain ok: sch-001 is placeable again \(host key drain removed\)$/m, 'text');
 
     # placeable again
@@ -94,7 +94,7 @@ sub drained {
     like($m->{guests}[0]{undo_error}, qr/vm-restore exited 3/, 'and why');
     my $e = eval { $wl->run('start', 'off'); 1 } ? undef : $@;
     is($e && $e->kind, 'refused', 'the host is still not placeable');
-    like((DrainFixture::events($f))[-1], qr/^err undrain sch-001: incomplete, 1 guest\(s\) not brought back: core\/core-vm; the host stays marked \(host key drain\), run undrain again$/, 'event');
+    like((DrainFixture::events($f))[-1], qr/^warning HPS-ALERT pri=warning kind=node subject=sch-001 state=failed undrain sch-001: incomplete, 1 guest\(s\) not brought back: core\/core-vm; the host stays marked \(host key drain\), run undrain again$/, 'event');
     like(HPS::Workload::Drain::render($r), qr/^undrain INCOMPLETE: not brought back: core\/core-vm\. sch-001 stays marked/m, 'text');
 
     DrainFixture::reset_calls($f);

@@ -185,7 +185,8 @@ bold: 1
 ---
 Issue register (`HPS::Issues`, `hps-issue-watch`, the healer) | opened (warning or urgent), resolved (notice), escalated (urgent), needs-human (urgent), and the reminder of every unresolved issue.
 hps-monitor | UNREACHABLE (warning), REACHABLE (notice), PAIR_FAILED (urgent), STOPPED (info); a check whose state changed or still holds (warning or urgent) and its recovery (notice); started, stopped, run failed, tick skipped, heartbeat.
-hps-workload (`HPS::Workload`) | the result of every operation except `status` and `console`: done (notice), refused (notice), failed (warning).
+hps-workload (`HPS::Workload`) | the result of every operation except `status` and `console`: done (notice), refused (notice), failed (warning). `set-class`: done (notice).
+hps-workload drain and undrain (`HPS::Workload::Drain`) | kind node, the host as subject: started (notice), done (notice), refused (notice), and failed (warning) when a drain leaves guests running or an undrain does not bring them all back. Each guest action is kind workload with the workload as subject: done (info), failed (warning).
 hps-jobs | a job that ended (notice, or warning when its exit status is not 0) and a job refused at once (notice).
 Pairing (`ce_approve`) | approved (notice), refused or gave up (warning).
 hps-log-rotate | rotated (notice) and any error (warning).

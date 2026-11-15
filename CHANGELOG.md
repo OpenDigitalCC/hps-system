@@ -12,6 +12,17 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Drain and class events join the log split (2026-11-15)
+
+- **Changed** `hps-workload drain`, `undrain` and `set-class` write their log
+  lines as event lines (`HPS::Event`, `docs/LOGGING.md`): the host operations
+  as kind `node` (subject the host), each guest action and `set-class` as kind
+  `workload` (subject the workload). A drain that leaves guests running is a
+  warning, so `hps-log attention` shows it until an undrain; a refusal is a
+  notice. The terminal output is unchanged. `docs/QUICKREF.md` and
+  `docs/WORKLOADS.md` list the new lines; `docs/STORAGE-FAULTS.md` is in the
+  further reading.
+
 ## Workload classes and the drain verb (2026-11-15)
 
 - **Added** A workload definition may carry `class`: a whole

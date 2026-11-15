@@ -35,6 +35,7 @@ no warnings 'experimental::signatures';
 use HPS::Registry;
 use HPS::Keysafe;
 use HPS::Workload::List ();
+use HPS::Event ();
 
 # Outcome => exit status of the verb. 3 is the tool's "refused"; 5 is drain's
 # own: guests are left (drain: still running, the host is not ready for reboot;
@@ -224,8 +225,17 @@ sub _settle ($wl, $rec) {
     return;
 }
 
+# _ev($wl, $kind, $pri, $subject, $state, $text): one event line (HPS::Event,
+# docs/LOGGING.md) through the workload driver's logger. A drain or undrain of a
+# host is kind node, subject the host; what happens to one guest is kind
+# workload, subject the workload. The terminal text is the text alone.
+sub _ev ($wl, $kind, $pri, $subject, $state, $text) {
+    HPS::Event::log_event(sub ($l, $m) { $wl->_log($l, $m) }, pri => $pri, kind => $kind, subject => $subject, state => $state, text => $text);
+    return;
+}
+
 sub _refused ($wl, $out, $why, %more) {
-    $wl->_log('warning', "$out->{op} $out->{host} refused: $why");
+    _ev($wl, 'node', 'notice', $out->{host}, 'refused', "$out->{op} $out->{host} refused: $why");
     return { %$out, outcome => 'refused', exit => $EXIT{refused}, reason => $why, %more };
 }
 
@@ -268,13 +278,13 @@ sub drain ($wl, $host, %a) {
     $rec->{state} = 'draining';
     delete $rec->{finished_at};
     $reg->host_set($mac, 'drain', $rec);
-    $wl->_log('notice', "drain $label: host marked not placeable (host key drain) by $wl->{by}; " . scalar(@$plan) . ' guest(s) to handle');
+    _ev($wl, 'node', 'notice', $label, 'started', "drain $label: host marked not placeable (host key drain) by $wl->{by}; " . scalar(@$plan) . ' guest(s) to handle');
     my $seq = 0;
     for my $e (@{ $rec->{guests} }) { $seq = $e->{seq} if ($e->{seq} // 0) > $seq }
     my @results;
     for my $g (@$plan) {
         my $what = "$g->{action} of $g->{workload}/$g->{vm} (class $g->{class})";
-        $wl->_log('notice', "drain $label: $g->{note}") if defined $g->{note};
+        _ev($wl, 'workload', 'notice', $g->{workload}, 'requested', "drain $label: $g->{note}") if defined $g->{note};
         my $e = _entry($rec, $g);
         if (!$e) {
             $e = { workload => $g->{workload}, vm => $g->{vm} };
@@ -287,11 +297,11 @@ sub drain ($wl, $host, %a) {
         my $err = $ok ? undef : _msg($@);
         if ($ok) {
             $e->{result} = 'done';
-            $wl->_log('info', "drain $label: $what ok");
+            _ev($wl, 'workload', 'info', $g->{workload}, 'done', "drain $label: $what ok");
         }
         else {
             @$e{qw(result error)} = ('left', $err);
-            $wl->_log('err', "drain $label: $what failed; the guest is left running: $err");
+            _ev($wl, 'workload', 'warning', $g->{workload}, 'failed', "drain $label: $what failed; the guest is left running: $err");
         }
         $e->{at} = $wl->_stamp;
         $reg->host_set($mac, 'drain', $rec);
@@ -302,7 +312,7 @@ sub drain ($wl, $host, %a) {
     $rec->{finished_at} = $wl->_stamp;
     $reg->host_set($mac, 'drain', $rec);
     my $outcome = !@$plan ? 'nothing-to-do' : @left ? 'guests-left' : 'drained';
-    $wl->_log(@left ? 'err' : 'notice', "drain $label: " . (
+    _ev($wl, 'node', (@left ? 'warning' : 'notice'), $label, (@left ? 'failed' : 'done'), "drain $label: " . (
         !@$plan ? 'nothing to do, no guest is running on it; ready for reboot'
         : @left ? 'NOT ready for reboot, ' . scalar(@left) . ' guest(s) still running: ' . join(', ', map {"$_->{workload}/$_->{vm}"} @left)
         : scalar(@results) . ' guest(s) handled; ready for reboot'));
@@ -324,7 +334,7 @@ sub undrain ($wl, $host, %a) {
     my $rec = eval { record($wl, $mac) };
     return _refused($wl, $out, _msg($@)) if $@;
     unless ($rec) {
-        $wl->_log('info', "undrain $label: the host is not drained (no host key drain); nothing to do") unless $a{dry_run};
+        _ev($wl, 'node', 'info', $label, 'done', "undrain $label: the host is not drained (no host key drain); nothing to do") unless $a{dry_run};
         return { %$out, outcome => 'not-drained', exit => $EXIT{'not-drained'}, guests => [], failed => [] };
     }
     _settle($wl, $rec);
@@ -339,7 +349,7 @@ sub undrain ($wl, $host, %a) {
     if ($a{dry_run}) {
         return { %$out, outcome => 'plan', exit => $EXIT{plan}, guests => \@rows, failed => [] };
     }
-    $wl->_log('notice', "undrain $label: by $wl->{by}; " . scalar(@todo) . ' guest(s) to bring back');
+    _ev($wl, 'node', 'notice', $label, 'started', "undrain $label: by $wl->{by}; " . scalar(@todo) . ' guest(s) to bring back');
     my (@failed, @results);
     for my $i (0 .. $#todo) {
         my ($e, $row) = ($todo[$i], $rows[$i]);
@@ -347,13 +357,13 @@ sub undrain ($wl, $host, %a) {
         my ($exists, $state) = eval { _vm_state($wl, $e->{workload}, $e->{vm}) };
         my $err = $@ ? 'its workload record cannot be read: ' . _msg($@) : undef;
         if (!defined $err && !$exists) {
-            $wl->_log('notice', "undrain $label: $what skipped: the workload no longer exists");
+            _ev($wl, 'workload', 'notice', $e->{workload}, 'done', "undrain $label: $what skipped: the workload no longer exists");
             push @results, { %$row, result => 'skipped', note => 'the workload no longer exists' };
             next;
         }
         if (!defined $err && ($state // '') ne $TARGET{ $e->{action} }) {
             my $now = $state // 'unknown';
-            $wl->_log('notice', "undrain $label: $what skipped: the guest is now $now, not $TARGET{ $e->{action} } as drain left it");
+            _ev($wl, 'workload', 'notice', $e->{workload}, 'done', "undrain $label: $what skipped: the guest is now $now, not $TARGET{ $e->{action} } as drain left it");
             push @results, { %$row, result => 'skipped', note => "now $now, not $TARGET{ $e->{action} } as drain left it; left as it is" };
             next;
         }
@@ -364,11 +374,11 @@ sub undrain ($wl, $host, %a) {
             $e->{undo_error} = $err;
             $e->{at} = $wl->_stamp;
             push @failed, $e;
-            $wl->_log('err', "undrain $label: $what failed; kept in the drain record: $err");
+            _ev($wl, 'workload', 'warning', $e->{workload}, 'failed', "undrain $label: $what failed; kept in the drain record: $err");
             push @results, { %$row, result => 'failed', error => $err };
             next;
         }
-        $wl->_log('info', "undrain $label: $what ok");
+        _ev($wl, 'workload', 'info', $e->{workload}, 'done', "undrain $label: $what ok");
         push @results, { %$row, result => 'done' };
     }
     if (@failed) {
@@ -376,13 +386,13 @@ sub undrain ($wl, $host, %a) {
         $rec->{state} = 'undrain-incomplete';
         $rec->{finished_at} = $wl->_stamp;
         $reg->host_set($mac, 'drain', $rec);
-        $wl->_log('err', "undrain $label: incomplete, " . scalar(@failed) . ' guest(s) not brought back: '
+        _ev($wl, 'node', 'warning', $label, 'failed', "undrain $label: incomplete, " . scalar(@failed) . ' guest(s) not brought back: '
             . join(', ', map {"$_->{workload}/$_->{vm}"} @failed) . '; the host stays marked (host key drain), run undrain again');
         return { %$out, outcome => 'incomplete', exit => $EXIT{incomplete}, guests => \@results,
             failed => [ map { +{ workload => $_->{workload}, vm => $_->{vm}, class => $_->{class}, error => $_->{undo_error} } } @failed ] };
     }
     $reg->host_unset($mac, 'drain');
-    $wl->_log('notice', "undrain $label: mark cleared (host key drain removed); the host is placeable again");
+    _ev($wl, 'node', 'notice', $label, 'done', "undrain $label: mark cleared (host key drain removed); the host is placeable again");
     return { %$out, outcome => 'undrained', exit => $EXIT{undrained}, guests => \@results, failed => [] };
 }
 

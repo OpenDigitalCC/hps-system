@@ -94,7 +94,7 @@ sub refusal { my ($def) = @_; return eval { HPS::Workload::validate($def); 1 } ?
     is(decode_json(slurp($wl->definition_path('job')))->{class}, 4, 'the definition has class 4');
     is($wl->load('job')->{class}, 4, 'and still loads');
     is(scalar(() = $f->{ce}->calls), 0, 'no node call');
-    is_deeply([ grep { /set-class/ } @{ $f->{log} } ], ['notice set-class job: class 3 -> 4 by tester (definition, record)'], 'logged as one event');
+    is_deeply([ grep { /set-class/ } @{ $f->{log} } ], [ DrainFixture::ev('notice', 'workload', 'job', 'done', 'set-class job: class 3 -> 4 by tester (definition, record)') ], 'logged as one event');
     is(DrainFixture::state($f, 'job'), 'running', 'the guest is untouched');
 
     for my $bad (0, 5, 'x', '', '03', '2.0') {

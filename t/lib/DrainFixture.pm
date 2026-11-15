@@ -8,6 +8,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib/perl", "$Bin/lib";
 use StorageFixture;
 use HPS::Workload::Drain;
+use HPS::Event ();
 
 our $HOST = 'sch-001';
 
@@ -53,7 +54,15 @@ sub actions {
     return [ map { [ $_->{script}, $_->{args}[0] ] } grep { $_->{script} =~ /^vm-(?:stop|save|start|restore)\z/ } $f->{ce}->calls ];
 }
 
-# The drain and undrain event lines of the log.
-sub events { my ($f) = @_; return grep { /^\w+ (?:un)?drain \S+[: ]/ } @{ $f->{log} } }
+# The drain and undrain event lines of the log: the marker lines
+# (HPS::Event, docs/LOGGING.md) whose text starts "drain " or "undrain ".
+sub events { my ($f) = @_; return grep { /^\w+ HPS-(?:EVENT|ALERT) pri=\S+ kind=\S+ subject=\S+ state=\S+ (?:un)?drain \S+[: ]/ } @{ $f->{log} } }
+
+# ev($pri, $kind, $subject, $state, $text): the logged form of one event line,
+# "<syslog level> <marker line>", as the fixture's logger records it.
+sub ev {
+    my ($pri, $kind, $subject, $state, $text) = @_;
+    return HPS::Event::syslog_level($pri) . ' ' . HPS::Event::line(pri => $pri, kind => $kind, subject => $subject, state => $state, text => $text);
+}
 
 1;

@@ -351,8 +351,9 @@ hps-workload set-class <name> <1-4> [--dry-run] [--json]
 `set-class` changes the class after `define` or `create`: in the stored
 definition (rewritten as canonical JSON, so a later `create` keeps it) and in
 the record of a created workload. Either may be absent, not both (4). It makes
-no node call and the guests are not touched. It is logged as one event:
-`set-class <name>: class 3 -> 2 by <operator> (definition, record)`.
+no node call and the guests are not touched. It is logged as one event line (kind `workload`, subject the workload, state
+`done`, notice): `set-class <name>: class 3 -> 2 by <operator> (definition,
+record)`.
 
 ## Drain and undrain
 
@@ -439,13 +440,20 @@ before the node call), `done`, or `left` (the action failed, with `error`). An
 entry still `attempting` belongs to a drain that died mid-call; the next
 `drain` or `undrain` settles it from the workload record.
 
-**Events.** Every drain and undrain, and each guest action, is one log line:
+**Events.** Every drain and undrain, and each guest action, is one event line
+(`docs/LOGGING.md`, `hps-log events`). What happens to the host is kind `node`
+with the host as subject; what happens to one guest is kind `workload` with the
+workload as subject. The text after the marker fields is:
 `drain <host>: host marked not placeable (host key drain) by <operator>; N
-guest(s) to handle`, `drain <host>: suspend of <workload>/<vm> (class 3) ok`,
-`drain <host>: ... failed; the guest is left running: <reason>`, `drain <host>:
-N guest(s) handled; ready for reboot`, `undrain <host>: resume of
-<workload>/<vm> (class 3) ok`, `undrain <host>: mark cleared (host key drain
-removed); the host is placeable again`.
+guest(s) to handle` (notice, `started`), `drain <host>: suspend of
+<workload>/<vm> (class 3) ok` (info, `done`), `drain <host>: ... failed; the
+guest is left running: <reason>` (warning, `failed`), `drain <host>: N guest(s)
+handled; ready for reboot` (notice, `done`), `drain <host>: NOT ready for
+reboot, ...` (warning, `failed`: shows in `hps-log attention` until the
+`undrain` that follows), `drain <host> refused: ...` (notice, `refused`),
+`undrain <host>: resume of <workload>/<vm> (class 3) ok` (info, `done`),
+`undrain <host>: mark cleared (host key drain removed); the host is placeable
+again` (notice, `done`). The terminal output carries the text alone.
 
 **Limits.** Live migration is not built: a class 1 or 2 guest is off for the
 length of the reboot. A suspended guest resumes on the same host only (its

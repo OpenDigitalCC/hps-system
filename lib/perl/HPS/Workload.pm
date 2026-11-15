@@ -628,7 +628,7 @@ sub set_class ($self, $name, $class, %a) {
     return $out if $a{dry_run};
     $self->_write_definition($name, $path, $text, 1) if $has_def && !(defined $def_was && $def_was eq $class);
     $self->_rec_update($name, sub ($r) { $r->{class} = $class + 0 }) if $rec;
-    $self->_log('notice', "set-class $name: class " . ($was // 'unreadable') . " -> $class by $self->{by} ("
+    $self->_event('notice', $name, 'done', "set-class $name: class " . ($was // 'unreadable') . " -> $class by $self->{by} ("
         . ($has_def ? 'definition' : 'no definition') . ', ' . ($rec ? 'record' : 'not created') . ')');
     return $out;
 }

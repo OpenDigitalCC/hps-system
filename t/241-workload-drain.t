@@ -71,11 +71,11 @@ sub err_of { my ($cb) = @_; return eval { $cb->(); 1 } ? undef : $@ }
         [ [ 'batch', 'batch-vm', 4, 'stop', 'done', 1 ], [ 'plain', 'plain-vm', 3, 'suspend', 'done', 2 ],
           [ 'shop', 'shop-vm', 2, 'suspend', 'done', 3 ], [ 'core', 'core-vm', 1, 'suspend', 'done', 4 ] ], 'the record of what drain did, per guest');
     my @ev = DrainFixture::events($f);
-    is($ev[0], 'notice drain sch-001: host marked not placeable (host key drain) by tester; 4 guest(s) to handle', 'event: the mark');
-    ok(scalar(grep { $_ eq 'info drain sch-001: stop of batch/batch-vm (class 4) ok' } @ev), 'event: the stop');
-    ok(scalar(grep { $_ eq 'info drain sch-001: suspend of core/core-vm (class 1) ok' } @ev), 'event: a suspend');
-    ok(scalar(grep { $_ eq 'notice drain sch-001: class 1: would be live-migrated when migration exists; suspending' } @ev), 'event: the migration gap');
-    is($ev[-1], 'notice drain sch-001: 4 guest(s) handled; ready for reboot', 'event: the end');
+    is($ev[0], DrainFixture::ev('notice', 'node', 'sch-001', 'started', 'drain sch-001: host marked not placeable (host key drain) by tester; 4 guest(s) to handle'), 'event: the mark (node, started)');
+    ok(scalar(grep { $_ eq DrainFixture::ev('info', 'workload', 'batch', 'done', 'drain sch-001: stop of batch/batch-vm (class 4) ok') } @ev), 'event: the stop');
+    ok(scalar(grep { $_ eq DrainFixture::ev('info', 'workload', 'core', 'done', 'drain sch-001: suspend of core/core-vm (class 1) ok') } @ev), 'event: a suspend');
+    ok(scalar(grep { $_ eq DrainFixture::ev('notice', 'workload', 'core', 'requested', 'drain sch-001: class 1: would be live-migrated when migration exists; suspending') } @ev), 'event: the migration gap');
+    is($ev[-1], DrainFixture::ev('notice', 'node', 'sch-001', 'done', 'drain sch-001: 4 guest(s) handled; ready for reboot'), 'event: the end (node, done)');
     like(HPS::Workload::Drain::render($r), qr/^drain ok: sch-001 is drained and ready for reboot; it is marked not placeable \(host key drain\) until hps-workload undrain sch-001$/m, 'text: the result');
 
     # placement: nothing is created, started or resumed on the host
@@ -124,7 +124,7 @@ sub err_of { my ($cb) = @_; return eval { $cb->(); 1 } ? undef : $@ }
     is_deeply([ DrainFixture::mark($f)->{state}, scalar @{ DrainFixture::mark($f)->{guests} } ], [ 'drained', 0 ], 'the host is marked, with an empty record');
     like(HPS::Workload::Drain::render($r), qr/^drain: nothing to do, no guest is running on sch-001; it is marked not placeable \(host key drain\) and ready for reboot/m, 'text');
     like(HPS::Workload::Drain::render($r), qr/^  left as it is: off\/off-vm \(stopped\)$/m, 'text: what is left');
-    is((DrainFixture::events($f))[-1], 'notice drain sch-001: nothing to do, no guest is running on it; ready for reboot', 'event');
+    is((DrainFixture::events($f))[-1], DrainFixture::ev('notice', 'node', 'sch-001', 'done', 'drain sch-001: nothing to do, no guest is running on it; ready for reboot'), 'event');
 }
 
 #--- guests left: a suspend the node refuses; the guest runs on, drain says NOT ready
@@ -142,8 +142,8 @@ sub err_of { my ($cb) = @_; return eval { $cb->(); 1 } ? undef : $@ }
     is($m->{state}, 'guests-left', 'host key drain: state guests-left');
     is_deeply([ map {"$_->{workload}:$_->{result}"} @{ $m->{guests} } ], [qw(batch:done plain:done shop:left core:done)], 'the record says which');
     my @ev = DrainFixture::events($f);
-    like((grep { /shop\/shop-vm/ && /^err / } @ev)[0], qr/^err drain sch-001: suspend of shop\/shop-vm \(class 2\) failed; the guest is left running: /, 'event: the failure');
-    is($ev[-1], 'err drain sch-001: NOT ready for reboot, 1 guest(s) still running: shop/shop-vm', 'event: the end');
+    like((grep { /shop\/shop-vm/ && /^warning / } @ev)[0], qr/^warning HPS-ALERT pri=warning kind=workload subject=shop state=failed drain sch-001: suspend of shop\/shop-vm \(class 2\) failed; the guest is left running: /, 'event: the failure is a warning on the workload');
+    is($ev[-1], DrainFixture::ev('warning', 'node', 'sch-001', 'failed', 'drain sch-001: NOT ready for reboot, 1 guest(s) still running: shop/shop-vm'), 'event: guests left running is a warning on the node');
     my $text = HPS::Workload::Drain::render($r);
     like($text, qr/^drain INCOMPLETE: sch-001 is NOT ready for reboot; still running: shop\/shop-vm\./m, 'text: NOT ready, with the list');
     like($text, qr/^  shop\/shop-vm\s.*FAILED, left running$/m, 'text: the guest line');
@@ -193,7 +193,7 @@ sub err_of { my ($cb) = @_; return eval { $cb->(); 1 } ? undef : $@ }
     is(scalar(() = $f->{ce}->calls), 0, 'a refusal sends nothing');
     ok(!DrainFixture::mark($f), 'and does not mark the host');
     is(DrainFixture::state($f, 'batch'), 'running', 'and stops no guest');
-    like((DrainFixture::events($f))[-1], qr/^warning drain sch-001 refused: 2 guest\(s\)/, 'event: the refusal');
+    like((DrainFixture::events($f))[-1], qr/^notice HPS-EVENT pri=notice kind=node subject=sch-001 state=refused drain sch-001 refused: 2 guest\(s\)/, 'event: the refusal is a notice');
 
     my $plan = drain($wl, dry_run => 1, include_nodes => 1);
     is_deeply([ map {"$_->{workload}:$_->{action}"} @{ $plan->{guests} } ],

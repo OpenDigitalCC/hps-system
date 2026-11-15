@@ -434,6 +434,10 @@ another.
 `hps-cluster-config [--cluster NAME] export [--json]`
 : Exports the configuration.
 
+The storage-fault keys `vm_disk_error_policy`, `iscsi_max_sectors_kb`,
+`iscsi_replacement_timeout` and `storage_min_free_pct` are set the same way;
+what they do is in `docs/STORAGE-FAULTS.md`.
+
 Through `hps-op`, values that do not fit an argument go through
 `hps-cluster-config-apply` with `--input`.
 
@@ -547,7 +551,8 @@ pool, `define` over an existing definition, a disk with a signature without
 ## Logs and the issue register
 
 - `hps-log attention` answers "is anything wrong" in a few lines; `hps-log
-  events` shows what happened; `hps-log audit` shows who called what;
+  events` shows what happened (including each `hps-workload` result, `set-class`,
+  `drain` and `undrain`); `hps-log audit` shows who called what;
   `hps-log host <host>` reads what a host sent to the IPS; `hps-log ips` reads
   the IPS's own lines.
 - `hps-metrics last <host>` shows the latest check results.
@@ -586,5 +591,6 @@ Needs a BMC driver
 - `docs/OPERATOR.md` – operator access, credentials and the API.
 - `docs/WORKLOADS.md` – the definition, limits, suspend and resume, workload
   classes, drain and undrain.
-- `docs/CLUSTER-CONFIG.md`, `docs/ISSUES.md`, `docs/LOGGING.md`,
-  `docs/MONITORING.md`, `docs/BMC.md`, `docs/OPENSVC.md`, `docs/IPS-CHECK.md`.
+- `docs/CLUSTER-CONFIG.md`, `docs/STORAGE-FAULTS.md`, `docs/ISSUES.md`,
+  `docs/LOGGING.md`, `docs/MONITORING.md`, `docs/BMC.md`, `docs/OPENSVC.md`,
+  `docs/IPS-CHECK.md`.
