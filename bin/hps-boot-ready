@@ -1,0 +1,42 @@
+#!/usr/bin/env perl
+# hps-boot-ready: do this IPS's boot services answer? (docs/BOOT-RELIABILITY.md)
+# Also reached as `hps-ips-check --boot-ready`.
+use strict;
+use warnings;
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib/perl";
+use Getopt::Long qw(GetOptionsFromArray);
+use JSON::PP;
+use HPS::BootReady;
+
+sub usage {
+    my ($msg) = @_;
+    print STDERR "hps-boot-ready: $msg\n" if $msg;
+    print STDERR <<'USAGE';
+Usage: hps-boot-ready [--wait SECONDS] [--json]
+Checks dnsmasq (running), DHCP (UDP 67 bound on the provisioning address),
+TFTP (UDP 69 bound, snponly.efi and undionly.kpxe present) and the HTTP boot
+path (boot_manager.sh answers). --wait: keep checking for up to SECONDS (0-600)
+until all answer; the default is one check.
+Exit: 0 ready, 1 not ready (a check failed), 3 cannot tell (nothing failed but
+a check could not be looked at), 2 usage.
+USAGE
+    return 2;
+}
+
+sub main {
+    my @argv = @_;
+    my ($wait, $json);
+    GetOptionsFromArray(\@argv, 'wait=s' => \$wait, 'json' => \$json) or return usage();
+    return usage('no arguments besides --wait and --json') if @argv;
+    return usage('--wait must be a number of seconds, 0-600') if defined $wait && !($wait =~ /\A[0-9]{1,3}\z/ && $wait <= 600);
+    my $r = HPS::BootReady::wait_ready(wait => $wait // 0);
+    if ($json) { print JSON::PP->new->canonical->pretty->encode($r) }
+    else {
+        printf "%s %s: %s\n", uc $_->{status}, $_->{name}, $_->{reason} for @{ $r->{checks} };
+        print "boot services: $r->{verdict}\n";
+    }
+    return HPS::BootReady::exit_code($r->{verdict});
+}
+
+exit main(@ARGV);

@@ -407,6 +407,10 @@ keys may be empty.
 | `audit_max_concurrent` | onboarding | Audit boots the IPS serves at once (0-1000; 0 = no limit) | `int:0..1000` | `2` | no |
 | `audit_timeout_seconds` | onboarding | Seconds after serving the audit image that an unfinished audit frees its slot (30-86400) | `int:30..86400` | `900` | no |
 | `monitor_interval_seconds` | monitoring | Seconds between resource checks of the paired nodes (10-86400; 0 disables) | `int0:10..86400` | `60` | no |
+| `boot_ready_wait_seconds` | monitoring | Seconds `hps-workload start` of a network-boot VM and `hps-bmc on`/`pxe-once` wait for the IPS boot services (DHCP, TFTP, HTTP) to answer before refusing (0-600; 0 checks once) | `int:0..600` | `60` | no |
+| `boot_stall_window_seconds` | monitoring | Seconds after a netboot VM starts or a node is powered on with no iPXE init before it is boot-stalled, and the pause between resets (30-86400; 0 turns the watch off) | `int0:30..86400` | `180` | no |
+| `boot_stall_max_resets` | monitoring | Resets of a boot-stalled node or VM before the IPS gives up and opens an issue (0-20; 0 only reports) | `int:0..20` | `3` | no |
+| `boot_stall_metal_reset` | monitoring | Let the IPS power-cycle a boot-stalled metal node through its BMC (false: the issue only) | `bool` | `false` | no |
 | `monitor_disk_warn_pct` | monitoring | Percent of a persistent filesystem or pool used (space or inodes) that is a WARNING (1-100, below `monitor_disk_crit_pct`; otherwise both defaults are used) | `int:1..100` | `80` | no |
 | `monitor_disk_crit_pct` | monitoring | Percent of a persistent filesystem or pool used (space or inodes) that is CRITICAL (1-100); hps-monitor grades the nodes' `disk_*` and `zpool_cap` checks and the IPS's own disks with these, hps-ips-check its disk checks | `int:1..100` | `90` | no |
 | `log_retention_days` | monitoring | Days the per-host and per-service day files and the catch-all day files are kept (1-3650) | `int:1..3650` | `7` | no |

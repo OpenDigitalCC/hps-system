@@ -8,6 +8,7 @@ use lib "$RealBin/../lib/perl";
 use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::BMC;
+use HPS::BootReady;
 
 # Exit: 0 ok, 3 refused, 4 target unreachable, 5 not supported, 1 failed
 # (usage mistakes: 2). IPS-04 calls `hps-bmc <action> <host>`.
@@ -19,7 +20,7 @@ sub usage {
     print STDERR "hps-bmc: $msg\n" if $msg;
     print STDERR <<'USAGE';
 Usage:
-  hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json]
+  hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json] [--no-boot-wait]
   hps-bmc status <host> --json      {"power":"on|off|unknown","model","serial","bmc_firmware"}
   hps-bmc console <host> [--seconds N]
       serial console: stdin keystrokes in, console output out; ends after N seconds
@@ -31,6 +32,9 @@ Usage:
   hps-bmc select <host>             choose the driver from the stored audit
   hps-bmc list [--json]
 <host> is a MAC (any format) or a registry HOSTNAME.
+on and pxe-once first wait (cluster key boot_ready_wait_seconds, default 60 s) for this IPS's
+DHCP, TFTP and HTTP boot services to answer, and refuse (exit 3) naming what does not;
+--no-boot-wait skips that (docs/BOOT-RELIABILITY.md).
 Exit: 0 ok, 3 refused, 4 target unreachable, 5 not supported by this device,
 1 failed, 2 usage.
 USAGE
@@ -50,9 +54,15 @@ sub kv {
 
 sub cmd_action {
     my ($bmc, $action, @args) = @_;
-    my ($json);
-    GetOptionsFromArray(\@args, 'json' => \$json) or return usage();
+    my ($json, $no_wait);
+    GetOptionsFromArray(\@args, 'json' => \$json, 'no-boot-wait' => \$no_wait) or return usage();
     return usage("$action needs one host") unless @args == 1;
+    return usage('--no-boot-wait is only for on and pxe-once') if $no_wait && $action ne 'on' && $action ne 'pxe-once';
+    if (($action eq 'on' || $action eq 'pxe-once') && !$no_wait) {
+        my $g = HPS::BootReady::gate();
+        print STDERR "hps-bmc: $_\n" for @{ $g->{warnings} };
+        if (!$g->{ok}) { print STDERR "hps-bmc: refused: $g->{message}\n"; return 3 }
+    }
     my $r = $bmc->run($args[0], $action);
     print STDERR $r->{stderr} if length $r->{stderr};
     if ($action eq 'status' && $r->{status}) {

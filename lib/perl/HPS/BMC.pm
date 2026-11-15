@@ -440,6 +440,14 @@ sub _record ($self, $mac, $res) {
     my $last = { action => $res->{action}, rc => $res->{rc}, at => strftime('%Y-%m-%d %H:%M:%S UTC', gmtime) };
     $last->{power} = $res->{status}{power} if $res->{status};
     eval { $self->{registry}->host_set($mac, 'bmc_last', $last) };
+    # The IPS-side power-on time, for the boot-stalled watch (HPS::BootWatch): a node
+    # powered on or reset that never netboots afterwards is stalled. An off clears it.
+    if ($res->{rc} == 0 && ($res->{action} eq 'on' || $res->{action} eq 'reset')) {
+        eval { $self->{registry}->host_set($mac, 'bmc_power_on_at', time) };
+    }
+    elsif ($res->{rc} == 0 && ($res->{action} eq 'off' || $res->{action} eq 'force-off')) {
+        eval { $self->{registry}->host_unset($mac, 'bmc_power_on_at') };
+    }
     return;
 }
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
 # hps-issue-watch: follows the nodes' syslog on the IPS, opens and resolves
-# issues by the trigger rules, and heals mirror-leg and zfs-vdev issues
-# (docs/ISSUES.md).
+# issues by the trigger rules, heals mirror-leg and zfs-vdev issues (docs/ISSUES.md),
+# and watches for netboot VMs and BMC-powered nodes that never reach iPXE
+# (HPS::BootWatch, docs/BOOT-RELIABILITY.md).
 # `loop` runs under supervisor (program:hps-issue-watch).
 use strict;
 use warnings;
@@ -11,6 +12,7 @@ use Getopt::Long qw(GetOptionsFromArray);
 use HPS::Issues;
 use HPS::IssueWatch;
 use HPS::IssueHeal;
+use HPS::BootWatch;
 
 $| = 1;
 
@@ -23,7 +25,8 @@ Usage:
   hps-issue-watch check-rules [FILE]
 loop: every S seconds (default 2) reads the new lines of <log>/<sender ip>/
   <date>.log and <log>/ips/hps/<date>.log, applies the rules, then runs the
-  healer over the due mirror-leg and zfs-vdev issues (--no-heal: record only). Starts at the end of every file unless its
+  healer over the due mirror-leg and zfs-vdev issues and the boot-stalled watch (a scan every
+  15 s; --no-heal: record only, neither runs). Starts at the end of every file unless its
   state file (<issues dir>/.watch-state.json) is less than 300 s old.
 check-rules: parses the rules file (default lib/hps-issue-rules.conf, or
   HPS_ISSUE_RULES) and prints the rule count, or the first bad line.
@@ -54,9 +57,10 @@ sub main {
     # the healer first: a storage-path issue resolving makes the mirror-leg
     # issues on its portal due at once (HPS::IssueHeal::resolved, IPS-34)
     my $heal = $noheal ? undef : HPS::IssueHeal->new(issues => $issues);
+    my $boot = $noheal ? undef : HPS::BootWatch->new(issues => $issues);
     my $w = eval { HPS::IssueWatch->new(issues => $issues, ($heal ? (on_resolve => sub { $heal->resolved($_[0]) }) : ())) };
     if (!$w) { print STDERR 'hps-issue-watch: ' . (ref $@ ? $@->message : $@) . "\n"; return 1 }
-    return $w->loop(interval => $interval, max_polls => $max, ($heal ? (tick => sub { $heal->tick }) : ()));
+    return $w->loop(interval => $interval, max_polls => $max, ($heal ? (tick => sub { my $n = eval { $boot->tick } // 0; return $n + $heal->tick }) : ()));
 }
 
 exit main(@ARGV);

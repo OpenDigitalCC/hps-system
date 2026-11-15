@@ -17,6 +17,7 @@ setup() {
   export HPS_CONFIG_BASE="$TEST_DIR/cfg"
   export HPS_SYSTEM_REGISTRY="$TEST_DIR/cfg/system.db"
   export HPS_BMC_RETRY_DELAY=0
+  export HPS_BOOT_READY_SKIP=1   # the boot-services gate of hps-bmc on/pxe-once (these tests have no dnsmasq)
   export HPS_BMC_ENV_PASS="SHIM_LOG CALLS_LOG FIX_DIR TEST_DIR P97_USER P97_PASS FAKE_CURL_RC FAKE_PDU_STATE FAKE_PDU_RC FAKE_IPMI_POWER FAKE_IPMI_ERR"
   unset HPS_BMC_NO_SYSLOG
   export PERL5LIB="$ROOT/lib/perl"
