@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Wiring of hps-log (docs/LOGGING.md): an ips-admin tool, open in the gate for
-# its two read verbs only, named by hps-op and OPERATOR.md. The reading itself
+# its five read verbs only (host, ips, events, audit, attention), named by hps-op and OPERATOR.md. The reading itself
 # is t/206-hps-log.t.
 
 bats_require_minimum_version 1.5.0
@@ -32,7 +32,7 @@ gate() {
   [ -x "$ROOT/ips-admin/hps-log" ]
   grep -qxF 'exec "${0%/*}/ips-admin-exec" hps-log "$@"' "$ROOT/ips-admin/hps-log"
   grep -q 'hps-log' "$ROOT/bin/hps-op"
-  grep -q '^| `hps-log` | `bin/hps-log` | `host`, `ips`' "$ROOT/docs/OPERATOR.md"
+  grep -q '^| `hps-log` | `bin/hps-log` | `host`, `ips`, `events`, `audit`, `attention`' "$ROOT/docs/OPERATOR.md"
   [ -x "$ROOT/bin/hps-log" ]
 }
 
@@ -59,12 +59,33 @@ gate() {
   [[ "$output" != *"tool="* ]]
 }
 
+@test "the ips-admin gate: events, audit and attention pass with their options, and only theirs" {
+  gate events --lines 20 --since 1h --min-level warning --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-log args=events --lines 20 --since 1h --min-level warning --json"* ]]
+  gate audit --grep ctrl-exec-api --since 30m
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-log args=audit --grep ctrl-exec-api --since 30m"* ]]
+  gate attention --since 2h --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tool=hps-log args=attention --since 2h --json"* ]]
+  gate attention
+  [ "$status" -eq 0 ]
+  gate attention --since '../x'
+  [ "$status" -eq 2 ]
+  gate events 'a b'
+  [ "$status" -eq 2 ]
+  gate audit /etc/passwd
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"tool="* ]]
+}
+
 @test "the ips-admin gate: any other hps-log verb, or a path, is refused" {
   gate
   [ "$status" -eq 2 ]
   gate tail cnh-001
   [ "$status" -eq 2 ]
-  [[ "$output" == *"only host and ips"* ]]
+  [[ "$output" == *"only host, ips, events, audit and attention"* ]]
   gate --json host cnh-001
   [ "$status" -eq 2 ]
   gate host ../../etc/passwd

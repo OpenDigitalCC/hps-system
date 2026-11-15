@@ -13,6 +13,7 @@ use lib "$RealBin/../lib/perl";
 use Getopt::Long qw(GetOptionsFromArray);
 use POSIX qw(WNOHANG);
 use Time::HiRes qw(sleep time);
+use HPS::Event;
 use HPS::Jobs;
 
 $| = 1;
@@ -21,6 +22,17 @@ umask 002;
 sub log_line {
     my ($level, $msg) = @_;
     print "hps-jobs: $level: $msg\n";
+    return;
+}
+
+# job_event($pri, $job, $state, $level, $msg): the line of log_line, as an event
+# line of kind job (HPS::Event, docs/LOGGING.md). The subject is the kind and
+# the first argument (a MAC or a workload name), so a later success of the same
+# job closes an earlier failure in hps-log attention.
+sub job_event {
+    my ($pri, $job, $state, $level, $msg) = @_;
+    my $subject = join ':', $job->{kind}, (defined $job->{args}[0] && $job->{args}[0] !~ /\A-/ ? ($job->{args}[0]) : ());
+    print HPS::Event::line(pri => $pri, kind => 'job', subject => $subject, state => $state, text => "hps-jobs: $level: $msg") . "\n";
     return;
 }
 
@@ -137,7 +149,7 @@ sub take_one {
         return (undef, 0);
     }
     if (defined $problem) {
-        log_line(error => "job $job->{id}: refused: $problem");
+        job_event('notice', $job, 'refused', error => "job $job->{id}: refused: $problem");
         $jobs->finish($job, exit => 2, stdout => '', stderr => "refused: $problem\n");
         return (undef, 1);
     }
@@ -156,7 +168,8 @@ sub reap {
         my ($exit, $out, $err) = @$r;
         my $dur  = sprintf('%.1f', time - $e->{t0});
         my $dest = $jobs->finish($e->{job}, exit => $exit, stdout => $out, stderr => $err, duration => $dur);
-        log_line(info => "job $e->{job}{id}: end lane=$lane kind=$e->{job}{kind} exit=$exit duration=${dur}s result=$dest");
+        job_event($exit == 0 ? 'notice' : 'warning', $e->{job}, $exit == 0 ? 'ended' : 'failed',
+            info => "job $e->{job}{id}: end lane=$lane kind=$e->{job}{kind} exit=$exit duration=${dur}s result=$dest");
         delete $running->{$lane};
     }
     return keys %$running;

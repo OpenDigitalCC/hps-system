@@ -12,6 +12,50 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## The log split: events, audit, metrics, rotation (2026-11-15)
+
+IPS-36 and IPS-20, extended by the owner on 2026-11-15 ("follow a log of
+actions and issues, but not the full audit trails"; "daily log rotation").
+`docs/LOGGING.md` is the home.
+
+- **Added** event lines: `HPS-EVENT pri=<info|notice> kind= subject= state=
+  <text>` and `HPS-ALERT pri=<warning|urgent> ...`, a fixed vocabulary
+  (`HPS::Event`). `grep -F HPS-ALERT events.log` is the attention filter. Written
+  by the issue register (opened, resolved, escalated, needs-human, and a
+  reminder of every unresolved issue every 50 minutes), hps-monitor (host
+  states, a check changing state, started, stopped, a heartbeat), hps-workload
+  (the result of each operation), hps-jobs (end and refusal), pairing (approved,
+  refused) and hps-log-rotate. A shell tool uses `hps_event`.
+- **Added** rsyslog routing on the IPS: `audit.log` (ctrl-exec-api, -agent,
+  -dispatcher, hps-auth-hook, ips-admin; no longer in the day files),
+  `metrics.log` (hps-monitor lines, the form `hps-metrics` reads) and
+  `events.log` (marker lines of local programs, and a table of derived lines for
+  what cannot carry a marker yet: iPXE, node up and off, held, BMC actions,
+  hps-node, hps-storage, hps-ips-check, local errors).
+- **Added** `hps-log attention [--since 1h]` (the open problems in a screenful;
+  exit 0 nothing, 10 attention, 11 the events could not be read: absent, empty,
+  unreadable or silent), `hps-log events` and `hps-log audit`; the ips-admin
+  gate, the wiring test and `docs/OPERATOR.md` list them. `--since` takes
+  `30m`, `1h`, `2d`.
+- **Changed** `hps-log` and `hps-metrics` read rotated and gzipped files.
+  `hps-log ips` reads `ips/dnsmasq-dhcp/` (`--grep DHCPACK` kept working) and no
+  longer reads the lab collector's events. `hps-log` level of an event line is
+  its own priority.
+- **Added** `hps-log-rotate` (supervisor program): renames the three views daily
+  and sends rsyslogd HUP, gzips files untouched for 10 minutes, deletes by
+  date. Cluster keys `log_events_retention_days` (365), `log_metrics_retention_days`
+  (30), `log_audit_retention_days` (14), `log_retention_days` (7, the day files).
+  Not included: a size cap.
+- **Changed** the hps-monitor host-state lines (UNREACHABLE, REACHABLE,
+  PAIR_FAILED, STOPPED) start with the marker and are at `warning`, `notice`,
+  `err` and `info`; `hps-metrics` reads them as before. The `hps-issue` open,
+  resolved and escalated lines, the hps-workload result lines and the hps-jobs
+  end lines carry the marker in front of their old text. In `hps-workload` the
+  marker is for syslog only: stderr is unchanged.
+- **Deploy** see `docs/LOGGING.md` "Deploy on an existing IPS": the IPS
+  restarts; the lab collector block of `lab/syslog-lab.pl` must shrink to
+  `all.log` or lines are written twice.
+
 ## A node of a stopped workload is stopped, not down (2026-11-15)
 
 - **Changed** `hps-monitor` does not call a node that is a VM of a workload

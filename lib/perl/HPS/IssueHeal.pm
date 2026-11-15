@@ -446,9 +446,11 @@ sub heal ($self, $rec) {
         $self->_pool_resolved($rec, $res) if $rec->{kind} eq 'zfs-vdev';
     }
     my $after = $issues->get($rec->{id});
-    $issues->_log($after->{state} eq 'needs-human' ? 'err' : 'info',
-        "hps-issue: heal $rec->{id} $res->{outcome}: " . HPS::Issues::clean_text($res->{detail}))
-        unless $res->{outcome} eq 'healing' && !$res->{attempted};
+    unless ($res->{outcome} eq 'healing' && !$res->{attempted}) {
+        my $text = "hps-issue: heal $rec->{id} $res->{outcome}: " . HPS::Issues::clean_text($res->{detail});
+        if ($after->{state} eq 'needs-human') { $issues->event(pri => 'urgent', subject => $rec->{key}, state => 'needs-human', text => $text) }
+        else                                  { $issues->_log('info', $text) }
+    }
     return $res;
 }
 

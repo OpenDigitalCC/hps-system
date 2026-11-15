@@ -57,20 +57,17 @@ spew("$logd/ips/2026-11-12.log",
     sl('08:00:10', '127.0.0.1', 'ips', 'hps-auth-hook', 'ALLOW action=run script=nagios-check'),
     sl('08:00:20', '127.0.0.1', 'ips', 'hps-auth-hook', 'ALLOW action=run script=osvc-secret-set'),
 );
-make_path("$logd/ips/dnsmasq");
+make_path("$logd/ips/dnsmasq", "$logd/ips/dnsmasq-dhcp");
 spew("$logd/ips/hps/2026-11-12.log",
     sl('08:00:15', '127.0.0.1', 'ips', 'hps', 'hps-onboard: host cnh-001 approved'),
     sl('08:00:16', '127.0.0.1', 'ips', 'hps', 'hps-monitor: host=sch-001.hps.test check=mem state=OK'),
     sl('08:00:17', '127.0.0.1', 'ips', 'hps', 'hps-monitor: tick hosts=3 duration=6.5'),
+    sl('08:00:21', '127.0.0.1', 'ips', 'hps', 'hps-storage: storage failed on sch-001'),
+);
+spew("$logd/ips/dnsmasq-dhcp/2026-11-12.log",
+    sl('08:00:25', '127.0.0.1', 'ips', 'dnsmasq-dhcp', 'DHCPACK(ens9) 10.9.0.12 52:54:00:aa:bb:cc cnh-001'),
 );
 spew("$logd/ips/dnsmasq/2026-11-12.log", sl('08:00:18', '127.0.0.1', 'ips', 'dnsmasq', 'another service, not read'));
-spew("$logd/events.log",
-    '2026-11-12T08:00:12.5+00:00 job ips supervisord: job 7 done',
-    '2026-11-12T08:00:13+00:00 metric ips hps: hps-monitor: host=x check=mem state=OK',
-    '2026-11-12T09:00:14+01:00 error ips hps-jobs: storage failed on sch-001',
-    '2026-11-12T08:00:15+00:00 node ips hps: hps-onboard: host cnh-001 approved',
-    '2026-11-12T08:00:16+00:00 error cnh-001 rsyslogd: a node event',
-);
 
 my $now = timegm(0, 11, 8, 12, 10, 2026);    # 2026-11-12 08:11:00 UTC
 my $log = HPS::Log->new(log_dir => $logd, registry => $reg, now => $now);
@@ -139,8 +136,8 @@ $r = $log->host_log('cnh-001', min_level => 'warning', grep => 'space');
 is($r->{count}, 1, '--min-level and --grep together');
 ok(!exists $log->host_log('cnh-001')->{min_level}, 'no min_level in the result without the option');
 $r = $log->ips_log(min_level => 'error');
-is_deeply([ map { "$_->{source}:$_->{message}" } @{ $r->{lines} } ], [ 'events:storage failed on sch-001' ],
-    'ips --min-level error: the error event only');
+is_deeply([ map { "$_->{source}:$_->{message}" } @{ $r->{lines} } ], [ 'ips/hps:hps-storage: storage failed on sch-001' ],
+    'ips --min-level error: the error line only');
 
 #--- the IPS ------------------------------------------------------------------------------
 $r = $log->ips_log;
@@ -148,14 +145,16 @@ is($r->{target}, 'ips', 'ips target');
 my @m = map { "$_->{source}:$_->{message}" } @{ $r->{lines} };
 is_deeply(\@m, [
     'ips:ALLOW action=run script=nagios-check',
-    'events:job 7 done',
-    'events:storage failed on sch-001',
     'ips/hps:hps-onboard: host cnh-001 approved',
     'ips:[redacted]',
-], 'ips: ips/<date>.log, ips/hps and the events of host ips in time order (+01:00 converted); '
- . 'monitor results, metric events, hps-tagged event copies, node events and other services left out');
-is_deeply($r->{sources}, [ 'ips', 'ips/hps', 'events' ], 'ips: the three sources');
-is($r->{lines}[2]{level}, 'error', 'an error event is an error');
+    'ips/hps:hps-storage: storage failed on sch-001',
+    'ips/dnsmasq-dhcp:DHCPACK(ens9) 10.9.0.12 52:54:00:aa:bb:cc cnh-001',
+], 'ips: ips/<date>.log, ips/hps and ips/dnsmasq-dhcp in time order; monitor results and other services left out');
+is_deeply($r->{sources}, [ 'ips', 'ips/hps', 'ips/dnsmasq-dhcp' ], 'ips: the three sources');
+is($r->{lines}[3]{level}, 'error', 'an error line is an error');
+$r = $log->ips_log(grep => 'DHCPACK');
+is_deeply([ map { $_->{source} } @{ $r->{lines} } ], [ 'ips/dnsmasq-dhcp' ], "ips --grep DHCPACK reads the dnsmasq-dhcp day files (the browser's lease lookup)");
+
 
 #--- refusals ------------------------------------------------------------------------------
 sub refused {

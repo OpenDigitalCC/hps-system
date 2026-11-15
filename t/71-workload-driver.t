@@ -82,6 +82,7 @@ my $f = StorageFixture::setup_workload();
     # the zvol went through HPS::Storage (its own log line and registry-free call)
     ok((grep { /^info call storage-zvol-create \Q$APP\E 20G/ } @{ $f->{log} }), 'zvol created through HPS::Storage');
     ok((grep { /^info call mirror-create/ } @{ $f->{log} }), 'node calls are logged');
+    ok((grep { /\Anotice HPS-EVENT pri=notice kind=workload subject=t0 state=done create t0 ok\z/ } @{ $f->{log} }), 'the result of create is an event line (docs/LOGGING.md)');
 
     my $e = err_of(sub { $wl->plan('create', 't0') });
     is($e->kind, 'refused', 'a second create is refused');
@@ -89,6 +90,7 @@ my $f = StorageFixture::setup_workload();
     my $before = nodecalls($f);
     $e = err_of(sub { $wl->run('create', 't0', resume => 1) });
     like($e->message, qr/already created/, '--resume on a finished create is refused too');
+    ok((grep { /\Anotice HPS-EVENT pri=notice kind=workload subject=t0 state=refused create t0 refused: .*already created/ } @{ $f->{log} }), 'a refusal is a notice event, state refused');
     is(nodecalls($f), $before, 'refused create sends nothing');
 }
 
@@ -154,6 +156,7 @@ my $f = StorageFixture::setup_workload();
     is($e->kind, 'failed', 'node failure: failed');
     like($e->message, qr/step 5\/10 vm-start exited 1: boom from vm-start/, 'failure names step, script and node stderr');
     is(rec($f, 't0')->{state}, 'stopped', 'failed start leaves the state');
+    ok((grep { /\Awarning HPS-ALERT pri=warning kind=workload subject=t0 state=failed start t0: step 5\/10 vm-start exited 1\z/ } @{ $f->{log} }), 'a failed step is an alert event: warning, failed');
     is(scalar(() = $f->{ce}->calls), 3, 'nothing runs after the failing call');
     $f->{ce}{rc}{'vm-start'} = 3;
     $e = err_of(sub { $wl->run('start', 't0') });
@@ -180,6 +183,8 @@ my $f = StorageFixture::setup_workload();
     $ce->{rc}{'mirror-status'} = 3;
     $r = $wl->run('status', 't0');
     ok(!$r->{ok}, 'status: a failing node call makes ok false, no exception');
+    ok(!(grep { /HPS-(?:EVENT|ALERT).*status t0/ } @{ $f->{log} }), 'a read verb (status) is not an event');
+    ok((grep { /\Ainfo status t0 ok\z/ } @{ $f->{log} }), '... it keeps its plain info line');
     delete $ce->{rc}{'mirror-status'};
     $ce->{out} = {};
 }

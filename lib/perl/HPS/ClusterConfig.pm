@@ -162,6 +162,16 @@ my @CATALOGUE = (
         prompt => 'Percent of a persistent filesystem or pool used (space or inodes) that is a WARNING (1-100, below monitor_disk_crit_pct)', rule => 'int:1..100', default => '80'),
     _q(key => 'monitor_disk_crit_pct', group => 'monitoring', menu => 0,
         prompt => 'Percent of a persistent filesystem or pool used (space or inodes) that is CRITICAL (1-100)', rule => 'int:1..100', default => '90'),
+    # Log retention (docs/LOGGING.md): hps-log-rotate, a supervisor program, deletes a file
+    # whose date is more than this many days before today.
+    _q(key => 'log_retention_days', group => 'monitoring', menu => 0,
+        prompt => 'Days the per-host and per-service day files and the catch-all day files are kept (1-3650)', rule => 'int:1..3650', default => '7'),
+    _q(key => 'log_events_retention_days', group => 'monitoring', menu => 0,
+        prompt => 'Days events.log and its rotated files are kept (1-3650)', rule => 'int:1..3650', default => '365'),
+    _q(key => 'log_metrics_retention_days', group => 'monitoring', menu => 0,
+        prompt => 'Days metrics.log and its rotated files are kept (1-3650)', rule => 'int:1..3650', default => '30'),
+    _q(key => 'log_audit_retention_days', group => 'monitoring', menu => 0,
+        prompt => 'Days audit.log and its rotated files are kept (1-3650)', rule => 'int:1..3650', default => '14'),
     _q(key => 'held_reboot_after_audit', group => 'onboarding', menu => 0,
         prompt => 'Reboot the audit image after the IPS accepts its audit (false keeps it up for inspection)', rule => 'bool', default => 'true'),
 

@@ -201,8 +201,23 @@ compute profile).
 ## Log lines
 
 Every line goes to syslog (tag `hps`, facility `local0`; OK is `info`, WARNING
-`warning`, CRITICAL, UNKNOWN and UNREACHABLE `err`) and, for `hps-monitor run`,
-to stdout. OK results are logged too.
+`warning`, CRITICAL and UNKNOWN `err`) and, for `hps-monitor run`, to stdout. OK
+results are logged too. rsyslog files the check, summary and tick lines in
+`metrics.log` (the file `hps-metrics` reads, rotated daily; `docs/LOGGING.md`)
+and in the day file `ips/hps/<date>.log` (the `from=ips` rules of
+`hps-issue-watch` read that one).
+
+The lines that matter to an operator are also **event lines**, written to
+`events.log` and read by `hps-log events` and `hps-log attention`
+(`docs/LOGGING.md`): the host-state lines below start with the marker
+`HPS-ALERT pri=<priority> kind=monitor subject=<fqdn> state=<state>` (UNREACHABLE
+is a `warning`, PAIR_FAILED `urgent`, REACHABLE a `notice`, STOPPED `info`) and
+keep their text after it. A check that is not OK also gets one event line when
+its state changes (`subject=<fqdn>/<check>`, `warning` for WARNING and UNKNOWN,
+`urgent` for CRITICAL) and again every 50 minutes while it holds; OK after a bad
+state is a `notice`. The monitor also logs `started`, `stopped` and a
+`service` heartbeat every 50 minutes (even with the interval 0), so a quiet
+cluster still has event lines in the last hour.
 
 ```
 hps-monitor: host=sch-001.hps.test check=mem state=OK MEM OK - 62% available (9.8 GiB of 15.6 GiB) | available=10522MB available_pct=62%
@@ -292,7 +307,7 @@ sample are `null`.
   `--guest` with `all` or `ips`, or on `last`, is usage (2).
 - **Cap:** at most 64 guests per host (`HPS::Metrics::MAX_GUESTS`): in each
   `vms` line the first 64 names in sorted order are read, so a guest past the
-  64th has no series and is not listed. Retention is the log tree's own; a
+  64th has no series and is not listed. Retention is `log_metrics_retention_days` (default 30); a
   call reads at most 512 MiB as above and at most 168 hours.
 
 Utilisation, in percent:
@@ -314,9 +329,10 @@ output marks a resource outside the compound with `*` (`diskio*`, `swap*`); the
 JSON of both `last` and `series` lists the resources that are in it
 (`in_compound`).
 
-Source: `<log>/metrics.log` when it exists (the lab's collector,
-`lab/syslog-lab.pl`), else `<log>/ips/hps/<date>.log`, which every IPS writes
-(hps-monitor logs with tag `hps`); `source` names the one read. A collector's
+Source: `<log>/metrics.log` and its rotated files `metrics-<date>.log[.gz]` when
+there are any (rsyslog on the IPS writes it, `docs/LOGGING.md`; retention
+`log_metrics_retention_days`, default 30), else `<log>/ips/hps/<date>.log`, which
+every IPS writes (hps-monitor logs with tag `hps`); `source` names the one read. A collector's
 `metrics.log` also holds the lines forwarded from its inner IPSs: only hosts in
 this cluster's DNS domain are read, so each IPS answers for its own hosts (an
 inner IPS answers from its own disk). Files are read from the end; a call reads

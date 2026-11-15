@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
-# hps-log: read the newest syslog lines of a host, or of the IPS itself, from the
-# IPS's log tree (docs/LOGGING.md). Read-only; an ips-admin tool, so it works
-# through hps-op.
+# hps-log: read the IPS's logs (docs/LOGGING.md): the newest syslog lines of a
+# host, of the IPS itself, the event lines, the audit records, and `attention`,
+# the answer to "is anything wrong" from a few lines. Read-only; an ips-admin
+# tool, so it works through hps-op.
 use strict;
 use warnings;
 use FindBin qw($RealBin);
@@ -10,35 +11,54 @@ use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::Log;
 
-my %EXIT = (usage => 2, notfound => 4, failed => 1);
+# attention: 10 = something needs attention, 11 = the events could not be read
+# (absent, empty, unreadable or silent); 0 = read, and nothing needs attention.
+my %EXIT = (usage => 2, notfound => 4, failed => 1, attention => 10, unread => 11);
 
 sub usage {
     my ($msg) = @_;
     print STDERR "hps-log: $msg\n" if $msg;
     print STDERR <<'USAGE';
 Usage:
-  hps-log host <mac|hostname> [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]
-  hps-log ips [--lines N] [--since MINUTES] [--grep WORD] [--min-level LEVEL] [--json]
+  hps-log attention [--since 1h] [--json]
+  hps-log events [--lines N] [--since T] [--grep WORD] [--min-level LEVEL] [--json]
+  hps-log audit [--lines N] [--since T] [--grep WORD] [--json]
+  hps-log host <mac|hostname> [--lines N] [--since T] [--grep WORD] [--min-level LEVEL] [--json]
+  hps-log ips [--lines N] [--since T] [--grep WORD] [--min-level LEVEL] [--json]
+attention: is anything wrong, from events.log alone: the counts of open
+  problems by priority and one line per problem (at most 20), newest decides
+  per kind and subject (docs/LOGGING.md). --since defaults to 1h.
+  Exit: 0 nothing needs attention, 10 attention, 11 the events could not be
+  read (no events.log, an empty one, an unreadable one, or no event line in
+  the window: never "no problems").
+events: the event lines (HPS-EVENT and HPS-ALERT), rotated files included.
+audit: the audit records: ctrl-exec calls and operator calls with identity.
 host: the newest lines the IPS received from the host, from every address the
   registry knows for it (its IP, and the addresses its stored audit recorded),
   merged by time.
-ips: the IPS's own lines: ips/<date>.log, ips/hps/<date>.log and the
-  events.log lines of host "ips" (hps-monitor's per-check results left out).
+ips: the IPS's own lines: ips/<date>.log, ips/hps/<date>.log and
+  ips/dnsmasq-dhcp/<date>.log (hps-monitor's per-check results left out).
   --lines N        how many lines, newest last (default 50, at most 500)
-  --since MINUTES  only lines of the last MINUTES (1 to 43200)
+  --since T        only lines of the last T: MINUTES (1 to 43200), or a number
+                   with m, h or d (30m, 1h, 2d). Rotated and compressed files
+                   are read as far back as that.
   --grep WORD      only lines that contain WORD (case-insensitive; one word of
                    A-Z a-z 0-9 _ . , : = @ + -), matched after redaction
   --min-level LEVEL  only lines of LEVEL or worse: warning (warnings and errors)
                    or error; a redacted line (level info) is left out
   --json           {target, host, mac, addresses, sources, lines:[{time, epoch,
-                   host, tag, message, level, source}], count, redacted, truncated,
-                   limit, and since_minutes, grep, min_level when given}
+                   host, tag, message, level, source; of an event line also pri,
+                   kind, subject, state, text}], count, redacted, truncated,
+                   limit, and since_minutes, grep, min_level when given};
+                   attention: {status, window_minutes, events, counts,
+                   problems, more, newest, reason}
 A line that names a secret (a word matching the cluster-config secret-name
 rule: secret, passw, token, credential, psk, private, key), or holds a PEM
 marker, an operator token or 64 hex digits, is shown as [redacted].
-level is error, warning or info, read from the text. Environment: HPS_LOG
-(the log tree, default /srv/hps-log), HPS_CONFIG_BASE (the registry).
-Exit: 0 ok, 1 failed, 2 usage, 4 no such host.
+level is error, warning or info, read from the text (an event line says its own
+priority). Environment: HPS_LOG (the log tree, default /srv/hps-log),
+HPS_CONFIG_BASE (the registry).
+Exit: 0 ok, 1 failed, 2 usage, 4 no such host; attention 10 and 11 (above).
 USAGE
     return 2;
 }
@@ -52,9 +72,33 @@ sub render {
     }
     $out .= "# no log lines\n" unless @{ $r->{lines} };
     for my $l (@{ $r->{lines} }) {
-        $out .= sprintf("%s %-7s %s %s: %s\n", $l->{time}, $l->{level}, $l->{host}, $l->{tag}, $l->{message});
+        if (defined $l->{kind}) {    # an event line, compact
+            $out .= sprintf("%s %-7s %s %s %s %s: %s\n", $l->{time}, $l->{pri}, $l->{kind}, $l->{subject}, $l->{state}, $l->{host}, $l->{text});
+        } else {
+            $out .= sprintf("%s %-7s %s %s: %s\n", $l->{time}, $l->{level}, $l->{host}, $l->{tag}, $l->{message});
+        }
     }
     $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};
+    $out .= '# could not read: ' . join(', ', map { s{.*/}{}r } @{ $r->{unreadable} }) . "\n" if @{ $r->{unreadable} // [] };
+    return $out;
+}
+
+# render_attention: a screenful. Line 1 says the answer, then one line per problem.
+sub render_attention {
+    my ($r) = @_;
+    my $head = "attention: last $r->{window_minutes} min";
+    if ($r->{status} !~ /\A(?:clear|attention)\z/) {
+        return "$head: cannot tell ($r->{status}): $r->{reason}\n";
+    }
+    my @p = map { "$_->{count} $_->{name}" } grep { $_->{count} } map { { name => $_, count => $r->{counts}{$_} } } qw(urgent warning);
+    my $out = $r->{status} eq 'clear'
+        ? "$head: nothing needs attention ($r->{events} event lines, newest $r->{newest})\n"
+        : "$head: " . join(', ', @p) . " ($r->{events} event lines, newest $r->{newest})\n";
+    for my $x (@{ $r->{problems} }) {
+        (my $hhmm = $x->{first}) =~ s/\A.*T([0-9:]{5}).*\z/$1/;
+        $out .= sprintf("%-7s %s %s %s since %sZ x%d %s\n", $x->{pri}, $x->{kind}, $x->{subject}, $x->{state}, $hhmm, $x->{lines}, $x->{text});
+    }
+    $out .= "... and $r->{more} more: hps-log events --min-level warning\n" if $r->{more};
     return $out;
 }
 
@@ -75,7 +119,15 @@ sub main {
         } elsif ($cmd eq 'ips') {
             HPS::Log::_fail(usage => 'ips takes no arguments') if @argv;
             $log->ips_log(%opt);
+        } elsif ($cmd eq 'events' || $cmd eq 'audit') {
+            HPS::Log::_fail(usage => "$cmd takes no arguments") if @argv;
+            $cmd eq 'events' ? $log->events_log(%opt) : $log->audit_log(%opt);
+        } elsif ($cmd eq 'attention') {
+            HPS::Log::_fail(usage => 'attention takes no arguments') if @argv;
+            HPS::Log::_fail(usage => 'attention takes only --since and --json') if grep { $_ ne 'since' } keys %opt;
+            $log->attention(%opt);
         } else {
+
             HPS::Log::_fail(usage => "unknown command '$cmd'");
         }
     };
@@ -89,8 +141,13 @@ sub main {
         print STDERR "hps-log: $err";
         return 1;
     }
+    if ($cmd eq 'attention') {
+        print $json ? JSON::PP->new->canonical->encode($r) . "\n" : render_attention($r);
+        return $r->{status} eq 'clear' ? 0 : $r->{status} eq 'attention' ? $EXIT{attention} : $EXIT{unread};
+    }
     print $json ? JSON::PP->new->canonical->encode($r) . "\n" : render($r);
     return 0;
+
 }
 
 exit main(@ARGV);
