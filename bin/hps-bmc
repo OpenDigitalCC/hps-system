@@ -9,6 +9,7 @@ use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::BMC;
 use HPS::BootReady;
+use HPS::Event ();
 
 # Exit: 0 ok, 3 refused, 4 target unreachable, 5 not supported, 1 failed
 # (usage mistakes: 2). IPS-04 calls `hps-bmc <action> <host>`.
@@ -61,7 +62,12 @@ sub cmd_action {
     if (($action eq 'on' || $action eq 'pxe-once') && !$no_wait) {
         my $g = HPS::BootReady::gate();
         print STDERR "hps-bmc: $_\n" for @{ $g->{warnings} };
-        if (!$g->{ok}) { print STDERR "hps-bmc: refused: $g->{message}\n"; return 3 }
+        if (!$g->{ok}) {
+            HPS::Event::log_event(sub { $bmc->_log(@_) }, pri => 'notice', kind => 'power', subject => $args[0], state => 'refused',
+                text => "$action $args[0] refused: $g->{message}");
+            print STDERR "hps-bmc: refused: $g->{message}\n";
+            return 3;
+        }
     }
     my $r = $bmc->run($args[0], $action);
     print STDERR $r->{stderr} if length $r->{stderr};

@@ -145,7 +145,7 @@ An init is recorded after the start | Booted. The `boot-stalled` issue resolves 
 
 The state the watch keeps is `vms.<vm>.boot_watch` in the workload record (host
 key `boot_watch` for metal): `tries`, `last_try_at`, `expect` (the start stamp
-after the last reset) and `gave_up`. A start that is not the watch's own (an
+after the last reset), `gave_up` and `stalled` (a boot-stalled line was logged for this start, so that a later boot is logged as booted). A start that is not the watch's own (an
 operator's stop and start) shows a different stamp and begins a new episode with
 no tries counted.
 
@@ -161,6 +161,10 @@ no tries counted.
 - A workload record that cannot be parsed, or one whose definition file cannot
   be loaded (so it is not known whether its VMs boot from the network): the same
   `boot-watch-blind` issue.
+- A VM whose compute host carries the host key `drain` (`hps-workload drain`
+  stopped its guests on purpose; a reset would fight the drain and its start
+  would be refused). If that key cannot be read the VM is reported as
+  `boot-watch-blind`, not reset.
 - A disk-boot VM.
 - Metal, unless `boot_stall_metal_reset` is true: the stall is detected and the
   issue opened, but the node is left alone. See the owner decisions below.
@@ -186,12 +190,21 @@ A bad value is warned about (in the log, once an hour) and the default used.
 
 ## Log lines
 
-The watch writes `hps-bootwatch: kind=boot subject=<workload>/<vm> or <host>
-state=<state> <text>` through syslog (tag `hps`). States: `boot-stalled`,
+The watch writes event lines (`HPS::Event`, `docs/LOGGING.md`): kind `boot`,
+subject `<workload>/<vm>` or the host, through one function
+(`HPS::BootWatch::_event`) and syslog (tag `hps`). States: `boot-stalled`,
 `reset`, `reset-failed`, `gave-up`, `booted`, `unreadable`, `failed`,
-`bad-setting`. `notice` for `reset` and `booted`, `warning` for the rest. They
-are written through one function (`HPS::BootWatch::_event`) so that they can
-move to the `HPS::Event` marker form of the log split in one place.
+`bad-setting`. `boot-stalled`, `gave-up`, `unreadable` and `reset-failed` are
+standing, `booted` clears them, and `reset` is a point. `hps-log attention`
+shows a stalled node while the boot services do not answer, after a failed
+reset and once the watch has given up, and drops it when the `booted` line
+comes; a successful `reset` line (a notice) closes the stall until the next
+window. Priority `notice` for `reset` and `booted`, `warning`
+for the rest. `gave-up` is a warning: the `boot-stalled` issue it opens becomes
+urgent after an hour, and the issue register's own line then says so. A standing
+line is repeated every 50 minutes while it holds. The readiness gate's refusals
+(`hps-workload start`, `hps-bmc on` and `pxe-once`) are notice lines, state
+`refused`, kind `workload` (subject the workload) and `power` (subject the host).
 
 # Layer 1: never give up at the firmware
 

@@ -152,7 +152,8 @@ for my $state (qw(stopped suspended creating failed)) {
     my $f = fixture(ready => 'not_ready');
     is(tick_at($f, 400), 0, 'boot services down: not acted on');
     is(scalar($f->{ce}->calls), 0, 'no reset into a deaf IPS');
-    ok(!exists rec($f)->{vms}{'n0-node'}{boot_watch}, 'no try recorded');
+    is(rec($f)->{vms}{'n0-node'}{boot_watch}{tries}, 0, 'no try recorded');
+    ok(rec($f)->{vms}{'n0-node'}{boot_watch}{stalled}, 'but the stall is remembered, so that a boot is logged as booted');
     ok((grep { /boot services do not answer/ } @{ $f->{log} }), 'but said');
     $f->{ready} = 'ready';
     is(tick_at($f, 20), 1, 'the IPS answers again: the reset follows');
@@ -160,6 +161,21 @@ for my $state (qw(stopped suspended creating failed)) {
     $f->{ready} = 'unknown';
     $f->{ce}{calls} = [];
     is(tick_at($f, 400), 1, 'readiness unknown: reset anyway');
+}
+
+#=== a draining compute host: never reset, never started again
+{
+    my $f = fixture();
+    $f->{reg}->host_set($StorageFixture::MAC, 'drain', { state => 'draining', guests => [] });
+    is(tick_at($f, 400), 0, 'compute host carries the host key drain: nothing acted on');
+    is(scalar($f->{ce}->calls), 0, 'no node call: not stopped, not started');
+    is(rec($f)->{vms}{'n0-node'}{state}, 'running', 'the record is untouched');
+    ok(!exists rec($f)->{vms}{'n0-node'}{boot_watch}, 'no try recorded');
+    is(scalar(issues_of($f, 'boot-stalled')), 0, 'and no issue');
+    is(tick_at($f, 2000), 0, 'much later: still nothing');
+    $f->{reg}->host_unset($StorageFixture::MAC, 'drain');
+    is(tick_at($f, 20), 1, 'after undrain (key removed) the watch resets as usual');
+    is(scalar(grep { /state=reset / } @{ $f->{log} }), 1, 'one reset line');
 }
 
 #=== limits and switches

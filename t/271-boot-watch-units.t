@@ -92,6 +92,19 @@ is_da(d(ready => undef), 'boot-stalled', 'reset', 'cannot tell if the IPS answer
 is_da(d(ready => 0, tries => 3), 'boot-stalled', 'give_up', 'give up does not wait for the IPS');
 is_da(d(since => $now - 100, ready => 0), 'booting', 'none', 'within the window the IPS state does not matter');
 
+# a draining host: its guests were stopped on purpose, never reset one (and never start it)
+is_da(d(draining => 1), 'draining', 'none', 'a VM on a draining host: never reset');
+is_da(d(draining => 1, tries => 3), 'draining', 'none', 'nor reported as given up');
+is_da(d(draining => 1, ready => 0), 'draining', 'none', 'nor deferred');
+is_da(d(draining => 1, max => 0), 'draining', 'none', 'with the limit at 0 as well');
+is_da(d(draining => 0), 'boot-stalled', 'reset', 'not draining: reset as before');
+is_da(d(draining => undef), 'boot-stalled', 'reset', 'not asked (metal): reset as before');
+is_da(d(draining => 'unknown'), 'unreadable', 'report', 'the drain key cannot be read: reported, never a reset');
+is_da(d(draining => 1, netboot => 'seen'), 'booted', 'none', 'a draining host whose VM booted is still booted');
+is_da(d(draining => 1, since => $now - 100), 'booting', 'none', 'within the window it is simply booting');
+# a stall that was logged is resolved by the boot that follows
+is_da(d(netboot => 'seen', stalled => 1), 'booted', 'resolve', 'netboot seen after a boot-stalled line: resolve');
+
 #--- status_note
 is(HPS::BootWatch::status_note('not_seen', 95), 'no netboot seen since start (95 s)', 'status: not seen');
 is(HPS::BootWatch::status_note('seen', 95), undef, 'status: seen has no note');

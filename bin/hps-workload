@@ -322,7 +322,11 @@ sub main {
         if ($op eq 'start' && !$nobw && HPS::BootWatch::netboot_vms(eval { $wl->load($name) } // {}, $vm)) {
             my $g = HPS::BootReady::gate();
             print STDERR "hps-workload: $_\n" for @{ $g->{warnings} };
-            if (!$g->{ok}) { print STDERR "hps-workload: start $name refused: $g->{message}\n"; return $EXIT{refused} }
+            if (!$g->{ok}) {
+                # the event is also the terminal line (the workload logger prints its text)
+                $wl->_event('notice', $name, 'refused', "start $name refused: $g->{message}");
+                return $EXIT{refused};
+            }
         }
         my $r = $wl->run($op, $name, %a);
         HPS::BootWatch->annotate_status($wl, $name, $r) if $op eq 'status';

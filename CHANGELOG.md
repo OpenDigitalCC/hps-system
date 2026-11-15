@@ -12,6 +12,25 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Boot reliability joins the log split and the drain (2026-11-15)
+
+- **Changed** The boot-stalled watch (`HPS::BootWatch`) writes event lines
+  (`HPS::Event`, `docs/LOGGING.md`): kind `boot`, subject the workload/VM or the
+  host. `reset` and `booted` are notices; `boot-stalled`, `reset-failed`,
+  `gave-up`, `unreadable`, `failed` and `bad-setting` are warnings. The standing
+  ones repeat every 50 minutes, so `hps-log attention` shows a stalled node and
+  drops it when a `booted` line follows (a stall that was only deferred, with the
+  boot services down, is remembered in the watch state as `stalled` for that).
+  The readiness gate's refusals in `hps-workload start` and `hps-bmc on` and
+  `pxe-once` are notice lines, state `refused`.
+- **New** states in the event vocabulary: standing `boot-stalled`, `gave-up`,
+  `unreadable`, `reset-failed`; clearing `booted`; point `reset`, `bad-setting`.
+- **Changed** The watch never resets a VM whose compute host carries the host
+  key `drain`: its guests were stopped on purpose, and a reset would fight the
+  drain. A drain key that cannot be read is reported (`boot-watch-blind`), not
+  acted on.
+- `docs/QUICKREF.md` lists `--no-boot-wait` and `hps-ips-check --boot-ready`.
+
 ## Drain and class events join the log split (2026-11-15)
 
 - **Changed** `hps-workload drain`, `undrain` and `set-class` write their log

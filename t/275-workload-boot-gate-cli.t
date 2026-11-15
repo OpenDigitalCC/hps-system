@@ -66,6 +66,7 @@ my ($rc, $out, $err) = cli(\%deaf, 'start', 'n0');
 is($rc, 3, 'start of a network-boot VM with the boot services down: refused (3)') or diag "$out$err";
 like($err, qr/hps-workload: start n0 refused: this IPS's boot services do not answer after 0 s \(dnsmasq: dnsmasq is not running; http: no HTTP answer/, 'naming what does not answer');
 like($err, qr/--no-boot-wait/, 'and the way round');
+is(scalar(() = $err =~ /start n0 refused:/g), 1, 'said once (the refusal is the event line, notice, kind workload)');
 is(scalar(() = calls()), 0, 'nothing was sent to a node');
 is(($f->{reg}->cluster_get_json('lab', 'workload_n0'))->{vms}{'n0-node'}{state}, 'defined', 'the record is unchanged');
 

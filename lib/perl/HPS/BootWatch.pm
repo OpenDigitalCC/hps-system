@@ -21,7 +21,10 @@ package HPS::BootWatch;
 # suspended, creating, failed...); a node without a start time on record; a
 # node whose record or last_boot_at cannot be read (that is its own reported
 # case, issue kind boot-watch-blind, never "fine" and never a reset); a node
-# while this IPS's boot services do not answer (the try is not spent).
+# while this IPS's boot services do not answer (the try is not spent); a VM
+# whose compute host carries the host key drain (HPS::Workload::Drain: its
+# guests were stopped on purpose, a reset would fight the drain, and its start
+# would be refused), or whose host's drain key cannot be read (reported).
 #
 # State kept: the VM's record vms.<vm>.boot_watch, or the host key boot_watch:
 # {tries, last_try_at, expect (the start stamp after our last reset), gave_up}.
@@ -34,6 +37,7 @@ no warnings 'experimental::signatures';
 use Time::Local ();
 use POSIX ();
 use HPS::BootReady ();
+use HPS::Event ();
 use HPS::Issues ();
 use HPS::Registry ();
 
@@ -97,8 +101,11 @@ sub netboot_state ($last, $since, $now) {
 #   window, max, tries, gave_up, now, since (epoch or undef), last_try (epoch or undef),
 #   recorded (the recorded state: only 'running' is watched), netboot (seen|not_seen|unreadable),
 #   netboot_detail, ready (1 / 0 / undef = boot services answer / do not / unknown),
-#   may_reset (false: report only, never act on the node).
-# state:  disabled, not-watched, unreadable, booted, booting, boot-stalled
+#   may_reset (false: report only, never act on the node),
+#   stalled (a boot-stalled line was logged for this start: booted must say so),
+#   draining (1 the VM's compute host carries host key drain, 0 it does not,
+#   'unknown' the key cannot be read; undef = not asked, taken as 0).
+# state:  disabled, not-watched, unreadable, booted, booting, draining, boot-stalled
 # action: none, report (unreadable: report it, touch nothing), resolve (booted after
 #         an episode), reset, defer (the IPS is deaf: try later, no try spent), give_up (open the issue)
 sub decide (%f) {
@@ -109,11 +116,17 @@ sub decide (%f) {
     return { state => 'unreadable', action => 'report', reason => $f{netboot_detail} // 'netboot state unreadable' }
         if ($f{netboot} // 'unreadable') eq 'unreadable';
     if ($f{netboot} eq 'seen') {
-        return { state => 'booted', action => ($f{tries} || $f{gave_up} ? 'resolve' : 'none'), reason => $f{netboot_detail} // 'netboot seen' };
+        return { state => 'booted', action => ($f{tries} || $f{gave_up} || $f{stalled} ? 'resolve' : 'none'), reason => $f{netboot_detail} // 'netboot seen' };
     }
     my $from = defined $f{last_try} && $f{last_try} > $f{since} ? $f{last_try} : $f{since};
     my $elapsed = $f{now} - $from;
     return { state => 'booting', action => 'none', reason => "no netboot seen since start ($elapsed s of $f{window})" } if $elapsed < $f{window};
+    # A draining host's guests were stopped on purpose: never reset (or start) one.
+    if (($f{draining} // 0) eq 'unknown') {
+        return { state => 'unreadable', action => 'report', reason => 'cannot tell whether the VM\'s compute host is draining (host key drain)' };
+    }
+    return { state => 'draining', action => 'none', reason => 'the VM\'s compute host carries the host key drain; never reset on a draining host' }
+        if $f{draining};
     my $why = "no netboot seen $elapsed s after the start (window $f{window} s)";
     if (!$f{may_reset}) {
         return { state => 'boot-stalled', action => 'give_up', reason => "$why; automatic reset is off for this node" };
@@ -172,10 +185,12 @@ sub _issues ($self) { return $self->{issues} //= HPS::Issues->new(registry => $s
 sub _wl ($self) { return $self->{workload} //= do { require HPS::Workload; HPS::Workload->new(registry => $self->{registry}) } }
 sub _bmc ($self) { return $self->{bmc} //= do { require HPS::BMC; HPS::BMC->new(registry => $self->{registry}) } }
 
-# _event($level, $subject, $state, $text): the one place an event line is made.
-# Written for the log split (HPS::Event): subject=<workload/vm or host> state=<state>.
-sub _event ($self, $level, $subject, $state, $text) {
-    $self->{logger}->($level, "kind=boot subject=$subject state=$state $text");
+# _event($pri, $subject, $state, $text): the one place an event line is made: an
+# HPS::Event marker line, kind boot (docs/LOGGING.md), subject <workload/vm or
+# host>. The states boot-stalled, gave-up, unreadable and reset-failed are standing
+# (a problem until a booted line); the callers repeat them every HPS::Event::REMIND.
+sub _event ($self, $pri, $subject, $state, $text) {
+    HPS::Event::log_event($self->{logger}, pri => $pri, kind => 'boot', subject => $subject, state => $state, text => $text);
     return;
 }
 
@@ -265,6 +280,7 @@ sub items ($self) {
                 next;
             }
             $it->{recorded} = $rv->{state};
+            $it->{compute} = $rv->{host};
             $it->{stamp} = $rv->{started_at};
             $it->{since} = parse_stamp($rv->{started_at});
             $it->{watch} = ref $rv->{boot_watch} eq 'HASH' ? $rv->{boot_watch} : {};
@@ -300,6 +316,15 @@ sub _metal_items ($self, $now) {
     return @out;
 }
 
+# _draining($item): 1 when the VM's compute host carries the host key drain, 0 when
+# it does not, 'unknown' when the host or the key cannot be looked up.
+sub _draining ($self, $it) {
+    my $host = $it->{compute};
+    return 'unknown' unless defined $host && !ref $host && length $host;
+    my $r = eval { $self->_reg->host_exists($self->_wl->_mac($host), 'drain') ? 1 : 0 };
+    return defined $r ? $r : 'unknown';
+}
+
 # verdict_for($item, $settings, $ready_cb): decide() over an item's facts. The
 # boot-services check ($ready_cb: 1, 0 or undef) runs only when a reset is due.
 sub verdict_for ($self, $it, $s, $ready_cb) {
@@ -308,6 +333,8 @@ sub verdict_for ($self, $it, $s, $ready_cb) {
     my %f = (
         window => $s->{window}, max => $s->{max}, now => $self->_now,
         tries => ($same ? ($w->{tries} // 0) : 0), gave_up => ($same ? $w->{gave_up} : 0), last_try => ($same ? $w->{last_try_at} : undef),
+        stalled => ($same ? $w->{stalled} : 0),
+        draining => ($it->{kind} eq 'vm' && ($it->{netboot} // '') eq 'not_seen' ? $self->_draining($it) : 0),
         since => $it->{since}, recorded => $it->{recorded}, netboot => $it->{netboot}, netboot_detail => $it->{netboot_detail},
         may_reset => ($it->{kind} eq 'metal' ? $s->{metal} : $s->{max} > 0 ? 1 : 0),
     );
@@ -404,7 +431,7 @@ sub _reset ($self, $it) {
 }
 
 sub _blind ($self, $it, $reason) {
-    $self->_event_every("blind:$it->{key}", 3600, 'warning', $it->{subject}, 'unreadable', $reason);
+    $self->_event_every("blind:$it->{key}", HPS::Event::REMIND, 'warning', $it->{subject}, 'unreadable', $reason);
     $self->_open($it, 'boot-watch-blind', "boot watch cannot judge $it->{subject}: $reason", $reason);
     return;
 }
@@ -415,6 +442,7 @@ sub _give_up ($self, $it, $reason, $tries) {
     my $rec = $self->_open($it, 'boot-stalled', "$what did not reach iPXE: $tries reset(s) tried; see the console: $hint",
         "$reason; console: $hint", urgent_after => 3600);
     $self->_event('warning', $it->{subject}, 'gave-up', "boot-stalled, $tries reset(s) tried, issue $rec->{id}; console: $hint");
+    $self->{said}{"gaveup:$it->{key}"} = $self->_now;
     return;
 }
 
@@ -429,7 +457,10 @@ sub handle ($self, $it, $s, $ready_cb) {
     my $same = defined $w->{expect} && defined $it->{stamp} && $w->{expect} eq $it->{stamp};
     my $tries = $same ? ($w->{tries} // 0) : 0;
     my $a = $v->{action};
-    if ($v->{state} ne 'unreadable') { $self->_close($it, 'boot-watch-blind', 'readable again', "$it->{subject}: $v->{state}") }
+    if ($v->{state} ne 'unreadable'
+        && $self->_close($it, 'boot-watch-blind', 'readable again', "$it->{subject}: $v->{state}")) {
+        $self->_event('notice', $it->{subject}, 'ok', "readable again; $v->{state}");
+    }
     if ($a eq 'report') {
         $self->_blind($it, $v->{reason});
     }
@@ -442,6 +473,9 @@ sub handle ($self, $it, $s, $ready_cb) {
     }
     elsif ($a eq 'defer') {
         $self->_event_every("defer:$it->{key}", 300, 'warning', $it->{subject}, 'boot-stalled', $v->{reason});
+        # Remembered, so that a later boot is logged as booted and closes the line above.
+        $self->_watch_save($it, { %{ $same ? $w : {} }, tries => $tries, expect => $it->{stamp}, stalled => 1 })
+            unless $same && $w->{stalled};
     }
     elsif ($a eq 'reset') {
         my $n = $tries + 1;
@@ -462,6 +496,11 @@ sub handle ($self, $it, $s, $ready_cb) {
     elsif ($a eq 'give_up' && !($same && $w->{gave_up})) {
         $self->_watch_save($it, { %{ $same ? $w : {} }, tries => $tries, expect => $it->{stamp}, gave_up => 1 });
         $self->_give_up($it, $v->{reason}, $tries);
+    }
+    elsif ($a eq 'give_up') {
+        # Gave up on an earlier tick: the standing line is repeated, as docs/LOGGING.md asks.
+        $self->_event_every("gaveup:$it->{key}", HPS::Event::REMIND, 'warning', $it->{subject}, 'gave-up',
+            "boot-stalled, $tries reset(s) tried; console: " . _console_hint($it));
     }
     return $v;
 }

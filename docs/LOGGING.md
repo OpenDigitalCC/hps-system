@@ -133,7 +133,7 @@ pairing | A node's pairing: approved, refused, held. The subject is the host key
 storage | A storage operation (derived line).
 node | A node powered on, off, up or down, or faulted (derived lines).
 power | A BMC power action (derived line).
-boot | iPXE initialisation and boot (derived lines).
+boot | iPXE initialisation and boot (derived lines); the boot-stalled watch (`HPS::BootWatch`): the subject is the workload/VM or the host.
 service | An IPS program: started, stopped, alive (the monitor's heartbeat), failed.
 log | The log's own housekeeping (rotation), and any local program error (derived line).
 auth | Reserved for operator-call refusals.
@@ -148,9 +148,9 @@ columns: Class | States | Meaning
 widths: 2.5cm | 7cm | X
 bold: 1
 ---
-standing | open, escalated, needs-human, warning, critical, unknown, unreachable, pair-failed | The problem holds until a clearing line of the same kind and subject. The emitter repeats it every 50 minutes.
-clearing | resolved, ok, reachable, stopped | The subject is well again, or stopped on purpose.
-point | started, ended, done, failed, refused, error, requested, defined, created, destroyed, on, off, up, down, paired, held, rotated | Something that happened once. At warning or urgent it stays a problem until a later line of the same kind and subject that does not need attention.
+standing | open, escalated, needs-human, warning, critical, unknown, unreachable, pair-failed, boot-stalled, gave-up, unreadable, reset-failed | The problem holds until a clearing line of the same kind and subject. The emitter repeats it every 50 minutes.
+clearing | resolved, ok, reachable, stopped, booted | The subject is well again, or stopped on purpose.
+point | started, ended, done, failed, refused, error, requested, defined, created, destroyed, on, off, up, down, paired, held, rotated, reset, bad-setting | Something that happened once. At warning or urgent it stays a problem until a later line of the same kind and subject that does not need attention.
 ```
 
 A subject has no space and no equals sign (other characters become an
@@ -187,6 +187,7 @@ Issue register (`HPS::Issues`, `hps-issue-watch`, the healer) | opened (warning 
 hps-monitor | UNREACHABLE (warning), REACHABLE (notice), PAIR_FAILED (urgent), STOPPED (info); a check whose state changed or still holds (warning or urgent) and its recovery (notice); started, stopped, run failed, tick skipped, heartbeat.
 hps-workload (`HPS::Workload`) | the result of every operation except `status` and `console`: done (notice), refused (notice), failed (warning). `set-class`: done (notice).
 hps-workload drain and undrain (`HPS::Workload::Drain`) | kind node, the host as subject: started (notice), done (notice), refused (notice), and failed (warning) when a drain leaves guests running or an undrain does not bring them all back. Each guest action is kind workload with the workload as subject: done (info), failed (warning).
+Boot-stalled watch and readiness gate (`HPS::BootWatch`, `HPS::BootReady`; `docs/BOOT-RELIABILITY.md`) | kind boot, the workload/VM or host as subject: boot-stalled (warning, also while the boot services do not answer), reset-failed and gave-up (warning), unreadable (warning), booted (notice, clears them), reset (notice), failed and bad-setting (warning). The standing ones repeat every 50 minutes while they hold. A start or power-on refused because the boot services do not answer (`hps-workload start`, `hps-bmc on` and `pxe-once`): refused (notice), kind workload or power. `hps-ips-check --boot-ready` writes no line.
 hps-jobs | a job that ended (notice, or warning when its exit status is not 0) and a job refused at once (notice).
 Pairing (`ce_approve`) | approved (notice), refused or gave up (warning).
 hps-log-rotate | rotated (notice) and any error (warning).

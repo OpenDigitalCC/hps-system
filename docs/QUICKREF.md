@@ -214,8 +214,14 @@ Virtual-machine workloads. `<name>` is the workload, stored as
 `hps-workload create <name> [--resume [--image-written]] [--dry-run] [--json] [--allow-any-pool-name]`
 : Builds the instance. `--resume` continues an unfinished create.
 
-`hps-workload start <name> [--vm <vm>] [--dry-run] [--json]`
-: Starts the VMs.
+`hps-workload start <name> [--vm <vm>] [--no-boot-wait] [--dry-run] [--json]`
+: Starts the VMs. A VM that boots from the network first waits up to cluster
+  key `boot_ready_wait_seconds` (default 60) for this IPS's DHCP, TFTP and HTTP
+  boot services, and is refused (exit 3, a notice line) naming what does not
+  answer; `--no-boot-wait` skips that. A network-boot VM that never reaches
+  iPXE is reset by the boot-stalled watch (`hps-issue-watch`, kind `boot`
+  lines, `docs/BOOT-RELIABILITY.md`), except on a draining host; `status`
+  shows `no netboot seen since start (N s)`.
 
 `hps-workload stop <name> [--vm <vm>] [--force] [--dry-run] [--json]`
 : Stops the VMs.
@@ -372,9 +378,11 @@ Node image pins on the IPS.
 
 Out-of-band power and console. `<host>` as above.
 
-`hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json]`
+`hps-bmc status|on|off|force-off|reset|pxe-once|identify <host> [--json] [--no-boot-wait]`
 : Power and identify actions. `status --json` returns power, model, serial and
-  BMC firmware.
+  BMC firmware. `on` and `pxe-once` first wait for the boot services as
+  `hps-workload start` does, and are refused (exit 3) while they do not answer;
+  `--no-boot-wait` skips that.
 
 `hps-bmc console <host> [--seconds N]`
 : Serial console: stdin in, output out; ends after N seconds (1 to 3600,
@@ -467,6 +475,12 @@ Operator credentials, run on the IPS.
 : Self-check of the IPS: boot manager, TFTP, DNS, ctrl-exec, syslog, time,
   disk space, registry and pairing. Prints PASS, FAIL or WARN per check and
   writes `ips-check.json`. Exit 0 with no FAIL, 1 with any FAIL, 2 usage.
+
+`hps-ips-check --boot-ready [--wait SECONDS] [--json]`
+: Only the boot-services readiness check: dnsmasq running, DHCP and TFTP bound
+  on the provisioning address with the boot files in place, the HTTP boot path
+  answering. Exit 0 ready, 1 not ready (names what does not answer), 3 cannot
+  tell, 2 usage. The same check gates `hps-workload start` and `hps-bmc`.
 
 ## hps-op and hps-run
 

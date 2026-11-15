@@ -98,6 +98,7 @@ for my $tool ([ 'hps-boot-ready', "$BIN/hps-boot-ready" ], [ 'hps-ips-check --bo
         my ($rc, $out, $err) = run_cli(\%env, @bmc, $action, 'aa:bb:cc:dd:ee:01');
         is($rc, 3, "hps-bmc $action with the boot services down: refused (3)");
         like($err, qr/hps-bmc: refused: this IPS's boot services do not answer after 0 s \(dnsmasq: dnsmasq is not running\)/, "hps-bmc $action: names what does not answer");
+        like($err, qr/hps-bmc: HPS-EVENT pri=notice kind=power subject=aa:bb:cc:dd:ee:01 state=refused $action aa:bb:cc:dd:ee:01 refused: this IPS's boot services do not answer/, "hps-bmc $action: logged as a notice event, state refused");
         ($rc, $out, $err) = run_cli(\%env, @bmc, $action, 'aa:bb:cc:dd:ee:01', '--no-boot-wait');
         is($rc, 1, "hps-bmc $action --no-boot-wait: the gate is skipped (the host is not in the registry: 1)");
         like($err, qr/No such host/, "hps-bmc $action --no-boot-wait: it got as far as the host lookup");
