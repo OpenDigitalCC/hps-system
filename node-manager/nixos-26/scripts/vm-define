@@ -10,6 +10,7 @@
 #          [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
 #          [--cpu-weight <n>] [--cpu-max-pct <pct>] [--mem-hard-limit <MiB>]
 #          [--io-weight <n>] per --disk: [--disk-iops <n>] [--disk-mbps <n>]
+#          [--disk-error-policy stop|report]
 #        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
 #          --net <bridge> [--mac <mac>] [--net ...] [--disk <dev>]
 #          [--serial-log <path>] [--replace]
@@ -70,6 +71,21 @@
 #             <iotune> total_iops_sec / total_bytes_sec (QEMU throttling).
 #             Default: no throttle.
 #
+# Disk error policy (docs/STORAGE-FAULTS.md):
+#   --disk-error-policy stop|report   what QEMU does with an I/O error of the
+#             host block device (the md mirror, or a zvol) on every --disk:
+#             <driver error_policy= rerror_policy=>. stop (the default) pauses
+#             the guest on a read or write error, so the guest never sees EIO and
+#             never remounts its filesystem read-only; `virsh resume` retries the
+#             failed request once the storage is back (domstate: paused, reason
+#             I/O error). report hands the error to the guest, as before. The
+#             cluster key vm_disk_error_policy chooses it for a workload: hps-workload
+#             passes --disk-error-policy report only when the key is report.
+#             The policy is not part of the spec hash while it is stop, so a
+#             guest defined before it existed is "already defined" and is not
+#             refused; it keeps its old XML until it is shut off and redefined with
+#             --replace (the line "defined without ... error policy" says so).
+#
 # The domain: q35, OVMF UEFI, host-passthrough CPU, virtio disk (raw, cache
 # none), virtio NIC (unless --nic-model) per bridge, serial console written to a log file, NO
 # graphics, NO spice, no video device.
@@ -127,6 +143,9 @@ CPU_WEIGHT=""
 CPU_MAX_PCT=""
 MEM_HARD=""
 IO_WEIGHT=""
+DISK_POLICY="stop"
+DEFINED_XML=""
+HAVE_SPEC=""
 TMP=""
 MAX_DISKS=8
 SERIAL_MAX=20
@@ -157,6 +176,7 @@ Usage: vm-define <vm> --memory <MiB> --vcpus <n> --disk <block device> [--disk <
          [--disk-bus virtio|scsi|sata] [--smbios vendor=<v>,product=<p>[,serial=<s>]]
          [--cpu-weight <1-10000>] [--cpu-max-pct <1-100>] [--mem-hard-limit <MiB>]
          [--io-weight <10-1000>]  per --disk: [--disk-iops <n>] [--disk-mbps <MiB/s>]
+         [--disk-error-policy stop|report]
        vm-define <vm> --boot network --memory <MiB> --vcpus <n>
          --net <bridge> [--mac <mac>] [...] [--disk <dev>] [--serial-log <path>]
 Exit: 0 ok, 2 usage, 3 refused, 1 failed.
@@ -218,7 +238,8 @@ parse_args() {
     case "$1" in
       --memory | --vcpus | --disk | --net | --image | --serial-log | --boot | --mac \
         | --nic-model | --vlan-pvid | --vlan-tagged | --disk-bus | --smbios \
-        | --cpu-weight | --cpu-max-pct | --mem-hard-limit | --io-weight | --disk-iops | --disk-mbps)
+        | --cpu-weight | --cpu-max-pct | --mem-hard-limit | --io-weight | --disk-iops | --disk-mbps \
+        | --disk-error-policy)
         [[ $# -ge 2 ]] || { usage; exit 2; }
         case "$1" in
           --memory) MEMORY=$2 ;;
@@ -230,6 +251,7 @@ parse_args() {
           --cpu-max-pct) CPU_MAX_PCT=$2 ;;
           --mem-hard-limit) MEM_HARD=$2 ;;
           --io-weight) IO_WEIGHT=$2 ;;
+          --disk-error-policy) DISK_POLICY=$2 ;;
           --net) NETS+=("$2"); MACS+=(""); PVIDS+=(""); TAGGEDS+=(""); MODELS+=("") ;;
           --mac) set_nic_option "$1" MACS "$2" ;;
           --nic-model) set_nic_option "$1" MODELS "$2" ;;
@@ -316,6 +338,7 @@ check_hardware() {
     *) refuse "--disk-bus '$DISK_BUS' is not virtio, scsi or sata" ;;
   esac
   [[ "$DISK_BUS" == virtio || ${#DISKS[@]} -gt 0 ]] || refuse "--disk-bus $DISK_BUS needs a --disk"
+  [[ "$DISK_POLICY" == stop || "$DISK_POLICY" == report ]] || refuse "--disk-error-policy '$DISK_POLICY' is not stop or report"
   [[ -n "$SMBIOS" ]] || return 0
   local -a parts
   IFS=',' read -r -a parts <<< "$SMBIOS"
@@ -429,6 +452,7 @@ check_serials() {
 render_xml() {
   local uuid=$1 n i body hash boot_xml disk_xml="" mac_xml smbios_os="" sysinfo_xml="" ctl_xml="" dev m prefix=vd letters=abcdefgh
   local tune_xml iotune_xml
+  local POLICY_ATTRS=" error_policy='$DISK_POLICY' rerror_policy='$DISK_POLICY'"
   if [[ "$BOOT" == "network" ]]; then
     boot_xml="    <boot dev='network'/>"
     if ((${#DISKS[@]} > 0)); then
@@ -448,7 +472,7 @@ render_xml() {
     for i in "${!DISKS[@]}"; do
       dev=$prefix${letters:$i:1}
       disk_xml+="    <disk type='block' device='disk'>
-      <driver name='qemu' type='raw' cache='none' io='native'/>
+      <driver name='qemu' type='raw' cache='none' io='native'$POLICY_ATTRS/>
       <source dev='${DISKS[$i]}'/>
       <target dev='$dev' bus='$DISK_BUS'/>
       <serial>$(disk_serial "$i")</serial>"
@@ -552,7 +576,11 @@ XML
   )
   # The NIC VLAN metadata joins the hash only when there is any, so a
   # definition made before --vlan-* existed keeps its hash.
-  hash=$(printf '%s\n%s\n%s' "$body" "$IMAGE" "${NIC_META:+$NIC_META}" | sha256sum)
+  # The disk error policy joins the hash only when it is not the default (stop),
+  # and its attributes are taken out of the body first, so a definition made
+  # before the policy existed keeps its hash (and is not refused as "different").
+  hash=$(printf '%s\n%s\n%s%s' "${body//"$POLICY_ATTRS"/}" "$IMAGE" "${NIC_META:+$NIC_META}" \
+    "${DISK_POLICY/#stop/}" | sha256sum)
   hash=${hash%% *}
   SPEC_HASH=$hash
   printf "<domain type='kvm'>\n"
@@ -570,10 +598,11 @@ XML
   printf '</domain>\n'
 }
 
+# defined_spec: the spec hash of the defined domain; its XML is left in
+# DEFINED_XML (call it without a command substitution, which would lose that).
 defined_spec() {
-  local xml
-  xml=$(run virsh -c qemu:///system dumpxml "$VM")
-  sed -n -E 's/.*<hps:spec>([0-9a-f]+)<\/hps:spec>.*/\1/p' <<< "$xml" | head -n 1
+  DEFINED_XML=$(run virsh -c qemu:///system dumpxml "$VM")
+  HAVE_SPEC=$(sed -n -E 's/.*<hps:spec>([0-9a-f]+)<\/hps:spec>.*/\1/p' <<< "$DEFINED_XML" | head -n 1)
 }
 
 # report_macs: one "VM <vm> defined mac=<mac>" per NIC (--boot network only),
@@ -606,11 +635,21 @@ main() {
   trap 'rm -rf "$TMP"' EXIT
   render_xml "" > "$TMP/domain.xml"
   if run_q virsh -c qemu:///system dominfo "$VM" > /dev/null; then
-    have=$(defined_spec)
+    defined_spec
+    have=$HAVE_SPEC
     if [[ "$have" == "$SPEC_HASH" ]]; then
-      log "$VM is already defined with this definition; nothing to do"
-      finish
-      return 0
+      if ((${#DISKS[@]} > 0)) && [[ "$DEFINED_XML" != *"error_policy='$DISK_POLICY'"* ]]; then
+        if ((REPLACE == 0)); then
+          log "$VM is already defined with this definition, but without the disk error policy $DISK_POLICY (made before it existed); shut it off and run with --replace to apply it"
+          finish
+          return 0
+        fi
+        log "$VM is defined without the disk error policy $DISK_POLICY: redefining it"
+      else
+        log "$VM is already defined with this definition; nothing to do"
+        finish
+        return 0
+      fi
     fi
     if ((REPLACE == 0)); then
       refuse "$VM is defined differently (spec ${have:-none}, wanted $SPEC_HASH); use --replace to redefine"

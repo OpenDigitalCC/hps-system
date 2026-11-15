@@ -801,7 +801,19 @@ sub _define_args ($self, $layout, $vm, $in, $macs = undef) {
         (map { ('--disk', $_->{device}, _limit_args($_, \@DISK_LIMITS)) } @{ $in->{disks} }),
         (map { $self->_net_args($layout, $vm, $_, $macs ? $macs->[$_] : undef) } 0 .. $#{ $vm->{nets} }),
         ($net_boot ? () : ('--image', "$in->{image_dir}/$vm->{image}.qcow2")), _hardware_args($vm),
-        _limit_args($vm, \@VM_LIMITS) ];
+        _limit_args($vm, \@VM_LIMITS), $self->_error_policy_args ];
+}
+
+# --disk-error-policy report when the cluster key vm_disk_error_policy says so;
+# the default (stop, also an unset key) passes nothing: vm-define's own default
+# stands and a recorded create keeps its argument list (docs/STORAGE-FAULTS.md).
+sub _error_policy_args ($self) {
+    my $reg = $self->{registry};
+    my $v = $reg->cluster_exists($self->_cluster, 'vm_disk_error_policy') ? $reg->cluster_get($self->_cluster, 'vm_disk_error_policy') : undef;
+    return () unless defined $v && !ref $v && length $v && $v ne 'stop';
+    _fail('refused', "cluster key vm_disk_error_policy is '$v'; it must be stop or report (hps-cluster-config set vm_disk_error_policy stop)")
+        unless $v eq 'report';
+    return ('--disk-error-policy', 'report');
 }
 
 # The net-vxlan-ensure calls for the vxlan nets of a VM on its compute host

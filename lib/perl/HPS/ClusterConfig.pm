@@ -238,6 +238,21 @@ my @CATALOGUE = (
     _q(key => 'network_min_link_mbps', group => 'networks', menu => 0,
         prompt => 'Lowest audited link speed, Mb/s, of a node\'s boot NIC that net-up accepts for a storage or transit network (10-1000000; 0 = no check; an unknown speed is accepted)',
         rule => 'int0:10..1000000', default => '1000'),
+
+    # Storage fault tolerance (docs/STORAGE-FAULTS.md): what the node does so a
+    # stalled or memory-starved iSCSI target does not become guest EIO.
+    _q(key => 'vm_disk_error_policy', group => 'resources', menu => 0,
+        prompt => 'What QEMU does with an I/O error of a guest disk: stop (pause the guest, so it never sees EIO; resume it when the storage is back) or report (hand the error to the guest)',
+        rule => 'enum:stop,report', default => 'stop'),
+    _q(key => 'iscsi_max_sectors_kb', group => 'resources', menu => 0,
+        prompt => 'Largest command, in KiB, of an iSCSI leg\'s block device on a compute node (64-4096; 0 = the kernel\'s limit); a smaller command needs less contiguous memory on the storage host',
+        rule => 'int0:64..4096', default => '256'),
+    _q(key => 'iscsi_replacement_timeout', group => 'resources', menu => 0,
+        prompt => 'Seconds an iSCSI leg queues I/O while its session is re-established before the error goes up to md (5-600); 15 is the owner ruling of 2026-11-12, a larger value needs the measurements of docs/STORAGE-FAULTS.md',
+        rule => 'int:5..600', default => '15'),
+    _q(key => 'storage_min_free_pct', group => 'resources', menu => 0,
+        prompt => 'vm.min_free_kbytes of a storage host as a percent of RAM (0-10; 0 = the kernel\'s value), at least 128 and at most 2048 MiB, so the iSCSI target keeps contiguous free memory',
+        rule => 'int0:1..10', default => '2'),
 );
 
 my %BY_KEY = map { $_->{key} => $_ } @CATALOGUE;

@@ -80,6 +80,16 @@ SHIM
 #!/usr/bin/env bash
 echo "wipefs $*" >> "$SHIM_LOG"
 SHIM
+  # curl: leg-resolve reads cluster keys (cmd=cluster_variable&name=<k>): the
+  # value is $STATE/key.<k>, else HTTP 404 (exit 22), as the IPS answers an unset key.
+  cat > "$TEST_DIR/bin/curl" <<'SHIM'
+#!/usr/bin/env bash
+echo "curl $*" >> "$SHIM_LOG"
+url=${*: -1}
+f="$STATE/key.${url##*name=}"
+[[ -e "$f" ]] || exit 22
+cat "$f"
+SHIM
   cat > "$TEST_DIR/bin/udevadm" <<'SHIM'
 #!/usr/bin/env bash
 echo "udevadm $*" >> "$SHIM_LOG"

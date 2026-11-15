@@ -140,7 +140,9 @@ bridge_cmds() {
   run p3_20_define
   [ "$status" -eq 0 ]
   h=$(sed -n -E 's/.*<hps:spec>([0-9a-f]+)<\/hps:spec>.*/\1/p' "$STATE/xml.vm1")
-  body=$(sed -n '/<name>/,/<\/devices>/p' "$STATE/xml.vm1" | sed '/<metadata>/,/<\/metadata>/d')
+  body=$(sed -n "/<name>/,/<\/devices>/p" "$STATE/xml.vm1" | sed "/<metadata>/,/<\/metadata>/d")
+  # the default disk error policy is not part of the hash (docs/STORAGE-FAULTS.md)
+  body=${body//" error_policy='stop' rerror_policy='stop'"/}
   want=$(printf '%s\n%s\n' "$body" "$IMG" | sha256sum)
   [ "$h" = "${want%% *}" ]
 }

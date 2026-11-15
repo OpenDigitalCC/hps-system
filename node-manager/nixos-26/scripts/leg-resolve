@@ -22,13 +22,35 @@
 # iscsid.conf defaults; this is the per-record guarantee.
 # Exit: 0 resolved, 2 usage, 3 refused (bad spec, no such zvol, LUN did not
 # appear), 1 a command failed.
+#
+# Two cluster keys, read from the IPS over the boot channel as host-reserve-apply
+# reads its own (an absent, unreadable or out-of-range key takes the default,
+# logged; docs/STORAGE-FAULTS.md):
+#   iscsi_replacement_timeout  seconds, 5-600, default 15 (the value below): the
+#                              replacement_timeout written to the node record.
+#   iscsi_max_sectors_kb       0, or 64-4096; default 256. Once the device is
+#                              there, queue/max_sectors_kb of its block device is
+#                              lowered to this (never raised, never above the
+#                              device's max_hw_sectors_kb), so one command needs
+#                              256 KB, not 1 MB, of contiguous target memory
+#                              (lab-dev 2026-11-15: order-4 allocation failures in
+#                              the target's iscsi_trx failed 1 MB writes). 0 keeps
+#                              the kernel's limit. Applied to a present device too.
+# Test hooks as above plus HPS_CMDLINE (default /proc/cmdline) and HPS_SYS
+# (default /sys).
 
 set -euo pipefail
 
 : "${HPS_DEV:=/dev}"
 : "${HPS_LEG_TIMEOUT:=30}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_SYS:=/sys}"
 
 SPEC=""
+IPS=""
+REPL_OVERRIDE=""
+MAX_SECTORS_KB=256
+REPLACEMENT_NAME="node.session.timeo.replacement_timeout"
 
 # The session timeouts written to the node record before each login (seconds).
 #   replacement_timeout  how long I/O is queued while a lost session is being
@@ -53,6 +75,93 @@ log() {
 run() {
   printf '+ %s\n' "$*" >&2
   "$@"
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE" 2> /dev/null); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# key_int <name> <min> <max>: the cluster key as an integer in range, else
+# empty (the default). Absent (HTTP 404, curl 22) is silent; unreadable or out of
+# range is logged.
+key_int() {
+  local out rc v
+  [[ -n "$IPS" ]] || return 0
+  set +e
+  out=$(run curl -fsS --max-time 10 "http://${IPS}/cgi-bin/boot_manager.sh?cmd=cluster_variable&name=$1" 2> /dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    [[ $rc -eq 22 ]] || log "cannot read $1 from the IPS (curl exit $rc): the default used"
+    return 0
+  fi
+  v=${out//[[:space:]]/}
+  [[ -n "$v" ]] || return 0
+  if [[ "$v" =~ ^(0|[1-9][0-9]{0,8})$ ]] && ((v >= $2 && v <= $3)); then
+    printf '%s\n' "$v"
+  else
+    log "$1 '$v' is not $2-$3: the default used"
+  fi
+}
+
+# load_keys: REPL_OVERRIDE and MAX_SECTORS_KB from the cluster keys.
+load_keys() {
+  local v
+  IPS=$(cmdline_value hps.ips || true)
+  if [[ -z "$IPS" ]]; then
+    log "hps.ips absent from the command line: the cluster keys take their defaults"
+    return 0
+  fi
+  REPL_OVERRIDE=$(key_int iscsi_replacement_timeout 5 600)
+  v=$(key_int iscsi_max_sectors_kb 0 4096)
+  if [[ -z "$v" ]]; then
+    return 0
+  elif ((v == 0 || v >= 64)); then
+    MAX_SECTORS_KB=$v
+  else
+    log "iscsi_max_sectors_kb '$v' is not 0 or 64-4096: the default used"
+  fi
+}
+
+# apply_max_sectors <by-path device>: lower the block device's max_sectors_kb to
+# MAX_SECTORS_KB (never raise it, never beyond max_hw_sectors_kb). A device with
+# no queue directory is a logged warning: the leg is usable without it.
+apply_max_sectors() {
+  local dev=$1 real name q cur hw want
+  if ((MAX_SECTORS_KB == 0)); then
+    log "iscsi_max_sectors_kb is 0: the kernel's max_sectors_kb of $dev is kept"
+    return 0
+  fi
+  real=$(readlink -f -- "$dev" 2> /dev/null || true)
+  name=${real##*/}
+  q="$HPS_SYS/block/$name/queue"
+  if [[ -z "$name" || ! -w "$q/max_sectors_kb" ]]; then
+    log "WARNING: no $q/max_sectors_kb: the command size of $dev is not limited"
+    return 0
+  fi
+  cur=$(cat "$q/max_sectors_kb" 2> /dev/null || true)
+  hw=$(cat "$q/max_hw_sectors_kb" 2> /dev/null || true)
+  [[ "$cur" =~ ^[0-9]+$ ]] || { log "WARNING: max_sectors_kb of $name is '$cur': not changed"; return 0; }
+  want=$MAX_SECTORS_KB
+  if [[ "$hw" =~ ^[0-9]+$ ]] && ((want > hw)); then
+    want=$hw
+  fi
+  if ((cur <= want)); then
+    log "max_sectors_kb of $name is $cur, at most $want: kept"
+    return 0
+  fi
+  log "+ echo $want > $q/max_sectors_kb"
+  if ! printf '%s\n' "$want" > "$q/max_sectors_kb" 2> /dev/null; then
+    log "WARNING: could not write $q/max_sectors_kb"
+  fi
 }
 
 usage() {
@@ -101,9 +210,13 @@ session_present() {
 # set_timeouts <ip> <iqn>: write ISCSI_TIMEOUTS into the node record (made by
 # the discovery) so the login that follows uses them.
 set_timeouts() {
-  local ip=$1 iqn=$2 kv
+  local ip=$1 iqn=$2 kv val
   for kv in "${ISCSI_TIMEOUTS[@]}"; do
-    run iscsiadm -m node -T "$iqn" -p "$ip" -o update -n "${kv%%=*}" -v "${kv#*=}" >&2
+    val=${kv#*=}
+    if [[ "${kv%%=*}" == "$REPLACEMENT_NAME" && -n "$REPL_OVERRIDE" ]]; then
+      val=$REPL_OVERRIDE
+    fi
+    run iscsiadm -m node -T "$iqn" -p "$ip" -o update -n "${kv%%=*}" -v "$val" >&2
   done
 }
 
@@ -141,12 +254,14 @@ resolve_iscsi() {
     refuse "iqn '$iqn' is not an iSCSI qualified name"
   fi
   dev="$HPS_DEV/disk/by-path/ip-$ip:3260-iscsi-$iqn-lun-0"
+  load_keys
   if [[ ! -e "$dev" ]]; then
     ensure_session "$ip" "$iqn"
   else
     log "$dev is already present"
   fi
   wait_for_device "$dev"
+  apply_max_sectors "$dev"
   printf '%s\n' "$dev"
 }
 

@@ -22,6 +22,9 @@
 #   host_reserve_mem_mib  MiB kept for the host. Default: 10% of RAM, at least 2048.
 #   zfs_arc_max_pct       the ZFS ARC cap, percent of RAM, at least 1024 MiB.
 #                         Default 25. Storage hosts (role SCH) only.
+#   storage_min_free_pct  vm.min_free_kbytes as a percent of RAM (0-10), at least
+#                         128 and at most 2048 MiB; default 2; 0 leaves the kernel's
+#                         value. Raised only, never lowered. Storage hosts only.
 #
 # Roles: the node's assigned TYPE from the registry (host key TYPE, read through
 # the boot channel cmd=host_variable, as hps-node-init reads HOSTNAME), falling
@@ -36,6 +39,8 @@
 #   SCH  zfs_arc_max = the cap, in bytes: /sys/module/zfs/parameters/zfs_arc_max
 #        when the module is loaded, and /run/modprobe.d/hps-zfs-arc.conf for a
 #        later load. The ARC then never grows into the guests' memory.
+#        vm.min_free_kbytes raised to storage_min_free_pct of RAM (/proc/sys/vm),
+#        so the iSCSI target keeps contiguous free memory (docs/STORAGE-FAULTS.md).
 #   TCH  systemctl set-property --runtime machine.slice (every libvirt guest):
 #          AllowedCPUs  the online CPUs less the host's
 #          CPUWeight=50, IOWeight=50  (system.slice keeps the default 100)
@@ -63,7 +68,10 @@ set -euo pipefail
 : "${HPS_CPU_ONLINE:=/sys/devices/system/cpu/online}"
 : "${HPS_ZFS_PARAMS:=/sys/module/zfs/parameters}"
 : "${HPS_MODPROBE_DIR:=/run/modprobe.d}"
+: "${HPS_PROC_SYS:=/proc/sys}"
 
+MIN_FREE_FLOOR=128
+MIN_FREE_CEIL=2048
 GUEST_CPU_WEIGHT=50
 GUEST_IO_WEIGHT=50
 GUEST_MEM_FLOOR=512
@@ -188,9 +196,47 @@ cpu_list() {
   printf '%s\n' "$out"
 }
 
+# apply_min_free <total MiB>: raise vm.min_free_kbytes on a storage host to
+# storage_min_free_pct of RAM (default 2; between MIN_FREE_FLOOR and
+# MIN_FREE_CEIL MiB), so the iSCSI target (iscsi_trx) keeps free memory for its
+# order-4 (64 KiB) and larger allocations (lab-dev 2026-11-15, docs/STORAGE-FAULTS.md).
+# Never lowers the kernel's own value; 0 leaves it alone. Prints the MiB in force,
+# or "-" when untouched (the log goes to stderr).
+apply_min_free() {
+  local total=$1 pct want cur
+  pct=$(key_int storage_min_free_pct 0 10)
+  pct=${pct:-2}
+  if ((pct == 0)); then
+    log "storage_min_free_pct 0: vm.min_free_kbytes left as the kernel set it"
+    printf '%s\n' "-"
+    return 0
+  fi
+  want=$((total * pct / 100))
+  ((want >= MIN_FREE_FLOOR)) || want=$MIN_FREE_FLOOR
+  ((want <= MIN_FREE_CEIL)) || want=$MIN_FREE_CEIL
+  cur=$(cat "$HPS_PROC_SYS/vm/min_free_kbytes" 2> /dev/null || true)
+  if [[ ! "$cur" =~ ^[0-9]+$ ]]; then
+    log "WARNING: cannot read $HPS_PROC_SYS/vm/min_free_kbytes: not changed"
+    printf '%s\n' "-"
+    return 0
+  fi
+  if ((cur >= want * 1024)); then
+    log "vm.min_free_kbytes is $cur KiB, at least $((want * 1024)): kept"
+    printf '%s\n' "$((cur / 1024))"
+    return 0
+  fi
+  log "+ echo $((want * 1024)) > $HPS_PROC_SYS/vm/min_free_kbytes"
+  if printf '%s\n' "$((want * 1024))" > "$HPS_PROC_SYS/vm/min_free_kbytes" 2> /dev/null; then
+    printf '%s\n' "$want"
+  else
+    log "WARNING: could not write $HPS_PROC_SYS/vm/min_free_kbytes"
+    printf '%s\n' "-"
+  fi
+}
+
 main() {
   local -a cpus
-  local n reserve_cpus mem_kib total reserve_mem pct arc=0 budget host_list guest_list
+  local n reserve_cpus mem_kib total reserve_mem pct arc=0 budget host_list guest_list min_free="-"
   if [[ $# -ne 0 ]]; then
     log "takes no arguments"
     exit 2
@@ -239,6 +285,10 @@ main() {
     fi
   fi
 
+  if has_role SCH; then
+    min_free=$(apply_min_free "$total")
+  fi
+
   budget=$((total - reserve_mem - arc))
   if ((budget < GUEST_MEM_FLOOR)); then
     log "warning: RAM $total MiB less host $reserve_mem MiB and ARC $arc MiB leaves $budget MiB for guests; $GUEST_MEM_FLOOR MiB used"
@@ -255,8 +305,8 @@ main() {
   has_role SCH || arc="-"
 
   mkdir -p "$HPS_RUN_DIR"
-  printf 'roles=%s\nroles_from=%s\ncpus=%s\nhost_cpus=%s\nguest_cpus=%s\nmem_total_mib=%s\nhost_mem_mib=%s\narc_max_mib=%s\nguest_mem_max_mib=%s\n' \
-    "${ROLES:-none}" "$ROLES_FROM" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget" \
+  printf 'roles=%s\nroles_from=%s\ncpus=%s\nhost_cpus=%s\nguest_cpus=%s\nmem_total_mib=%s\nhost_mem_mib=%s\narc_max_mib=%s\nguest_mem_max_mib=%s\nmin_free_mib=%s\n' \
+    "${ROLES:-none}" "$ROLES_FROM" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget" "$min_free" \
     > "$HPS_RUN_DIR/host-reserve"
   printf 'HOST-RESERVE roles=%s roles_from=%s cpus=%s host_cpus=%s guest_cpus=%s mem_total_mib=%s host_mem_mib=%s arc_max_mib=%s guest_mem_max_mib=%s\n' \
     "${ROLES:-none}" "$ROLES_FROM" "$n" "${host_list:-none}" "$guest_list" "$total" "$reserve_mem" "$arc" "$budget"
