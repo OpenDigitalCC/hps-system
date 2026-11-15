@@ -8,8 +8,10 @@ use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::Keysafe;
 use HPS::Workload;
+use HPS::Workload::Drain;
 
-# 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, node refusal), 4 not found
+# 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, node refusal), 4 not found;
+# drain and undrain also: 5 guests left (HPS::Workload::Drain::EXIT)
 my %EXIT = (
     usage => 2, refused => 3, perms => 3,
     malformed => 3, notfound => 4, failed => 1,
@@ -32,6 +34,9 @@ Usage:
   hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
   hps-workload show-definition <name>
   hps-workload list   [--project <P>] [--json]
+  hps-workload set-class <name> <1-4> [--dry-run] [--json]
+  hps-workload drain   <host> [--include-nodes] [--dry-run] [--json]
+  hps-workload undrain <host> [--dry-run] [--json]
   hps-workload images [--json]
 suspend saves each VM's memory to /<pool>/enc/state/<vm>.save on its compute host and
 stops it (a long job survives a planned host reboot); resume brings it back where it
@@ -56,7 +61,20 @@ console prints the tail of each VM's serial console log (vm-console-log on its
 compute host; read-only), --lines N of it (1-10000, default the node's 200);
 with --vm the log alone, else each under a "== <vm> on <host>" heading. Exit 4
 when the one VM asked for has no log, 1 when any VM's log could not be read.
-list prints every recorded workload: name, project (from its definition), state, compute
+A definition may carry "class": 1 core, 2 customer-facing, 3 ordinary (default), 4 batch
+and test: what happens to the workload when its host must go down. set-class changes it
+in the stored definition and the record of a created workload; nothing on a node changes.
+drain empties a compute host before a planned reboot: it marks the host not placeable (host
+key drain: create, start and resume refuse it), then handles each running guest, class 4
+first: class 4 is stopped, class 3 suspended, class 1 and 2 suspended too (live migration is
+not built). A guest that is a cluster node (a registered host, or a network-boot VM) is never
+suspended: drain refuses while one runs there, or with --include-nodes stops them last.
+undrain resumes what drain suspended and starts what drain stopped (class 1 first), leaves
+what was already stopped or suspended, and clears the mark. Exit of drain: 0 drained and
+ready for reboot (also when no guest was running), 5 guests still running (NOT ready), 3
+refused (nothing changed). Exit of undrain: 0 done or not drained, 5 some guests not brought
+back (kept in the record; run it again), 3 refused.
+list prints every recorded workload: name, project (from its definition), state, class, compute
 host(s), VM count, the first address and created_at; --json gives every address. Addresses
 are DHCP leases of the IPS's dnsmasq matched by the VM's MAC (status --json carries them per
 VM as addresses: [{net, mac, ip, source}], empty when none). images lists the catalogue
@@ -96,7 +114,7 @@ sub render_run {
 
 sub render_status {
     my ($r) = @_;
-    my $out = "Workload $r->{name}: $r->{state}\n";
+    my $out = "Workload $r->{name}: $r->{state} (class " . ($r->{class} // 'unreadable') . ")\n";
     for my $v (@{ $r->{vms} }) {
         $out .= sprintf("  %-20s host %-14s recorded %-9s node %s%s\n", $v->{vm}, $v->{host} // '-',
             $v->{recorded_state} // '-', $v->{state}, $v->{ok} ? '' : ' (a node call failed)');
@@ -202,17 +220,61 @@ sub catalogue_verb {
     return defined $rc ? $rc : fail_exit($@);
 }
 
+# set-class <name> <1-4>: the class in the definition and the record.
+sub class_verb {
+    my ($name, $rest, %o) = @_;
+    return usage('set-class needs <name> <1-4>') unless @$rest == 1;
+    return usage('set-class takes only --dry-run and --json') if $o{other};
+    my $rc = eval {
+        my $r = HPS::Workload->new->set_class($name, $rest->[0], dry_run => $o{dry_run});
+        if ($o{json}) { print JSON::PP->new->canonical->pretty->encode($r) }
+        else {
+            my $where = join(' and ', ($r->{definition} ? 'the definition' : ()), ($r->{record} ? 'the record' : ()));
+            print(($r->{dry_run} ? 'Dry run: set-class' : 'set-class ok:') . " workload $name class "
+                . ($r->{was} // 'unreadable') . " -> $r->{class} in $where" . ($r->{dry_run} ? '; nothing is changed' : '') . "\n");
+        }
+        return 0;
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
+# drain <host> and undrain <host> (HPS::Workload::Drain). The exit status is the
+# outcome's; a refusal goes to stderr (and, with --json, the result to stdout).
+sub drain_verb {
+    my ($op, $host, $rest, %o) = @_;
+    return usage("$op takes no further arguments") if @$rest;
+    return usage("$op takes only --dry-run and --json" . ($op eq 'drain' ? ' and --include-nodes' : '')) if $o{other};
+    return usage('--include-nodes is only for drain') if $o{include_nodes} && $op ne 'drain';
+    return usage("$op needs a host: a MAC or a registry hostname") unless $host =~ /\A[A-Za-z0-9][A-Za-z0-9_.:-]*\z/;
+    my $rc = eval {
+        my $wl = HPS::Workload->new;
+        my $r = $op eq 'drain' ? HPS::Workload::Drain::drain($wl, $host, dry_run => $o{dry_run}, include_nodes => $o{include_nodes})
+            : HPS::Workload::Drain::undrain($wl, $host, dry_run => $o{dry_run});
+        if ($o{json}) { print JSON::PP->new->canonical->pretty->encode($r) }
+        else { print HPS::Workload::Drain::render($r) }
+        print STDERR "hps-workload: $op $r->{host} refused: $r->{reason}\n" if $r->{outcome} eq 'refused' && !$o{json};
+        return $r->{exit};
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw, $nodes);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget, 'image-written' => \$imgw,
         'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
+        'include-nodes' => \$nodes,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images';
-    my $name = shift @argv // return usage('workload name required');
+    my $name = shift @argv // return usage($op eq 'drain' || $op eq 'undrain' ? 'host required' : 'workload name required');
+    my $other = ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw);
+    return drain_verb($op, $name, \@argv, json => $json, dry_run => $dry, include_nodes => $nodes, other => $other)
+        if $op eq 'drain' || $op eq 'undrain';
+    return usage('--include-nodes is only for drain') if $nodes;
+    return class_verb($name, \@argv, json => $json, dry_run => $dry, other => $other) if $op eq 'set-class';
     return definition_verb($op, $name, \@argv, json => $json, dry_run => $dry, replace => $replace,
         other => ($resume || $any || defined $vm || $forget))
         if $op eq 'define' || $op eq 'show-definition';

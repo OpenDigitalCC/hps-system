@@ -12,6 +12,36 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Workload classes and the drain verb (2026-11-15)
+
+- **Added** A workload definition may carry `class`: a whole
+  number 1 to 4, default 3 (1 core, 2 customer-facing, 3 ordinary, 4 batch and
+  test). `define` and `create` refuse anything else. `create` records it;
+  `hps-workload list` shows it in a `CLASS` column, `status` in its first line,
+  both in `--json`. A record without the key reads as 3 and is not rewritten.
+  It is another field than a VM's `priority` (start order), hence the name.
+- **Added** `hps-workload set-class <name> <1-4>` changes the class in the
+  stored definition and the record, with no node call; logged as an event.
+- **Added** `hps-workload drain <host> [--include-nodes] [--dry-run] [--json]`:
+  marks the host not placeable (host key `drain`) and handles each running
+  guest, class 4 first: class 4 stopped, class 3 suspended, class 1 and 2
+  suspended with a line saying they would be live-migrated when migration
+  exists. A guest that is a cluster node (a registered host, or a network-boot
+  VM) is never suspended: refused by default, stopped last with
+  `--include-nodes`. A guest that cannot be handled is left running and
+  reported. Exit 0 drained (also when no guest was running: `--json` `outcome` is
+  `nothing-to-do`), 5 guests left (not ready for reboot), 3 refused. A workload record that cannot be read is a refusal, never
+  "nothing running".
+- **Added** `hps-workload undrain <host> [--dry-run] [--json]`: reverses what
+  the drain record says drain did (resume, start; class 1 first), leaves what
+  was already stopped or suspended, clears the mark; a partial failure keeps
+  the failures in the record for a second run.
+- **Changed** `hps-workload create`, `start` and `resume` refuse (3) a compute
+  host that carries the host key `drain`, naming the key and `undrain`.
+- New module `HPS::Workload::Drain`; host key `drain` in the key catalogue.
+  IPS side only: no node script and no `.nix` file changed. Plan items U1 and U2
+  of the upgradability design.
+
 ## A node of a stopped workload is stopped, not down (2026-11-15)
 
 - **Changed** `hps-monitor` does not call a node that is a VM of a workload

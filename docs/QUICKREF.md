@@ -241,8 +241,27 @@ Virtual-machine workloads. `<name>` is the workload, stored as
   10000.
 
 `hps-workload list [--project <P>] [--json]`
-: Lists every recorded workload: name, project, state, hosts, VM count, first
-  address, creation time.
+: Lists every recorded workload: name, project, state, class, hosts,
+  VM count, first address, creation time.
+
+`hps-workload set-class <name> <1-4> [--dry-run] [--json]`
+: Sets the workload's class in its definition and its record: 1 core,
+  2 customer-facing, 3 ordinary (the default), 4 batch and test. A definition
+  may carry it as the top-level key `class`. No guest is touched.
+
+`hps-workload drain <host> [--include-nodes] [--dry-run] [--json]`
+: Empties a compute host before a planned reboot. Marks it not placeable (host
+  key `drain`; `create`, `start` and `resume` refuse it), then handles each
+  running guest, class 4 first: class 4 is stopped, class 3 suspended, class 1
+  and 2 suspended too until live migration exists. A guest that is a cluster
+  node is never suspended: drain refuses while one runs there, or with
+  `--include-nodes` stops them last. `--dry-run` prints the plan with each
+  guest's memory and estimated state file size.
+
+`hps-workload undrain <host> [--dry-run] [--json]`
+: Resumes what drain suspended and starts what drain stopped, class 1 first,
+  and clears the mark. What was already stopped or suspended stays so. After a
+  partial failure the record keeps the failures; run it again.
 
 `hps-workload images [--json]`
 : Lists the image catalogue with size and sha256.
@@ -482,6 +501,17 @@ Tool-specific codes:
 `hps-bmc`
 : 4 – target unreachable; 5 – not supported by this device.
 
+`hps-workload drain`
+: 0 – drained, ready for reboot (also when no guest was running: `--json`
+  `outcome` is `nothing-to-do`); 5 – guests still running, NOT ready for
+  reboot; 3 – refused
+  (a node VM without `--include-nodes`, or a workload record that cannot be
+  read).
+
+`hps-workload undrain`
+: 0 – done, or the host was not drained; 5 – some guests not brought back,
+  kept in the record.
+
 `hps-osvc status`
 : 2 – a peer is stale.
 
@@ -515,13 +545,13 @@ Works at once on the IPS, with no node involved
 : `hps-issues`, `hps-log`, `hps-metrics` (reads of what the IPS holds),
   `hps-pins`, `hps-cluster-config`, `hps-operator`, `hps-ips-check`,
   `hps-onboard` (list, show, assign, forget, prune-agents),
-  `hps-workload` define, show-definition, list and images, and every
-  `--dry-run`.
+  `hps-workload` define, show-definition, set-class, list and images, and
+  every `--dry-run`.
 
 Needs a booted, paired node
 : `hps-node`, `hps-storage`, `hps-osvc` and the `hps-workload` verbs that act
-  on VMs (create, start, stop, suspend, resume, destroy, status, grow-disk,
-  console) call node scripts through the IPS's dispatcher. `hps-node net-up`
+  on VMs (create, start, stop, suspend, resume, drain, undrain, destroy,
+  status, grow-disk, console) call node scripts through the IPS's dispatcher. `hps-node net-up`
   needs a NixOS host.
 
 Needs a node image or a reboot
@@ -535,6 +565,7 @@ Needs a BMC driver
 # Further reading
 
 - `docs/OPERATOR.md` – operator access, credentials and the API.
-- `docs/WORKLOADS.md` – the definition, limits, suspend and resume.
+- `docs/WORKLOADS.md` – the definition, limits, suspend and resume, workload
+  classes, drain and undrain.
 - `docs/CLUSTER-CONFIG.md`, `docs/ISSUES.md`, `docs/LOGGING.md`,
   `docs/MONITORING.md`, `docs/BMC.md`, `docs/OPENSVC.md`, `docs/IPS-CHECK.md`.

@@ -51,16 +51,16 @@ is_deeply(HPS::Workload::List::list($wl, project => 'nobody'), [], 'no match: em
 
 unlink "$f->{reg}->workload_dir('lab')/beta.json" if 0;
 my $text = HPS::Workload::List::render_list($rows);
-like($text, qr/^NAME\s+PROJECT\s+STATE\s+HOST\s+VMS\s+ADDRESS\s+CREATED$/m, 'text header');
-like($text, qr/^alpha\s+projA\s+running\s+sch-001\s+1\s+10\.0\.0\.21\s+2026-11-12 05:51:36 UTC$/m, 'alpha row');
-like($text, qr/^beta\s+projB\s+partial\s+sch-001,sch-002\s+2\s+-\s+2026-11-13/m, 'beta row, no address is a dash');
+like($text, qr/^NAME\s+PROJECT\s+STATE\s+CLASS\s+HOST\s+VMS\s+ADDRESS\s+CREATED$/m, 'text header');
+like($text, qr/^alpha\s+projA\s+running\s+3\s+sch-001\s+1\s+10\.0\.0\.21\s+2026-11-12 05:51:36 UTC$/m, 'alpha row');
+like($text, qr/^beta\s+projB\s+partial\s+3\s+sch-001,sch-002\s+2\s+-\s+2026-11-13/m, 'beta row, no address is a dash');
 is(HPS::Workload::List::render_list([]), "no workloads\n", 'empty');
 
 # a record whose definition is gone: project null, still listed
 unlink StorageFixture::write_def($f, { %{ StorageFixture::base_def() }, name => 'beta', project => 'projB' });
 $rows = HPS::Workload::List::list($f->{wl}->());
 is($rows->[1]{project}, undef, 'definition gone: project null');
-like(HPS::Workload::List::render_list($rows), qr/^beta\s+-\s+partial/m, 'and a dash in the table');
+like(HPS::Workload::List::render_list($rows), qr/^beta\s+-\s+partial\s+3\s/m, 'and a dash in the table');
 is(scalar @{ HPS::Workload::List::list($f->{wl}->(), project => 'projB') }, 0, 'not matched by --project either');
 
 # the CLI

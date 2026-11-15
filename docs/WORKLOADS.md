@@ -33,10 +33,11 @@ Checked before any node call; a refusal exits 3 and names the field:
 | --- | --- |
 | `name` (workload, VM, disk, net) | `^[a-z][a-z0-9-]{0,31}$`; the workload name equals the file name; VM names are unique |
 | `project` | non-empty string |
+| `class` (workload, top level) | optional, a whole number 1-4, default 3: the workload's class (1 core, 2 customer-facing, 3 ordinary, 4 batch and test), which decides what `drain` does with it. See "Workload classes" |
 | `access` | optional; `ssh_keys` a list of public key lines, `console` a JSON boolean |
 | `memory_mib` | 256-262144 |
 | `vcpus` | 1-64 |
-| `priority` | 1-5; 1 starts first and stops last. Default 1 for a storage provider (a `boot: network` VM with disks of its own: a nested SCH or IPS builds its pool on them), else 3. At one priority providers start first and stop last. See "Stop order on a node" |
+| `priority` (per VM) | 1-5; 1 starts first and stops last. Default 1 for a storage provider (a `boot: network` VM with disks of its own: a nested SCH or IPS builds its pool on them), else 3. At one priority providers start first and stop last. See "Stop order on a node" |
 | `image` | `^[a-z0-9][a-z0-9._-]{0,63}$`; `hps-resources/images/<image>.qcow2` and `<image>.sha256` must exist on the IPS (checked by `create`; `image-fetch` on the node checks the sum); absent when `boot` is `network` |
 | `boot` | optional, `disk` (default) or `network`. `network`: the VM netboots from the first NIC like a metal node (a nested HPS node, CS-3.12a); `image` is refused, `disks` may be empty or absent, so `compute_host` is required; `create` runs `net-bridge-ensure` and `vm-define --boot network` only (no zvol, image, mirror or image write) and `start`, `stop`, `status` and `destroy` are unchanged |
 | `disks[].size` | `^[1-9][0-9]*[MGT]$` |
@@ -126,9 +127,9 @@ hps-workload status <name> --json          (per VM: addresses)
 `list` shows every recorded workload (a `workload_<name>` key of the cluster
 configuration; the `_destroyed` audit keys are not workloads): name, project
 (from the stored definition; `-` and null when the definition is gone), state,
-compute host(s), VM count, the first address and `created_at`. `--project P`
-keeps one project's. `--json` is `{"workloads": [{name, project, state, hosts,
-vms, addresses, created_at}]}` with every address as `{vm, net, mac, ip,
+class, compute host(s), VM count, the first address and `created_at`.
+`--project P` keeps one project's. `--json` is `{"workloads": [{name, project,
+state, class, hosts, vms, addresses, created_at}]}` with every address as `{vm, net, mac, ip,
 source}`.
 
 An address is a DHCP lease: the IPS's dnsmasq leases file
@@ -320,6 +321,136 @@ destroy) passes through to `HPS::Storage`: pools are named after the cluster.
 - **A reboot of the host.** `suspend`, reboot, then `resume`. The definition the host lost is defined again from the record (the recorded MACs), exactly as `start` does after a reboot.
 - **While suspended.** `status` shows the VM as `suspended` with the state file, when it was saved and its size (`state_file`, `saved_at`, `size_bytes` in `status --json`; the node state is `shut off`). `start` and `stop` refuse and point to `resume`.
 - **`destroy` of a suspended workload** removes the state file too (`vm-save <vm> --state <file> --discard`), after the VM is stopped and undefined and before the zvols go.
+
+## Workload classes
+
+A definition may carry a top-level `class`: the workload's class, a whole
+number 1 to 4, default 3. The class decides what happens to the workload when
+its compute host must go down (`drain`, below). It is another field than a
+VM's `priority`, which orders start and stop inside one workload.
+
+| Class | Meaning | `drain` does |
+| --- | --- | --- |
+| 1 | Core: IPS, DNS, syslog, dispatcher, edge firewalls | suspends it (live migration is not built) |
+| 2 | Customer-facing services | suspends it (live migration is not built) |
+| 3 | Ordinary workloads (default) | suspends it |
+| 4 | Batch and test | stops it cleanly |
+
+`define` and `create` refuse (3) any other value, a string or a fraction
+included, and the message names the classes. `create` writes the class into
+the record (`class`); `list` shows it in the `CLASS` column and `status` in
+its first line, and both carry `class` in `--json`. A record made before the
+key existed has none: it reads as 3 and is not rewritten by a read. A recorded
+value that is not 1 to 4 shows as `?` in `list`, and `drain` refuses until it
+is set.
+
+```
+hps-workload set-class <name> <1-4> [--dry-run] [--json]
+```
+
+`set-class` changes the class after `define` or `create`: in the stored
+definition (rewritten as canonical JSON, so a later `create` keeps it) and in
+the record of a created workload. Either may be absent, not both (4). It makes
+no node call and the guests are not touched. It is logged as one event:
+`set-class <name>: class 3 -> 2 by <operator> (definition, record)`.
+
+## Drain and undrain
+
+```
+hps-workload drain   <host> [--include-nodes] [--dry-run] [--json]
+hps-workload undrain <host> [--dry-run] [--json]
+```
+
+`drain` empties a compute host before a planned reboot; `undrain` brings its
+guests back afterwards. `<host>` is a MAC or a registry hostname.
+
+**What drain does.** It marks the host not placeable, then handles each guest
+the workload records say is running there, lowest class first: class 4 is
+stopped (`stop`, never forced), class 3 is suspended (`suspend`), class 1 and 2
+are suspended as well and each prints `class N: would be live-migrated when
+migration exists; suspending`. Inside a class the order is by workload name,
+and inside a workload its stop order. Guests that are stopped, suspended or
+only defined are listed as `left as it is` and not touched. The actions are the
+`stop` and `suspend` of this page, one VM at a time, so their node calls,
+refusals and records are the same.
+
+**The mark.** Host key `drain`. While it is there `create`, `start` and
+`resume` refuse (3) that host: `compute host <host> is draining (host key
+drain) ... Run hps-workload undrain <host>`. `stop`, `suspend`, `status`,
+`console` and `destroy` are not placement and still work. There is no
+scheduler: a definition names its compute host, so a draining host is refused,
+never skipped.
+
+**Node VMs.** A guest that is itself a cluster node or infrastructure is never
+suspended: a VM one of whose recorded MACs is a registered host (a nested
+node, the IPS's own host), or a `boot: network` VM. While one runs on the host
+`drain` refuses (3), lists them and changes nothing. Stop them yourself, or
+give `--include-nodes`: they are then stopped cleanly after every other guest,
+whatever their class.
+
+**A guest that cannot be handled.** When a `suspend` or `stop` fails (no room
+for the state file, a node refusal, a definition that no longer loads) the
+guest is reported and left running, and the rest are still handled. `drain`
+then exits 5 and says the host is NOT ready for reboot, with what still runs.
+Put the cause right and run `drain` again: it handles only what still runs.
+
+**Records that cannot be read.** `drain` reads every workload record of the
+cluster. One that cannot be read, has no `vms`, a VM with no host or an unknown
+state, a running VM on a host the registry does not know, or a class that is
+not 1 to 4 is a refusal (3) naming it, and nothing is changed: an unreadable
+record is never taken as "nothing running".
+
+**`--dry-run`** prints the plan and changes nothing: per guest its class,
+action, memory and the estimated size of the state file (the guest's memory;
+`vm-save` needs that much free on `<pool>/enc/state`).
+
+**What undrain does.** It reverses exactly what `drain` did, from the record in
+the host key: it resumes what `drain` suspended and starts what `drain`
+stopped, nodes first (they were stopped last), then class 1 to 4. A guest that
+was stopped or suspended before the drain, and one `drain` left running, are
+not in the record and are not touched. A guest that is no longer as `drain`
+left it (destroyed meanwhile, or in another state) is skipped with a note.
+When every guest is back the key is removed and the host is placeable again. A
+guest that cannot be brought back stays in the record, the mark stays, and
+`undrain` exits 5; run it again. `undrain` of a host that is not drained says
+so and exits 0.
+
+| Outcome (`outcome` in `--json`) | Exit | Meaning |
+| --- | --- | --- |
+| `drained` | 0 | Every running guest handled; the host is marked and ready for reboot |
+| `guests-left` | 5 | Some guests still run (`still_running`); marked, NOT ready for reboot |
+| `nothing-to-do` | 0 | No guest was running; the host is marked and ready for reboot |
+| `refused` | 3 | A node VM without `--include-nodes`, or a record that cannot be read; nothing changed |
+| `undrained` | 0 | Everything `drain` did is reversed; the mark is cleared |
+| `not-drained` | 0 | `undrain` of a host with no mark; nothing changed |
+| `incomplete` | 5 | `undrain` could not bring back some guests (`failed`); the record keeps them |
+| `plan` | 0 | `--dry-run` with something to do (`nothing-to-do`, 0, with nothing) |
+
+`--json` also gives `host`, `mac`, `key` (`drain`), `guests` (per guest:
+`workload`, `vm`, `class`, `action`, `node`, `memory_mib`,
+`state_file_bytes_estimate`, `note`, `result`, `error`), `idle` and
+`ready_for_reboot`. A host the registry does not know is not found (4).
+
+**The record.** Host key `drain`: `{"state": "draining|drained|guests-left|undrain-incomplete",
+"started_at": "...", "finished_at": "...", "by": "operator", "guests":
+[{"workload": "...", "vm": "...", "class": 3, "action": "suspend", "node": 0,
+"seq": 1, "result": "done", "at": "..."}]}`. `result` is `attempting` (written
+before the node call), `done`, or `left` (the action failed, with `error`). An
+entry still `attempting` belongs to a drain that died mid-call; the next
+`drain` or `undrain` settles it from the workload record.
+
+**Events.** Every drain and undrain, and each guest action, is one log line:
+`drain <host>: host marked not placeable (host key drain) by <operator>; N
+guest(s) to handle`, `drain <host>: suspend of <workload>/<vm> (class 3) ok`,
+`drain <host>: ... failed; the guest is left running: <reason>`, `drain <host>:
+N guest(s) handled; ready for reboot`, `undrain <host>: resume of
+<workload>/<vm> (class 3) ok`, `undrain <host>: mark cleared (host key drain
+removed); the host is placeable again`.
+
+**Limits.** Live migration is not built: a class 1 or 2 guest is off for the
+length of the reboot. A suspended guest resumes on the same host only (its
+state file is on that host's pool). `drain` acts on what the records say, not
+on what the node reports: a guest running outside the records is not seen.
 
 ## Resource limits
 
@@ -533,7 +664,7 @@ Issue markers
 Cluster key `workload_<name>`:
 
 ```json
-{"state": "created", "created_at": "...", "by": "operator",
+{"state": "created", "class": 3, "created_at": "...", "by": "operator",
  "vms": {"$VM": {"host": "$NODE", "state": "defined",
                  "disks": {"root": {"md": "/dev/md/$VM-root", "legs": ["local:...", "iscsi:..."]}},
                  "last_owner": "$NODE", "started_at": "...",
@@ -542,6 +673,7 @@ Cluster key `workload_<name>`:
 
 After `destroy`, cluster key `workload_<name>_destroyed` is
 `{"at": "...", "by": "operator", "forgotten": false}`; the next `create` removes it.
+Host key `drain` ("Drain and undrain"): present while the host is drained.
 All registry keys, with their types: `docs/REGISTRY-KEYS.md`.
 
 A `boot: network` VM has `"disks": {}` and `"macs": ["$MAC", ...]`, the MACs
@@ -566,7 +698,10 @@ runs it as root on the IPS.
 ## Exit codes and logging
 
 `0` ok, `1` failed (a node call failed), `2` usage, `3` refused (definition,
-policy, node refusal, existing workload), `4` not found (definition, record, VM).
+policy, node refusal, existing workload), `4` not found (definition, record, VM,
+host). `drain` and `undrain` add `5` guests left (still running after `drain`,
+not brought back by `undrain`). `drain` of a host with no running guest exits `0`:
+the host is marked and ready, and `--json` `outcome` says `nothing-to-do`.
 Every node call, its exit status and every refusal is logged to stderr and, via
 `logger -t hps -p local0.<level>`, to syslog (`HPS_WORKLOAD_NO_SYSLOG=1` turns
 syslog off). No log line carries a key, secret or signature.
@@ -584,3 +719,5 @@ Environment: `HPS_WORKLOAD_CMD` (default `bin/hps-workload`), `HPS_RUN_CMD`
 
 Nothing in this page has run against libvirt, mdadm, ZFS or ctrl-exec; tests use
 a recording runner or a shim `hps-run`. The first real run is the lab runsheet.
+`drain` and `undrain` have not run against a host: their guest actions are the
+`stop`, `suspend`, `start` and `resume` above.
