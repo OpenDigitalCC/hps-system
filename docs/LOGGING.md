@@ -135,7 +135,7 @@ node | A node powered on, off, up or down, or faulted (derived lines).
 power | A BMC power action (derived line).
 boot | iPXE initialisation and boot (derived lines); the boot-stalled watch (`HPS::BootWatch`): the subject is the workload/VM or the host.
 service | An IPS program: started, stopped, alive (the monitor's heartbeat), failed.
-log | The log's own housekeeping (rotation), and any local program error (derived line).
+log | The log's own housekeeping (rotation), and a local program error (derived line: warning for a program HPS runs, info for any other).
 auth | Reserved for operator-call refusals.
 ```
 
@@ -217,8 +217,50 @@ node-fault | hps-node: with FAULT | warning, node, error
 node | hps-node: | notice, node, done
 storage | hps-storage: with exit | notice, storage, done
 ips-check | hps-ips-check FAIL or summary | warning, service, failed
-error | any other local line at syslog severity err or worse, except hps-monitor lines | warning, log, error
+error | a line at syslog severity err or worse of a program HPS runs (`hps*`, `ctrl-exec*`, OpenSVC `om`, dnsmasq, lighttpd, chronyd, supervisord, rsyslogd), except hps-monitor lines | warning, log, error
+error-other | a line at syslog severity err or worse of any other program, except hps-monitor lines | info, log, error
 ```
+
+Why two error rows. The attention filter (`HPS-ALERT`, priority warning or
+urgent) answers "is anything wrong with HPS". A program HPS runs failing is
+that. An err-level line of a program HPS only hosts (a libvirt wrapper resetting
+a connection, a kernel driver, a guest's own tool: the lab wrote about 400 of
+them in ten minutes) is not, and made `hps-log attention` noisy and, once other
+clusters' lines were forwarded in, wrong. Those lines stay in `events.log` at
+priority `info` (`hps-log events --grep error`; the original is in the day
+file), and the issue register, the monitor and the programs' own markers carry
+the real alerts. A line of the first row is derived first, so an HPS program is
+never the quiet one.
+
+## Whose lines
+
+The views hold this cluster's lines only. A line is this cluster's when it comes
+from this IPS itself (the loopback sender), or from a host named as the cluster
+names its hosts: a single label, or `<label>.<network_dns_domain>`
+(`docs/NAMING.md`). The generated `rsyslog.conf` puts `audit.log`, `metrics.log`
+and `events.log` behind that one condition. Everything else is filed as before in
+the per-sender day files, so nothing is lost: `hps-log host` and `hps-log ips`
+still read it.
+
+The lab forwards the syslog of its nested clusters' IPSs to the lab IPS
+(`ips-syslog-forward`, host names `<prefix>.<hostname>`: `s1.ips`, `s3.tch-001`).
+Those lines match neither form. The sender address cannot be the test: the nested
+IPS is a VM on the same network as the hosts of the lab cluster. The registered
+host names cannot be either: they change as nodes pair, and the file is generated
+once. The host name form is fixed by the cluster's naming rule and by
+`_rsyslog_forward_block`, which is what puts the prefix there.
+
+A host of this cluster whose syslog host name is neither a single label nor
+`<label>.<network_dns_domain>` (set by hand, another domain) has its lines in the
+day file of its address only, and an `hps-log host` finds them there. If
+`network_dns_domain` is empty only single labels are the cluster's.
+
+`hps-log attention`, `events` and `audit` apply the same test to what older files
+already hold (the reader looks up `network_dns_domain`; when it cannot be read,
+nothing is left out). A foreign line is never counted as an event of this
+cluster, so a window that holds only foreign lines is `silent`, not `clear`.
+The rule is generated with the other rsyslog rules; after a deploy, `rsyslogd
+-N1` checks the file (`re_match` on `$hostname` is the one construct this adds).
 
 # Rotation and retention
 

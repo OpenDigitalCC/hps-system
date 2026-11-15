@@ -29,7 +29,7 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
-@test "audit programs go to audit.log and stop, from any sender" {
+@test "audit programs go to audit.log and stop (of this cluster: see the own-cluster tests below)" {
   rule="$(grep -E '^if \(\$programname == \["ctrl-exec-api"' "$CONF")"
   for p in ctrl-exec-api ctrl-exec-agent ctrl-exec-dispatcher hps-auth-hook ips-admin; do
     [[ "$rule" == *"\"$p\""* ]]
@@ -143,4 +143,113 @@ teardown() {
   routing=$(grep -n '^## # Log message routing' "$CONF" | cut -d: -f1)
   [ "$views" -lt "$routing" ]
   [ -z "$fwd" ] || [ "$fwd" -lt "$views" ]
+}
+
+# --- whose lines (docs/LOGGING.md "Whose lines"): the views take this cluster's lines only ---
+
+# gen_with_domain <domain>: regenerate the file as a cluster whose network_dns_domain is <domain>.
+gen_with_domain() {
+  local dom="$1"
+  hps_get_config() {
+    case "$1" in
+      log) echo "$TEST_DIR/log" ;;
+      active_cluster) echo lab ;;
+      *) return 1 ;;
+    esac
+  }
+  cluster_registry() {
+    [[ "$2" == get && "$3" == network_dns_domain && -n "$dom" ]] && { echo "\"$dom\""; return 0; }
+    return 1
+  }
+  create_config_rsyslog
+}
+
+# own_regex: the regular expression of the re_match in the generated file, as a Perl pattern
+own_regex() {
+  grep -o 're_match($hostname, "[^"]*")' "$CONF" | head -1 | sed -e 's/^re_match(\$hostname, "//' -e 's/")$//' -e 's/\\\\/\\/g'
+}
+
+# is_own <regex> <hostname>: 0 when the host name is this cluster's
+is_own() {
+  perl -e 'exit($ARGV[1] =~ qr/$ARGV[0]/ ? 0 : 1)' "$1" "$2"
+}
+
+@test "the three views are gated on this IPS or a host named as the cluster names its hosts, and the gate is the same text each time" {
+  gate="$(grep -o '^if (($fromhost-ip == "127.0.0.1" or re_match(.*)) then {$' "$CONF" | sort -u)"
+  [ "$(printf '%s\n' "$gate" | wc -l)" -eq 1 ]
+  [ "$(grep -c '^if (($fromhost-ip == "127.0.0.1" or re_match' "$CONF")" -eq 3 ]
+  # the line after each gate is the view's own rule
+  grep -A1 '^if (($fromhost-ip == "127.0.0.1" or re_match' "$CONF" | grep -qF 'if ($programname == ["ctrl-exec-api"'
+  grep -A1 '^if (($fromhost-ip == "127.0.0.1" or re_match' "$CONF" | grep -qF 'if ($msg contains "hps-monitor: host="'
+  grep -A1 '^if (($fromhost-ip == "127.0.0.1" or re_match' "$CONF" | grep -qF 'if ($fromhost-ip == "127.0.0.1" and ($msg contains "HPS-EVENT pri="'
+}
+
+@test "a line that is not this cluster's matches no view and is stopped by none: only the audit rule stops, inside its gate, so a foreign line reaches the day files" {
+  views=$(grep -n '^## # Whose lines' "$CONF" | cut -d: -f1)
+  routing=$(grep -n '^## # Log message routing' "$CONF" | cut -d: -f1)
+  [ "$views" -lt "$routing" ]
+  stops=$(sed -n "${views},${routing}p" "$CONF" | grep -c '^  stop$')
+  [ "$stops" -eq 1 ]
+  # that stop is inside the gate: the audit rule's closing is "}" "}" (rule, gate)
+  grep -A1 '^  stop$' "$CONF" | grep -q '^}$'
+  [ "$(sed -n "${views},${routing}p" "$CONF" | grep -c '^}$')" -ge 3 ]
+  # the remote catch-all, which files every foreign line, is unchanged
+  grep -qF 'dynaFile="RemoteLogFile"' "$CONF"
+}
+
+@test "no domain: only a single label is this cluster's; the lab's forwarded hosts are not" {
+  re="$(own_regex)"
+  [ "$re" = '^[a-z0-9_-]+$' ]
+  is_own "$re" ips
+  is_own "$re" sch-001
+  is_own "$re" tch-004
+  ! is_own "$re" s1.ips
+  ! is_own "$re" s3.tch-001
+  ! is_own "$re" s1.sch-002
+  ! is_own "$re" sch-001.lab.example
+}
+
+@test "with a cluster DNS domain: a label, or label.domain; a forwarded host (prefix.label, prefix.label.domain) is not" {
+  gen_with_domain lab.example
+  re="$(own_regex)"
+  [ "$re" = '^[a-z0-9_-]+(\.lab\.example)?$' ]
+  grep -qF 're_match($hostname, "^[a-z0-9_-]+(\\.lab\\.example)?$")' "$CONF"
+  is_own "$re" ips
+  is_own "$re" sch-001
+  is_own "$re" sch-001.lab.example
+  ! is_own "$re" s1.ips
+  ! is_own "$re" s1.sch-001.lab.example
+  ! is_own "$re" s3.tch-001
+  ! is_own "$re" sch-001.other.example
+  ! is_own "$re" lab.example
+}
+
+@test "a domain that is not a plain DNS name is ignored (never put into the rule)" {
+  gen_with_domain 'x") or ($msg contains "y'
+  re="$(own_regex)"
+  [ "$re" = '^[a-z0-9_-]+$' ]
+  [ "$(grep -c 'contains "y"' "$CONF")" -eq 0 ]
+}
+
+@test "the err-level derived line: HPS programs are a warning (attention), anything else is info (events only)" {
+  hps_row="" ; other_row=""
+  for row in "${RSYSLOG_DERIVED_EVENTS[@]}"; do
+    IFS='|' read -r name cond pri kind state <<< "$row"
+    [ "$name" = error ] && hps_row="$row"
+    [ "$name" = error-other ] && other_row="$row"
+  done
+  [ -n "$hps_row" ] && [ -n "$other_row" ]
+  IFS='|' read -r name cond pri kind state <<< "$hps_row"
+  [ "$pri" = warning ]
+  [[ "$cond" == *'$programname startswith "hps"'* ]]
+  [[ "$cond" == *'$programname startswith "ctrl-exec"'* ]]
+  [[ "$cond" == *'"dnsmasq"'* && "$cond" == *'"om"'* ]]
+  IFS='|' read -r name cond pri kind state <<< "$other_row"
+  [ "$pri" = info ]
+  [[ "$cond" != *programname* ]]
+  # the HPS row comes first, so a line of an HPS program is never the info one
+  a=$(grep -n 'HPSDerived_error"' "$CONF" | head -1 | cut -d: -f1)
+  e=$(grep -n 'HPSDerived_error_other"' "$CONF" | tail -1 | cut -d: -f1)
+  [ -n "$a" ] && [ -n "$e" ]
+  grep -n '^} else if (\$syslogseverity' "$CONF" | head -2 | grep -q 'startswith "hps"'
 }

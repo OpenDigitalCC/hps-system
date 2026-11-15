@@ -188,6 +188,7 @@ sub new ($class, %opt) {
         max_scan => $opt{max_scan} // MAX_SCAN_BYTES,    # bytes per call (HPS::Metrics reads more)
         scanned  => 0,
         gz_window => $opt{gz_window},
+        (exists $opt{domain} ? (domain => $opt{domain}) : ()),    # tests: network_dns_domain, or undef for unreadable
     }, $class;
     return $self;
 }
@@ -195,6 +196,36 @@ sub new ($class, %opt) {
 sub log_dir ($self) { return $self->{log_dir} }
 sub _now ($self)    { return $self->{now} // time }
 sub registry ($self) { return $self->{registry} //= HPS::Registry->new }
+
+#--- whose lines ------------------------------------------------------------------------
+# The event, audit and metrics views hold this cluster's lines (rsyslog gates them: lib/functions.d/
+# create-config-rsyslog.sh, docs/LOGGING.md "Whose lines"): this IPS, and hosts named as the cluster
+# names them, a single label or <label>.<network_dns_domain>. A line another cluster's IPS forwarded
+# here has the host name <prefix>.<hostname>. Older files may still hold such lines, and the reader
+# leaves them out of attention, events and audit.
+
+# own_host($host, $domain): true when a line of that host name is this cluster's. $domain undef
+# (the registry cannot be read): cannot tell, so the line is kept, never hidden on a guess.
+sub own_host ($host, $domain) {
+    return 1 unless defined $domain;
+    my $h = lc($host // '');
+    return 1 unless $h =~ /\./;
+    return length($domain) && $h =~ /\A[a-z0-9_-]+\.\Q$domain\E\z/ ? 1 : 0;
+}
+
+# _domain(): network_dns_domain of the active cluster, lower case; '' when it is unset; undef when
+# it cannot be read. Given with new(domain => ...) in tests.
+sub _domain ($self) {
+    return $self->{domain} if exists $self->{domain};
+    my $d = eval { lc($self->registry->cluster_dns_domain // '') };
+    return $self->{domain} = defined $d ? $d : undef;
+}
+
+# _own_keep(): the $keep callback of _collect for a view: this cluster's lines only.
+sub _own_keep ($self) {
+    my $dom = $self->_domain;
+    return sub ($rec) { return own_host($rec->{host}, $dom) };
+}
 
 # _day_files($dir): [path, year, month] of the <date>.log and <date>.log.gz
 # files, newest first. Of a day that has both (hps-log-rotate is compressing
@@ -521,7 +552,7 @@ sub ips_log ($self, %raw) {
 sub _view_log ($self, $name, $parse, %raw) {
     my $opt   = options(%raw);
     my @files = view_files($self->log_dir, $name);
-    my @lists = @files ? ([ $self->_collect(\@files, sub ($l, @x) { $parse->($l) }, $name, $opt) ]) : ();
+    my @lists = @files ? ([ $self->_collect(\@files, sub ($l, @x) { $parse->($l) }, $name, $opt, $self->_own_keep) ]) : ();
     my $r = $self->_result({ target => $name, host => $name, addresses => [] }, [ @files ? $name : () ], $opt, @lists);
     $r->{unreadable} = [ @{ $self->{unreadable} // [] } ];
     return $r;
@@ -564,11 +595,13 @@ sub attention ($self, %raw) {
     my $bytes = 0;
     $bytes += (-s $_->[0]) // 0 for @files;
     $self->{unreadable} = [];
+    my $dom = $self->_domain;
     my (%seen, @order);
     for my $f (@files) {
         my $more = $self->_each_line_backwards($f->[0], sub ($line) {
             my $rec = parse_event($line) or return 1;
             return 0 if $rec->{epoch} < $cutoff;
+            return 1 unless own_host($rec->{host}, $dom);    # another cluster's line, forwarded here
             $r{events}++;
             $r{newest} //= _iso($rec->{epoch});
             my $ev = $rec->{ev} or return 1;

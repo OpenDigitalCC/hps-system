@@ -12,6 +12,44 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Deploy fixes: the boot watch, the log reads, foreign lines (2026-11-15)
+
+First deploy of `2f84242` on the lab; four defects.
+
+- **Fixed** The boot-stalled watch reset healthy VMs: the VMs of the lab's
+  nested clusters netboot from their own IPS, so the lab IPS never records a
+  `last_boot_at` for them. The watch now acts only on a node this IPS can expect
+  to see boot (a NIC on a network of purpose `provisioning`, its MAC on record;
+  metal this IPS powered on), reports what it cannot tell (`boot-watch-blind`),
+  and never judges a node that was already running when it was enabled. The
+  readiness gate and the status note use the same scope. See
+  `docs/BOOT-RELIABILITY.md`.
+- **Changed** `boot_stall_window_seconds` now defaults to 0: **the watch ships
+  switched off** and is enabled per cluster after a trial on one disposable VM.
+  A bad value gives 0 (off), not a guessed window.
+- **Fixed** Setting the window to 0 stopped nothing in a running scan. The
+  settings are read at the start of every scan and before every action; at most
+  one reset per scan.
+- **New** `boot_stall_max_nodes` (default 1), a circuit breaker: more nodes than
+  this judged stalled in one scan and none is reset; one `boot-watch-many` issue
+  says so.
+- **Changed** Leftover `boot_watch` state of an older rule set, of a node out of
+  scope, or of a watch that is off is cleared, with a `cleared` event line, so a
+  standing boot line in `hps-log attention` ends with its cause. New event
+  states: standing `tripped`, clearing `cleared`.
+- **Fixed** `hps-log ips --lines N --grep WORD` without `--since` returned old
+  lines and "stopped early": one 64 MiB budget was shared by all sources of the
+  call. Each source now has its own, is read newest file first and from the end,
+  stops at N lines, skips blocks without the word, and says how far back it got
+  (`scanned_back_to`).
+- **Fixed** Lines forwarded from the nested clusters' IPSs (host names
+  `<prefix>.<hostname>`) flooded this cluster's `events.log` and `attention`.
+  `audit.log`, `metrics.log` and `events.log` now take this IPS and hosts named as
+  the cluster names them only; the reader also leaves older foreign lines out.
+- **Changed** The derived "err-level line" event is a warning only for programs
+  HPS runs; any other program's err line is derived at `info` (`events`, not
+  `attention`).
+
 ## Boot reliability joins the log split and the drain (2026-11-15)
 
 - **Changed** The boot-stalled watch (`HPS::BootWatch`) writes event lines

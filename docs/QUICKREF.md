@@ -335,7 +335,12 @@ Read-only results of `hps-monitor`. The target is `<mac|hostname|ips|all>`.
 
 ## hps-log
 
-Read-only syslog lines, newest last, secrets shown as `[redacted]`.
+Read-only syslog lines, newest last, secrets shown as `[redacted]`. `--lines N`
+without `--since` is the newest N matching lines (newest file first, from its end
+backwards, a 64 MiB budget per source); a read that hit the budget says how far
+back it got (`scanned_back_to`). The event, audit and metrics views hold this
+cluster's lines only: lines another cluster's IPS forwarded here (`s1.ips`) are
+in the day files, not in `attention` or `events`.
 
 `hps-log attention [--since 1h] [--json]`
 : Is anything wrong: the open problems from the event lines, at most a
