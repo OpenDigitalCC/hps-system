@@ -40,8 +40,8 @@ my %KIND = map { $_ => 1 } qw(issue monitor workload storage node power job pair
 # kind and subject (the emitter repeats it while it holds); clearing: the
 # subject is well again; point: something that happened once.
 my %STATE = (
-    (map { $_ => 'standing' } qw(open escalated needs-human warning critical unknown unreachable pair-failed boot-stalled gave-up unreadable reset-failed)),
-    (map { $_ => 'clearing' } qw(resolved ok reachable stopped booted)),
+    (map { $_ => 'standing' } qw(open escalated needs-human warning critical unknown unreachable pair-failed boot-stalled gave-up unreadable reset-failed tripped)),
+    (map { $_ => 'clearing' } qw(resolved ok reachable stopped booted cleared)),
     (map { $_ => 'point' } qw(started ended done failed refused error requested defined created destroyed
         on off up down paired held rotated reset bad-setting)),
 );

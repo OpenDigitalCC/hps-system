@@ -143,4 +143,20 @@ sub issues_of { my ($f, $kind) = @_; return grep { $_->{kind} eq $kind } $f->{is
     ok(!$reg->host_exists($MAC, 'bmc_power_on_at'), 'force-off clears it');
 }
 
+#=== a node powered on before the watch was enabled is baselined; an old-rules state is cleared
+{
+    my $f = fixture(metal => 1);
+    $f->{bw}{enabled_at} = $T + 1000;
+    is(tick_at($f, 5000), 0, 'powered on before the watch was enabled, never booted: not judged');
+    is_deeply($f->{bmc}{calls}, [], 'the BMC is not touched');
+    is(scalar(issues_of($f, 'boot-stalled')), 0, 'and no issue');
+}
+{
+    my $f = fixture(metal => 1);
+    $f->{reg}->host_set($MAC, 'boot_watch', { tries => 2, expect => $f->{reg}->host_get($MAC, 'bmc_power_on_at'), gave_up => 1 });
+    is(tick_at($f, 20), 1, 'a boot_watch state without the rule-set marker: cleared');
+    ok(!$f->{reg}->host_exists($MAC, 'boot_watch'), 'the host key is gone');
+    ok((grep { /state=cleared/ } @{ $f->{log} }), 'with a clearing line');
+}
+
 done_testing;

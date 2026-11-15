@@ -10,13 +10,13 @@ use lib "$Bin/../lib/perl";
 use HPS::BootWatch;
 
 #--- settings
-is_deeply([ HPS::BootWatch::window(undef) ], [ 180, undef ], 'window: unset is 180');
+is_deeply([ HPS::BootWatch::window(undef) ], [ 0, undef ], 'window: unset is 0, the watch ships off');
 is_deeply([ HPS::BootWatch::window('0') ], [ 0, undef ], 'window: 0 turns the watch off');
 is_deeply([ HPS::BootWatch::window('30') ], [ 30, undef ], 'window: 30 is the least');
 is_deeply([ HPS::BootWatch::window('86400') ], [ 86400, undef ], 'window: 86400 is the most');
 for my $bad ('29', '86401', 'x', '-5') {
     my ($v, $w) = HPS::BootWatch::window($bad);
-    is($v, 180, "window '$bad': 180");
+    is($v, 0, "window '$bad': off (0), never a guessed window");
     like($w, qr/boot_stall_window_seconds='\Q$bad\E'/, "window '$bad': warned");
 }
 is_deeply([ HPS::BootWatch::max_resets(undef) ], [ 3, undef ], 'max_resets: unset is 3');
@@ -25,6 +25,13 @@ is_deeply([ HPS::BootWatch::max_resets('20') ], [ 20, undef ], 'max_resets: 20')
 my ($v, $w) = HPS::BootWatch::max_resets('21');
 is($v, 3, 'max_resets 21: 3');
 like($w, qr/boot_stall_max_resets='21'/, 'and warned');
+is_deeply([ HPS::BootWatch::max_nodes(undef) ], [ 1, undef ], 'max_nodes: unset is 1');
+is_deeply([ HPS::BootWatch::max_nodes('100') ], [ 100, undef ], 'max_nodes: 100');
+for my $bad ('0', '101', 'x') {
+    my ($nv, $nw) = HPS::BootWatch::max_nodes($bad);
+    is($nv, 1, "max_nodes '$bad': 1");
+    like($nw, qr/boot_stall_max_nodes='\Q$bad\E'/, "max_nodes '$bad': warned");
+}
 is_deeply([ HPS::BootWatch::metal_reset(undef) ], [ 0, undef ], 'metal_reset: unset is false');
 is_deeply([ HPS::BootWatch::metal_reset('true') ], [ 1, undef ], 'metal_reset: true');
 is_deeply([ HPS::BootWatch::metal_reset('False') ], [ 0, undef ], 'metal_reset: False');
@@ -102,6 +109,10 @@ is_da(d(draining => undef), 'boot-stalled', 'reset', 'not asked (metal): reset a
 is_da(d(draining => 'unknown'), 'unreadable', 'report', 'the drain key cannot be read: reported, never a reset');
 is_da(d(draining => 1, netboot => 'seen'), 'booted', 'none', 'a draining host whose VM booted is still booted');
 is_da(d(draining => 1, since => $now - 100), 'booting', 'none', 'within the window it is simply booting');
+is_da(d(baselined => 1), 'baselined', 'none', 'running before the watch was enabled: not judged, never reset');
+is_da(d(baselined => 1, netboot => 'unreadable'), 'baselined', 'none', 'and not reported either');
+is_da(d(baselined => 1, since => undef), 'unreadable', 'report', 'no start time is still reported');
+is_da(d(baselined => 1, window => 0), 'disabled', 'none', 'window 0 beats it');
 # a stall that was logged is resolved by the boot that follows
 is_da(d(netboot => 'seen', stalled => 1), 'booted', 'resolve', 'netboot seen after a boot-stalled line: resolve');
 
@@ -117,4 +128,37 @@ is_deeply([ HPS::BootWatch::netboot_vms($def, 'd') ], ['d'], 'with a VM named');
 is_deeply([ HPS::BootWatch::netboot_vms($def, 'b') ], [], 'a disk-boot VM named: none');
 is_deeply([ HPS::BootWatch::netboot_vms({}) ], [], 'an empty definition: none');
 
+#--- vm_scope: positive evidence that THIS IPS boots the VM
+my $lay = { prov => { purpose => 'provisioning' }, fab => { kind => 'fabric', purpose => 'emulated-switch' }, mgmt => { purpose => 'workload' }, nop => { cidr => '10.0.0.0/24' } };
+my $mac1 = '52:54:00:00:00:01';
+sub sc { my ($nets, $macs) = @_; return (HPS::BootWatch::vm_scope({ nets => $nets }, $lay, $macs))[0] }
+is(sc(['prov']), 'in', 'scope: a NIC on the provisioning net is in (gate form, no MACs)');
+is(sc(['fab']), 'out', 'scope: a fabric-only VM (a nested cluster node) is out');
+is(sc([ { net => 'fab', pvid => 110 } ]), 'out', 'scope: a NIC given as an object, fabric: out');
+is(sc(['mgmt']), 'out', 'scope: a net of another known purpose: out');
+is(sc(['fab', { net => 'prov' }]), 'in', 'scope: one NIC on provisioning is enough');
+is(sc(['nop']), 'unknown', 'scope: a net without a purpose: cannot tell');
+is(sc(['gone']), 'unknown', 'scope: a net not in the layout: cannot tell');
+is(sc(['fab', 'gone']), 'unknown', 'scope: no provisioning NIC and one NIC unknown: cannot tell, not out');
+is(sc([]), 'unknown', 'scope: no NIC: cannot tell');
+is((HPS::BootWatch::vm_scope({ nets => ['prov'] }, undef))[0], 'unknown', 'scope: no layout: cannot tell');
+is((HPS::BootWatch::vm_scope({ nets => ['prov'] }, 'junk'))[0], 'unknown', 'scope: a layout that is not a hash: cannot tell');
+is(sc(['prov'], [$mac1]), 'in', 'scope with MACs: the provisioning NIC has its MAC on record: in');
+is(sc(['fab', 'prov'], [ 'aa:aa:aa:aa:aa:aa', $mac1 ]), 'in', 'scope with MACs: the MAC of the provisioning NIC (index 1)');
+is(sc(['prov'], []), 'unknown', 'scope with MACs: none on record: cannot tell');
+is(sc(['prov', 'fab'], [$mac1]), 'unknown', 'scope with MACs: the count differs from the NICs: cannot tell');
+is(sc(['prov'], ['junk']), 'unknown', 'scope with MACs: a MAC that is not one: cannot tell');
+is(sc(['fab'], [$mac1]), 'out', 'scope with MACs: out stays out');
+
+#--- netboot_vms with a layout (the readiness gate and the status note)
+my $ldef = { vms => [ { name => 'p', boot => 'network', nets => ['prov'] }, { name => 'o', boot => 'network', nets => [ 'fab', { net => 'prov' } ] },
+    { name => 'f', boot => 'network', nets => [ { net => 'fab', pvid => 110 } ] }, { name => 'm', boot => 'network', nets => ['mgmt'] },
+    { name => 'x', boot => 'network', nets => ['gone'] }, { name => 'd', boot => 'disk', nets => ['prov'] } ] };
+is_deeply([ HPS::BootWatch::netboot_vms($ldef, undef, $lay) ], [qw(p o x)], 'with a layout: the VMs that boot from this IPS, and the ones that cannot be told (gating is harmless); not fabric-only or other-purpose ones');
+is_deeply([ HPS::BootWatch::netboot_vms($ldef, 'f', $lay) ], [], 'a fabric-only VM named: none, so it is not gated');
+is_deeply([ HPS::BootWatch::netboot_vms($ldef, 'x', $lay) ], ['x'], 'an unknown-scope VM named: gated');
+is_deeply([ HPS::BootWatch::netboot_vms($ldef) ], [qw(p o f m x)], 'without a layout: every network-boot VM');
+is_deeply([ HPS::BootWatch::netboot_vms($ldef, undef, 'junk') ], [qw(p o f m x)], 'a layout that is not a hash: every network-boot VM (cannot tell: gated)');
+
 done_testing;
+

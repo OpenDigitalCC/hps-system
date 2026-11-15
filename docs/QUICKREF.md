@@ -218,10 +218,14 @@ Virtual-machine workloads. `<name>` is the workload, stored as
 : Starts the VMs. A VM that boots from the network first waits up to cluster
   key `boot_ready_wait_seconds` (default 60) for this IPS's DHCP, TFTP and HTTP
   boot services, and is refused (exit 3, a notice line) naming what does not
-  answer; `--no-boot-wait` skips that. A network-boot VM that never reaches
-  iPXE is reset by the boot-stalled watch (`hps-issue-watch`, kind `boot`
-  lines, `docs/BOOT-RELIABILITY.md`), except on a draining host; `status`
-  shows `no netboot seen since start (N s)`.
+  answer; `--no-boot-wait` skips that. Only a VM with a NIC on the provisioning
+  network is gated: a nested cluster's VM on a fabric net boots from its own IPS.
+  The boot-stalled watch (`hps-issue-watch`, kind `boot` lines,
+  `docs/BOOT-RELIABILITY.md`) is off until `boot_stall_window_seconds` is set
+  (suggested 180, after a trial on one disposable VM); it resets only a VM this
+  IPS can expect to see boot and that was started after the watch was enabled,
+  one per scan, never on a draining host. `status` shows `no netboot seen since
+  start (N s)` for a VM this IPS boots.
 
 `hps-workload stop <name> [--vm <vm>] [--force] [--dry-run] [--json]`
 : Stops the VMs.

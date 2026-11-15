@@ -17,6 +17,18 @@ package HPS::BootWatch;
 # healer's loop: same root process, same HPS::Issues, same runner), rate limited
 # to one scan every SCAN_EVERY seconds.
 #
+# Scope and baseline (docs/BOOT-RELIABILITY.md): the watch acts only on a node THIS IPS can
+# expect to see boot, by positive evidence: a VM with a NIC on a network of purpose
+# provisioning whose MAC is on record (assigned by this IPS), or a metal node this IPS
+# powered on. A nested cluster's VM (its only NIC on a fabric net) netboots from its own IPS
+# and is out of scope: never judged, reset, noted or issued, and its state is cleared. A scope
+# that cannot be told is reported (boot-watch-blind) and never acted on. A node that was
+# already running when the watch was enabled (process start, or the window key leaving 0) is
+# baselined, not judged: only a start after that can be judged. The watch ships off
+# (boot_stall_window_seconds 0), is re-read before every action, resets at most one node per
+# scan, and a breaker (boot_stall_max_nodes) stops all resets when many nodes look stalled at
+# once. State written by an older rule set (no rules marker) is cleared, never resumed.
+#
 # Never reset: a VM whose recorded state is not running (stopped on purpose,
 # suspended, creating, failed...); a node without a start time on record; a
 # node whose record or last_boot_at cannot be read (that is its own reported
@@ -41,11 +53,19 @@ use HPS::Event ();
 use HPS::Issues ();
 use HPS::Registry ();
 
-use constant DEFAULT_WINDOW => 180;
+# The watch ships switched off (docs/BOOT-RELIABILITY.md): 0 until an operator turns it on.
+use constant DEFAULT_WINDOW => 0;
 use constant MIN_WINDOW     => 30;
 use constant MAX_WINDOW     => 86400;
 use constant DEFAULT_RESETS => 3;
 use constant MAX_RESETS     => 20;
+use constant DEFAULT_NODES  => 1;
+use constant MAX_NODES      => 100;
+# Written into every boot_watch state this code saves. A state without it comes from an
+# older rule set and is cleared, never resumed.
+use constant RULES          => 2;
+# While the watch is off, the leftovers of an earlier run are looked for this often.
+use constant STAND_DOWN_EVERY => 300;
 use constant SCAN_EVERY     => 15;
 # The start stamp is written when vm-start returns, a little after the guest
 # began to boot; a netboot this much before the stamp still counts as ours.
@@ -54,12 +74,17 @@ use constant FUTURE         => 300;
 
 #=== settings (pure) =====================================================================
 
-# window($raw): (seconds, warning). 0 disables the watch; else 30..86400.
+# window($raw): (seconds, warning). 0, the default, disables the watch; else 30..86400. A
+# value that is not usable gives 0 (off) and a warning: never a guess at a window.
 sub window ($raw) {
     my ($v, $w) = HPS::BootReady::int_setting($raw, DEFAULT_WINDOW, 0, MAX_WINDOW, 'boot_stall_window_seconds');
     return ($v, $w) if !$v || $v >= MIN_WINDOW;
-    return (DEFAULT_WINDOW, "boot_stall_window_seconds='$raw' is not 0 or " . MIN_WINDOW . '..' . MAX_WINDOW . '; using ' . DEFAULT_WINDOW);
+    return (DEFAULT_WINDOW, "boot_stall_window_seconds='$raw' is not 0 or " . MIN_WINDOW . '..' . MAX_WINDOW . '; using ' . DEFAULT_WINDOW . ' (off)');
 }
+
+# max_nodes($raw): (n, warning). 1..100: the circuit breaker. More than n distinct nodes
+# judged stalled in one scan and none of them is reset.
+sub max_nodes ($raw) { return HPS::BootReady::int_setting($raw, DEFAULT_NODES, 1, MAX_NODES, 'boot_stall_max_nodes') }
 
 # max_resets($raw): (n, warning). 0..20; 0 detects and reports only.
 sub max_resets ($raw) { return HPS::BootReady::int_setting($raw, DEFAULT_RESETS, 0, MAX_RESETS, 'boot_stall_max_resets') }
@@ -113,6 +138,9 @@ sub decide (%f) {
     my $rec = $f{recorded} // '';
     return { state => 'not-watched', action => 'none', reason => "recorded state is '$rec', not running" } unless $rec eq 'running';
     return { state => 'unreadable', action => 'report', reason => 'no usable start time on record' } unless defined $f{since};
+    # Already running when the watch first saw it (process start, or the window key
+    # changing from 0): not judged. Only a start after that is.
+    return { state => 'baselined', action => 'none', reason => 'running before the watch was enabled; not judged' } if $f{baselined};
     return { state => 'unreadable', action => 'report', reason => $f{netboot_detail} // 'netboot state unreadable' }
         if ($f{netboot} // 'unreadable') eq 'unreadable';
     if ($f{netboot} eq 'seen') {
@@ -147,26 +175,84 @@ sub status_note ($netboot, $seconds, $detail = '') {
     return undef;
 }
 
-# netboot_vms($def, $only_vm): names of the VMs of a validated definition that boot
-# from the network (the one named only, when given).
-sub netboot_vms ($def, $only = undef) {
-    return map { $_->{name} } grep { ($_->{boot} // 'disk') eq 'network' && (!defined $only || $_->{name} eq $only) } @{ $def->{vms} // [] };
+# net_name($nic): the network name of one entry of a VM's nets (a name, or {net, ...}).
+sub net_name ($n) { return ref $n eq 'HASH' ? $n->{net} : $n }
+
+# vm_scope($vm, $layout, $macs): (scope, detail). Whether THIS IPS can expect to see the VM
+# boot: in, out, or unknown. $vm is the definition's VM, $layout the cluster key
+# network_layout (a hash), $macs the record's MACs (one per NIC, in order), or undef.
+#   in       a NIC on a network of purpose provisioning (the L2 this IPS serves DHCP and
+#            TFTP on), and, when $macs is given, that NIC's MAC is on record: the IPS's
+#            own workload engine assigned it (and a host that netbooted with it is
+#            registered under it). Positive evidence, not the absence of a boot.
+#   out      every NIC is on a network whose purpose is known and is not provisioning (the
+#            fabric net of a nested cluster: the VM netboots from its own IPS)
+#   unknown  the layout, a network's purpose or the MAC cannot be told: reported, never acted on
+# Without $macs (the readiness gate, before a MAC exists) only the network is looked at.
+sub vm_scope ($vm, $layout, $macs = undef) {
+    return ('unknown', 'network_layout (cluster config) is unreadable') unless ref $layout eq 'HASH';
+    my @nets = map { net_name($_) } @{ ref $vm->{nets} eq 'ARRAY' ? $vm->{nets} : [] };
+    return ('unknown', 'the definition lists no NIC') unless @nets;
+    my (@prov, @unk);
+    for my $i (0 .. $#nets) {
+        my $n = $nets[$i];
+        my $l = defined $n && !ref $n ? $layout->{$n} : undef;
+        my $p = ref $l eq 'HASH' ? $l->{purpose} : undef;
+        if (!defined $p || ref $p || !length $p) { push @unk, "network '" . (defined $n && !ref $n ? $n : '?') . "' has no known purpose"; next }
+        push @prov, $i if $p eq 'provisioning';
+    }
+    unless (@prov) {
+        return ('unknown', join('; ', @unk)) if @unk;
+        return ('out', 'no NIC on a network of purpose provisioning: it boots from another IPS');
+    }
+    return ('in', 'a NIC on the provisioning network') unless defined $macs;
+    return ('unknown', 'the record has no MAC for the VM') unless ref $macs eq 'ARRAY' && @$macs;
+    return ('unknown', 'the record has ' . scalar(@$macs) . ' MAC(s), the definition ' . scalar(@nets) . ' NIC(s)') if @$macs != @nets;
+    for my $i (@prov) {
+        my $m = $macs->[$i];
+        return ('in', "NIC $i ($m) is on the provisioning network and its MAC was assigned by this IPS")
+            if defined $m && !ref $m && $m =~ /\A[0-9a-f]{2}(?::[0-9a-f]{2}){5}\z/i;
+    }
+    return ('unknown', 'the provisioning NIC has no usable MAC on record');
+}
+
+# netboot_vms($def, $only_vm, $layout): names of the VMs of a validated definition that
+# boot from the network (the one named only, when given), for the readiness gate and the
+# status note. With $layout (the network_layout hash) a VM that is out of scope (it does
+# not boot from this IPS) is left out; one whose scope cannot be told is kept, because
+# being gated is harmless. Without a layout every network-boot VM.
+sub netboot_vms ($def, $only = undef, $layout = undef) {
+    return map { $_->{name} } grep {
+        ($_->{boot} // 'disk') eq 'network' && (!defined $only || $_->{name} eq $only)
+            && (ref $layout ne 'HASH' || (vm_scope($_, $layout))[0] ne 'out')
+    } @{ $def->{vms} // [] };
+}
+
+# _layout(): the cluster's network_layout hash, or undef when it cannot be read.
+sub _layout ($self) {
+    my $reg = $self->_reg;
+    my $l = eval { $reg->cluster_get_json($reg->active_cluster, 'network_layout') };
+    return ref $l eq 'HASH' ? $l : undef;
 }
 
 #=== the facts from the registry =========================================================
 
 sub new ($class, %o) {
     my $reg = $o{registry} // HPS::Registry->new;
+    my $now = $o{now} // sub { time };
     return bless {
         registry => $reg,
         issues   => $o{issues},                    # HPS::Issues, made on first use
         workload => $o{workload},                  # HPS::Workload, made on first use
         bmc      => $o{bmc},                       # HPS::BMC, made on first use
         ready    => $o{ready} // sub { HPS::BootReady::check(registry => $reg)->{verdict} },
-        now      => $o{now} // sub { time },
+        now      => $now,
         logger   => $o{logger} // \&_default_logger,
-        settings => $o{settings},                  # tests: {window, max, metal}; else the cluster keys
-        next_scan => 0, blind => undef, said => {},
+        settings => $o{settings},                  # tests: a hash, or a sub returning {window, max, nodes, metal}; else the cluster keys
+        # When the watch was (last) enabled: the process start, or the scan that saw the window
+        # key leave 0. A VM started before that is baselined, not judged. undef while it is off.
+        enabled_at => $o{enabled_at} // $now->(),
+        next_scan => 0, next_standdown => 0, blind => undef, said => {},
     }, $class;
 }
 
@@ -209,13 +295,15 @@ sub _setting ($self, $key) {
     return defined $c ? eval { $reg->cluster_get($c, $key) } : undef;
 }
 
-# settings(): {window, max, metal, warnings}, read afresh (the keys may change).
+# settings(): {window, max, nodes, metal, warnings}, read afresh from the registry on every call
+# (the keys may change: tick calls it at the start of a scan and again before every action).
 sub settings ($self) {
-    return $self->{settings} if $self->{settings};
+    if (my $s = $self->{settings}) { return ref $s eq 'CODE' ? $s->() : $s }
     my ($w, $ww) = window($self->_setting('boot_stall_window_seconds'));
     my ($m, $mw) = max_resets($self->_setting('boot_stall_max_resets'));
     my ($t, $tw) = metal_reset($self->_setting('boot_stall_metal_reset'));
-    return { window => $w, max => $m, metal => $t, warnings => [ grep { defined } $ww, $mw, $tw ] };
+    my ($n, $nw) = max_nodes($self->_setting('boot_stall_max_nodes'));
+    return { window => $w, max => $m, nodes => $n, metal => $t, warnings => [ grep { defined } $ww, $mw, $tw, $nw ] };
 }
 
 # last_boot($mac): (raw last_boot_at or undef when none recorded, error text or undef).
@@ -227,31 +315,55 @@ sub _last_boot ($self, $mac) {
     return ($v, undef);
 }
 
-# vm_netboot($rv, $since, $now): (state, detail) over every MAC of the VM's record:
-# seen when any of them netbooted; unreadable when none did and any cannot be read.
+# vm_netboot($rv, $since, $now): (state, detail, ever) over every MAC of the VM's record:
+# seen when any of them netbooted; unreadable when none did and any cannot be read. ever
+# is 1 when this IPS has recorded a boot (any last_boot_at) for any of the MACs, ever.
 sub vm_netboot ($self, $rv, $since, $now) {
     my @macs = ref $rv->{macs} eq 'ARRAY' ? grep { defined && !ref } @{ $rv->{macs} } : ();
-    return ('unreadable', 'the record has no MAC for the VM') unless @macs;
-    my ($best, @bad, $seen_detail) = ('not_seen');
+    return ('unreadable', 'the record has no MAC for the VM', 0) unless @macs;
+    my (@bad, $ever);
     for my $mac (@macs) {
         my ($raw, $err) = $self->_last_boot($mac);
         if (defined $err) { push @bad, $err; next }
+        $ever = 1 if defined $raw;
         my ($s, $d) = netboot_state($raw, $since, $now);
-        if ($s eq 'seen') { return ($s, "$mac: $d") }
+        if ($s eq 'seen') { return ($s, "$mac: $d", 1) }
         push @bad, "$mac: $d" if $s eq 'unreadable';
     }
-    return ('unreadable', join('; ', @bad)) if @bad;
-    return ('not_seen', 'no iPXE init recorded after the start');
+    return ('unreadable', join('; ', @bad), $ever // 0) if @bad;
+    return ('not_seen', 'no iPXE init recorded after the start', $ever // 0);
 }
 
 #=== the scan ============================================================================
 
-# items(): one {kind, key, subject, ...facts, report?} per watched VM and metal node.
+# _baselined($item): true when the item must not be judged: its start is older than the
+# moment the watch was enabled (it was already running when the watch first saw it). An
+# episode this rule set began (a state with the rules marker for the same start stamp) is
+# resumed instead, so a restart of the process does not abandon a node mid-recovery. A VM
+# this IPS has never recorded a boot for is a special case of the same rule: it can only be
+# judged when it was started after the watch was enabled.
+sub _baselined ($self, $it) {
+    return 0 unless defined $it->{since};
+    my $w = $it->{watch} // {};
+    return 0 if ($w->{rules} // 0) == RULES && defined $w->{expect} && defined $it->{stamp} && $w->{expect} eq $it->{stamp};
+    return 0 if defined $self->{enabled_at} && $it->{since} >= $self->{enabled_at};
+    return 1;
+}
+
+# items(): one {kind, key, subject, ...facts, report?} per node the watch may judge: a
+# VM (in scope: a NIC on the provisioning net, its MAC on record) or a metal node the IPS
+# powered on. An item may carry:
+#   report     the node cannot be judged (scope or facts unreadable): reported, never acted on
+#   scope      'out' for a VM that boots from another IPS: no judgement, only a clean-up
+#   clear_why  boot_watch state or issues that must be removed (out of scope, or written by
+#              an older rule set)
+#   baselined  running before the watch was enabled: not judged
 sub items ($self) {
     my @out;
     my $reg = $self->_reg;
     my $c = eval { $reg->active_cluster } // return ();
     my $now = $self->_now;
+    my $layout = $self->_layout;
     my @keys = eval { $reg->cluster_list($c) };
     for my $key (sort @keys) {
         my ($name) = $key =~ /\Aworkload_([a-z][a-z0-9-]{0,31})\z/ or next;
@@ -270,23 +382,46 @@ sub items ($self) {
                 report => "definition workloads/$name.json is unreadable ($derr), so it is not known whether its VMs boot from the network" };
             next;
         }
-        for my $vm (netboot_vms($def)) {
+        # Readable again: a workload-level report from an earlier scan can end.
+        push @out, { kind => 'vm', workload => $name, vm => '*', subject => "$name/*", key => "recovered:$name", recovered => 1 };
+        for my $vmdef (grep { ($_->{boot} // 'disk') eq 'network' } @{ $def->{vms} // [] }) {
+            my $vm = $vmdef->{name};
             my $rv = ref $rec->{vms} eq 'HASH' ? $rec->{vms}{$vm} : undef;
             my $it = { kind => 'vm', workload => $name, vm => $vm, subject => "$name/$vm", key => "$name/$vm" };
+            my $macs = ref $rv eq 'HASH' ? (ref $rv->{macs} eq 'ARRAY' ? $rv->{macs} : []) : undef;
+            my ($scope, $why) = vm_scope($vmdef, $layout, $macs);
+            $it->{scope} = $scope;
+            $it->{watch} = ref $rv eq 'HASH' && ref $rv->{boot_watch} eq 'HASH' ? $rv->{boot_watch} : {};
+            if ($scope eq 'out') {
+                $it->{clear_why} = "VM $vm boots from another IPS ($why)";
+                push @out, $it;
+                next;
+            }
+            if ($scope eq 'unknown') {
+                $it->{report} = "cannot tell whether VM $vm boots from this IPS: $why";
+                $it->{key} = "blind:$name/$vm";
+                push @out, $it;
+                next;
+            }
             if (ref $rv ne 'HASH') {
                 $it->{report} = "workload record $key has no entry for VM $vm";
                 $it->{key} = "blind:$name/$vm";
                 push @out, $it;
                 next;
             }
+            if (%{ $it->{watch} } && ($it->{watch}{rules} // 0) != RULES) {
+                $it->{clear_why} = 'the boot-watch state was written by an older rule set';
+                $it->{clear_state} = 1;
+                $it->{watch} = {};
+            }
             $it->{recorded} = $rv->{state};
             $it->{compute} = $rv->{host};
             $it->{stamp} = $rv->{started_at};
             $it->{since} = parse_stamp($rv->{started_at});
-            $it->{watch} = ref $rv->{boot_watch} eq 'HASH' ? $rv->{boot_watch} : {};
             if (($rv->{state} // '') eq 'running' && defined $it->{since}) {
-                @$it{qw(netboot netboot_detail)} = $self->vm_netboot($rv, $it->{since}, $now);
+                @$it{qw(netboot netboot_detail ever)} = $self->vm_netboot($rv, $it->{since}, $now);
             }
+            $it->{baselined} = $self->_baselined($it);
             push @out, $it;
         }
     }
@@ -307,10 +442,17 @@ sub _metal_items ($self, $now) {
         $it->{since} = parse_stamp($on);
         my $w = eval { $reg->host_exists($mac, 'boot_watch') ? $reg->host_get_json($mac, 'boot_watch') : undef };
         $it->{watch} = ref $w eq 'HASH' ? $w : {};
+        if (%{ $it->{watch} } && ($it->{watch}{rules} // 0) != RULES) {
+            $it->{clear_why} = 'the boot-watch state was written by an older rule set';
+            $it->{clear_state} = 1;
+            $it->{watch} = {};
+        }
         if (defined $it->{since}) {
             my ($raw, $err) = $self->_last_boot($mac);
             @$it{qw(netboot netboot_detail)} = defined $err ? ('unreadable', $err) : netboot_state($raw, $it->{since}, $now);
+            $it->{ever} = defined $raw ? 1 : 0;
         }
+        $it->{baselined} = $self->_baselined($it);
         push @out, $it;
     }
     return @out;
@@ -337,6 +479,7 @@ sub verdict_for ($self, $it, $s, $ready_cb) {
         draining => ($it->{kind} eq 'vm' && ($it->{netboot} // '') eq 'not_seen' ? $self->_draining($it) : 0),
         since => $it->{since}, recorded => $it->{recorded}, netboot => $it->{netboot}, netboot_detail => $it->{netboot_detail},
         may_reset => ($it->{kind} eq 'metal' ? $s->{metal} : $s->{max} > 0 ? 1 : 0),
+        baselined => $it->{baselined},
     );
     my $v = decide(%f, ready => 1);
     $v = decide(%f, ready => $ready_cb->()) if $v->{action} eq 'reset';
@@ -389,6 +532,7 @@ sub _close ($self, $it, $kind, $action, $result) {
 
 sub _watch_save ($self, $it, $w) {
     my $reg = $self->_reg;
+    $w = { %$w, rules => RULES } if defined $w;    # this rule set's own episode: resumable
     if ($it->{kind} eq 'vm') {
         my $c = $reg->active_cluster;
         my $rec = $reg->cluster_get_json($c, "workload_$it->{workload}");
@@ -505,15 +649,129 @@ sub handle ($self, $it, $s, $ready_cb) {
     return $v;
 }
 
-# tick(): one rate-limited pass. Returns the number of items acted on (reset, give up,
-# resolve, report), 0 when it was not time or the watch is off.
+#=== clean-up: state and issues that outlived their cause ================================
+
+# _clear_item($item, $why): removes the boot_watch state of a node and resolves its open
+# boot-stalled and boot-watch-blind issues; when it removed anything, logs the clearing
+# event (kind boot, state cleared) so that a standing boot line in hps-log attention ends
+# with its cause. Returns true when it did something; nothing to remove: no line.
+sub _clear_item ($self, $it, $why) {
+    my $did = 0;
+    if ($it->{clear_state} || (ref $it->{watch} eq 'HASH' && %{ $it->{watch} })) {
+        $did = 1 if eval { $self->_watch_save($it, undef); 1 };
+    }
+    for my $kind (qw(boot-stalled boot-watch-blind)) {
+        $did = 1 if $self->_close($it, $kind, 'boot watch state cleared', $why);
+    }
+    $self->_event('notice', $it->{subject}, 'cleared', "$why; its boot-watch state and issues are removed") if $did;
+    return $did;
+}
+
+# _stand_down($now): the watch is off. The leftovers of an earlier run (boot_watch state in
+# a workload record or host, and the open issues of kind boot-stalled, boot-watch-blind and
+# boot-watch-many) are removed, each with a cleared line, so that nothing keeps saying a node
+# is stalled for a watch that no longer runs. Looked for every STAND_DOWN_EVERY seconds.
+# Returns the number of nodes and issues cleared.
+sub _stand_down ($self, $now) {
+    return 0 if $now < $self->{next_standdown};
+    $self->{next_standdown} = $now + STAND_DOWN_EVERY;
+    my $reg = $self->_reg;
+    my $c = eval { $reg->active_cluster } // return 0;
+    my $why = 'the boot watch is off (boot_stall_window_seconds is 0)';
+    my ($n, %said) = (0);
+    $self->{open} = {};
+    for my $key (sort eval { $reg->cluster_list($c) }) {
+        my ($name) = $key =~ /\Aworkload_([a-z][a-z0-9-]{0,31})\z/ or next;
+        my $rec = eval { $reg->cluster_get_json($c, $key) };
+        next unless ref $rec eq 'HASH' && ref $rec->{vms} eq 'HASH';
+        for my $vm (sort keys %{ $rec->{vms} }) {
+            my $rv = $rec->{vms}{$vm};
+            next unless ref $rv eq 'HASH' && ref $rv->{boot_watch} eq 'HASH';
+            my $it = { kind => 'vm', workload => $name, vm => $vm, subject => "$name/$vm", watch => $rv->{boot_watch} };
+            if (eval { $self->_clear_item($it, $why) }) { $n++; $said{ $it->{subject} } = 1 }
+        }
+    }
+    for my $mac (sort eval { $reg->host_list_all }) {
+        next unless eval { $reg->host_exists($mac, 'boot_watch') };
+        my $name = eval { $reg->fqdn($mac) } // $mac;
+        my $w = eval { $reg->host_get_json($mac, 'boot_watch') };
+        my $it = { kind => 'metal', mac => $mac, host => $name, subject => $name, watch => (ref $w eq 'HASH' && %$w ? $w : { rules => 0 }) };
+        if (eval { $self->_clear_item($it, $why) }) { $n++; $said{$name} = 1 }
+    }
+    # Issues that have no state behind them (a blind report, the breaker's issue).
+    for my $i (eval { $self->_issues->list }) {
+        next unless $i->{state} ne 'resolved' && ($i->{kind} // '') =~ /\Aboot-(?:stalled|watch-blind|watch-many)\z/;
+        my $f = ref $i->{fields} eq 'HASH' ? $i->{fields} : {};
+        my $subject = defined $f->{workload} ? "$f->{workload}/" . (($f->{vm} // 'any') eq 'any' ? '*' : $f->{vm}) : defined $f->{host} ? $f->{host} : 'watch';
+        eval { $self->_issues->resolve_key($i->{key}, 'boot watch off', resolution => { by => 'healer', action => 'boot watch off', result => $why }); 1 } or next;
+        $n++;
+        $self->_event('notice', $subject, 'cleared', "$why; issue $i->{id} resolved") unless $said{$subject}++;
+    }
+    return $n;
+}
+
+#=== the breaker ===============================================================================
+
+# _breaker_open($names, $limit): more than $limit distinct nodes look stalled in this scan:
+# one standing event and one issue, no reset of any of them.
+sub _breaker_open ($self, $names, $limit) {
+    my @n = sort @$names;
+    my $list = join(', ', @n > 10 ? (@n[ 0 .. 9 ], '...') : @n);
+    my $text = scalar(@n) . " nodes look stalled at once (limit $limit): more likely a fault in the watch or the boot service than in the nodes; none was reset ($list)";
+    $self->_event_every('breaker', HPS::Event::REMIND, 'warning', 'watch', 'tripped', "many nodes look stalled at once: $text");
+    my $key = HPS::Issues::make_key('boot-watch-many', { scope => 'cluster' }, 'scope');
+    return if $self->_open_keys('boot-watch-many')->{$key};
+    eval {
+        $self->_issues->open_issue(kind => 'boot-watch-many', fields => { scope => 'cluster' }, key_fields => ['scope'], severity => 'warning',
+            summary => "many nodes look stalled at once: more likely a fault in the watch or the boot service than in the nodes ($list)",
+            detail => $text, by => 'hps-bootwatch', urgent_after => 3600);
+        $self->_open_keys('boot-watch-many')->{$key} = 1;
+    };
+    return;
+}
+
+# _breaker_clear(): the scan no longer has too many stalled nodes: the issue resolves.
+sub _breaker_clear ($self) {
+    my $key = HPS::Issues::make_key('boot-watch-many', { scope => 'cluster' }, 'scope');
+    return unless delete $self->_open_keys('boot-watch-many')->{$key};
+    eval { $self->_issues->resolve_key($key, 'healer', resolution => { by => 'healer', action => 'boot watch', result => 'no longer many nodes stalled at once' }) };
+    delete $self->{said}{breaker};
+    $self->_event('notice', 'watch', 'cleared', 'no longer many nodes stalled at once');
+    return;
+}
+
+# _counts_as_stalled($item, $verdict): a node newly judged stalled in this scan. One that
+# already gave up (its issue stands) is not new.
+sub _counts_as_stalled ($it, $v) {
+    return 0 unless $v->{state} eq 'boot-stalled';
+    my $w = $it->{watch} // {};
+    my $same = defined $w->{expect} && defined $it->{stamp} && $w->{expect} eq $it->{stamp};
+    return $v->{action} eq 'give_up' && $same && $w->{gave_up} ? 0 : 1;
+}
+
+#=== the tick ===================================================================================
+
+# tick(): one rate-limited scan. Returns the number of items acted on (reset, give up,
+# resolve, report, clear), 0 when it was not time or the watch is off.
+#   * the settings are read at the start and again before every item that may act, so a
+#     window set to 0 stops the scan at the next item, not at the end of the pass;
+#   * at most one reset per scan, then it returns to the caller's loop (the other watcher
+#     work and a changed key are seen before the next one, SCAN_EVERY seconds on);
+#   * the breaker: more than boot_stall_max_nodes distinct nodes newly judged stalled in
+#     this scan and none is reset or given up on; one issue says so.
 sub tick ($self) {
     my $now = $self->_now;
     return 0 if $now < $self->{next_scan};
     $self->{next_scan} = $now + SCAN_EVERY;
     my $s = $self->settings;
     $self->_event_every("setting:$_", 3600, 'warning', 'settings', 'bad-setting', $_) for @{ $s->{warnings} // [] };
-    return 0 unless $s->{window};
+    if (!$s->{window}) {
+        $self->{enabled_at} = undef;
+        return $self->_stand_down($now);
+    }
+    $self->{enabled_at} //= $now;
+    $self->{next_standdown} = 0;
+    $self->{open} = {};
     my @items = eval { $self->items };
     if ($@) { $self->_event_every('scan', 600, 'warning', 'scan', 'failed', 'cannot read the registry: ' . _msg($@)); return 0 }
     my ($asked, $ready);
@@ -525,10 +783,42 @@ sub tick ($self) {
         return $ready;
     };
     my $n = 0;
+    my @live;
     for my $it (@items) {
-        my $v = eval { $self->handle($it, $s, $cb) };
+        if ($it->{recovered}) {
+            $n++ if eval { $self->_close($it, 'boot-watch-blind', 'readable again', "$it->{subject}: readable") && do { $self->_event('notice', $it->{subject}, 'ok', 'readable again'); 1 } };
+            next;
+        }
+        if (defined $it->{clear_why}) {
+            my $did = eval { $self->_clear_item($it, $it->{clear_why}) };
+            $n++ if $did;
+            if ($@) { $self->_event_every("err:$it->{key}", 600, 'warning', $it->{subject}, 'failed', 'boot watch failed: ' . _msg($@)) }
+        }
+        next if ($it->{scope} // '') eq 'out';
+        push @live, $it;
+    }
+    # The first pass only judges: how many nodes look stalled right now.
+    my %stalled;
+    for my $it (@live) {
+        next if defined $it->{report};
+        my $v = eval { $self->verdict_for($it, $s, $cb) } or next;
+        $stalled{ $it->{subject} } = 1 if _counts_as_stalled($it, $v);
+    }
+    my $limit = $s->{nodes} // DEFAULT_NODES;
+    my $tripped = keys %stalled > $limit;
+    if ($tripped) { $self->_breaker_open([ keys %stalled ], $limit) }
+    else          { $self->_breaker_clear }
+    for my $it (@live) {
+        next if $tripped && $stalled{ $it->{subject} };
+        my $now_s = $self->settings;
+        if (!$now_s->{window}) {    # switched off while the scan ran: stop here, touch nothing more
+            $self->{enabled_at} = undef;
+            last;
+        }
+        my $v = eval { $self->handle($it, $now_s, $cb) };
         if ($@) { $self->_event_every("err:$it->{key}", 600, 'warning', $it->{subject}, 'failed', 'boot watch failed: ' . _msg($@)); next }
         $n++ if $v->{action} =~ /\A(?:reset|give_up|resolve|report)\z/;
+        last if $v->{action} eq 'reset';    # one reset per scan
     }
     return $n;
 }
@@ -537,8 +827,8 @@ sub tick ($self) {
 # each VM of the status result that boots from the network and is recorded running.
 sub annotate_status ($class, $wl, $name, $out, %o) {
     my $def = eval { $wl->load($name) } or return;
-    my %nb = map { $_ => 1 } netboot_vms($def);
     my $self = $class->new(registry => $wl->{registry}, now => $o{now});
+    my %nb = map { $_ => 1 } netboot_vms($def, undef, $self->_layout);
     my $rec = $wl->record($name) // return;
     for my $v (@{ $out->{vms} // [] }) {
         next unless $nb{ $v->{vm} } && ($v->{recorded_state} // '') eq 'running';

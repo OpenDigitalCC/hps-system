@@ -319,7 +319,10 @@ sub main {
             }
             return 0;
         }
-        if ($op eq 'start' && !$nobw && HPS::BootWatch::netboot_vms(eval { $wl->load($name) } // {}, $vm)) {
+        # Gated: a VM that boots from the network and from THIS IPS (a NIC on the provisioning
+        # net). A nested cluster's VM on a fabric net netboots from its own IPS: not gated.
+        if ($op eq 'start' && !$nobw
+            && HPS::BootWatch::netboot_vms(eval { $wl->load($name) } // {}, $vm, HPS::BootWatch->new(registry => $wl->{registry})->_layout)) {
             my $g = HPS::BootReady::gate();
             print STDERR "hps-workload: $_\n" for @{ $g->{warnings} };
             if (!$g->{ok}) {

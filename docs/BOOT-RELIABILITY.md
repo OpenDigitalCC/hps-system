@@ -22,7 +22,7 @@ widths: 1.5cm | 7cm | 3.5cm | 3cm
 bold: 1
 ---
 3 | Do not start into a deaf IPS: `hps-workload start` of a network-boot VM, and `hps-bmc on` and `pxe-once`, wait for the boot services and refuse if they do not answer | IPS | Yes
-2 | Notice and recover: a netboot VM or BMC-powered node with no iPXE init within a window is reset a bounded number of times, then an issue is opened | IPS | Yes
+2 | Notice and recover: a netboot VM or BMC-powered node of this IPS with no iPXE init within a window is reset a bounded number of times, then an issue is opened. Off until an operator enables it per cluster | IPS | Yes (ships off)
 1 | Never give up at the firmware: a VM boots an iPXE that retries for ever; on metal the BIOS network retry setting | Node image and BIOS | Design only (below)
 ```
 
@@ -70,7 +70,11 @@ bold: 1
 
 `hps-workload start <name>` first checks whether the workload has a VM that
 boots from the network (`"boot": "network"`, only the VM named with `--vm` when
-given). If so it waits, up to `boot_ready_wait_seconds`, for the verdict
+given) and from this IPS: it has a NIC on a network of `network_layout` whose
+purpose is `provisioning`. A VM whose NICs are all on other networks (the fabric
+net of a nested cluster, purpose `emulated-switch`) netboots from its own IPS, is
+not gated and does not make the start wait. A VM whose network purpose cannot be
+told is gated: waiting is harmless. If a VM is gated it waits, up to `boot_ready_wait_seconds`, for the verdict
 `ready`, then:
 
 - ready: the start goes ahead.
@@ -100,8 +104,8 @@ bold: 1
 
 ## What it watches
 
-For each VM of a workload that boots from the network, recorded `running`, and
-for each metal node the IPS powered on or reset through its BMC (host key
+For each VM of a workload that boots from the network **from this IPS** (see
+Scope below), recorded `running`, and for each metal node the IPS powered on or reset through its BMC (host key
 `bmc_power_on_at`, written by `hps-bmc on` and `reset`, removed by `off` and
 `force-off`): started at T, and no iPXE init recorded after T. The IPS records
 every iPXE init as the host key `last_boot_at`. A VM's start time is the
@@ -114,6 +118,97 @@ followed. `hps-workload status` shows, for a running network-boot VM that has
 not reached iPXE, the line `no netboot seen since start (N s)`, from the first
 second, so that `running` is not the whole story. If the value cannot be read the
 line says `netboot state unreadable (...)`.
+
+## Scope: only a node this IPS can expect to see boot
+
+The rule is positive evidence, never the absence of a boot. The watch acts on a
+node only when this IPS can expect to see it boot, and every other node is out
+of scope: never reset, never an issue, no `no netboot seen` note.
+
+```datatable
+columns: Node | In scope when | Otherwise
+widths: 3cm | 7cm | 5cm
+bold: 1
+---
+VM | It boots from the network, has a NIC on a network of `network_layout` whose `purpose` is `provisioning` (the L2 this IPS serves DHCP and TFTP on), and the workload record holds the MAC of that NIC (assigned by this IPS when it defined the VM; a host that netboots with it is registered under it) | Every NIC is on a network of another known purpose: out of scope. A network or MAC that cannot be told: `cannot tell`, below
+Metal node | This IPS powered it on or reset it through its BMC (host key `bmc_power_on_at`); the host is registered here | Not watched
+```
+
+A nested cluster's VM is a network-boot workload of the outer cluster, but its
+only NIC is on a network of purpose `emulated-switch` (the fabric net, `fab`): it
+netboots from its own inner cluster's IPS, so this IPS never records its
+`last_boot_at` and never will. Judging it by that absence is the fault that
+reset healthy VMs on the lab (History, below).
+
+Cannot tell
+: A VM whose scope cannot be determined (the definition cannot be loaded,
+  `network_layout` cannot be read, a network has no purpose, the record has no
+  MAC or a different number of MACs than NICs) is reported: an event line (state
+  `unreadable`) and an issue of kind `boot-watch-blind`, which resolves when the
+  scope can be told. It is never reset.
+
+An out-of-scope VM that carries `boot_watch` state, or open `boot-stalled` or
+`boot-watch-blind` issues (the layout was changed, or an older version of the
+watch wrote them), is cleaned up: see Clean-up.
+
+## Baseline: a node already running is not judged
+
+The watch remembers when it was enabled: the start of the `hps-issue-watch`
+process, or the scan that saw `boot_stall_window_seconds` change from 0 to a
+window. A node whose start is older than that was already running when the watch
+first saw it: it is baselined, not judged, however long it has been without a
+netboot. Only a node started after the watch was enabled can be judged stalled,
+by whoever started it (`hps-workload start`, the watch's own reset, an
+operator's restart).
+
+This covers the node this IPS has never recorded a boot for (no `last_boot_at`
+ever): it is judged only when it was started after the watch was enabled in the
+current episode. An episode the watch itself began (its `boot_watch` state with
+the rule-set marker, for the same start) is resumed after a restart of the
+process, not abandoned. Setting the key to 0 and back starts a new baseline.
+
+## One reset per scan, and the settings are read every time
+
+```datatable
+columns: Rule | Why
+widths: 6cm | 9cm
+bold: 1
+---
+The settings are read from the registry at the start of every scan and again before every item that may act | Setting `boot_stall_window_seconds` to 0 stops a scan in progress at its next item, not at the end of the pass (a reset can take a minute)
+At most one reset (VM or metal) per scan, then the scan returns to the `hps-issue-watch` loop | The other watcher work runs between resets, and a changed key or a recovered node is seen before the next reset, one scan (15 s) on
+```
+
+## The breaker
+
+If more than `boot_stall_max_nodes` (default 1) distinct nodes are newly judged
+stalled in the same scan, none of them is reset and none is given up on. The
+watch opens one issue of kind `boot-watch-many` and logs one standing line
+(`boot`, subject `watch`, state `tripped`): "many nodes look stalled at once:
+more likely a fault in the watch or the boot service than in the nodes". Many
+nodes failing together point at the IPS, the network or the watch, and a reset
+loop over all of them would make it worse. The issue resolves, with a `cleared`
+line, in the first scan that has no more than the limit. A node that gave up in
+an earlier scan (its issue stands) does not count again. With the limit raised
+(`boot_stall_max_nodes` 3) two stalled nodes are reset one per scan.
+
+## Clean-up: nothing outlives its cause
+
+```datatable
+columns: Leftover | When | What happens
+widths: 5cm | 4cm | 6cm
+bold: 1
+---
+`boot_watch` state without the rule-set marker (`rules: 2`) | Any scan with the watch on | Removed, never resumed: the episode was not begun by these rules. The node is then judged afresh (and baselined if it was already running). The line `state=cleared` is logged
+`boot_watch` state, `boot-stalled` and `boot-watch-blind` issues of a node now out of scope | Any scan with the watch on | Removed and resolved; a `cleared` line
+A workload-level `boot-watch-blind` issue (record or definition unreadable) after it is readable again | Any scan | Resolved; an `ok` line
+All `boot_watch` state, and every open `boot-stalled`, `boot-watch-blind` and `boot-watch-many` issue | The watch is off (`boot_stall_window_seconds` 0): at once, then every 5 minutes | Removed and resolved, each with a `cleared` line
+```
+
+The `cleared` line is a clearing state (`docs/LOGGING.md`): it ends a standing
+`boot-stalled`, `gave-up`, `unreadable`, `reset-failed` or `tripped` line for the
+same subject, so `hps-log attention` cannot show a boot problem for a node or a
+watch that no longer exists, while `hps-ips-check --boot-ready` passes.
+
 
 ## Where it lives, and why
 
@@ -136,7 +231,7 @@ widths: 5cm | 10cm
 bold: 1
 ---
 Within the window of the start, or of the last reset | Nothing.
-Past the window, resets left, boot services answering | Reset. A VM: `stop --force` then `start` (the path `hps-workload` uses, so the record and `started_at` follow). Metal: a BMC `reset`, else `on`. One try is counted.
+Past the window, resets left, boot services answering | Reset (one node per scan, then the scan returns to the loop). A VM: `stop --force` then `start` (the path `hps-workload` uses, so the record and `started_at` follow). Metal: a BMC `reset`, else `on`. One try is counted.
 Past the window, boot services not answering | Defer. No reset and no try is spent: resetting into a deaf IPS only repeats the failure. Said in the log every 5 minutes.
 Past the window, resets used up (or `boot_stall_max_resets` is 0, or metal reset is off) | Give up: open the issue `boot-stalled`, once. It names the workload and VM (or the node), the tries and the console command. It becomes urgent after an hour unresolved.
 A reset that itself fails | Give up at once, naming what failed.
@@ -166,6 +261,10 @@ no tries counted.
   would be refused). If that key cannot be read the VM is reported as
   `boot-watch-blind`, not reset.
 - A disk-boot VM.
+- A VM that is out of scope (it boots from another IPS), one whose scope cannot be told,
+  and one that was already running when the watch was enabled (Baseline).
+- Any node while the watch is off, while more nodes than `boot_stall_max_nodes` look
+  stalled, or after another node was reset in the same scan.
 - Metal, unless `boot_stall_metal_reset` is true: the stall is detected and the
   issue opened, but the node is left alone. See the owner decisions below.
 
@@ -181,21 +280,23 @@ columns: Cluster key | Default | Range | Meaning
 widths: 4.8cm | 1.7cm | 2.3cm | 6.2cm
 bold: 1
 ---
-`boot_stall_window_seconds` | 180 | 0, or 30 to 86400 | Seconds after the start with no iPXE init before the node is boot-stalled, and the pause between resets. 0 turns the watch off. Read afresh every scan.
+`boot_stall_window_seconds` | 0 (off) | 0, or 30 to 86400 | Seconds after the start with no iPXE init before the node is boot-stalled, and the pause between resets. 0 turns the watch off, and is the default. Read at the start of every scan and before every action.
+`boot_stall_max_nodes` | 1 | 1 to 100 | The breaker: more nodes than this newly judged stalled in one scan and none is reset; one issue says so.
 `boot_stall_max_resets` | 3 | 0 to 20 | Resets before the IPS gives up and opens the issue. 0 only reports.
 `boot_stall_metal_reset` | false | true or false | Let the IPS power-cycle a boot-stalled metal node through its BMC. VMs are always reset.
 ```
 
-A bad value is warned about (in the log, once an hour) and the default used.
+A bad value is warned about (in the log, once an hour) and the default used; for the
+window the default is 0, so a bad value switches the watch off rather than guessing a window.
 
 ## Log lines
 
 The watch writes event lines (`HPS::Event`, `docs/LOGGING.md`): kind `boot`,
 subject `<workload>/<vm>` or the host, through one function
 (`HPS::BootWatch::_event`) and syslog (tag `hps`). States: `boot-stalled`,
-`reset`, `reset-failed`, `gave-up`, `booted`, `unreadable`, `failed`,
-`bad-setting`. `boot-stalled`, `gave-up`, `unreadable` and `reset-failed` are
-standing, `booted` clears them, and `reset` is a point. `hps-log attention`
+`reset`, `reset-failed`, `gave-up`, `booted`, `cleared`, `tripped`, `unreadable`, `failed`,
+`bad-setting`. `boot-stalled`, `gave-up`, `unreadable`, `reset-failed` and `tripped` are
+standing, `booted` and `cleared` clear them, and `reset` is a point. `hps-log attention`
 shows a stalled node while the boot services do not answer, after a failed
 reset and once the watch has given up, and drops it when the `booted` line
 comes; a successful `reset` line (a notice) closes the stall until the next
@@ -205,6 +306,45 @@ urgent after an hour, and the issue register's own line then says so. A standing
 line is repeated every 50 minutes while it holds. The readiness gate's refusals
 (`hps-workload start`, `hps-bmc on` and `pxe-once`) are notice lines, state
 `refused`, kind `workload` (subject the workload) and `power` (subject the host).
+
+## Enabling the watch
+
+The watch ships off (`boot_stall_window_seconds` is 0): a reset is the most
+disruptive thing the IPS does by itself, and it is enabled per cluster, on
+purpose, after a trial on one disposable VM.
+
+1. `hps-ips-check --boot-ready` exits 0 (the boot services answer).
+2. Create a disposable workload with one network-boot VM on the provisioning
+   network (a `network_layout` entry of purpose `provisioning`), and leave the
+   cluster's other workloads alone. Do not start the VM yet.
+3. `hps-cluster-config set boot_stall_window_seconds 180`. The next scan (15 s)
+   enables the watch and records the moment: whatever runs now is baselined.
+   `boot_stall_max_resets` 3 and `boot_stall_max_nodes` 1 are right for a trial.
+4. Start the VM with the boot services stopped (`supervisorctl stop dnsmasq`,
+   `hps-workload start <name> --no-boot-wait`), wait one window, and see
+   `state=boot-stalled ... boot services do not answer` in `hps-log events --grep
+   boot`; start dnsmasq: the next scan resets the VM once, it netboots, and
+   `state=booted` follows.
+5. Check that nothing else was touched: `hps-workload status` of the other
+   workloads (a nested cluster's VMs show no `no netboot seen` note), no
+   `boot-stalled`, `boot-watch-blind` or `boot-watch-many` issue
+   (`hps-issue list`), and `hps-log attention` shows no `boot` line.
+6. Leave it on, or turn it off again with `hps-cluster-config set
+   boot_stall_window_seconds 0`: the running scan stops at its next item, and
+   the leftovers are cleared.
+
+## History
+
+2026-11-15, the first deploy of this layer on the lab (main 2f84242): the watch
+judged every `boot: network` VM of the nested clusters (`s1-*`, `s3-*`, NIC on
+the fabric net `fab`) with "no netboot seen 3200 s after the start" and reset
+eight of them, because their iPXE init goes to their own cluster's IPS and the
+lab IPS never records a `last_boot_at` for them. Setting the window to 0 did not
+stop the running scan, which kept resetting for five minutes (about 60 s a VM)
+until the process was stopped. Fixed by the scope rule (positive evidence that
+this IPS boots the node), the baseline, the settings read before every action, one reset per scan,
+the breaker, the clean-up, and shipping the watch off.
+
 
 # Layer 1: never give up at the firmware
 
@@ -288,6 +428,12 @@ Metal power-cycling
   to true to let the IPS reset a node through its BMC, after trying it on one
   node.
 
+Enabling the watch
+: Whether `boot_stall_window_seconds` is turned on in a cluster is the owner's
+  call, after the trial above. The default stays 0 until then. The window
+  (180 s suggested) and the breaker (`boot_stall_max_nodes`, 1) are the
+  owner's to tune.
+
 Gate when the check cannot run
 : A verdict of `unknown` lets `hps-workload start` and `hps-bmc` go ahead with a
   warning. The alternative is to refuse, which would block starts on an IPS whose
@@ -308,7 +454,7 @@ On the lab IPS, in order:
    after the wait; `--no-boot-wait` starts it. Restore dnsmasq.
 3. Start a netboot VM and check that `hps-workload status` shows `no netboot seen
    since start (N s)` until it pairs.
-4. Stop dnsmasq, start the VM with `--no-boot-wait`, and leave it. After the
+4. With the watch enabled (Enabling the watch), stop dnsmasq, start the VM with `--no-boot-wait`, and leave it. After the
    window the log shows `state=boot-stalled`, then `state=boot-stalled ... boot
    services do not answer` (deferred). Start dnsmasq: the next scan resets the
    VM, it netboots, and the issue never opens.
@@ -318,3 +464,6 @@ On the lab IPS, in order:
    While the services are down no reset is made and no try is spent, so no issue
    opens: the IPS is the fault, and `hps-ips-check --boot-ready` says so.
 6. A VM stopped with `hps-workload stop` is not reset while it is stopped.
+7. A VM on the fabric net of a nested cluster is never reset, gated or noted,
+   with the watch on; a VM already running when the window key changes from 0
+   is not reset however long it has been without a netboot.

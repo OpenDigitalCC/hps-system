@@ -300,7 +300,7 @@ for my $state (qw(stopped suspended creating failed)) {
     is($s->{metal}, 0, 'metal off by default');
     $f->{reg}->cluster_set('lab', 'boot_stall_window_seconds', '5');
     $s = $f->{bw}->settings;
-    is($s->{window}, 180, 'a bad window: the default');
+    is($s->{window}, 0, 'a bad window: the default, which is off (never a guessed window)');
     like($s->{warnings}[0], qr/boot_stall_window_seconds='5'/, 'with a warning');
     is(tick_at($f, 20), 0, 'a tick with a warning still runs');
     ok((grep { /state=bad-setting/ } @{ $f->{log} }), 'and says so once');
