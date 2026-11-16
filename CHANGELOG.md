@@ -12,6 +12,40 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Storage and compute on the stock starter (2026-11-16)
+
+Step 3 of `plans/PLAN.md` (`docs/BUNDLE.md` "Storage and compute"). The pinned
+images are unchanged.
+
+- **New** the role step of the node bundle (`node-manager/bundle/role`): a
+  `STARTER` node whose registry `TYPE` is `SCH` or `TCH` sets up what the pinned
+  storage and compute profiles set up at build time, at boot: clock, log
+  forwarding, host reserve, the storage services (target directory, portal port,
+  modules) or the compute services (KVM, `libvirtd` with the profile's
+  `qemu.conf`, the UEFI firmware links, md with `AUTO -all` and the
+  `hps-md-event` monitor, `iscsid` with the 15 s timeouts), bridges, om3, and the
+  power-off unit; the iSCSI initiator follows pairing. The node scripts are the
+  same files; the boot scripts the pinned images run as units travel in the bundle
+  as `lib/*`. A failed role step is said and does not stop the pairing; `init`
+  then ends with 1.
+- **New** `lib/hps-log-journal`: the journal to the IPS on TCP 514 with the
+  journal's facility and priority, from jq and the shell (rsyslog would cost 335
+  MiB of node RAM).
+- **New** om3 `3.0.0-rc62` as a local package (`hps-starter add-local`), on the
+  `SCH` and `TCH` role lines; `jq`, `smartmontools`, `tcpdump` and `xxd` by the
+  store path the pinned images use.
+- **New** the adapter's `fw_open` and `svc_mask`, and `svc_start --unit-opt`.
+- **Changed** the boot line of a `STARTER` host carries the node's own
+  `spl.spl_hostid`, as a pinned host's does.
+- **Changed** the three waiting fixes are bundle content: `suspend-state` and
+  `guest-resume` ported whole (`vm-save`, `vm-restore`, `vm-resume`, `vm-status`,
+  `vm-stop`, `check_vms`, the healer and their tests; `vm-resume` joins the bundle
+  allowlist), `iscsi-failfast` already on `main` through `storage-faults`, its
+  settings now written by `role` for starter nodes.
+- **Not carried** AppArmor (the starter's kernel does not have it in its security
+  modules: guests are confined by DAC, seccomp and cleared capabilities),
+  `nagios-check` and the usage checks, `hps-net`.
+
 ## The node bundle: a stock starter becomes a paired node (2026-11-16)
 
 Step 2 of `plans/PLAN.md` (`docs/BUNDLE.md`). The pinned images are unchanged.

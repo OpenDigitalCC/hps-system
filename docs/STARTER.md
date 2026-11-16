@@ -37,8 +37,8 @@ cache. `nix-cache-info`, one `<hash>.narinfo` per store path and the
 `nar/<hash>.nar.xz` files they name, exactly as `cache.nixos.org` publishes
 them, so the upstream signatures stay valid (a node trusts the stock key). It
 holds the closure of the packages in `lib/starter/nixos.packages` (libvirt,
-QEMU, open-iscsi, mdadm, targetcli-fb, perl, the Perl modules and openssl the
-agent needs); ZFS is already in the starter. Which node gets which package is
+QEMU, open-iscsi, mdadm, targetcli-fb, jq, smartmontools, tcpdump, xxd, and om3 as a
+local package, perl, the Perl modules and openssl the agent needs); ZFS is already in the starter. Which node gets which package is
 `lib/starter/nixos.roles` (`docs/BUNDLE.md`). A node reads the repository with
 `--option substituters http://<ips>/packages/nixos/26.05`.
 
