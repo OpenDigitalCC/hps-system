@@ -59,7 +59,7 @@ sub fixture {
         spit("$up/cache/nar/$fh.nar.xz", $nar);
         my $refs = join ' ', map { "$_-$ni{$_}{name}" } @{ $ni{$k}{refs} };
         spit("$up/cache/$k.narinfo", "StorePath: /nix/store/$k-$ni{$k}{name}\nURL: nar/$fh.nar.xz\nCompression: xz\n"
-            . "FileHash: sha256:$fh\nFileSize: " . length($nar) . "\nNarHash: sha256:x\nNarSize: 9\n" . (length $refs ? "References: $refs" : 'References:') . "\nSig: cache.nixos.org-1:sig-$k\n");
+            . "FileHash: sha256:$fh\nFileSize: " . length($nar) . "\nNarHash: sha256:x\nNarSize: 9\n" . (length $refs ? "References: $refs" : ($k =~ /[0-9a-m]\z/ ? 'References:' : '')) . "\nSig: cache.nixos.org-1:sig-$k\n");
     }
     my $hy = "$up/hydra";
     spit("$hy/build/100/download/1/bzImage", $KERNEL);

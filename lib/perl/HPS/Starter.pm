@@ -522,8 +522,8 @@ sub _which ($cmd) {
 # _parse_narinfo($text, $what): {url, filehash, filesize, refs => [hash], raw}
 sub _parse_narinfo ($text, $what) {
     my %f;
-    for my $l (split /\n/, $text) { $f{$1} = $2 // '' if $l =~ /\A([A-Za-z]+):(?: (.*))?\z/ }  # an empty value (References:) has no space after the colon
-    for my $k (qw(StorePath URL FileHash FileSize References)) {
+    for my $l (split /\n/, $text) { $f{$1} = $2 // '' if $l =~ /\A([A-Za-z]+):(?: (.*))?\z/ }  # an empty value has no space after the colon
+    for my $k (qw(StorePath URL FileHash FileSize)) {
         _fail('failed', "$what: narinfo has no $k") unless exists $f{$k};
     }
     _fail('failed', "$what: URL '$f{URL}' is not nar/<file>") unless $f{URL} =~ m{\Anar/[A-Za-z0-9._-]+\z};
@@ -531,7 +531,7 @@ sub _parse_narinfo ($text, $what) {
     _fail('failed', "$what: FileSize '$f{FileSize}' is not a number") unless $f{FileSize} =~ /\A[0-9]+\z/;
     my ($self_name) = $f{StorePath} =~ m{\A/nix/store/$HASH_RE-(.+)\z} or _fail('failed', "$what: bad StorePath '$f{StorePath}'");
     my %refs;
-    for my $r (split ' ', $f{References}) {
+    for my $r (split ' ', $f{References} // '') {   # a path that refers to nothing has no References line
         my ($h, $n) = $r =~ /\A($HASH_RE)-(.+)\z/ or _fail('failed', "$what: bad reference '$r'");
         $refs{$h} = $n;
     }
