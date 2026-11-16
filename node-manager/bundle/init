@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+#
+# init - the node's boot sequence, from the bundle (docs/BUNDLE.md). OS-neutral:
+# everything that differs between operating systems is in adapter/<os>.sh
+# (how to add a package, how to start a service).
+#
+# Run by bootstrap.sh at boot and again by the bundle-refresh action. Every step
+# is idempotent, so a refresh is the same sequence over a node that is already
+# up: it re-reads the IPS, installs what is new and leaves the rest alone.
+# Straight sequence, every command logged as it runs ("+ command"):
+#
+#   1. sysadmin   the user, its ssh key (from the IPS), sudo, sshd refusing root
+#   2. packages   the role's packages, from the IPS repository (cmd=node_packages)
+#   3. agent      the ctrl-exec agent from the IPS package area, its configuration,
+#                 the preset allowlist (allowlist) pointing at actions/, its
+#                 service
+#   4. legacy     the older function bundle that the hps-node plugin sources
+#   5. pairing    hps-pair, the existing pairing flow: registry hostname, pairing
+#                 request, report to the IPS, certificate, agent restart
+#
+# Sysadmin comes first so that a person can log in and look even when a later
+# step fails. A failed step stops the sequence (exit 1) with the reason on the
+# console, in the journal and on the IPS log; pairing refused is exit 3.
+#
+# Usage: init [boot|refresh]
+# Overrides for tests: HPS_RUN_DIR, HPS_CMDLINE, HPS_ROOT (prefix of /etc and
+# /var), HPS_PATH_EXTRA, and the adapter's HPS_NIX_PROFILE, HPS_SYSTEMD_DIR.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+: "${HPS_RUN_DIR:=/run/hps}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_ROOT:=}"
+MODE="${1:-boot}"
+
+# The node's programs: the starter's own, then (after step 2) the packages.
+export PATH="${HPS_PATH_EXTRA:+$HPS_PATH_EXTRA:}/run/current-system/sw/bin:/run/wrappers/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+SSHD_CONFIG="${HPS_ROOT}/etc/ssh/sshd_config"
+AGENT_ETC="${HPS_ROOT}/etc/ctrl-exec-agent"
+AGENT_PORT=7443
+# One OpenSSH public key per line, no options in front (command=, from= and the
+# like would restrict or redirect a key; the IPS refuses them as well).
+KEY_RE='^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]+( [^[:cntrl:]]*)?$'
+
+log() {
+  printf '[hps-init] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute; the caller decides what a failure means.
+run() {
+  log "+ $*"
+  "$@"
+}
+
+cmdline_value() {
+  local key="$1" word
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ips_url() {
+  printf 'http://%s/cgi-bin/boot_manager.sh?cmd=%s' "$IPS" "$1"
+}
+
+# fetch_text <cmd>: the IPS's answer to boot_manager.sh?cmd=<cmd>.
+fetch_text() {
+  run curl -fsS --max-time 60 "$(ips_url "$1")"
+}
+
+# ips_log <message>: one line in the IPS log, best effort.
+ips_log() {
+  [[ -n "${IPS:-}" ]] || return 0
+  curl -fs --max-time 5 -G --data-urlencode "message=$*" --data-urlencode "function=node-bundle" \
+    "$(ips_url log_message)" > /dev/null 2>&1 || true
+}
+
+die() {
+  log "error: $*"
+  ips_log "error: $*"
+  exit 1
+}
+
+#-------------------------------------------------------------------------------
+# 0. Which node, which OS, which adapter
+#-------------------------------------------------------------------------------
+IPS="$(cmdline_value hps.ips || true)"
+[[ -n "$IPS" ]] || die "no hps.ips= on the kernel command line"
+OS_ID="$(cmdline_value hps.os || true)"
+[[ "$OS_ID" =~ ^[^:]+:([a-z]+):([0-9][0-9A-Za-z.-]*)$ ]] || die "hps.os='${OS_ID}' is not arch:os:version"
+OS_NAME="${BASH_REMATCH[1]}"
+OS_VERSION="${BASH_REMATCH[2]}"
+
+# The adapter. One file per OS; it defines pkg_add, svc_start and svc_reload.
+case "$OS_NAME" in
+  nixos) source "$HERE/adapter/nixos.sh" ;;
+  # ALPINE (plan step 4): add adapter/alpine.sh here, with the same functions
+  # and variables as adapter/nixos.sh, and a branch of this case. No Alpine code
+  # exists yet; the bundle refuses an OS it has no adapter for.
+  *) die "no adapter for OS '$OS_NAME' (adapter/ has: $(cd "$HERE/adapter" && ls | tr '\n' ' '))" ;;
+esac
+adapter_init "$IPS" "$OS_VERSION"
+
+mkdir -p "$HPS_RUN_DIR/bin"
+exec 9> "$HPS_RUN_DIR/init.lock"
+flock -n 9 || die "another init is running"
+
+log "bundle ${HERE##*/}, mode $MODE, ips $IPS, os $OS_ID"
+ips_log "bundle ${HERE##*/} $MODE: init starts"
+
+#-------------------------------------------------------------------------------
+# 1. sysadmin
+#-------------------------------------------------------------------------------
+step_sysadmin() {
+  local keys home grp
+  keys="$(fetch_text node_sysadmin_keys 2> /dev/null || true)"
+  keys="$(printf '%s\n' "$keys" | grep -E "$KEY_RE" || true)"
+
+  if id sysadmin > /dev/null 2>&1; then
+    run usermod -aG "$SUDO_GROUP" sysadmin
+  else
+    run useradd -m -s "$(command -v bash)" -G "$SUDO_GROUP" sysadmin
+  fi
+  home="$(getent passwd sysadmin | cut -d: -f6)"
+  grp="$(id -gn sysadmin)"
+  run install -d -m 0700 -o sysadmin -g "$grp" "$home/.ssh"
+  if [[ -n "$keys" ]]; then
+    printf '%s\n' "$keys" > "$home/.ssh/authorized_keys"
+    run chmod 0600 "$home/.ssh/authorized_keys"
+    run chown "sysadmin:$grp" "$home/.ssh/authorized_keys"
+    log "sysadmin: $(printf '%s\n' "$keys" | wc -l) ssh key(s) from the IPS"
+  else
+    log "warning: the IPS gave no sysadmin ssh key (its file sysadmin_authorized_keys is missing or empty): sysadmin cannot log in by ssh"
+    ips_log "warning: no sysadmin ssh key on the IPS"
+  fi
+
+  # sshd: the directives go FIRST, since the first value of a keyword wins; the
+  # starter's own configuration follows unchanged. /etc/ssh/sshd_config is a
+  # link into the read-only store on NixOS: the new file replaces the link.
+  [[ -e "$SSHD_CONFIG.hps-orig" ]] || run cp -L "$SSHD_CONFIG" "$SSHD_CONFIG.hps-orig"
+  {
+    printf '# written by the HPS node bundle (docs/BUNDLE.md); the starter'\''s own configuration follows\n'
+    printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitEmptyPasswords no\nAllowUsers sysadmin\n\n'
+    cat "$SSHD_CONFIG.hps-orig"
+  } > "$SSHD_CONFIG.new"
+  run sshd -t -f "$SSHD_CONFIG.new"
+  run mv -f "$SSHD_CONFIG.new" "$SSHD_CONFIG"
+  run passwd -l root
+  svc_reload sshd
+}
+
+#-------------------------------------------------------------------------------
+# 2. packages
+#-------------------------------------------------------------------------------
+step_packages() {
+  local list
+  local -a paths=()
+  list="$(fetch_text node_packages)" || die "the IPS gave no package list for this node (is the repository synced: hps-starter sync ${OS_NAME}?)"
+  mapfile -t paths < <(printf '%s\n' "$list" | grep -E '^/nix/store/' || true)
+  ((${#paths[@]} > 0)) || die "the IPS's package list for this node is empty"
+  pkg_add "${paths[@]}" || die "adding the packages failed"
+  adapter_init "$IPS" "$OS_VERSION"
+}
+
+#-------------------------------------------------------------------------------
+# 3. the ctrl-exec agent and its preset allowlist
+#-------------------------------------------------------------------------------
+# write_if_changed <file> <mode>: stdin to the file, replaced only when it
+# differs (the agent reloads its configuration whenever a file changes).
+write_if_changed() {
+  local file="$1" mode="$2"
+  cat > "$file.new"
+  if cmp -s "$file.new" "$file" 2> /dev/null; then
+    rm -f "$file.new"
+  else
+    chmod "$mode" "$file.new"
+    mv -f "$file.new" "$file"
+  fi
+}
+
+step_agent() {
+  local dir="$HPS_RUN_DIR/ctrl-exec" tar="$HPS_RUN_DIR/ctrl-exec.tar.gz" version
+  if [[ ! -f "$dir/VERSION" ]]; then
+    run curl -fsS --max-time 120 -o "$tar" "http://${IPS}/packages/ctrl-exec/ctrl-exec-latest.tar.gz" \
+      || die "cannot fetch the ctrl-exec agent from the IPS (packages/ctrl-exec/ctrl-exec-latest.tar.gz)"
+    rm -rf "$dir.new"
+    mkdir -p "$dir.new"
+    run tar -xzf "$tar" --strip-components=1 -C "$dir.new" \
+      || die "the ctrl-exec tarball does not unpack"
+    version="$(tr -d '[:space:]' < "$dir.new/VERSION")"
+    # as nix/package.nix does: the bin script reports the release's version
+    sed -i "s/our \$VERSION = 'UNINSTALLED'/our \$VERSION = '${version}'/" "$dir.new/bin/ctrl-exec-agent"
+    rm -rf "$dir"
+    mv "$dir.new" "$dir"
+    rm -f "$tar"
+  fi
+  version="$(tr -d '[:space:]' < "$dir/VERSION")"
+  log "ctrl-exec agent $version in $dir"
+
+  # The program: perl from the packages, with their modules and openssl.
+  write_if_changed "$HPS_RUN_DIR/bin/ctrl-exec-agent" 0755 << EOF
+#!/bin/sh
+PATH="${PKG_BIN}:\$PATH"
+PERL5LIB="${PKG_PERL5LIB}"
+export PATH PERL5LIB
+exec perl "$dir/bin/ctrl-exec-agent" "\$@"
+EOF
+  export PATH="$HPS_RUN_DIR/bin:$PKG_BIN:$PATH"
+
+  mkdir -p "$AGENT_ETC" "${HPS_ROOT}/var/lib/ctrl-exec-agent"
+  chmod 0750 "$AGENT_ETC"
+  # agent.conf: the standard keys, the PATH of the actions, and the profiles
+  # scripts.conf names. There is no executor in step 2 (it is a C program that
+  # needs building, plan step 5): the agent runs the actions itself, as root,
+  # and the profiles below are not applied. The allowlist and each action's own
+  # argument checks are the control.
+  write_if_changed "$AGENT_ETC/agent.conf" 0640 << EOF
+# written by the HPS node bundle (docs/BUNDLE.md); changes are replaced at the next refresh
+port = ${AGENT_PORT}
+cert = ${AGENT_ETC}/agent.crt
+key = ${AGENT_ETC}/agent.key
+ca = ${AGENT_ETC}/ca.crt
+script_path = ${PKG_BIN}:/run/wrappers/bin:/run/current-system/sw/bin
+
+[profile default]
+run_as = nobody
+no_new_privileges = yes
+
+[profile node]
+run_as = root
+no_new_privileges = yes
+EOF
+
+  # scripts.conf from the allowlist: one line per action, the path through the
+  # bundle link, so a refreshed script is the one that runs.
+  local name opts
+  {
+    printf '# written by the HPS node bundle from its allowlist (docs/BUNDLE.md)\n'
+    while read -r name opts; do
+      [[ -z "$name" || "$name" == \#* ]] && continue
+      if [[ ! -f "$HERE/actions/$name" ]]; then
+        log "warning: allowlist names $name but the bundle has no actions/$name: left out"
+        continue
+      fi
+      printf '%s = %s/bundle/actions/%s%s\n' "$name" "$HPS_RUN_DIR" "$name" "${opts:+ $opts}"
+    done < "$HERE/allowlist"
+  } | write_if_changed "$AGENT_ETC/scripts.conf" 0640
+  log "allowlist: $(grep -vc '^#' "$AGENT_ETC/scripts.conf") actions"
+
+  # The service starts once there is a certificate; pairing (step 5) restarts it.
+  svc_start --when-exists "$AGENT_ETC/agent.crt" --port "$AGENT_PORT" ctrl-exec-agent \
+    "PATH=${PKG_BIN}:${PATH}" "PERL5LIB=${PKG_PERL5LIB}" \
+    "$(command -v perl)" "$dir/bin/ctrl-exec-agent" serve
+}
+
+#-------------------------------------------------------------------------------
+# 4. legacy function bundle
+#-------------------------------------------------------------------------------
+# The allowlisted hps-node plugin sources /run/hps/functions.sh. It is the
+# bundle the pinned images fetch (hps-node-init); not fatal here.
+step_legacy() {
+  if run curl -fsS --max-time 60 -o "$HPS_RUN_DIR/functions.sh" "$(ips_url get_remote_functions)"; then
+    log "legacy function bundle: $(wc -c < "$HPS_RUN_DIR/functions.sh") bytes"
+  else
+    log "warning: no legacy function bundle (the hps-node plugin will say so); continuing"
+  fi
+}
+
+#-------------------------------------------------------------------------------
+# 5. pairing
+#-------------------------------------------------------------------------------
+step_pair() {
+  local rc=0
+  mkdir -p "$HPS_RUN_DIR"
+  run bash "$HERE/lib/hps-pair" || rc=$?
+  case "$rc" in
+    0) ips_log "paired (bundle ${HERE##*/})" ;;
+    3) ips_log "error: the IPS refused pairing"; return 3 ;;
+    *) ips_log "error: pairing did not complete (exit $rc)"; return 1 ;;
+  esac
+}
+
+step_sysadmin
+step_packages
+step_agent
+step_legacy
+step_pair
+log "done: bundle ${HERE##*/}"

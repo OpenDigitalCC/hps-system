@@ -1,0 +1,69 @@
+# The preset allowlist of the node bundle (docs/BUNDLE.md): the actions the
+# ctrl-exec agent of a starter node may run, and nothing else. One per line:
+#   name [key=value ...]     key=value is a scripts.conf option (profile, input)
+# name is a file under actions/ in the bundle. These are the scripts of the
+# pinned images (nix/modules/hps-ctrl-exec.nix) plus bundle-refresh; a test keeps
+# the two lists the same until the pinned images are retired (plan step 7).
+hps-node profile=node
+storage-pool-inspect profile=node
+storage-disks profile=node
+node-dmesg profile=node
+node-journal profile=node
+node-facts profile=node
+storage-pool-import profile=node
+storage-pool-create profile=node input=raw
+storage-pool-destroy profile=node
+dataset-unlock profile=node input=raw
+storage-trim-check profile=node
+iscsi-export profile=node
+iscsi-unexport profile=node
+iscsi-status profile=node
+storage-zvol-create profile=node
+storage-zvol-destroy profile=node
+storage-zvol-grow profile=node
+storage-zvol-list profile=node
+storage-zfs-set profile=node
+storage-status profile=node
+storage-vdev-online profile=node
+storage-io-measure profile=node
+net-bridge-ensure profile=node
+net-status profile=node
+net-capture profile=node
+leg-resolve profile=node
+mirror-create profile=node
+mirror-assemble profile=node
+mirror-status profile=node
+mirror-rejoin profile=node
+mirror-stop profile=node
+mirror-detach-leg profile=node
+image-fetch profile=node
+vm-define profile=node
+vm-image-write profile=node
+vm-seed-write profile=node input=raw
+vm-start profile=node
+vm-stop profile=node
+vm-disk-resize profile=node
+vm-disk-hotplug profile=node
+vm-save profile=node
+vm-restore profile=node
+vm-status profile=node
+vm-undefine profile=node
+vm-console-log profile=node
+vm-confinement-report profile=node
+osvc-status profile=node
+osvc-object-set profile=node
+osvc-object-start profile=node
+osvc-object-stop profile=node
+osvc-object-delete profile=node
+osvc-freeze profile=node
+osvc-thaw profile=node
+osvc-secret-set profile=node input=raw
+osvc-ca-export profile=node
+osvc-rig-probe profile=node
+node-poweroff profile=node
+iscsi-login-test profile=node
+net-vlan-address profile=node
+net-vxlan-ensure profile=node
+host-reserve-apply profile=node
+host-resources profile=node
+bundle-refresh profile=node

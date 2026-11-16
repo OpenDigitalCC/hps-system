@@ -432,6 +432,58 @@ if [[ "$cmd" == "get_node_plugin" ]]; then
 fi
 
 
+#===============================================================================
+# The node bundle (plan step 2, docs/BUNDLE.md). A node booted from the stock
+# starter fetches these over the provisioning network: all plain, none secret.
+#   node_bootstrap      the one script the kernel line's hook runs
+#   node_bundle         the bundle, a tar.gz built from the tree on each request
+#   node_packages       the store paths of this node's role, one per line
+#   node_sysadmin_keys  the installation's sysadmin ssh public key(s)
+#===============================================================================
+if [[ "$cmd" == "node_bootstrap" ]]; then
+  if ! out="$(node_bootstrap_script)"; then
+    cgi_auto_fail "$cmd: no bootstrap script on this IPS" 404 "Not Found"
+    exit 1
+  fi
+  hps_log info "[$mac] node bootstrap script served"
+  cgi_success "$out"$'\n'
+  exit 0
+fi
+
+if [[ "$cmd" == "node_bundle" ]]; then
+  bundle_tmp="$(mktemp /tmp/node-bundle.XXXXXX)"
+  trap 'rm -f "$bundle_tmp"' EXIT
+  if ! node_bundle_tar > "$bundle_tmp"; then
+    cgi_auto_fail "$cmd: the bundle cannot be built on this IPS" 500 "Internal Server Error"
+    exit 1
+  fi
+  hps_log info "[$mac] node bundle served: $(sha256sum < "$bundle_tmp" | cut -c1-16), $(stat -c %s "$bundle_tmp") bytes"
+  printf 'Content-Type: application/gzip\nContent-Length: %s\n\n' "$(stat -c %s "$bundle_tmp")"
+  cat "$bundle_tmp"
+  exit 0
+fi
+
+if [[ "$cmd" == "node_packages" ]]; then
+  if ! packages_out="$(node_role_packages "$(host_registry "$mac" get os_id 2>/dev/null || true)" "$(host_registry "$mac" get TYPE 2>/dev/null || true)")"; then
+    cgi_auto_fail "$cmd: no package list for this node (see the IPS log)" 404 "Not Found"
+    exit 1
+  fi
+  hps_log info "[$mac] node packages served: $(printf '%s\n' "$packages_out" | wc -l) store paths"
+  cgi_success "$packages_out"$'\n'
+  exit 0
+fi
+
+if [[ "$cmd" == "node_sysadmin_keys" ]]; then
+  if ! keys_out="$(node_sysadmin_keys)"; then
+    cgi_auto_fail "$cmd: this IPS holds no sysadmin key" 404 "Not Found" info
+    exit 1
+  fi
+  hps_log info "[$mac] sysadmin key(s) served: $(printf '%s\n' "$keys_out" | wc -l)"
+  cgi_success "$keys_out"$'\n'
+  exit 0
+fi
+
+
 # Command: node_audit - a held node posts its hardware audit (hps-audit/1 JSON)
 # POST only, size-capped, caller must be STATE=HELD (see host_audit_intake)
 if [[ "$cmd" == "node_audit" ]]; then

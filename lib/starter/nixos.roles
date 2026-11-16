@@ -1,0 +1,23 @@
+# Which packages a NixOS node gets, by role: plain data, read by the IPS
+# (lib/functions.d/node-bundle-functions.sh, node_role_packages) when a starter
+# node asks for its package list (boot_manager.sh cmd=node_packages).
+#
+# One line per role:   ROLE: name name ...
+# ROLE is a word of the host's registry TYPE (SCH, TCH, ...); the role * is every
+# node. A host of TYPE SCH,TCH gets both lines. Each name is a NAME of
+# lib/starter/nixos.packages, resolved to a store path through the repository's
+# manifest (hps-starter sync nixos), so a name the package list lacks is an error
+# the node reports, not a package that is silently left out.
+#
+# ZFS is already in the stock starter and is not listed. What the storage and
+# compute scripts still need beyond these (smartmontools, xxd, tcpdump, ...) is
+# step 3 of plans/PLAN.md.
+
+# The ctrl-exec agent: perl, its modules, and openssl for pairing.
+*: perl JSON IO-Socket-SSL Net-SSLeay openssl
+
+# Storage controller: the iSCSI target and md mirrors.
+SCH: targetcli-fb mdadm
+
+# Compute host: libvirt and QEMU, the iSCSI initiator, md mirrors.
+TCH: libvirt qemu-host-cpu-only open-iscsi mdadm

@@ -190,6 +190,13 @@ ensure_hostname() {
   fi
   name=$(fqdn_of "$name") || return 1
   set_hostname "$name"
+  # hostnamectl --transient answers 0 and changes nothing when the OS has a
+  # static hostname (the stock NixOS starter has one, "nixos"). The kernel name
+  # is what om3 reads, so make it so with hostname(1).
+  if [[ "$(hostname 2> /dev/null || true)" != "$name" ]]; then
+    log "the hostname is not $name after hostnamectl (a static hostname wins); using hostname(1)"
+    run hostname "$name"
+  fi
   check_self_resolves "$name"
   REGISTER_NAME="$name"
 }

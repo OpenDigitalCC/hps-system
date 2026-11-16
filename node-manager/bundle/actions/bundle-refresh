@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# bundle-refresh - fetch the node bundle again from this node's own IPS and run
+# its init over it: a script changed on the IPS is live when this has run.
+#
+# ctrl-exec allowlisted node script (docs/BUNDLE.md). It takes no arguments and
+# fetches nothing a dispatcher names: the address is hps.ips= on the node's own
+# kernel command line, the file is the IPS's bundle. Every command is logged to
+# stderr as "+ command" before it runs.
+#
+# What the refresh does is bootstrap.sh's refresh mode (the same file the node
+# booted with, kept inside the bundle): fetch, unpack, switch /run/hps/bundle to
+# the new copy, run init, which rewrites the allowlist and installs any package
+# the role gained. A node that is paired is not paired again.
+#
+# Usage: bundle-refresh          (no arguments)
+# Exit: 0 refreshed, 1 the fetch or init failed, 2 usage.
+
+set -euo pipefail
+
+if [[ $# -ne 0 ]]; then
+  echo "Usage: bundle-refresh (takes no arguments)" >&2
+  exit 2
+fi
+
+: "${HPS_RUN_DIR:=/run/hps}"
+BOOTSTRAP="$HPS_RUN_DIR/bundle/bootstrap.sh"
+
+if [[ ! -f "$BOOTSTRAP" ]]; then
+  echo "bundle-refresh: $BOOTSTRAP is missing: this node has no bundle to refresh" >&2
+  exit 1
+fi
+
+printf '+ sh %s refresh\n' "$BOOTSTRAP" >&2
+exec sh "$BOOTSTRAP" refresh
