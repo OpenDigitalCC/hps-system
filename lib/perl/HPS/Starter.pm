@@ -36,6 +36,7 @@ use JSON::PP ();
 use Digest::SHA ();
 use File::Path ();
 use File::Basename ();
+use File::Copy ();
 use POSIX qw(strftime);
 
 package HPS::Starter::Error {
@@ -359,6 +360,7 @@ sub package_list ($self, $file) {
 
 sub _sync_nixos_repo ($self, $ver, $st) {
     my $dir  = $self->repo_dir('nixos', $ver);
+    $self->{localdir} = "$self->{resources}/local/nixos/$ver";
     my $list = $self->{packages} // _fail('usage', 'the package list file is not set');
     my $pk   = $self->package_list($list);
     my ($pk_sha) = _sha_file($list);
@@ -450,7 +452,12 @@ sub _build_repo ($self, $ver, $st, $dir, $work, $pk, $pk_sha, $old) {
     while (my @batch = splice(@need, 0, 8)) {
         $n += @batch;
         $self->_log("repository: fetching nar files $n of $total");
-        $self->_fetch([ map { [ "$self->{cache}/$_", "$dir/.tmp-$$/$_" ] } @batch ], chunk => 8);
+        my @up = grep { !($self->{localdir} && -f "$self->{localdir}/$_") } @batch;
+        $self->_fetch([ map { [ "$self->{cache}/$_", "$dir/.tmp-$$/$_" ] } @up ], chunk => 8) if @up;
+        for my $nar (grep { $self->{localdir} && -f "$self->{localdir}/$_" } @batch) {
+            File::Path::make_path(File::Basename::dirname("$dir/.tmp-$$/$nar"));
+            File::Copy::copy("$self->{localdir}/$nar", "$dir/.tmp-$$/$nar") or _fail('failed', "cannot copy local $nar: $!");
+        }
         for my $nar (@batch) {
             my $t = "$dir/.tmp-$$/$nar";
             my ($hex, $raw) = _sha_file($t);
@@ -518,7 +525,44 @@ sub _candidates ($self, $file, $pk) {
     return \%out;
 }
 
+# add_local($os, $ver, $from, \@paths): local packages. Copies the narinfo and nar
+# of each store path and of its closure from <from>, a binary cache laid out as
+# hps-starter's own (<hash>.narinfo, nar/<file>), into <resources>/local/<os>/<ver>/,
+# leaving out what the repository already holds. The next sync takes them into the
+# repository beside the upstream ones, and a package list line naming the path
+# (NAME /nix/store/<path>) makes it a root. Returns {added => N, held => N}.
+sub add_local ($self, $os, $ver, $from, $paths) {
+    _fail('usage', "local packages are for nixos only") unless $os eq 'nixos';
+    $self->_check_os_version($os, $ver);
+    $from =~ s{/+\z}{};
+    my $repo = $self->repo_dir($os, $ver);
+    my $ldir = "$self->{resources}/local/$os/$ver";
+    my (%seen, @todo, $added, $held);
+    $added = $held = 0;
+    for my $p (@$paths) {
+        $p =~ m{\A/nix/store/($HASH_RE)-[A-Za-z0-9._+-]+\z} or _fail('usage', "'$p' is not a store path");
+        push @todo, $1;
+    }
+    while (defined(my $h = shift @todo)) {
+        next if $seen{$h}++;
+        if (-f "$repo/$h.narinfo" && !-f "$ldir/$h.narinfo") { $held++; next }
+        my $src = "$from/$h.narinfo";
+        -f $src or _fail('notfound', "no narinfo for $h in $from");
+        my $ni = _parse_narinfo(_slurp($src), $src);
+        my $nar = "$from/$ni->{url}";
+        -f $nar or _fail('notfound', "$src names $ni->{url}, which is not in $from");
+        _fail('failed', "$nar: size differs from its narinfo") unless (-s $nar) == $ni->{filesize};
+        File::Path::make_path("$ldir/nar");
+        File::Copy::copy($nar, "$ldir/$ni->{url}") or _fail('failed', "cannot copy $nar: $!");
+        File::Copy::copy($src, "$ldir/$h.narinfo") or _fail('failed', "cannot copy $src: $!");
+        $added++;
+        push @todo, keys %{ $ni->{refs} };
+    }
+    return { added => $added, held => $held, dir => $ldir };
+}
+
 sub _slurp_head ($file) {
+
     open(my $fh, '<:raw', $file) or _fail('failed', "cannot read $file: $!");
     read($fh, my $h, 6);
     close $fh;
@@ -560,6 +604,12 @@ sub _need ($self, $hashes, $dir, $work, $old) {
         my $e = $old ? $old->{files}{$rel} : undef;
         if ($e && _file_is("$dir/$rel", $e->{size}, $e->{sha256})) {
             $self->{ni}{$h} = _parse_narinfo(_slurp("$dir/$rel"), "$dir/$rel");
+            $self->{name}{$h} = $self->{ni}{$h}{name};
+            next;
+        }
+        my $lf = $self->{localdir} ? "$self->{localdir}/$rel" : undef;
+        if ($lf && -f $lf) {    # a local package: placed by hps-starter add-local, used as it is
+            $self->{ni}{$h} = _parse_narinfo(_slurp($lf), $lf);
             $self->{name}{$h} = $self->{ni}{$h}{name};
             next;
         }

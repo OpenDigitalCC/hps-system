@@ -277,6 +277,47 @@ like($e && $e->message, qr/package 'libvirt': several x86_64 candidates/, 'two x
     }
 }
 
+# --- a local package (plan step 2: the ctrl-exec agent) --------------------------
+{
+    my $w4 = world();
+    $w4->{new}->()->sync('nixos');    # the repository holds libvirt, perl, glibc
+    # a "builder" cache: one package nobody upstream has, referring to the x86 glibc
+    my $b = "$w4->{root}/builder";
+    my $name = 'localpkg-1.0';
+    my $nar = "nar-of-local-$name";
+    my $fh = HPS::Starter::nix32(Digest::SHA::sha256($nar));
+    spit("$b/nar/$fh.nar.xz", $nar);
+    spit("$b/" . h('loc') . ".narinfo", "StorePath: /nix/store/" . h('loc') . "-$name\nURL: nar/$fh.nar.xz\nCompression: xz\n"
+        . "FileHash: sha256:$fh\nFileSize: " . length($nar) . "\nNarHash: sha256:x\nNarSize: 9\nReferences: " . h('glibc-x') . "-glibc-2.42-103\n");
+    my $path = '/nix/store/' . h('loc') . "-$name";
+    my $s = $w4->{new}->();
+    my $r = $s->add_local('nixos', '26.05', $b, [ $path ]);
+    # glibc is not in the builder cache but is held by the repository: left out, not an error
+    is($r->{added}, 1, 'add-local: the package is copied');
+    is($r->{held}, 1, 'add-local: what the repository holds is left out');
+    ok(-f "$w4->{root}/res/local/nixos/26.05/" . h('loc') . '.narinfo', 'its narinfo is in the local area');
+    ok(-f "$w4->{root}/res/local/nixos/26.05/nar/$fh.nar.xz", 'and its nar');
+    my $e5 = err_of(sub { $s->add_local('nixos', '26.05', $b, [ '/nix/store/' . h('absent') . '-x-1' ]) });
+    is($e5 && $e5->kind, 'notfound', 'a path the builder cache lacks is not found');
+    $e5 = err_of(sub { $s->add_local('nixos', '26.05', $b, [ '/usr/bin/x' ]) });
+    is($e5 && $e5->kind, 'usage', 'a path that is not a store path is a usage error');
+    # sync takes it into the repository beside the upstream ones, upstream never asked for it
+    spit("$w4->{root}/pk5", "libvirt\nlocalpkg $path\n");
+    my $s5 = HPS::Starter->new(%{ $w4->{o} }, packages => "$w4->{root}/pk5");
+    my $r5 = $s5->sync('nixos');
+    my $m5 = decode_json(slurp("$w4->{root}/res/packages/nixos/26.05/manifest.json"));
+    is($m5->{roots}{localpkg}, $path, 'the local package is a root');
+    ok(-f "$w4->{root}/res/packages/nixos/26.05/" . h('loc') . '.narinfo', 'its narinfo is in the repository');
+    is(slurp("$w4->{root}/res/packages/nixos/26.05/nar/$fh.nar.xz"), $nar, 'its nar is in the repository');
+    ok(exists $m5->{files}{ h('loc') . '.narinfo' }, 'the manifest vouches for it (sha256 and size), so verify and prune treat it as any other');
+    my $v5 = $s5->verify('nixos', '26.05');
+    is_deeply([ map { scalar @{ $_->{bad} } } @$v5 ], [ 0, 0 ], 'verify: all files read back, the local one too');
+    unlike(slurp("$w4->{root}/res/packages/nixos/26.05/" . h('loc') . '.narinfo'), qr/^Sig:/m, 'a local package carries no upstream signature');
+    # a second sync keeps it
+    my $r6 = $s5->sync('nixos');
+    is($r6->{repo}{fetched}, 0, 'a second sync fetches nothing and keeps the local package');
+}
+
 # --- the verb ----------------------------------------------------------------
 {
     my $res = "$w->{root}/res";
