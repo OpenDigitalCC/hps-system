@@ -13,11 +13,17 @@
 #   svc_start       a run-time systemd unit, in RAM (/run/systemd/system)
 #   svc_reload      reload a service the starter already has (sshd)
 #   svc_restart_later  restart services from a timer, after the caller has answered
+#   svc_mask        keep a unit the OS ships from ever starting (the md last-resort timers)
+#   fw_open         open a TCP port in the host firewall (the iSCSI portal, om3)
 #
 # What an adapter for another OS provides (Alpine: plan step 4, adapter/alpine.sh,
 # chosen by init's "case $os"): the same function names, with the same arguments,
 # and these variables, set by adapter_init:
 #   PKG_BIN        directory where added packages' programs appear
+#   PKG_SBIN       the same for programs a package installs under sbin (open-iscsi,
+#                  libvirt, rsyslog)
+#   SYS_BIN        the starter's own program directories, colon separated
+#   LIBVIRT_CONF_DIR  where the libvirt of this OS reads libvirtd.conf and qemu.conf
 #   SUDO_GROUP     the group whose members have sudo
 #
 # Every command is logged with run (defined by init) before it executes.
@@ -30,12 +36,15 @@ NIX_CACHE_KEY=cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
 # adapter_init <ips> <os version>: set the variables above. PKG_PERL5LIB is
 # read from the profile as it is now, so call it again after pkg_add.
-# shellcheck disable=SC2034  # SUDO_GROUP and PKG_BIN are read by init, which sources this file
+# shellcheck disable=SC2034  # these variables are read by init, which sources this file
 adapter_init() {
   ADAPTER_IPS="$1"
   ADAPTER_VERSION="$2"
   SUDO_GROUP=wheel
   PKG_BIN="$NIX_PROFILE/bin"
+  PKG_SBIN="$NIX_PROFILE/sbin"
+  SYS_BIN="/run/wrappers/bin:/run/current-system/sw/bin"
+  LIBVIRT_CONF_DIR=/var/lib/libvirt
   return 0
 }
 
@@ -107,18 +116,22 @@ pkg_realise() {
 #   --port N             open TCP port N in the host firewall (the NixOS
 #                        firewall is on, and only ssh is open)
 #   --opt Key=Value      one more line of the unit's [Service] section (the user
-#                        and the confinement of the agent; ExecStartPre=+ ...)
+#                        and the confinement of the agent; ExecStartPre=+ ...); a
+#                        key given again replaces the default (Type, Restart)
+#   --unit-opt Key=Value one more line of the unit's [Unit] section (After=, Wants=,
+#                        StartLimitIntervalSec=)
 # Sets SVC_CHANGED=1 when the unit's text differs from what was there (a new
 # version of the program): a running service then runs the old one until it is
 # restarted (svc_restart_later).
 svc_start() {
   local when="" port=""
-  local -a opt=()
+  local -a opt=() uopt=()
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
       --when-exists) when="$2"; shift 2 ;;
       --port) port="$2"; shift 2 ;;
       --opt) opt+=("$2"); shift 2 ;;
+      --unit-opt) uopt+=("$2"); shift 2 ;;
       *) log "svc_start: unknown option $1"; return 2 ;;
     esac
   done
@@ -134,8 +147,9 @@ svc_start() {
   {
     printf '[Unit]\nDescription=HPS %s (run-time unit, written by the node bundle)\nAfter=network.target\n' "$name"
     [[ -n "$when" ]] && printf 'ConditionPathExists=%s\n' "$when"
-    printf '\n[Service]\nType=simple\n'
     local e
+    for e in "${uopt[@]}"; do printf '%s\n' "$e"; done
+    printf '\n[Service]\nType=simple\n'
     for e in "${env[@]}"; do
       printf 'Environment="%s"\n' "$e"
     done
@@ -151,10 +165,7 @@ svc_start() {
     [[ -e "$unit" ]] && SVC_CHANGED=1
     mv -f "${unit}.new" "$unit"
   fi
-  if [[ -n "$port" ]]; then
-    iptables -C nixos-fw -p tcp --dport "$port" -j nixos-fw-accept 2> /dev/null \
-      || run iptables -I nixos-fw 1 -p tcp --dport "$port" -j nixos-fw-accept
-  fi
+  [[ -z "$port" ]] || fw_open "$port"
   run systemctl daemon-reload
   run systemctl start "${name}.service"
 }
@@ -170,4 +181,25 @@ svc_restart_later() {
 # svc_reload <name>: re-read the configuration of a service the OS already runs.
 svc_reload() {
   run systemctl reload "${1}.service"
+}
+
+# fw_open <port>...: open TCP ports in the host firewall (the NixOS firewall is on,
+# and only ssh is open). Idempotent; the rule lives as long as the boot.
+fw_open() {
+  local port
+  for port in "$@"; do
+    iptables -C nixos-fw -p tcp --dport "$port" -j nixos-fw-accept 2> /dev/null \
+      || run iptables -I nixos-fw 1 -p tcp --dport "$port" -j nixos-fw-accept
+  done
+}
+
+# svc_mask <unit>...: a unit the OS ships (name.timer, name@.service) is made to
+# do nothing for this boot, by a run-time link to /dev/null.
+svc_mask() {
+  local u
+  mkdir -p "$SYSTEMD_RUN_DIR"
+  for u in "$@"; do
+    [[ "$(readlink "$SYSTEMD_RUN_DIR/$u" 2> /dev/null)" == /dev/null ]] || run ln -sf /dev/null "$SYSTEMD_RUN_DIR/$u"
+  done
+  run systemctl daemon-reload
 }

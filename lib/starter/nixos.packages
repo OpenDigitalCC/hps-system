@@ -20,3 +20,18 @@ targetcli-fb
 # takes it at its next bundle-refresh. Its closure holds the Perl modules (JSON is
 # the starter's own path) and openssl the agent needs, so none is listed.
 ctrl-exec-agent /nix/store/s9s4irf45ylxa3s6cmvl3c6iq9prbq9b-ctrl-exec-agent-0.14.7
+# What the storage and compute scripts call and the starter does not have (step 3,
+# docs/BUNDLE.md "Storage and compute"). Each is the x86_64 store path the pinned
+# images use (upstream, signed by cache.nixos.org), named as it stands so that no
+# search is made and the choice among several candidates is not left to a guess.
+jq /nix/store/5gzyrb8fdgqcj9qyg0dhz5c20m0k4b78-jq-1.8.2-bin
+smartmontools /nix/store/l5ak22wkkiv2mgv3hcp7ihsmhv40mgxk-smartmontools-7.5
+tcpdump /nix/store/107bankzjkd6j9s2hnllhl88p5wqcw87-tcpdump-4.99.6
+xxd /nix/store/anbhv1x4z9s5xpvpi5v4z2dzq0943ma0-xxd-tinyxxd-1.3.15
+rsyslog /nix/store/gqa6kq01rbcr7z179smsn546rrqn2jax-rsyslog-8.2610.0
+# om3 (OpenSVC v3): a LOCAL package, the build the pinned images use (pinned
+# v3.0.0-rc62 in flake.nix), from the lab's Nix cache; not in nixpkgs. Put on the
+# IPS with `hps-starter add-local nixos --from <cache> <path>` like the agent.
+# 3.0.0-rc62 has no upstream signature in the lab cache either, so a node takes it
+# unchecked, in its own call.
+om3 /nix/store/icpkmfz7s1kdv444l7sfdsvijk7m7qvx-om3-3.0.0-rc62

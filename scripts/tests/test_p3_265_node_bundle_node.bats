@@ -528,9 +528,11 @@ extract_bundle() {
   [[ "$output" == *"is not a store path"* ]]
 }
 
+# the three things: boot arguments (the IPS), packages (pkg_*), services (svc_*, and the
+# firewall port a service needs, fw_open)
 @test "adapter: the three per-OS things are all it defines (plus its variables); Alpine has no code" {
   grep -qE '^(pkg_add|svc_start|svc_reload|adapter_init)\(\)' "$ROOT/node-manager/bundle/adapter/nixos.sh"
-  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init pkg_add pkg_realise svc_reload svc_restart_later svc_start " ]
+  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init fw_open pkg_add pkg_realise svc_mask svc_reload svc_restart_later svc_start " ]
   [ ! -e "$ROOT/node-manager/bundle/adapter/alpine.sh" ]
 }
 

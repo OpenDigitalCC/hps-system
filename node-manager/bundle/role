@@ -1,0 +1,320 @@
+# shellcheck shell=bash
+# role - what a storage (SCH) or compute (TCH) node needs beyond the agent
+# (docs/BUNDLE.md "Storage and compute"). Sourced by init; nothing runs when it is
+# sourced. OS-neutral: the programs come from the role's packages, the services
+# are started through the adapter (svc_start, svc_mask, fw_open), and every
+# directory outside /run/hps is under ${HPS_ROOT}, so that the tests can run it.
+#
+# This is what the pinned images' profiles (nix/modules/profiles/storage.nix,
+# compute.nix, hps-opensvc.nix, hps-common.nix) arrange at build time, done at
+# boot from the bundle instead; the node scripts themselves are the same files.
+#
+#   role_pre   before pairing: clock, log forwarding, the storage or compute
+#              services, host reserve, bridges, om3, the shutdown unit
+#   role_post  after pairing set the hostname: the iSCSI initiator (its name is
+#              the node's FQDN)
+#
+# A step that fails is said (console, journal, IPS log) and remembered in
+# ROLE_FAILED; it never stops the boot or the pairing, so that a person (or the
+# IPS) can look at the node. init ends with a non-zero exit when one failed.
+#
+# Defined by init and the adapter: log, run, fetch_text, ips_log, write_if_changed,
+# ips_url, HERE, HPS_RUN_DIR, HPS_ROOT, HPS_CMDLINE, PKG_BIN, PKG_SBIN, SYS_BIN,
+# LIBVIRT_CONF_DIR, svc_start, svc_mask, fw_open.
+
+NODE_TYPE=""
+ROLE_FAILED=""
+
+# role_is <ROLE>: the node's registry TYPE (a comma list) names the role.
+role_is() {
+  [[ ",${NODE_TYPE}," == *",$1,"* ]]
+}
+
+# role_try <what> <function> [args]: run a step in a subshell with -e on (a plain
+# call inside "if" would switch -e off), say so and remember it when it fails.
+role_try() {
+  local what="$1" rc=0
+  shift
+  set +e
+  (
+    set -e
+    "$@"
+  )
+  rc=$?
+  set -e
+  if ((rc != 0)); then
+    log "role step failed ($rc): $what"
+    ips_log "error: role step failed: $what"
+    ROLE_FAILED="${ROLE_FAILED:+$ROLE_FAILED, }$what"
+  fi
+  return 0
+}
+
+# role_bin <program>: its path, from the added packages first, then the starter's own.
+role_bin() {
+  local d
+  for d in "$PKG_BIN" "$PKG_SBIN" ${SYS_BIN//:/ }; do
+    if [[ -x "$d/$1" ]]; then
+      printf '%s\n' "$d/$1"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# role_need <program>...: every program is there, or the missing ones are named
+# (a role's package list that lacks one is found here, not by the first action).
+role_need() {
+  local p missing=""
+  for p in "$@"; do
+    role_bin "$p" > /dev/null || missing="$missing $p"
+  done
+  if [[ -n "$missing" ]]; then
+    log "missing programs:$missing (the role's packages: lib/starter/nixos.roles)"
+    return 1
+  fi
+}
+
+# role_path: the PATH of the services this file starts.
+role_path() {
+  printf '%s:%s:%s\n' "$PKG_BIN" "$PKG_SBIN" "$SYS_BIN"
+}
+
+# role_modules <module>...: load kernel modules; one that is not there is said, not fatal
+# (a module built into the kernel has no file).
+role_modules() {
+  local m
+  for m in "$@"; do
+    run modprobe "$m" || log "module $m not loaded (built in, or not in this kernel)"
+  done
+}
+
+# role_lib <name> [VAR=value...]: run a script of the bundle's lib/ with the node's
+# settings. Not exec'd as a function: a script of its own, as on the pinned images.
+role_lib() {
+  local name="$1"
+  shift
+  run env HPS_CMDLINE="$HPS_CMDLINE" HPS_RUN_DIR="$HPS_RUN_DIR" "$@" bash "$HERE/lib/$name"
+}
+
+# role_group <name> / role_user <name> <extra group>: system accounts, once.
+role_group() {
+  getent group "$1" > /dev/null 2>&1 || run groupadd --system "$1"
+}
+role_user() {
+  local name="$1" extra="${2:-}"
+  role_group "$name"
+  if ! id "$name" > /dev/null 2>&1; then
+    run useradd --system --no-create-home --gid "$name" ${extra:+--groups "$extra"} \
+      --shell "$(command -v nologin || echo /bin/false)" "$name"
+  fi
+}
+
+#-------------------------------------------------------------------------------
+# every storage and compute node
+#-------------------------------------------------------------------------------
+# The clock: from the IPS, before anything needs TLS (hps-time, as on the pinned images).
+role_clock() {
+  role_lib hps-time HPS_TIMESYNCD_DIR="${HPS_ROOT}/run/systemd/timesyncd.conf.d"
+}
+
+# Logs: journald's lines to the IPS (TCP 514), as the pinned images' rsyslog does:
+# the IPS's issue watcher reads the HPS-ISSUE lines and the node's own logs from there.
+# rsyslog reads the journal itself (imjournal), so the stock journald is left as it is.
+role_logs() {
+  local rsyslogd
+  rsyslogd="$(role_bin rsyslogd)" || { log "rsyslogd is not installed"; return 1; }
+  role_lib hps-log-target
+  write_if_changed "$HPS_RUN_DIR/rsyslog.conf" 0644 << EOF
+# written by the HPS node bundle (docs/BUNDLE.md)
+global(workDirectory="$HPS_RUN_DIR")
+module(load="imjournal" StateFile="$HPS_RUN_DIR/imjournal.state" Ratelimit.Interval="0")
+include(file="$HPS_RUN_DIR/rsyslog-target.conf" mode="optional")
+EOF
+  svc_start hps-rsyslog "$rsyslogd" -n -f "$HPS_RUN_DIR/rsyslog.conf" -i "$HPS_RUN_DIR/rsyslogd.pid"
+}
+
+# The host's reserve (CPU, memory, ZFS ARC), as hps-host-reserve does on the
+# pinned images: the allowlisted script itself, before pairing and any guest.
+role_reserve() {
+  run env HPS_CMDLINE="$HPS_CMDLINE" HPS_RUN_DIR="$HPS_RUN_DIR" bash "$HERE/actions/host-reserve-apply" \
+    || log "host-reserve-apply exited $? (continuing)"
+}
+
+# The bridges of the networks attached to this host: net-bridge-ensure, once, so
+# that they exist before any workload; later runs go through the agent.
+role_bridges() {
+  run env HPS_CMDLINE="$HPS_CMDLINE" bash "$HERE/actions/net-bridge-ensure" \
+    || log "net-bridge-ensure exited $? (continuing)"
+}
+
+# om3: membership, health and local service management (nix/modules/hps-opensvc.nix).
+# The cluster secret arrives later, over the agent (osvc-secret-set), which
+# restarts the unit; until then the unit's condition keeps it down.
+role_osvc() {
+  local om
+  om="$(role_bin om)" || { log "om (om3) is not installed"; return 1; }
+  role_group opensvc
+  run install -d -m 0700 "${HPS_ROOT}/etc/opensvc" "${HPS_ROOT}/var/lib/opensvc"
+  svc_start --when-exists "$HPS_RUN_DIR/osvc-cluster-secret" --port 1215 --unit-opt StartLimitIntervalSec=0 \
+    --opt Restart=always --opt RestartSec=15 \
+    --opt "EnvironmentFile=-$HPS_RUN_DIR/opensvc.env" --opt WorkingDirectory=/var/lib/opensvc \
+    --opt "ExecStartPre=$(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-osvc-config" \
+    opensvc-daemon "PATH=$(role_path)" HOME=/var/lib/opensvc \
+    "$om" daemon run '$OSVC_DAEMON_ARGS'
+  fw_open 10000
+}
+
+# Power-off: guests stop, mirrors stop, targets and sessions go, pools are
+# exported, in that order, while everything they need is still up
+# (hps-shutdown-storage; the unit stops before the units it is After=).
+role_shutdown() {
+  svc_start --unit-opt "After=libvirtd.service iscsid.service ctrl-exec-agent.service ctrl-exec-executor.service hps-rsyslog.service network-online.target systemd-networkd.service systemd-resolved.service local-fs.target" \
+    --opt Type=oneshot --opt RemainAfterExit=yes --opt Restart=no --opt TimeoutStopSec=300 \
+    --opt "ExecStop=$(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-shutdown-storage" \
+    hps-shutdown-storage "PATH=$(role_path)" "HPS_SCRIPTS_DIR=$HPS_RUN_DIR/bundle/actions" \
+    "$(command -v true)"
+}
+
+#-------------------------------------------------------------------------------
+# storage (SCH)
+#-------------------------------------------------------------------------------
+# ZFS is in the starter (the module and the userland, matching its kernel). The
+# iSCSI target is the kernel's LIO, driven by targetcli, which keeps its
+# configuration in /etc/target: a directory the starter does not have.
+role_storage() {
+  role_need zpool zfs targetcli mdadm smartctl xxd jq
+  role_modules zfs target_core_mod iscsi_target_mod target_core_iblock
+  run install -d -m 0755 "${HPS_ROOT}/etc/target"
+  # the portal; access control is the target's ACL (initiator IQN), as on the pinned images
+  fw_open 3260
+}
+
+#-------------------------------------------------------------------------------
+# compute (TCH)
+#-------------------------------------------------------------------------------
+# libvirt and QEMU/KVM, md mirrors, the iSCSI initiator (its name and daemon
+# follow pairing: role_iscsi). The settings are those of compute.nix, except
+# AppArmor: the starter's kernel does not have it in its security modules, so the
+# guests are confined by the DAC model, seccomp and cleared capabilities
+# (docs/BUNDLE.md "What is not carried").
+role_compute() {
+  local libvirtd qemu_bin edk2 f
+  role_need virsh libvirtd qemu-img qemu-system-x86_64 iscsiadm iscsid mdadm tcpdump jq
+  libvirtd="$(role_bin libvirtd)"
+  role_modules vhost_net 8021q bridge raid1 iscsi_tcp
+  # KVM: the module of the CPU's vendor (the one that is not there always fails)
+  if grep -q '^vendor_id[[:space:]]*:[[:space:]]*GenuineIntel' "${HPS_CPUINFO:-/proc/cpuinfo}"; then
+    role_modules kvm_intel
+  elif grep -qE '^vendor_id[[:space:]]*:[[:space:]]*(AuthenticAMD|HygonGenuine)' "${HPS_CPUINFO:-/proc/cpuinfo}"; then
+    role_modules kvm_amd
+  else
+    log "the CPU is neither Intel nor AMD: no KVM module loaded"
+  fi
+
+  # QEMU runs as an unprivileged user (libvirtd relabels each guest's disks to it)
+  role_user qemu-libvirtd kvm
+
+  run install -d -m 0755 "${HPS_ROOT}$LIBVIRT_CONF_DIR" "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu"
+  write_if_changed "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu.conf" 0644 << 'EOF'
+# written by the HPS node bundle (docs/BUNDLE.md); the settings of nix/modules/profiles/compute.nix
+user = "qemu-libvirtd"
+group = "qemu-libvirtd"
+namespaces = []
+seccomp_sandbox = 1
+clear_emulator_capabilities = 1
+dynamic_ownership = 1
+allow_disk_format_probing = 0
+security_default_confined = 1
+security_require_confined = 0
+set_process_name = 1
+EOF
+
+  # The UEFI firmware the guest definitions name (vm-define: HPS_OVMF_CODE, HPS_OVMF_VARS):
+  # the files QEMU ships, linked where the pinned images have them.
+  qemu_bin="$(readlink -f "$(role_bin qemu-system-x86_64)")"
+  edk2="${qemu_bin%/bin/*}/share/qemu"
+  run install -d -m 0755 "${HPS_ROOT}/run/libvirt/nix-ovmf"
+  for f in "$edk2"/edk2-*; do
+    [[ -e "$f" ]] && ln -sf "$f" "${HPS_ROOT}/run/libvirt/nix-ovmf/${f##*/}"
+  done
+
+  # md mirrors: HPS assembles every mirror explicitly (mirror-assemble); nothing
+  # may start a half mirror by itself (AUTO -all, the last-resort timers off).
+  # The monitor's PROGRAM writes one HPS-ISSUE line per leg event (hps-md-event).
+  write_if_changed "${HPS_ROOT}/etc/mdadm.conf" 0644 << EOF
+# written by the HPS node bundle (docs/BUNDLE.md)
+PROGRAM $HPS_RUN_DIR/bundle/lib/hps-md-event
+AUTO -all
+EOF
+  svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
+  svc_start --opt Restart=always \
+    hps-mdmonitor "PATH=$(role_path)" \
+    "$(role_bin mdadm)" --monitor --scan --config="${HPS_ROOT}/etc/mdadm.conf"
+
+  svc_start --opt KillMode=process --opt Restart=on-failure --opt LimitMEMLOCK=infinity \
+    --unit-opt "After=hps-mdmonitor.service" \
+    libvirtd "PATH=$(role_path)" "$libvirtd"
+}
+
+# The iSCSI initiator: named by the node's FQDN (so after pairing set the hostname),
+# with the open-iscsi package's own configuration and the timeouts of the
+# fail-fast ruling (a lost storage host is an outage after 15 s, not a stall).
+role_iscsi() {
+  local pkg iscsid
+  iscsid="$(role_bin iscsid)" || { log "iscsid is not installed"; return 1; }
+  role_lib hps-iscsi-name
+  pkg="$(readlink -f "$iscsid")"
+  pkg="${pkg%/sbin/*}"
+  pkg="${pkg%/bin/*}"
+  [[ -f "$pkg/etc/iscsi/iscsid.conf" ]] || { log "$pkg/etc/iscsi/iscsid.conf is not there"; return 1; }
+  run install -d -m 0755 "${HPS_ROOT}/etc/iscsi" "${HPS_ROOT}/var/lib/iscsi"
+  {
+    cat "$pkg/etc/iscsi/iscsid.conf"
+    # appended: a later line wins; leg-resolve writes the same values per record before each login
+    printf '\n# the fail-fast ruling of 2026-11-12 (docs/WORKLOADS.md); the node bundle\n'
+    printf 'node.session.timeo.replacement_timeout = 15\nnode.conn[0].timeo.noop_out_interval = 5\n'
+    printf 'node.conn[0].timeo.noop_out_timeout = 5\nnode.conn[0].timeo.login_timeout = 15\n'
+  } | write_if_changed "${HPS_ROOT}/etc/iscsi/iscsid.conf" 0644
+  ln -sf "$HPS_RUN_DIR/initiatorname.iscsi" "${HPS_ROOT}/etc/iscsi/initiatorname.iscsi"
+  svc_start --opt KillMode=process --opt Restart=on-failure \
+    iscsid "PATH=$(role_path)" "$iscsid" -f --config="${HPS_ROOT}/etc/iscsi/iscsid.conf"
+}
+
+#-------------------------------------------------------------------------------
+# the two entry points
+#-------------------------------------------------------------------------------
+role_detect() {
+  local t
+  t="$(fetch_text 'host_variable&name=TYPE' 2> /dev/null | tr -d '[:space:]' || true)"
+  if [[ "$t" =~ ^[A-Z]{2,5}(,[A-Z]{2,5})*$ ]]; then
+    NODE_TYPE="$t"
+  else
+    NODE_TYPE=""
+  fi
+}
+
+role_pre() {
+  role_detect
+  if ! role_is SCH && ! role_is TCH; then
+    log "role: registry TYPE '${NODE_TYPE:-none}' is neither SCH nor TCH: no storage or compute services"
+    return 0
+  fi
+  log "role: $NODE_TYPE"
+  role_try "clock" role_clock
+  role_try "log forwarding" role_logs
+  role_try "host reserve" role_reserve
+  if role_is SCH; then role_try "storage services" role_storage; fi
+  if role_is TCH; then role_try "compute services" role_compute; fi
+  role_try "bridges" role_bridges
+  role_try "om3" role_osvc
+  role_try "shutdown unit" role_shutdown
+}
+
+role_post() {
+  if role_is TCH; then role_try "iSCSI initiator" role_iscsi; fi
+  if [[ -n "$ROLE_FAILED" ]]; then
+    log "role: failed steps: $ROLE_FAILED"
+    return 1
+  fi
+}

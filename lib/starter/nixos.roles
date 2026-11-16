@@ -9,15 +9,17 @@
 # manifest (hps-starter sync nixos), so a name the package list lacks is an error
 # the node reports, not a package that is silently left out.
 #
-# ZFS is already in the stock starter and is not listed. What the storage and
-# compute scripts still need beyond these (smartmontools, xxd, tcpdump, ...) is
-# step 3 of plans/PLAN.md.
+# ZFS is already in the stock starter and is not listed. The lines below carry what
+# the storage and compute scripts call (docs/BUNDLE.md "Storage and compute"); a
+# package added to a line arrives on a running node at its next bundle-refresh.
 
 # The ctrl-exec agent and its executor (a local package: its closure carries perl, its modules and openssl).
 *: ctrl-exec-agent
 
-# Storage controller: the iSCSI target and md mirrors.
-SCH: targetcli-fb mdadm
+# Storage controller: the iSCSI target, md, SMART, the key converter (xxd), om3 and the log forwarder.
+SCH: targetcli-fb mdadm smartmontools xxd jq rsyslog om3
 
-# Compute host: libvirt and QEMU, the iSCSI initiator, md mirrors.
-TCH: libvirt qemu-host-cpu-only open-iscsi mdadm
+# Compute host: libvirt and QEMU (with all the display and audio libraries the
+# stock qemu-host-cpu-only closure carries: headless QEMU is plan step 5), the
+# iSCSI initiator, md mirrors, frame capture, om3 and the log forwarder.
+TCH: libvirt qemu-host-cpu-only open-iscsi mdadm tcpdump jq rsyslog om3

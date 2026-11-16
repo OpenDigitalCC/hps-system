@@ -16,12 +16,16 @@
 #                 profiles of the pinned images, the preset allowlist (allowlist)
 #                 pointing at actions/, the two services
 #   4. legacy     the older function bundle that the hps-node plugin sources
-#   5. pairing    hps-pair, the existing pairing flow: registry hostname, pairing
+#   5. role       a storage (SCH) or compute (TCH) node: clock, log forwarding, the
+#                 storage or compute services, bridges, om3 (role, role_pre)
+#   6. pairing    hps-pair, the existing pairing flow: registry hostname, pairing
 #                 request, report to the IPS, certificate, agent restart
+#   7. role, after pairing   the iSCSI initiator, named by the FQDN (role_post)
 #
 # Sysadmin comes first so that a person can log in and look even when a later
 # step fails. A failed step stops the sequence (exit 1) with the reason on the
-# console, in the journal and on the IPS log; pairing refused is exit 3.
+# console, in the journal and on the IPS log; pairing refused is exit 3. A failed
+# role step does not stop the sequence (it is said, and the exit is 1 at the end).
 #
 # Usage: init [boot|refresh]
 # Overrides for tests: HPS_RUN_DIR, HPS_CMDLINE, HPS_ROOT (prefix of /etc and
@@ -34,6 +38,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 : "${HPS_CMDLINE:=/proc/cmdline}"
 : "${HPS_ROOT:=}"
 MODE="${1:-boot}"
+ROLE_RC=0
 
 # The node's programs: the starter's own, then (after step 2) the packages.
 export PATH="${HPS_PATH_EXTRA:+$HPS_PATH_EXTRA:}/run/current-system/sw/bin:/run/wrappers/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -107,6 +112,8 @@ case "$OS_NAME" in
   *) die "no adapter for OS '$OS_NAME' (adapter/ has: $(cd "$HERE/adapter" && ls | tr '\n' ' '))" ;;
 esac
 adapter_init "$IPS" "$OS_VERSION"
+# shellcheck source=role
+source "$HERE/role"
 
 mkdir -p "$HPS_RUN_DIR/bin"
 exec 9> "$HPS_RUN_DIR/init.lock"
@@ -225,7 +232,7 @@ step_agent() {
 #!/bin/sh
 exec "$AGENT/bin/ctrl-exec-agent" "\$@"
 EOF
-  export PATH="$HPS_RUN_DIR/bin:$PKG_BIN:$PATH"
+  export PATH="$HPS_RUN_DIR/bin:$PKG_BIN:$PKG_SBIN:$PATH"
 
   # agent.conf: the standard keys, the executor socket, the PATH of the actions,
   # and the profiles scripts.conf names (those of the pinned images).
@@ -235,7 +242,7 @@ port = ${AGENT_PORT}
 cert = ${AGENT_ETC}/agent.crt
 key = ${AGENT_ETC}/agent.key
 ca = ${AGENT_ETC}/ca.crt
-script_path = ${PKG_BIN}:/run/wrappers/bin:/run/current-system/sw/bin
+script_path = ${PKG_BIN}:${PKG_SBIN}:${SYS_BIN}
 executor_socket = ${sock}
 
 [profile default]
@@ -351,6 +358,11 @@ step_sysadmin
 step_packages
 step_agent
 step_legacy
+role_pre
 step_pair
 persist_hostname
+role_post || ROLE_RC=1
+if ((ROLE_RC != 0)); then
+  die "bundle ${HERE##*/}: the node is up and paired, but a role step failed: $ROLE_FAILED"
+fi
 log "done: bundle ${HERE##*/}"
