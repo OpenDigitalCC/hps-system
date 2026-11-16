@@ -260,7 +260,8 @@ already hold (the reader looks up `network_dns_domain`; when it cannot be read,
 nothing is left out). A foreign line is never counted as an event of this
 cluster, so a window that holds only foreign lines is `silent`, not `clear`.
 The rule is generated with the other rsyslog rules; after a deploy, `rsyslogd
--N1` checks the file (`re_match` on `$hostname` is the one construct this adds).
+-N1` checks the file (`re_match` on `$hostname` is the one construct this adds; the expression's end
+anchor is written `\$`, since rsyslog refuses a bare `$` in a double-quoted string).
 
 # Rotation and retention
 

@@ -61,7 +61,8 @@ _rsyslog_own_condition() {
   if [[ -n "$domain" ]]; then
     re+="(\\\\.${domain//./\\\\.})?"
   fi
-  re+='$'
+  # rsyslog refuses a bare $ inside a double-quoted string: the end anchor is written \$
+  re+='\$'
   printf '($fromhost-ip == "127.0.0.1" or re_match($hostname, "%s"))' "$re"
 }
 

@@ -166,7 +166,7 @@ gen_with_domain() {
 
 # own_regex: the regular expression of the re_match in the generated file, as a Perl pattern
 own_regex() {
-  grep -o 're_match($hostname, "[^"]*")' "$CONF" | head -1 | sed -e 's/^re_match(\$hostname, "//' -e 's/")$//' -e 's/\\\\/\\/g'
+  grep -o 're_match($hostname, "[^"]*")' "$CONF" | head -1 | sed -e 's/^re_match(\$hostname, "//' -e 's/")$//' -e 's/\\\$$/$/' -e 's/\\\\/\\/g'
 }
 
 # is_own <regex> <hostname>: 0 when the host name is this cluster's
@@ -213,7 +213,7 @@ is_own() {
   gen_with_domain lab.example
   re="$(own_regex)"
   [ "$re" = '^[a-z0-9_-]+(\.lab\.example)?$' ]
-  grep -qF 're_match($hostname, "^[a-z0-9_-]+(\\.lab\\.example)?$")' "$CONF"
+  grep -qF 're_match($hostname, "^[a-z0-9_-]+(\\.lab\\.example)?\$")' "$CONF"
   is_own "$re" ips
   is_own "$re" sch-001
   is_own "$re" sch-001.lab.example
