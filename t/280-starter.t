@@ -243,6 +243,40 @@ like($e && $e->message, qr/package 'libvirt': several x86_64 candidates/, 'two x
     like(slurp("$root/args"), qr{--noproxy \* }, 'without a proxy curl goes direct');
 }
 
+# --- a package named by its store path (plan step 2: openssl, JSON) ----------
+{
+    my $w2 = world();
+    # perl-x is the x86_64 perl; name it by path as a second root, as the package list does
+    # for a package the release holds in several versions
+    my $named = '/nix/store/' . h('perl-x') . '-perl-5.42.3';
+    spit("$w2->{root}/pk2", "libvirt\nperl\n# named by its store path, no search of the release's list\ncopy-of-perl $named\n");
+    my $s = HPS::Starter->new(%{ $w2->{o} }, packages => "$w2->{root}/pk2");
+    is_deeply($s->package_list("$w2->{root}/pk2"),
+        [ [ 'libvirt', undef, undef ], [ 'perl', undef, undef ], [ 'copy-of-perl', undef, $named ] ],
+        'package_list: NAME STORE-PATH gives the path as it stands');
+    my $r3 = $s->sync('nixos');
+    my $m3 = decode_json(slurp("$w2->{root}/res/packages/nixos/26.05/manifest.json"));
+    is($m3->{roots}{'copy-of-perl'}, $named, 'the named package is a root, as named');
+    is($m3->{roots}{perl}, $named, 'and the searched one resolved to the same path');
+    is($r3->{repo}{paths}, 4, 'its closure is held');
+    is_deeply($m3->{packages}, [ 'libvirt', 'perl', 'copy-of-perl' ], 'the manifest lists the names');
+
+    # a named path whose narinfo upstream lacks stops the sync with the path in the message
+    my $missing = '/nix/store/' . h('nothing-here') . '-openssl-3.6.5-bin';
+    spit("$w2->{root}/pk3", "libvirt\nopenssl $missing\n");
+    my $w3 = world();
+    my $err = err_of(sub { HPS::Starter->new(%{ $w3->{o} }, packages => "$w2->{root}/pk3")->sync('nixos') });
+    ok($err, 'a named store path the cache does not hold stops the sync');
+    like(ref $err ? $err->message : $err, qr/narinfo|no narinfo|h\Q@{[ substr(h('nothing-here'), 0, 8) ]}\E|not found|cannot/i, 'the error is about that path');
+
+    # lines that are not NAME [OUTPUT] or NAME STORE-PATH are refused
+    for my $bad ("openssl /usr/bin/openssl\n", "openssl /nix/store/short-name\n", "openssl bin extra\n", "/nix/store/" . h('x') . "-a\n") {
+        spit("$w2->{root}/bad", $bad);
+        my $e2 = err_of(sub { $s->package_list("$w2->{root}/bad") });
+        is($e2 && $e2->kind, 'usage', "refused: " . ($bad =~ s/\n//r));
+    }
+}
+
 # --- the verb ----------------------------------------------------------------
 {
     my $res = "$w->{root}/res";

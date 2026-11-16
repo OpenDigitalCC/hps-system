@@ -336,7 +336,11 @@ sub _parse_netboot ($file) {
 
 # --- NixOS repository ---
 
-# package_list($file): [[name, output|undef]...] from the list file.
+# package_list($file): [[name, output|undef, store path|undef]...] from the list
+# file. A line is NAME [OUTPUT], or NAME /nix/store/<hash>-<name>: the store path
+# is then the root as it stands, with no search of the release's store-paths
+# list (for a name the release holds in several versions, such as openssl, or
+# for a path the starter already holds, such as the Perl module JSON).
 sub package_list ($self, $file) {
     my @p;
     for my $line (split /\n/, _slurp($file)) {
@@ -344,8 +348,10 @@ sub package_list ($self, $file) {
         $line =~ s/\A\s+|\s+\z//g;
         next unless length $line;
         my ($name, $out, @rest) = split ' ', $line;
-        _fail('usage', "$file: '$line' is not NAME [OUTPUT]") if @rest || $name !~ /\A[A-Za-z0-9][A-Za-z0-9._+-]*\z/ || (defined $out && $out !~ /\A[a-z]+\z/);
-        push @p, [ $name, $out ];
+        my $store;
+        if (defined $out && $out =~ m{\A/nix/store/$HASH_RE-[A-Za-z0-9._+-]+\z}) { $store = $out; $out = undef }
+        _fail('usage', "$file: '$line' is not NAME [OUTPUT] or NAME STORE-PATH") if @rest || $name !~ /\A[A-Za-z0-9][A-Za-z0-9._+-]*\z/ || (defined $out && $out !~ /\A[a-z]+\z/);
+        push @p, [ $name, $out, $store ];
     }
     _fail('usage', "$file names no package") unless @p;
     return \@p;
@@ -391,6 +397,11 @@ sub _build_repo ($self, $ver, $st, $dir, $work, $pk, $pk_sha, $old) {
     my $glibc = $self->_anchor_glibc(substr($sys, 0, 32), $dir, $work, $old);
     my %roots;
     for my $p (@$pk) {
+        if (defined $p->[2]) {
+            $roots{$p->[0]} = $p->[2];
+            $self->_log("repository: $p->[0] -> $p->[2] (named in the package list)");
+            next;
+        }
         my $key = defined $p->[1] ? "$p->[0]:$p->[1]" : $p->[0];
         my @hashes = @{ $cand->{$key} // [] };
         _fail('failed', "package '$key': no store path of that name in the release's store-paths list") unless @hashes;
@@ -490,7 +501,7 @@ sub _candidates ($self, $file, $pk) {
         open($fh, '<', $file) or _fail('failed', "cannot read $file: $!");
     }
     my @pat = map { my ($n, $o) = @$_; [ defined $o ? "$n:$o" : $n,
-        qr/\A(?:perl[0-9][0-9.]*-)?\Q$n\E-[0-9][0-9A-Za-z.]*@{[ defined $o ? '-' . quotemeta($o) : '' ]}\z/ ] } @$pk;
+        qr/\A(?:perl[0-9][0-9.]*-)?\Q$n\E-[0-9][0-9A-Za-z.]*@{[ defined $o ? '-' . quotemeta($o) : '' ]}\z/ ] } grep { !defined $_->[2] } @$pk;
     my (%out, %seen);
     local $/ = "\n";
     while (my $l = <$fh>) {
