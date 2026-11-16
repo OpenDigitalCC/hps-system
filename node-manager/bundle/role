@@ -122,6 +122,7 @@ role_clock() {
 # the IPS's issue watcher reads the HPS-ISSUE lines and the node's own logs from there.
 # lib/hps-log-journal (jq and the shell) instead of rsyslog, whose closure is 335 MiB of RAM.
 role_logs() {
+  role_need jq
   svc_start hps-log-journal "PATH=$(role_path)" "HPS_CMDLINE=$HPS_CMDLINE" \
     "$(command -v bash)" "$HPS_RUN_DIR/bundle/lib/hps-log-journal"
 }
