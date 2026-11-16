@@ -1,0 +1,7 @@
+alpine-base
+ssl_client
+bash
+curl
+openssh
+sudo
+shadow

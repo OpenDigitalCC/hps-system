@@ -71,7 +71,7 @@ qemu-system-x86_64
 qemu-img
 open-iscsi
 tcpdump
-ovmf
+qemu-edk2-i386-vars
 
 # monitoring and cluster membership
 monitoring-plugins

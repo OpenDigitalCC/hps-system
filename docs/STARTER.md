@@ -17,8 +17,8 @@ and stays until the image profiles are retired.
 | starter | `<resources>/starter/<os>/<version>/` | `http://<ips>/starter/<os>/<version>/` |
 | package repository | `<resources>/packages/<os>/<version>/` | `http://<ips>/packages/<os>/<version>/` |
 
-`<resources>` is `/srv/hps-resources` on the IPS. `<os>` is `nixos` (or
-`alpine`, not yet implemented) and `<version>` is the OS release (`26.05`), the
+`<resources>` is `/srv/hps-resources` on the IPS. `<os>` is `nixos` or `alpine`
+(`Alpine`, below) and `<version>` is the OS release (`26.05`, `3.24`), the
 same word that ends the host's `os_id` (`x86_64:nixos:26.05`). The `starter/`
 tree is aliased by the generated lighttpd configuration, so an IPS must be
 restarted (or its web server configuration regenerated) once after this
@@ -77,7 +77,7 @@ On the IPS: `docker exec hps-lab-ips /srv/hps-system/bin/hps-starter sync nixos`
   that names the host, the proxy used and the URL, for example
   `upstream refused or unreachable via proxy http://10.100.1.2:3128: host
   hydra.nixos.org: curl: (56) CONNECT tunnel failed, response 403`.
-  `sync alpine` stops with exit 3, "not yet implemented (plan step 4)".
+  `sync alpine` is its own section below (`--alpine URL` names its upstream root).
   `--only starter` or `--only repository` fills one part (the repository
   follows the release of the synced starter). `--hydra`, `--releases` and
   `--cache` replace the three upstream roots with a mirror, or with a
@@ -115,6 +115,53 @@ systems this way. For those a line of the list can be `NAME /nix/store/<hash>-<n
 the store path is the root as it stands, with no search (the list names the
 `JSON` module that the starter already holds, and the bin output of the
 starter's own openssl; `docs/BUNDLE.md`).
+
+## Alpine
+
+`hps-starter sync alpine` (release `3.24`, Alpine 3.24.4) makes two sets from ONE
+snapshot of Alpine's repository, plain files like the NixOS ones:
+
+| what | where on the IPS | holds |
+| --- | --- | --- |
+| starter | `starter/alpine/3.24/` | `vmlinuz-lts`, `initramfs-lts`, `manifest.json` |
+| repository | `packages/alpine/3.24/{main,community}/x86_64/` | Alpine's own `APKINDEX.tar.gz` and the `.apk` files of the closure, byte for byte |
+| local repository | `packages/alpine/3.24/local/x86_64/` | the local packages and an unsigned index, only when there are some |
+
+The index is read once, `lib/starter/alpine.packages` is resolved in it (depends, provides,
+`install_if`: the `-openrc` subpackages), and every package is proved against its index line
+(size and the control-stream checksum `C:`). A package that pins another exactly (`zfs-lts`
+needs `linux-lts=6.18.63-r0`) must find that version in the set, else the sync refuses:
+the repository is not one snapshot, and a ZFS module loads only into the kernel it was built
+for. Alpine's signatures are kept as they are; `apk` on the node checks them with the stock
+keys. HPS signs nothing.
+
+**The matched starter.** The netboot kernel of a point release lags the repository (3.24.4 shipped
+6.18.60, the repository has 6.18.63 and `zfs-lts` only for that). When they are the same, the stock
+`vmlinuz-lts` and `initramfs-lts` are used byte for byte. When they differ, the starter is
+`boot/vmlinuz-lts` of the repository's `linux-lts` package (the file the netboot tree is made of) and
+the stock initramfs with its module directory replaced by the repository kernel's: the same module
+names, their dependencies from `modules.dep`, and the kernel's own module index files, so the
+initramfs loads its drivers. Everything else in it, `init` included, is the stock file; a test
+compares them. The manifest says `assembled`, the two kernel releases, and the sha256 of both stock
+files. Nothing is compiled and nothing is built from source: the assembly is a gzip and a cpio.
+
+**No modloop.** The stock netboot loads a 290 MiB squashfs of modules and firmware into RAM; that
+file cannot be rebuilt without breaking its signature. The starter runs with `modloop=none` and the
+node installs `linux-lts` from the repository (signed) into RAM with `apk`, without scripts,
+`linux-firmware-none` satisfying the kernel's firmware dependency (the 108 firmware packages, 930 MiB
+of the repository the feasibility check measured, are not held or sent).
+
+**Local packages.** A line `NAME local` in the list names a package that Alpine does not have
+(`ctrl-exec-agent`, `om3`, `nagios-check`, `hps-nagios-plugins`). `hps-starter add-local alpine --from DIR
+FILE.apk...` copies built `.apk` files to `local/alpine/3.24/`; `sync` puts them in the repository's
+`local/` directory with an index it writes itself (`HPS::Apk`, plain Perl). They carry no Alpine
+signature and a node installs them knowing so (`--allow-untrusted`, from the local repository only).
+Until a package is added, `sync` ends with `missing_local=...` and says so; a role that names it is
+refused by the package list (`node_role_packages`), never silently left out. The Alpine builds of
+these four are plan step 5 (the builder); none exists yet.
+
+`verify` and `list` cover Alpine as they do NixOS. `--only starter` is refused (the starter is made
+from the repository); `--only repository` is the same as no `--only`.
 
 ## Booting a host from the starter
 

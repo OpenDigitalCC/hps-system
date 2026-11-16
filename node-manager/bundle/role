@@ -70,7 +70,7 @@ role_need() {
     role_bin "$p" > /dev/null || missing="$missing $p"
   done
   if [[ -n "$missing" ]]; then
-    log "missing programs:$missing (the role's packages: lib/starter/nixos.roles)"
+    log "missing programs:$missing (the role's packages: lib/starter/${OS_NAME:-nixos}.roles)"
     return 1
   fi
 }
@@ -122,9 +122,7 @@ role_clock() {
 # the IPS's issue watcher reads the HPS-ISSUE lines and the node's own logs from there.
 # lib/hps-log-journal (jq and the shell) instead of rsyslog, whose closure is 335 MiB of RAM.
 role_logs() {
-  role_need jq
-  svc_start hps-log-journal "PATH=$(role_path)" "HPS_CMDLINE=$HPS_CMDLINE" \
-    "$(command -v bash)" "$HPS_RUN_DIR/bundle/lib/hps-log-journal"
+  log_forward
 }
 
 # The host's reserve (CPU, memory, ZFS ARC), as hps-host-reserve does on the
@@ -255,6 +253,7 @@ PROGRAM $HPS_RUN_DIR/md-event
 AUTO -all
 EOF
   svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
+  md_monitor
 }
 
 #-------------------------------------------------------------------------------
@@ -276,7 +275,11 @@ role_zfs() {
 # configuration in /etc/target: a directory the starter does not have.
 role_storage() {
   role_need zpool zfs targetcli mdadm smartctl xxd jq
+  zfs_hostid_set
+  role_stock_services
   role_modules zfs target_core_mod iscsi_target_mod target_core_iblock
+  # targetcli drives LIO through configfs; systemd mounts it, OpenRC does not
+  if [[ -n "${MOUNT_CONFIGFS:-}" ]]; then mountpoint -q /sys/kernel/config || run mount -t configfs none /sys/kernel/config; fi
   run install -d -m 0755 "${HPS_ROOT}/etc/target"
   # the portal; access control is the target's ACL (initiator IQN), as on the pinned images
   fw_open 3260
@@ -361,9 +364,14 @@ role_compute() {
   local libvirtd qemu_bin edk2 f
   role_need virsh libvirtd virtlogd qemu-img qemu-system-x86_64 iscsiadm iscsid mdadm tcpdump jq
   libvirtd="$(role_bin libvirtd)"
-  # AppArmor first: when it is not active the step stops here, before anything
+  # Confinement first: when it is not there the step stops here, before anything
   # that starts a guest (libvirtd, the mirror monitor) is started
-  role_apparmor
+  role_stock_services
+  if [[ "$GUEST_CONFINEMENT" == apparmor ]]; then
+    role_apparmor
+  else
+    role_unconfined
+  fi
   role_modules vhost_net 8021q bridge raid1 iscsi_tcp
   # KVM: the module of the CPU's vendor (the one that is not there always fails)
   if grep -q '^vendor_id[[:space:]]*:[[:space:]]*GenuineIntel' "${HPS_CPUINFO:-/proc/cpuinfo}"; then
@@ -380,7 +388,8 @@ role_compute() {
   run install -d -m 0755 "${HPS_ROOT}$LIBVIRT_CONF_DIR" "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu"
   # the guests' logs (vm-define sends the serial console to /var/log/libvirt/qemu/<vm>-serial.log)
   run install -d -m 0755 "${HPS_ROOT}/var/log/libvirt/qemu"
-  write_if_changed "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu.conf" 0644 << 'EOF'
+  {
+    cat << 'EOF'
 # written by the HPS node bundle (docs/BUNDLE.md); the settings of nix/modules/profiles/compute.nix
 user = "qemu-libvirtd"
 group = "qemu-libvirtd"
@@ -392,8 +401,10 @@ allow_disk_format_probing = 0
 security_default_confined = 1
 security_require_confined = 0
 set_process_name = 1
-security_driver = "apparmor"
 EOF
+    # the security driver: apparmor where libvirt has it; an OS whose libvirt has none names nothing
+    [[ -z "$QEMU_SECURITY_LINE" ]] || printf '%s\n' "$QEMU_SECURITY_LINE"
+  } | write_if_changed "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu.conf" 0644
 
   # The UEFI firmware the guest definitions name (vm-define: HPS_OVMF_CODE, HPS_OVMF_VARS):
   # the files QEMU ships, linked where the pinned images have them.
@@ -417,16 +428,14 @@ EOF
 # with the open-iscsi package's own configuration and the timeouts of the
 # fail-fast ruling (a lost storage host is an outage after 15 s, not a stall).
 role_iscsi() {
-  local pkg iscsid
+  local conf iscsid
   iscsid="$(role_bin iscsid)" || { log "iscsid is not installed"; return 1; }
   role_lib hps-iscsi-name
-  pkg="$(readlink -f "$iscsid")"
-  pkg="${pkg%/sbin/*}"
-  pkg="${pkg%/bin/*}"
-  [[ -f "$pkg/etc/iscsi/iscsid.conf" ]] || { log "$pkg/etc/iscsi/iscsid.conf is not there"; return 1; }
+  conf="$(iscsid_conf_source)"
+  [[ -f "$conf" ]] || { log "$conf is not there"; return 1; }
   run install -d -m 0755 "${HPS_ROOT}/etc/iscsi" "${HPS_ROOT}/var/lib/iscsi"
   {
-    cat "$pkg/etc/iscsi/iscsid.conf"
+    cat "$conf"
     # appended: a later line wins; leg-resolve writes the same values per record before each login
     printf '\n# the fail-fast ruling of 2026-11-12 (docs/WORKLOADS.md); the node bundle\n'
     printf 'node.session.timeo.replacement_timeout = 15\nnode.conn[0].timeo.noop_out_interval = 5\n'
@@ -435,6 +444,31 @@ role_iscsi() {
   ln -sf "$HPS_RUN_DIR/initiatorname.iscsi" "${HPS_ROOT}/etc/iscsi/initiatorname.iscsi"
   svc_start --opt KillMode=process --opt Restart=on-failure \
     iscsid "PATH=$(role_path)" "$iscsid" -f --config="${HPS_ROOT}/etc/iscsi/iscsid.conf"
+}
+
+# role_stock_services: the OS's own services a role needs running (ENSURE_SERVICES of the
+# adapter: dbus on Alpine, where targetcli and libvirt expect it; none on NixOS)
+role_stock_services() {
+  local s
+  for s in ${ENSURE_SERVICES:-}; do svc_ensure "$s"; done
+}
+
+# role_unconfined: the guests of this node are not confined. Alpine's libvirt is built
+# without the AppArmor driver (docs/BUNDLE.md "Alpine: guest confinement"), so there is
+# no confinement to load, and the pinned images never run a guest with the DAC model
+# alone. So the step refuses, loudly, unless the installation accepted it: the cluster
+# key allow_unconfined_guests=true puts hps.unconfined=ack on the kernel line
+# (alpine-boot-functions.sh), and then libvirtd starts with the acknowledgement on the
+# console and in the IPS log, and /run/hps/unconfined says so. Never silent.
+role_unconfined() {
+  if ! guest_confinement_ack; then
+    log "ERROR: guests on this node would run UNCONFINED: this OS's libvirt has no AppArmor driver, and the installation has not accepted that."
+    log "ERROR: libvirtd is NOT started. To accept it, set the cluster key allow_unconfined_guests=true on the IPS (hps-cluster-config set allow_unconfined_guests true) and boot the node again."
+    return 1
+  fi
+  log "WARNING: guests on this node run UNCONFINED (no AppArmor driver in this OS's libvirt); accepted by the installation (hps.unconfined=ack)"
+  ips_log "warning: guests on this node run UNCONFINED (accepted: allow_unconfined_guests=true)"
+  printf 'guests are not confined: libvirt of this OS has no AppArmor driver; accepted by the installation (hps.unconfined=ack)\n' > "$HPS_RUN_DIR/unconfined"
 }
 
 #-------------------------------------------------------------------------------

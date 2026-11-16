@@ -38,5 +38,14 @@ if [[ ! -f "$BOOTSTRAP" ]]; then
   exit 1
 fi
 
+# No systemd (Alpine): the executor runs this action in a private mount namespace with the
+# agent's configuration read-only. The refresh must write that configuration and start
+# services, so it runs in the namespace of PID 1 (nsenter, util-linux), with the same
+# capabilities the action has (the node profile of agent.conf).
+if ! command -v "$HPS_SYSTEMD_RUN" > /dev/null 2>&1 && command -v nsenter > /dev/null 2>&1; then
+  printf '+ nsenter --target 1 --mount sh %s refresh\n' "$BOOTSTRAP" >&2
+  exec nsenter --target 1 --mount sh "$BOOTSTRAP" refresh < /dev/null
+fi
+
 printf '+ systemd-run --wait --pipe sh %s refresh\n' "$BOOTSTRAP" >&2
 exec "$HPS_SYSTEMD_RUN" --quiet --wait --pipe --collect --unit=hps-refresh sh "$BOOTSTRAP" refresh < /dev/null

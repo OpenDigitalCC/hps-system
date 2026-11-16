@@ -17,6 +17,12 @@
 #   svc_env         give a service of the OS a setting of its environment (hostnamed's file)
 #   fw_open         open a TCP port in the host firewall (the iSCSI portal, om3)
 #
+# and the small differences init and role ask the adapter about (adapter/alpine.sh has
+# the same names): pkg_kind, pkg_agent_dir, pkg_nagios_check, pkg_nagios_plugins,
+# pkg_stamp (what a package line is, and where it is), user_unlock, sudo_grant,
+# hostname_apply, os_compat, log_forward, md_monitor, zfs_hostid_set, svc_ensure,
+# iscsid_conf_source.
+#
 # What an adapter for another OS provides (Alpine: plan step 4, adapter/alpine.sh,
 # chosen by init's "case $os"): the same function names, with the same arguments,
 # and these variables, set by adapter_init:
@@ -28,6 +34,13 @@
 #   SYS_BIN        the starter's own program directories, colon separated
 #   LIBVIRT_CONF_DIR  where the libvirt of this OS reads libvirtd.conf and qemu.conf
 #   SUDO_GROUP     the group whose members have sudo
+#   PKG_LINE_RE    the shape of a line of the IPS's package list
+#   ADAPTER_PATH_EXTRA  a directory added to the agent's script_path (the compatibility
+#                  programs of an OS without systemd), or empty
+#   GUEST_CONFINEMENT   apparmor | none (role_apparmor, role_unconfined)
+#   QEMU_SECURITY_LINE  the security_driver line of qemu.conf, or empty
+#   ENSURE_SERVICES, MOUNT_CONFIGFS  stock services a role needs started, and whether
+#                  configfs must be mounted for targetcli (OpenRC): empty on NixOS
 #
 # Every command is logged with run (defined by init) before it executes.
 
@@ -49,8 +62,29 @@ adapter_init() {
   PKG_ETC="$NIX_PROFILE/etc"
   SYS_BIN="/run/wrappers/bin:/run/current-system/sw/bin"
   LIBVIRT_CONF_DIR=/var/lib/libvirt
+  PKG_LINE_RE='^/nix/store/'
+  ADAPTER_PATH_EXTRA=""
+  GUEST_CONFINEMENT=apparmor
+  QEMU_SECURITY_LINE='security_driver = "apparmor"'
+  ENSURE_SERVICES=""
+  MOUNT_CONFIGFS=""
   return 0
 }
+
+# pkg_kind <line>: what a line of the package list is, for init: agent | nagios-check |
+# nagios-plugins | other. pkg_agent_dir, pkg_nagios_check, pkg_nagios_plugins: where that
+# package is (a store path is where it is). pkg_stamp: what changes when its version does,
+# for the service text (the path does that here: nothing).
+pkg_kind() {
+  if [[ "$1" =~ -ctrl-exec-agent-[0-9][0-9.]*$ ]]; then echo agent
+  elif [[ "$1" =~ -nagios-check$ ]]; then echo nagios-check
+  elif [[ "$1" =~ -hps-nagios-plugins$ ]]; then echo nagios-plugins
+  else echo other; fi
+}
+pkg_agent_dir() { printf '%s\n' "$1"; }
+pkg_nagios_check() { printf '%s\n' "$1"; }
+pkg_nagios_plugins() { printf '%s\n' "$1"; }
+pkg_stamp() { return 0; }
 
 # _unsigned <store path>: true when the IPS repository's narinfo of the path has
 # no signature: a local package (docs/BUNDLE.md "Local packages"). The upstream
@@ -132,6 +166,7 @@ svc_start() {
   local -a opt=() uopt=()
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
+      --stamp) shift 2 ;;    # for an OS whose unit text does not change with a package version
       --when-exists) when="$2"; shift 2 ;;
       --port) port="$2"; shift 2 ;;
       --opt) opt+=("$2"); shift 2 ;;
@@ -206,6 +241,51 @@ svc_mask() {
     [[ "$(readlink "$SYSTEMD_RUN_DIR/$u" 2> /dev/null)" == /dev/null ]] || run ln -sf /dev/null "$SYSTEMD_RUN_DIR/$u"
   done
   run systemctl daemon-reload
+}
+
+# user_unlock, sudo_grant: nothing to do here (the wheel group has sudo; sshd takes the
+# account as useradd made it)
+user_unlock() { return 0; }
+sudo_grant() { return 0; }
+
+# hostname_apply <fqdn>: hostnamed reads the static name from the OS's own file unless
+# told otherwise (NixOS: a link into the store); so it is told to read /etc/hostname
+hostname_apply() {
+  svc_env systemd-hostnamed "SYSTEMD_ETC_HOSTNAME=${HPS_ROOT}/etc/hostname"
+  if [[ -n "${1:-}" ]]; then
+    systemctl try-restart systemd-hostnamed.service 2> /dev/null || true
+  fi
+}
+
+# os_compat: the programs the OS lacks, for the scripts: none (systemd is here)
+os_compat() { return 0; }
+
+# log_forward: the journal's lines to the IPS (lib/hps-log-journal, jq and the shell)
+log_forward() {
+  role_need jq
+  svc_start hps-log-journal "PATH=$(role_path)" "HPS_CMDLINE=$HPS_CMDLINE" \
+    "$(command -v bash)" "$HPS_RUN_DIR/bundle/lib/hps-log-journal"
+}
+
+# md_monitor: the starter's own mdmonitor.service, which udev starts with the first array
+md_monitor() { return 0; }
+
+# zfs_hostid_set: the kernel line's spl.spl_hostid does it (nixos_starter_boot_lines)
+zfs_hostid_set() { return 0; }
+
+# svc_ensure <name>: a stock service is running (none is asked for here)
+svc_ensure() {
+  systemctl is-active --quiet "${1}.service" || run systemctl start "${1}.service"
+}
+
+# iscsid_conf_source: the open-iscsi package's own iscsid.conf, in its store path
+iscsid_conf_source() {
+  local iscsid pkg
+  iscsid="$(role_bin iscsid)" || return 1
+  pkg="$(readlink -f "$iscsid")"
+  pkg="${pkg%/sbin/*}"
+  pkg="${pkg%/bin/*}"
+  printf '%s\n' "$pkg/etc/iscsi/iscsid.conf"
 }
 
 # svc_env <unit> <VAR=value>: the service <unit> (one the OS ships) gets this environment

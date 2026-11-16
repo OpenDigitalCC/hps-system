@@ -59,6 +59,24 @@ node_bundle_tar() {
     | gzip -n
 }
 
+# node_apkovl_tar [base]
+# The overlay an Alpine starter node's stock initramfs fetches (apkovl= on its kernel
+# line, docs/BUNDLE.md "The hook" on Alpine): a gzip-compressed tar of
+# node-manager/apkovl-alpine, on stdout. A world file (what the initramfs installs from
+# the IPS repository at boot), the marker that makes the stock init add its default boot
+# services, OpenRC's "local" service in the default runlevel and the one script it runs
+# (the hook that fetches node_bootstrap). Deterministic, like the bundle. No secret.
+node_apkovl_tar() {
+  local base src
+  base="$(_node_tree_base "${1:-}")" || return 1
+  src="${base}/node-manager/apkovl-alpine"
+  if [[ ! -f "${src}/etc/local.d/hps-bootstrap.start" || ! -f "${src}/etc/apk/world" ]]; then
+    hps_log error "node_apkovl_tar: ${src} has no etc/local.d/hps-bootstrap.start or etc/apk/world"
+    return 1
+  fi
+  tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode='go-w,a-s' -cf - -C "$src" . | gzip -n
+}
+
 # node_bootstrap_script [base]: the bootstrap script, on stdout.
 node_bootstrap_script() {
   local base
@@ -111,6 +129,13 @@ node_role_packages() {
     path="$(jq -r --arg n "$name" '.roots[$n] // empty' "$manifest")" || return 1
     if [[ -z "$path" ]]; then
       missing="${missing:+$missing }${name}"
+      continue
+    fi
+    if [[ "$os" == alpine ]]; then
+      # apk resolves versions itself: the node gets names. A local package (the
+      # agent, om3: no Alpine signature) is marked, so that the node installs it
+      # from the local repository knowing so (adapter/alpine.sh pkg_add).
+      if [[ "$path" == local/* ]]; then printf 'local/%s\n' "$name"; else printf '%s\n' "$name"; fi
       continue
     fi
     printf '%s\n' "$path"

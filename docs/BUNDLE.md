@@ -57,8 +57,7 @@ world-writable), so the same tree is the same bytes and the same bundle id; the
 IPS log line `node bundle served: <id>` and the node's `/run/hps/bundle` link
 both show the id (the first 16 hex digits of the sha256). The node actions are
 not forked: an action under `nixos-26/scripts/` is the one script for pinned
-images and starter nodes alike. Alpine (plan step 4) will add its own scripts
-directory to the builder.
+images, NixOS starter nodes and Alpine starter nodes alike ("Alpine").
 
 ## The hook
 
@@ -299,10 +298,18 @@ Everything else in the bundle is OS-neutral: the user, the SSH key, the
 file), the agent, the allowlist, the pairing. The adapter also sets two
 variables: where added packages' programs appear (`PKG_BIN`) and the sudo group.
 
-**Alpine** (plan step 4) adds `adapter/alpine.sh` with the same functions and
-variables (`PKG_ETC`, where a package's `etc` files appear, is the one AppArmor added) and one branch in `init`'s `case "$OS_NAME"`, which marks the place;
-the IPS side adds its kernel line and its package repository. There is no Alpine
-code now, and `init` refuses an OS it has no adapter for by name.
+**Alpine** (plan step 4) is `adapter/alpine.sh`: the same functions and variables, one
+branch in `init`'s `case "$OS_NAME"`, and the IPS's own kernel line and repository
+("Alpine"). `init` still refuses an OS it has no adapter for by name. Besides the
+three things, `init` and `role` ask the adapter a few small questions, so that neither
+file names an OS: what a line of the package list is and where that package is
+(`pkg_kind`, `pkg_agent_dir`, `pkg_nagios_check`, `pkg_nagios_plugins`, `pkg_stamp`), the
+account (`user_unlock`, `sudo_grant`), the name (`hostname_apply`), the programs the OS
+lacks (`os_compat`), logs (`log_forward`), the md monitor (`md_monitor`), the ZFS hostid
+(`zfs_hostid_set`), a stock service (`svc_ensure`), the package's iSCSI configuration
+(`iscsid_conf_source`) and the variables `PKG_LINE_RE`, `ADAPTER_PATH_EXTRA`,
+`GUEST_CONFINEMENT`, `QEMU_SECURITY_LINE`, `ENSURE_SERVICES`, `MOUNT_CONFIGFS`. A test
+(`test_p3_268`) requires every one in both adapters.
 
 ## On the IPS: what makes a starter host pair
 
@@ -490,10 +497,80 @@ the boot (`plans/step3-trial.md`).
 | see what the monitor gets from a node | `hps-run <host> nagios-check --all`, or `hps-monitor run --host <host>` on the IPS |
 | add a program to a role | name it in `nixos.packages`, put it on the role line of `nixos.roles`, `hps-starter sync nixos --only repository`, then `hps-run <host> bundle-refresh`; `role` then finds it, or says `missing programs: ...` |
 
+## Alpine
+
+An Alpine node (`HOST_PROFILE STARTER`, `hps.os=x86_64:alpine:3.24`) runs the same `init`, the same
+`role` and the same node scripts as a NixOS node; `test_p3_268` compares them byte for byte with the
+tree's. What differs is the adapter, and the boot.
+
+**The hook.** Alpine has no systemd and its stock initramfs has no "run this" argument. The stock
+feature that fetches something over the provisioning network and acts on it is `apkovl=`: the
+initramfs fetches the file, unpacks it into the new root and installs the packages its
+`etc/apk/world` names from `alpine_repo=`. So the kernel line carries `apkovl=http://<ips>/cgi-bin/boot_manager.sh?cmd=node_apkovl/node.apkovl.tar.gz`
+and the IPS builds the overlay on each request (`node_apkovl_tar`, from `node-manager/apkovl-alpine/`): a
+world file (`alpine-base ssl_client bash curl openssh sudo shadow`), `etc/.default_boot_services` (the
+marker that makes the stock init add its usual boot services), OpenRC's own `local` service in the
+default runlevel, and `etc/local.d/hps-bootstrap.start`, which runs in the background, fetches
+`node_bootstrap` from `hps.ips=` with the same retry the NixOS hook has, and runs it. The starter
+files stay stock (and matched, "Alpine" of `docs/STARTER.md`); the overlay is configuration the IPS
+delivers with the boot, holds no secret and no logic beyond that script, and is not in the bundle.
+The URL ends in a name ending `.tar.gz` because the stock init unpacks by that suffix, and has no
+`&` or `;` for iPXE. Everything it says goes to the console and to `/run/hps-boot.log` (no journal).
+
+**What the adapter does.**
+
+| thing | Alpine |
+| --- | --- |
+| how to boot it | `vmlinuz-lts`, `initramfs-lts`, `ip=dhcp modloop=none`, `alpine_repo`, `apkovl`, `hps.*` (`alpine_starter_boot_lines`) |
+| how to add a package | `apk add` from `/packages/alpine/3.24/{main,community}`, the node's `/etc/apk/repositories` written to that and nothing else. Kernel packages (`linux-lts`, `linux-firmware-none`, `mkinitfs`, `zfs-lts`) with `--no-scripts` (mkinitfs's trigger would build an 80 MiB initramfs into RAM) and then `depmod -a`; local packages (`local/<name>` in the list) in their own call with `--allow-untrusted --repository .../local`; the agent with `--upgrade`, so that a new version is taken at a refresh |
+| how to start a service | an OpenRC script in `/etc/init.d` (RAM), `supervise-daemon` when it restarts, a one-shot with `start()` and `stop()` for the dataset mount and the power-off quiesce; `User`, `ExecStartPre`, `ExecStop`, `Restart`, `EnvironmentFile`, `LimitMEMLOCK`, `RuntimeDirectory` and `After` are translated, the rest is written into the script as "not applied" |
+| ports | no firewall on Alpine: `fw_open` says so |
+
+Differences a person should know, all in the adapter or the packages:
+
+- **sudo, not doas.** `doas` is Alpine's lighter default, but `sudo` is in `main` and keeps `sudo -n` the
+  same on every OS. `sysadmin` is made with `useradd` (the package `shadow`), its password field set to
+  `*` (a locked `!` account is refused by sshd on Alpine), `/etc/sudoers.d/hps-sysadmin`, and root locked.
+- **The agent has no unit sandbox.** It runs as `ctrl-exec-agent` through `setpriv` with an empty
+  capability and bounding set and `no_new_privs`; `ProtectSystem`, the system call filter and the rest
+  of the NixOS unit have no OpenRC equivalent. The executor is root, as on NixOS.
+- **bundle-refresh** runs the bootstrap in the mount namespace of PID 1 with `nsenter` (there is no
+  `systemd-run`), with the capabilities of the node profile.
+- **`systemctl` and `udevadm`** are two small scripts in `/run/hps/bin` (`os_compat`): `start`, `stop`,
+  `restart`, `try-restart`, `cat` over `rc-service`; `set-property` and `show` say they are not available.
+  `udevadm settle` is an `mdev -s` and a second. The node scripts are not forked.
+- **Not carried:** the cgroup reserve of CPU, memory and IO for the host (`host-reserve-apply` sets the
+  ZFS ARC cap and the memory floor but its `systemctl set-property` is refused), `node-journal` (no
+  journal), the continuing NTP sync (the clock is stepped once from the IPS), and renewal of the DHCP
+  lease (the IPS reserves the address by MAC; a client for the node is an open question).
+- **Logs:** busybox `syslogd -R <ips>:514`, the lines the IPS's rsyslog already takes.
+- **ZFS hostid:** `hps.zfs_hostid=` on the kernel line, written with `zgenhostid` before the module loads.
+- **dbus** is started and **configfs** mounted before targetcli and libvirt.
+
+**Guest confinement: not supported.** The stock Alpine kernel has AppArmor built in
+(`CONFIG_SECURITY_APPARMOR=y`, but `CONFIG_LSM` leaves it out, so `lsm=` and `apparmor=1` would be
+needed) and Alpine packages the AppArmor userland (`apparmor`, `apparmor-profiles`, 4.1.7). Alpine's
+**libvirt 12.3.0 is built without the AppArmor driver**: `libvirt-daemon`, `libvirt-common-drivers`
+and `libvirt-qemu` hold no `virt-aa-helper`, and `libvirt.so` and the QEMU driver have no AppArmor
+security driver (only the generic `virCommandSetAppArmorProfile` symbol). Confinement per guest
+therefore cannot be loaded, and the item stops here. The compute role does not fall back quietly:
+`role_unconfined` refuses (`libvirtd` is not started, the step "compute services" fails, `init` ends
+1 and says why) unless the installation accepted it with the cluster key `allow_unconfined_guests`
+set to `true` (`hps-cluster-config set allow_unconfined_guests true`). The IPS then puts
+`hps.unconfined=ack` on the kernel line, the node starts `libvirtd` with a console warning, an IPS
+log line and `/run/hps/unconfined`, and `qemu.conf` names no security driver. Ways to close it, for
+the owner: a libvirt built with the driver (a local package, plan step 5), or one AppArmor profile on
+the QEMU binary path that does not need libvirt's driver.
+
+**Local packages not yet built.** The Alpine builds of `ctrl-exec-agent` (the Perl tree and the C
+executor), `om3`, `nagios-check` and `hps-nagios-plugins` are plan step 5. The NixOS builds in the lab's
+cache are glibc binaries with `/nix/store` interpreters and do not run on Alpine; `om3`'s `om` and the
+executor must be built for musl (or statically). Until they are added (`hps-starter add-local alpine`)
+an Alpine node cannot pair.
+
 ## Not in this step
 
-The IPS-side sysadmin key extraction by the installer; an Alpine adapter (plan step
-4); headless QEMU, which brings the compute node's RAM down (plan step 5); and
+The IPS-side sysadmin key extraction by the installer; headless QEMU, which brings the compute node's RAM down (plan step 5); and
 `hps-net` on starter nodes (see "What is not carried"). The monitoring checks are
 on storage and compute nodes only: a starter node of another `TYPE` has no
 `checks.conf` and the IPS's `hps-monitor` gets the action's plain message from it.

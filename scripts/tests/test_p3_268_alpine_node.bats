@@ -1,0 +1,343 @@
+#!/usr/bin/env bats
+#
+# Plan step 4 (node-manager/bundle/adapter/alpine.sh, docs/BUNDLE.md "Alpine"): what the
+# bundle's init does on an Alpine node, run against shims of curl, apk, rc-service and
+# the user tools, with the bundle the IPS really builds. The same init and the same role
+# file as the NixOS node (test_p3_265, test_p3_266); this is the adapter's part. No
+# network, no root, no Alpine.
+
+setup() {
+  TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p3-268.XXXXXX")"
+  ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+  export TEST_DIR ROOT
+  export CALLS="$TEST_DIR/calls.log"
+  : > "$CALLS"
+  export HPS_RUN_DIR="$TEST_DIR/run" HPS_ROOT="$TEST_DIR/root" HPS_CMDLINE="$TEST_DIR/cmdline"
+  export HPS_PKG_PREFIX="$TEST_DIR/usr" HPS_PKG_ETC="$TEST_DIR/root/etc"
+  export HPS_OPENRC_DIR="$TEST_DIR/initd" HPS_LIB_MODULES="$TEST_DIR/lib/modules"
+  export HPS_APK="$TEST_DIR/bin/apk" HPS_RC_SERVICE="$TEST_DIR/bin/rc-service"
+  export HPS_PATH_EXTRA="$TEST_DIR/bin:$TEST_DIR/usr/bin" HPS_CPUINFO="$TEST_DIR/cpuinfo" HPS_FETCH_RETRY=0
+  mkdir -p "$TEST_DIR/bin" "$TEST_DIR/serve" "$TEST_DIR/home/sysadmin" "$HPS_ROOT/etc/ssh" "$HPS_ROOT/etc/iscsi" \
+    "$TEST_DIR/usr/bin" "$TEST_DIR/usr/sbin" "$TEST_DIR/usr/lib/hps-nagios-plugins" "$HPS_LIB_MODULES/6.18.63-0-lts" "$TEST_DIR/svc"
+  echo "BOOT_IMAGE=vmlinuz-lts console=ttyS0 hps.ips=10.9.9.9 hps.mac=aa:bb:cc:dd:ee:ff hps.os=x86_64:alpine:3.24 hps.profile=STARTER hps.domain=lab.test hps.zfs_hostid=1a2b3c4d" > "$HPS_CMDLINE"
+  printf 'vendor_id\t: GenuineIntel\n' > "$HPS_CPUINFO"
+  printf '# the starter\nPermitRootLogin yes\n' > "$HPS_ROOT/etc/ssh/sshd_config"
+  printf '# the package iscsid.conf\nnode.startup = manual\nnode.session.timeo.replacement_timeout = 120\n' > "$HPS_ROOT/etc/iscsi/iscsid.conf"
+  shims
+  programs
+  source "$ROOT/lib/functions.d/node-bundle-functions.sh"
+  hps_log() { :; }
+  node_bundle_tar "$ROOT" > "$TEST_DIR/serve/bundle.tgz"
+  echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvZkQ9mXfJq0mG2yQ3nqYk0n1b2c3d4e5f6g7h8i9j0 admin@site' > "$TEST_DIR/serve/keys"
+  printf '%s\n' linux-lts linux-firmware-none local/ctrl-exec-agent jq zfs zfs-lts targetcli local/nagios-check local/hps-nagios-plugins > "$TEST_DIR/serve/packages"
+  echo "SCH" > "$TEST_DIR/serve/type"
+  mkdir -p "$TEST_DIR/bundle"
+  tar -xzf "$TEST_DIR/serve/bundle.tgz" -C "$TEST_DIR/bundle"
+  printf '#!/bin/bash\necho "hps-pair $*" >> "$CALLS"\nhostname sch-001.lab.test\n' > "$TEST_DIR/bundle/lib/hps-pair"
+  for s in lib/hps-time actions/host-reserve-apply actions/net-bridge-ensure; do
+    printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n' "${s##*/}" > "$TEST_DIR/bundle/$s"
+  done
+  printf '#!/bin/bash\necho "hps-iscsi-name $(hostname)" >> "$CALLS"\nmkdir -p "$HPS_RUN_DIR"\necho InitiatorName=iqn.test > "$HPS_RUN_DIR/initiatorname.iscsi"\n' > "$TEST_DIR/bundle/lib/hps-iscsi-name"
+}
+
+teardown() {
+  rm -rf "$TEST_DIR"
+}
+
+shims() {
+  local b="$TEST_DIR/bin" s
+  cat > "$b/curl" <<'EOF'
+#!/bin/bash
+echo "curl $*" >> "$CALLS"
+out=""; url=""; prev=""
+for a in "$@"; do
+  [[ "$prev" == -o ]] && out="$a"
+  prev="$a"
+  case "$a" in http://*) url="$a" ;; esac
+done
+emit() { if [[ -n "$out" ]]; then cp "$1" "$out"; else cat "$1"; fi; }
+case "$url" in
+  *cmd=node_bundle) emit "$TEST_DIR/serve/bundle.tgz" ;;
+  *cmd=node_sysadmin_keys) emit "$TEST_DIR/serve/keys" ;;
+  *cmd=node_packages) emit "$TEST_DIR/serve/packages" ;;
+  *"cmd=host_variable&name=TYPE") [[ -f "$TEST_DIR/serve/type" ]] || exit 22; emit "$TEST_DIR/serve/type" ;;
+  *cmd=log_message*) echo "$*" >> "$TEST_DIR/iplog"; exit 0 ;;
+  *) exit 22 ;;
+esac
+EOF
+  cat > "$b/id" <<'EOF'
+#!/bin/bash
+case "$*" in
+  "-gn "*) echo users ;;
+  [a-z]*) [[ -e "$TEST_DIR/user-$1" ]] || exit 1; echo "uid=1001($1)" ;;
+  *) /usr/bin/id "$@" ;;
+esac
+EOF
+  cat > "$b/getent" <<'EOF'
+#!/bin/bash
+case "$1" in
+  group) [[ -e "$TEST_DIR/group-$2" ]] || exit 2; echo "$2:x:300:" ;;
+  *) echo "sysadmin:x:1001:100::$TEST_DIR/home/sysadmin:/bin/bash" ;;
+esac
+EOF
+  printf '#!/bin/bash\necho "useradd $*" >> "$CALLS"\ntouch "$TEST_DIR/user-${!#}"\n' > "$b/useradd"
+  printf '#!/bin/bash\necho "groupadd $*" >> "$CALLS"\ntouch "$TEST_DIR/group-${!#}"\n' > "$b/groupadd"
+  cat > "$b/install" <<'EOF'
+#!/bin/bash
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in -o|-g) shift 2 ;; *) args+=("$1"); shift ;; esac
+done
+/usr/bin/install "${args[@]}"
+EOF
+  printf '#!/bin/bash\nif [[ $# -gt 0 ]]; then printf "%%s\\n" "$1" > "$TEST_DIR/khost"; else cat "$TEST_DIR/khost" 2> /dev/null || echo localhost; fi\n' > "$b/hostname"
+  printf '#!/bin/bash\n[[ "$1" == -r ]] && echo 6.18.63-0-lts || /usr/bin/uname "$@"\n' > "$b/uname"
+  # apk: logs, and the services of a package appear as the test needs them
+  printf '#!/bin/bash\necho "apk $*" >> "$CALLS"\n[[ "$1" == info ]] && echo "${*: -1}-1.0-r0"\nexit 0\n' > "$b/apk"
+  # rc-service: a service is started once it has been started
+  cat > "$b/rc-service" <<'EOF'
+#!/bin/bash
+echo "rc-service $*" >> "$CALLS"
+case "$2" in
+  status) [[ -e "$TEST_DIR/svc/$1" ]] ;;
+  start) touch "$TEST_DIR/svc/$1" ;;
+  stop) rm -f "$TEST_DIR/svc/$1" ;;
+  *) exit 0 ;;
+esac
+EOF
+  for s in usermod chown chgrp passwd sshd modprobe depmod zgenhostid mountpoint mount setsid; do
+    printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n[[ "%s" == mountpoint ]] && exit 1\n[[ "%s" == modprobe && -n "${FAIL_MODPROBE:-}" && "$1" == "$FAIL_MODPROBE" ]] && exit 1\nexit 0\n' "$s" "$s" "$s" > "$b/$s"
+  done
+  chmod +x "$b"/*
+}
+
+programs() {
+  local p
+  for p in ctrl-exec-agent ctrl-exec-executor jq mdadm zpool zfs smartctl xxd targetcli om awk virsh qemu-img qemu-system-x86_64 tcpdump virtlogd libvirtd iscsid iscsiadm; do
+    printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n[ "$1" = --version ] && echo "ctrl-exec-agent 0.14.7"\nexit 0\n' "$p" > "$TEST_DIR/usr/bin/$p"
+  done
+  mkdir -p "$TEST_DIR/usr/share/qemu"
+  touch "$TEST_DIR/usr/share/qemu/edk2-x86_64-code.fd" "$TEST_DIR/usr/share/qemu/edk2-i386-vars.fd"
+  printf '#!/bin/bash\necho "nagios-check $*" >> "$CALLS"\n' > "$TEST_DIR/usr/bin/nagios-check"
+  for p in check_disk check_load check_procs check_mem; do printf '#!/bin/bash\n' > "$TEST_DIR/usr/lib/hps-nagios-plugins/$p"; done
+  chmod +x "$TEST_DIR"/usr/bin/* "$TEST_DIR"/usr/lib/hps-nagios-plugins/*
+}
+
+ok0() { [ "$status" -eq 0 ] || { printf '%s\n' "$output" | tail -30 >&3; return 1; }; }
+
+svc() { cat "$HPS_OPENRC_DIR/$1"; }
+
+# --- the node scripts are the same files ---------------------------------------
+
+@test "the Alpine node runs the NixOS node's role file and node scripts: nothing is forked" {
+  cmp "$TEST_DIR/bundle/role" "$ROOT/node-manager/bundle/role"
+  cmp "$TEST_DIR/bundle/init" "$ROOT/node-manager/bundle/init"
+  cmp "$TEST_DIR/bundle/actions/leg-resolve" "$ROOT/node-manager/nixos-26/scripts/leg-resolve"
+  [ -f "$TEST_DIR/bundle/adapter/alpine.sh" ] && [ -f "$TEST_DIR/bundle/adapter/nixos.sh" ]
+}
+
+# --- boot: sysadmin, packages, the agent ---------------------------------------
+
+@test "init, Alpine, SCH: sysadmin with the IPS key, sudo by sudoers.d, an unlocked account, root refused" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [[ "$output" == *"done: bundle"* ]]
+  grep -q '^useradd -m -s .*bash -G wheel sysadmin' "$CALLS"
+  grep -qx "usermod -p \* sysadmin" "$CALLS"
+  [ "$(cat "$HPS_ROOT/etc/sudoers.d/hps-sysadmin")" = 'sysadmin ALL=(ALL) NOPASSWD:ALL' ]
+  [ "$(stat -c %a "$HPS_ROOT/etc/sudoers.d/hps-sysadmin")" = 440 ]
+  grep -q 'ssh-ed25519 AAAAC3' "$TEST_DIR/home/sysadmin/.ssh/authorized_keys"
+  head -n 3 "$HPS_ROOT/etc/ssh/sshd_config" | grep -qx 'PermitRootLogin no'
+  grep -qx 'passwd -l root' "$CALLS"
+  # sshd is installed by the package and started by the first run
+  grep -qx 'rc-service sshd start' "$CALLS"
+}
+
+@test "init, Alpine: packages from the IPS repository only; kernel packages without scripts and then depmod; local ones unsigned, from the local repository" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [ "$(cat "$HPS_ROOT/etc/apk/repositories")" = "$(printf 'http://10.9.9.9/packages/alpine/3.24/main\nhttp://10.9.9.9/packages/alpine/3.24/community')" ]
+  grep -qx 'apk add --no-scripts --quiet linux-lts linux-firmware-none zfs-lts' "$CALLS"
+  grep -qx 'depmod -a 6.18.63-0-lts' "$CALLS"
+  grep -qx 'apk add --quiet jq zfs targetcli' "$CALLS"
+  grep -q 'apk add --quiet --upgrade --allow-untrusted --repository http://10.9.9.9/packages/alpine/3.24/local ctrl-exec-agent' "$CALLS"
+  # an upstream package is never installed unchecked
+  ! grep -E '^apk add .*--allow-untrusted.* (jq|zfs|targetcli|linux-lts)( |$)' "$CALLS"
+  # the kernel comes before what loads modules, depmod before the ordinary packages
+  [ "$(grep -n '^depmod' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^apk add --quiet jq' "$CALLS" | head -1 | cut -d: -f1)" ]
+}
+
+@test "init, Alpine: a name that is not a package name is refused, not passed to apk" {
+  printf '%s\n' 'jq; rm -rf /' linux-lts local/ctrl-exec-agent > "$TEST_DIR/serve/packages"
+  run bash "$TEST_DIR/bundle/init" boot
+  ! grep -q 'rm -rf' "$CALLS"
+}
+
+@test "init, Alpine: the agent and its executor are OpenRC services; the executor is root, the agent is the service user with no capability, and waits for its certificate" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  run svc ctrl-exec-executor
+  [[ "$output" == *"#!/sbin/openrc-run"* ]]
+  [[ "$output" == *"command=$TEST_DIR/usr/bin/ctrl-exec-executor"* ]]
+  [[ "$output" == *"supervisor=supervise-daemon"* ]]
+  [[ "$output" == *"checkpath -d -m 0755 /run/ctrl-exec-agent"* ]]
+  [[ "$output" == *"# stamp: ctrl-exec-agent-1.0-r0"* ]]
+  run svc ctrl-exec-agent
+  [[ "$output" == *"--reuid=ctrl-exec-agent --regid=ctrl-exec-agent --clear-groups --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs --"* ]]
+  [[ "$output" == *"ctrl-exec-agent/agent.crt"* && "$output" == *"promote-cert"* ]]
+  [[ "$output" == *"# not applied (systemd only): ProtectSystem=strict"* ]]
+  # no certificate before pairing: the agent is defined, not started; the executor runs
+  grep -qx 'rc-service ctrl-exec-executor start' "$CALLS"
+  ! grep -qx 'rc-service ctrl-exec-agent start' "$CALLS"
+  # the agent's actions find the compatibility programs
+  grep -q "^script_path = .*:$HPS_RUN_DIR/bin\$" "$HPS_ROOT/etc/ctrl-exec-agent/agent.conf"
+  grep -qx "no_new_privileges = yes" <(sed -n '/\[profile node\]/,$p' "$HPS_ROOT/etc/ctrl-exec-agent/agent.conf" | sed -n 3p)
+}
+
+@test "init, Alpine: a new agent version is a changed service text, restarted a few seconds later, detached" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  printf '#!/bin/bash\necho "apk $*" >> "$CALLS"\n[[ "$1" == info ]] && echo "ctrl-exec-agent-2.0-r0"\nexit 0\n' > "$TEST_DIR/bin/apk"
+  run bash "$TEST_DIR/bundle/init" refresh
+  ok0
+  [[ "$output" == *"the agent or its executor changed: restarting both in a few seconds"* ]]
+  grep -q '# stamp: ctrl-exec-agent-2.0-r0' "$HPS_OPENRC_DIR/ctrl-exec-agent"
+  [[ "$output" == *"+ (sleep 5; "*"rc-service ctrl-exec-executor restart; "*"rc-service ctrl-exec-agent restart;) detached"* ]]
+}
+
+# --- storage --------------------------------------------------------------------
+
+@test "init, Alpine, SCH: the node's own ZFS hostid before the module, configfs mounted, dbus running, the services as OpenRC scripts" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  grep -qx 'zgenhostid -f 1a2b3c4d' "$CALLS"
+  [ "$(grep -n '^zgenhostid' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^modprobe zfs' "$CALLS" | head -1 | cut -d: -f1)" ]
+  grep -qx 'mount -t configfs none /sys/kernel/config' "$CALLS"
+  grep -qx 'rc-service dbus start' "$CALLS"
+  grep -qx 'modprobe target_core_mod' "$CALLS"
+  # the dataset mount: a one-shot that stays "started" (the scripts start it by name)
+  run svc hps-zfs-mount
+  [[ "$output" == *"start() {"* && "$output" == *"zfs mount -a"* ]]
+  [[ "$output" != *"supervise-daemon"* ]]
+  # the power-off unit: nothing runs at start, the stop is the quiesce, after the services it needs
+  run svc hps-shutdown-storage
+  [[ "$output" == *"stop() {"* && "$output" == *"hps-shutdown-storage"* ]]
+  [[ "$output" == *"use net libvirtd iscsid ctrl-exec-agent ctrl-exec-executor hps-log-journal"* ]]
+  grep -qx 'rc-service hps-shutdown-storage start' "$CALLS"
+}
+
+@test "init, Alpine, SCH: om3 waits for its cluster secret, takes its arguments from the environment file, restarts itself" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  run svc opensvc-daemon
+  [[ "$output" == *"supervisor=supervise-daemon"* ]]
+  [[ "$output" == *'command_args="daemon run $OSVC_DAEMON_ARGS"'* ]]
+  [[ "$output" == *"opensvc.env"* ]]
+  [[ "$output" == *"osvc-cluster-secret"* ]]
+  [[ "$output" == *"respawn_delay=5"* ]]
+  ! grep -qx 'rc-service opensvc-daemon start' "$CALLS"
+}
+
+@test "init, Alpine: logs go to the IPS by syslog, one mirror monitor, no firewall to open" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [ "$(cat "$HPS_ROOT/etc/conf.d/syslog")" = 'SYSLOGD_OPTS="-t -R 10.9.9.9:514 -L"' ]
+  grep -qx 'rc-service syslog restart' "$CALLS"
+  run svc mdmonitor
+  [[ "$output" == *"--monitor --scan --foreground"* ]]
+  [[ "$output" == *"supervisor=supervise-daemon"* ]]
+  grep -q 'PROGRAM ' "$HPS_ROOT/etc/mdadm.conf"
+}
+
+# --- compute: the confinement finding -------------------------------------------
+
+@test "init, Alpine, TCH: guests would be unconfined (libvirt has no AppArmor driver): libvirtd is NOT started, loudly, and the step is a failed one" {
+  echo TCH > "$TEST_DIR/serve/type"
+  printf '%s\n' linux-lts local/ctrl-exec-agent jq libvirt-daemon qemu-system-x86_64 open-iscsi local/nagios-check local/hps-nagios-plugins > "$TEST_DIR/serve/packages"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: guests on this node would run UNCONFINED"* ]]
+  [[ "$output" == *"libvirtd is NOT started"* ]]
+  [[ "$output" == *"role step failed"*"compute services"* || "$output" == *"a role step failed: compute services"* ]]
+  [ ! -e "$HPS_OPENRC_DIR/libvirtd" ]
+  ! grep -qx 'rc-service libvirtd start' "$CALLS"
+  [ ! -e "$HPS_RUN_DIR/unconfined" ]
+  grep -q 'role step failed: compute services' "$TEST_DIR/iplog"
+}
+
+@test "init, Alpine, TCH, acknowledged by the installation (hps.unconfined=ack): libvirtd starts with a warning, the IPS is told, a file says so, qemu.conf names no security driver" {
+  echo TCH > "$TEST_DIR/serve/type"
+  printf '%s\n' linux-lts local/ctrl-exec-agent jq libvirt-daemon qemu-system-x86_64 open-iscsi local/nagios-check local/hps-nagios-plugins > "$TEST_DIR/serve/packages"
+  sed -i 's/$/ hps.unconfined=ack/' "$HPS_CMDLINE"
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [[ "$output" == *"WARNING: guests on this node run UNCONFINED"* ]]
+  grep -q 'UNCONFINED' "$TEST_DIR/iplog"
+  [[ "$(cat "$HPS_RUN_DIR/unconfined")" == *"not confined"* ]]
+  run svc libvirtd
+  [[ "$output" == *"need virtlogd"* && "$output" == *'rc_ulimit="-l unlimited"'* ]]
+  grep -qx 'rc-service libvirtd start' "$CALLS"
+  grep -q '^user = "qemu-libvirtd"' "$HPS_ROOT/etc/libvirt/qemu.conf"
+  ! grep -q 'security_driver' "$HPS_ROOT/etc/libvirt/qemu.conf"
+  # the UEFI firmware the guest definitions name
+  [ -L "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-x86_64-code.fd" ] && [ -L "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-i386-vars.fd" ]
+  # the initiator: the package's own iscsid.conf kept once beside the node's, the fail-fast lines once
+  [ -f "$HPS_ROOT/etc/iscsi/iscsid.conf.hps-stock" ]
+  [ "$(grep -c 'replacement_timeout = 15' "$HPS_ROOT/etc/iscsi/iscsid.conf")" -eq 1 ]
+  run bash "$TEST_DIR/bundle/init" refresh
+  [ "$(grep -c 'replacement_timeout = 15' "$HPS_ROOT/etc/iscsi/iscsid.conf")" -eq 1 ]
+}
+
+# --- the compatibility programs --------------------------------------------------
+
+@test "the systemctl of an OpenRC node: the verbs the bundle's scripts use, over rc-service; what it cannot do it says" {
+  run bash "$TEST_DIR/bundle/init" boot
+  s="$HPS_RUN_DIR/bin/systemctl"
+  [ -x "$s" ]
+  : > "$CALLS"
+  PATH="$TEST_DIR/bin:$PATH" run "$s" restart ctrl-exec-agent.service
+  ok0
+  grep -qx 'rc-service ctrl-exec-agent restart' "$CALLS"
+  PATH="$TEST_DIR/bin:$PATH" run "$s" start --no-block hps-zfs-mount.service
+  grep -qx 'rc-service hps-zfs-mount start' "$CALLS"
+  # try-restart: only what runs
+  : > "$CALLS"
+  PATH="$TEST_DIR/bin:$PATH" run "$s" try-restart systemd-timesyncd.service
+  ok0
+  ! grep -q 'restart' "$CALLS"
+  # cat: does the service exist (the scripts ask before they start the dataset mount)
+  mkdir -p "$TEST_DIR/etc-init.d"
+  PATH="$TEST_DIR/bin:$PATH" run "$s" cat hps-zfs-mount.service
+  [ "$status" -eq 1 ]
+  # a cgroup setting is not there, and says so
+  PATH="$TEST_DIR/bin:$PATH" run "$s" set-property --runtime machine.slice CPUWeight=100
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not available on this OS (OpenRC)"* ]]
+  PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/udevadm" settle --timeout=10
+  ok0
+  PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/udevadm" info /dev/sda
+  [ "$status" -eq 1 ]
+}
+
+@test "the NixOS adapter and the Alpine adapter define the same functions" {
+  names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
+  # the interface init and role call: every one is in both
+  for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set iscsid_conf_source; do
+    grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
+    grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
+  done
+  grep -qE '^guest_confinement_ack\(\)' "$ROOT/node-manager/bundle/adapter/alpine.sh"
+}
+
+@test "bundle-refresh without systemd runs the bootstrap in the namespace of PID 1 (nsenter), with no argument from a dispatcher" {
+  mkdir -p "$HPS_RUN_DIR/bundle"
+  printf '#!/bin/sh\necho "bootstrap ran with: $*"\n' > "$HPS_RUN_DIR/bundle/bootstrap.sh"
+  printf '#!/bin/bash\necho "nsenter $*" >> "$CALLS"\nwhile [[ "$1" == --* ]]; do shift; [[ "$1" == 1 ]] && shift; done\nexec "$@"\n' > "$TEST_DIR/bin/nsenter"
+  chmod +x "$TEST_DIR/bin/nsenter"
+  HPS_SYSTEMD_RUN="$TEST_DIR/bin/no-systemd-run" PATH="$TEST_DIR/bin:$PATH" run bash "$ROOT/node-manager/bundle/actions/bundle-refresh"
+  ok0
+  [[ "$output" == *"+ nsenter --target 1 --mount sh $HPS_RUN_DIR/bundle/bootstrap.sh refresh"* ]]
+  [[ "$output" == *"bootstrap ran with: refresh"* ]]
+  grep -q '^nsenter --target 1 --mount sh ' "$CALLS"
+}

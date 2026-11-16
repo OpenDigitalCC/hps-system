@@ -493,12 +493,12 @@ extract_bundle() {
   ! grep -q '^node-ghost' "$HPS_ROOT/etc/ctrl-exec-agent/scripts.conf"
 }
 
-@test "init: an OS without an adapter is refused by name (Alpine is plan step 4)" {
+@test "init: an OS without an adapter is refused by name" {
   extract_bundle
-  echo "hps.ips=10.9.9.9 hps.os=x86_64:alpine:3.22" > "$HPS_CMDLINE"
+  echo "hps.ips=10.9.9.9 hps.os=x86_64:bsd:1.0" > "$HPS_CMDLINE"
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 1 ]
-  [[ "$output" == *"no adapter for OS 'alpine'"* ]]
+  [[ "$output" == *"no adapter for OS 'bsd'"* ]]
   ! grep -q '^useradd' "$CALLS"
 }
 
@@ -530,10 +530,10 @@ extract_bundle() {
 
 # the three things: boot arguments (the IPS), packages (pkg_*), services (svc_*, and the
 # firewall port a service needs, fw_open)
-@test "adapter: the three per-OS things are all it defines (plus its variables); Alpine has no code" {
+@test "adapter: the per-OS things are all it defines (plus its variables, and the few small questions init and role ask it); Alpine has its own (test_p3_268)" {
   grep -qE '^(pkg_add|svc_start|svc_reload|adapter_init)\(\)' "$ROOT/node-manager/bundle/adapter/nixos.sh"
-  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init fw_open pkg_add pkg_realise svc_env svc_mask svc_reload svc_restart_later svc_start " ]
-  [ ! -e "$ROOT/node-manager/bundle/adapter/alpine.sh" ]
+  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init fw_open hostname_apply iscsid_conf_source log_forward md_monitor os_compat pkg_add pkg_agent_dir pkg_kind pkg_nagios_check pkg_nagios_plugins pkg_realise pkg_stamp sudo_grant svc_ensure svc_env svc_mask svc_reload svc_restart_later svc_start user_unlock zfs_hostid_set " ]
+  [ -e "$ROOT/node-manager/bundle/adapter/alpine.sh" ]
 }
 
 @test "bundle-refresh takes no arguments and runs the bootstrap script the node booted with" {

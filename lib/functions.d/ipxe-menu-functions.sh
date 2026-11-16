@@ -448,6 +448,12 @@ ipxe_network_boot() {
 # Alpine network booter. 
 # TODO: this could become more generic, merging in different O/S patterns
 ipxe_boot_alpine() {
+  # HOST_PROFILE STARTER: the stock starter and the node bundle (alpine-boot-functions.sh);
+  # every other profile keeps the older path below until plan step 7 retires it.
+  if [[ "$(host_registry "${mac:-}" get HOST_PROFILE 2>/dev/null)" == STARTER ]]; then
+    alpine_ipxe_starter "${mac:-}"
+    return $?
+  fi
   local alpine_version="$(get_host_os_version "$mac")"
   
   # Get active cluster once (if function needs it)

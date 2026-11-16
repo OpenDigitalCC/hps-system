@@ -450,6 +450,22 @@ if [[ "$cmd" == "node_bootstrap" ]]; then
   exit 0
 fi
 
+# The Alpine starter's apkovl (docs/BUNDLE.md "The hook"): the stock initramfs takes the
+# file name after the last "/" of apkovl= to decide how to unpack, so the command may be
+# followed by /node.apkovl.tar.gz.
+if [[ "$cmd" == "node_apkovl" || "$cmd" == node_apkovl/* ]]; then
+  apkovl_tmp="$(mktemp /tmp/node-apkovl.XXXXXX)"
+  trap 'rm -f "$apkovl_tmp"' EXIT
+  if ! node_apkovl_tar > "$apkovl_tmp"; then
+    cgi_auto_fail "$cmd: the apkovl cannot be built on this IPS" 500 "Internal Server Error"
+    exit 1
+  fi
+  hps_log info "[$mac] node apkovl served: $(sha256sum < "$apkovl_tmp" | cut -c1-16), $(stat -c %s "$apkovl_tmp") bytes"
+  printf 'Content-Type: application/gzip\nContent-Length: %s\n\n' "$(stat -c %s "$apkovl_tmp")"
+  cat "$apkovl_tmp"
+  exit 0
+fi
+
 if [[ "$cmd" == "node_bundle" ]]; then
   bundle_tmp="$(mktemp /tmp/node-bundle.XXXXXX)"
   trap 'rm -f "$bundle_tmp"' EXIT

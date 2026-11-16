@@ -60,6 +60,35 @@ escalated. The owner ruled that the healer reassembles the mirror.
   node). Keeping the guest's memory (`virsh save` and `restore` around the
   reassembly) is not built.
 
+## Alpine on the stock starter (2026-11-16)
+
+Step 4 of `plans/PLAN.md` (`docs/STARTER.md` "Alpine", `docs/BUNDLE.md` "Alpine"). The NixOS
+starter nodes behave as before; the only changes to files they use are small questions that
+`init` and `role` now ask the adapter instead of naming the OS.
+
+- **New** `hps-starter sync alpine` (release 3.24): Alpine's indexes read once, the package
+  list resolved in that one snapshot, every package proved against its index line, Alpine's
+  signatures kept. The starter is matched to the repository's kernel: stock files when the
+  netboot kernel is the repository's, else the repository's `linux-lts` kernel with the stock
+  initramfs keeping everything but its module directory (6.18.60 against 6.18.63 today). No modloop
+  (`modloop=none`, `linux-firmware-none`): the node installs `linux-lts` and `zfs-lts` by `apk`.
+  Scratch sync against upstream: 23 s, starter 41.4 MiB, repository 276.8 MiB in 275 packages (the
+  feasibility check measured 1,020 MiB with firmware). `list`, `verify` and `add-local alpine` cover it.
+- **New** `HPS::Apk`: apk files and indexes read and written in plain Perl; the local repository's
+  unsigned index.
+- **New** the boot: `alpine_starter_boot_lines`, the stock `apkovl=` hook (`cmd=node_apkovl`,
+  `node-manager/apkovl-alpine/`), `node_role_packages` for Alpine (names, local ones marked),
+  the cluster key `allow_unconfined_guests`.
+- **New** `node-manager/bundle/adapter/alpine.sh`: apk, OpenRC services, a systemctl and a udevadm
+  for the node scripts, setpriv for the agent, syslog forwarding, the ZFS hostid, sudo.
+- **Changed** `init` and `role` ask the adapter (`pkg_kind`, `user_unlock`, `log_forward`, ...) where
+  they named NixOS paths or units; the NixOS adapter has the same functions and its tests are unchanged
+  but three that said "Alpine has no code". `bundle-refresh` uses `nsenter` where there is no `systemd-run`.
+- **Finding** guests on Alpine cannot be confined: libvirt 12.3.0 is built without the AppArmor
+  driver. The compute role refuses to start `libvirtd` unless `allow_unconfined_guests` is true.
+- **Missing** the Alpine builds of the agent with its executor, om3, nagios-check and
+  hps-nagios-plugins (plan step 5); an Alpine node cannot pair until they are added.
+
 ## AppArmor and the monitoring checks on the stock starter (2026-11-16)
 
 Step 3 of `plans/PLAN.md` continued (`docs/BUNDLE.md` "AppArmor", "Monitoring"). The

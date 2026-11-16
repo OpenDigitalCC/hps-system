@@ -106,9 +106,7 @@ OS_VERSION="${BASH_REMATCH[2]}"
 # The adapter. One file per OS; it defines pkg_add, svc_start and svc_reload.
 case "$OS_NAME" in
   nixos) source "$HERE/adapter/nixos.sh" ;;
-  # ALPINE (plan step 4): add adapter/alpine.sh here, with the same functions
-  # and variables as adapter/nixos.sh, and a branch of this case. No Alpine code
-  # exists yet; the bundle refuses an OS it has no adapter for.
+  alpine) source "$HERE/adapter/alpine.sh" ;;
   *) die "no adapter for OS '$OS_NAME' (adapter/ has: $(cd "$HERE/adapter" && ls | tr '\n' ' '))" ;;
 esac
 adapter_init "$IPS" "$OS_VERSION"
@@ -135,6 +133,8 @@ step_sysadmin() {
   else
     run useradd -m -s "$(command -v bash)" -G "$SUDO_GROUP" sysadmin
   fi
+  user_unlock sysadmin
+  sudo_grant sysadmin
   home="$(getent passwd sysadmin | cut -d: -f6)"
   grp="$(id -gn sysadmin)"
   run install -d -m 0700 -o sysadmin -g "$grp" "$home/.ssh"
@@ -166,39 +166,45 @@ step_sysadmin() {
 #-------------------------------------------------------------------------------
 # 2. packages
 #-------------------------------------------------------------------------------
-# AGENT: the store path of the ctrl-exec agent (with its executor), set here.
-# NAGIOS_CHECK, NAGIOS_PLUGINS: the monitoring packages of a storage or compute
-# node (role_monitor); like the agent they are run by their path, not put in the
-# profile (nagios-check is a single file, the plugins' directory would add its check_*
-# programs to every PATH).
+# AGENT: where the ctrl-exec agent (with its executor) is: the directory with its bin/
+# (a store path on NixOS, /usr on Alpine), set here; AGENT_PKG is its line of the package
+# list. NAGIOS_CHECK, NAGIOS_PLUGINS: the monitoring packages of a storage or compute
+# node (role_monitor): the plugin file and the directory of the standard checks; on NixOS
+# they are run by their path and not put in the profile (nagios-check is a single file,
+# the plugins' directory would add its check_* programs to every PATH).
 AGENT=""
+AGENT_PKG=""
+AGENT_STAMP=""
 NAGIOS_CHECK=""
 NAGIOS_PLUGINS=""
+NAGIOS_CHECK_PKG=""
+NAGIOS_PLUGINS_PKG=""
 
 step_packages() {
   local list p
   local -a paths=() rest=()
   list="$(fetch_text node_packages)" || die "the IPS gave no package list for this node (is the repository synced: hps-starter sync ${OS_NAME}?)"
-  mapfile -t paths < <(printf '%s\n' "$list" | grep -E '^/nix/store/' || true)
+  mapfile -t paths < <(printf '%s\n' "$list" | grep -E "$PKG_LINE_RE" || true)
   ((${#paths[@]} > 0)) || die "the IPS's package list for this node is empty"
   for p in "${paths[@]}"; do
     # The agent is run by its path: a new version sits beside the old one and
     # replaces nothing under a running process (docs/BUNDLE.md "The upgrade").
-    if [[ "$p" =~ -ctrl-exec-agent-[0-9][0-9.]*$ ]]; then
-      AGENT="$p"
-    elif [[ "$p" =~ -nagios-check$ ]]; then
-      NAGIOS_CHECK="$p"
-    elif [[ "$p" =~ -hps-nagios-plugins$ ]]; then
-      NAGIOS_PLUGINS="$p"
-    else
-      rest+=("$p")
-    fi
+    case "$(pkg_kind "$p")" in
+      agent) AGENT_PKG="$p" ;;
+      nagios-check) NAGIOS_CHECK_PKG="$p" ;;
+      nagios-plugins) NAGIOS_PLUGINS_PKG="$p" ;;
+      *) rest+=("$p") ;;
+    esac
   done
-  [[ -n "$AGENT" ]] || die "the IPS's package list has no ctrl-exec agent"
-  pkg_realise "$AGENT" || die "the ctrl-exec agent $AGENT could not be taken from the IPS repository"
-  for p in "$NAGIOS_CHECK" "$NAGIOS_PLUGINS"; do
+  [[ -n "$AGENT_PKG" ]] || die "the IPS's package list has no ctrl-exec agent"
+  pkg_realise "$AGENT_PKG" || die "the ctrl-exec agent $AGENT_PKG could not be taken from the IPS repository"
+  for p in "$NAGIOS_CHECK_PKG" "$NAGIOS_PLUGINS_PKG"; do
     [[ -z "$p" ]] || pkg_realise "$p" || die "the monitoring package $p could not be taken from the IPS repository"
   done
+  AGENT="$(pkg_agent_dir "$AGENT_PKG")"
+  AGENT_STAMP="$(pkg_stamp "$AGENT_PKG")"
+  [[ -z "$NAGIOS_CHECK_PKG" ]] || NAGIOS_CHECK="$(pkg_nagios_check "$NAGIOS_CHECK_PKG")"
+  [[ -z "$NAGIOS_PLUGINS_PKG" ]] || NAGIOS_PLUGINS="$(pkg_nagios_plugins "$NAGIOS_PLUGINS_PKG")"
   if ((${#rest[@]} > 0)); then
     pkg_add "${rest[@]}" || die "adding the packages failed"
   fi
@@ -232,7 +238,7 @@ step_agent() {
   local svc=ctrl-exec-agent var="${HPS_ROOT}/var/lib/ctrl-exec-agent" sock=/run/ctrl-exec-agent/exec.sock
   # HPS_AGENT_FS (tests): where to look at the package, for a store path that is not here
   local fs="${HPS_AGENT_FS:-$AGENT}"
-  [[ -x "$fs/bin/ctrl-exec-executor" ]] || die "$AGENT has no bin/ctrl-exec-executor: not an agent package with its executor"
+  [[ -x "$fs/bin/ctrl-exec-executor" ]] || die "$AGENT_PKG has no bin/ctrl-exec-executor: not an agent package with its executor"
   log "ctrl-exec agent $("$fs/bin/ctrl-exec-agent" --version 2> /dev/null || echo "?") at $AGENT"
 
   # The network-facing agent is its own user, never root and never sysadmin.
@@ -259,7 +265,7 @@ port = ${AGENT_PORT}
 cert = ${AGENT_ETC}/agent.crt
 key = ${AGENT_ETC}/agent.key
 ca = ${AGENT_ETC}/ca.crt
-script_path = ${PKG_BIN}:${PKG_SBIN}:${SYS_BIN}
+script_path = ${PKG_BIN}:${PKG_SBIN}:${SYS_BIN}${ADAPTER_PATH_EXTRA:+:$ADAPTER_PATH_EXTRA}
 executor_socket = ${sock}
 
 [profile default]
@@ -291,12 +297,12 @@ EOF
   # The executor: root, not sandboxed (it applies the profile to each action and
   # re-reads the allowlist from its own root-owned files). Then the agent.
   SVC_CHANGED=0
-  svc_start --opt RuntimeDirectory=ctrl-exec-agent --opt RuntimeDirectoryMode=0755 ctrl-exec-executor \
+  svc_start --stamp "$AGENT_STAMP" --opt RuntimeDirectory=ctrl-exec-agent --opt RuntimeDirectoryMode=0755 ctrl-exec-executor \
     "$AGENT/bin/ctrl-exec-executor" serve "$sock" "$AGENT_ETC/agent.conf" "$AGENT_ETC/scripts.conf" "$svc"
   # The agent: the service user, no capability, the unit's own sandbox
   # (nix/modules, ctrl-exec's module.nix). It starts once there is a
   # certificate; pairing (step 5) restarts it.
-  svc_start --when-exists "$AGENT_ETC/agent.crt" --port "$AGENT_PORT" \
+  svc_start --stamp "$AGENT_STAMP" --when-exists "$AGENT_ETC/agent.crt" --port "$AGENT_PORT" \
     --opt "User=$svc" --opt "Group=$svc" \
     --opt "ExecStartPre=+$AGENT/bin/ctrl-exec-agent promote-cert" \
     --opt 'ExecReload=/run/current-system/sw/bin/kill -HUP $MAINPID' \
@@ -368,14 +374,11 @@ persist_hostname() {
     printf '%s\n' "$want" > "$f.new"
     run mv -f "$f.new" "$f"
   fi
-  # hostnamed reads the static name from the OS's own file unless told otherwise (NixOS: a
-  # link into the store); so it is told to read this one
-  svc_env systemd-hostnamed "SYSTEMD_ETC_HOSTNAME=${HPS_ROOT}/etc/hostname"
-  if [[ -n "$want" ]]; then
-    systemctl try-restart systemd-hostnamed.service 2> /dev/null || true
-  fi
+  # what the OS needs to read the name from that file (NixOS: hostnamed is told to)
+  hostname_apply "$want"
 }
 
+os_compat
 step_sysadmin
 step_packages
 step_agent

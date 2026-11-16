@@ -228,7 +228,7 @@ EOF
   repo
   run node_role_packages "nixos" TCH "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 1 ]
-  run node_role_packages "x86_64:alpine:3.22" TCH "$ROOT" "$TEST_DIR/res"
+  run node_role_packages "x86_64:bsd:1.0" TCH "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 1 ]
   grep -q "no role list" "$TEST_DIR/hps.log"
 }

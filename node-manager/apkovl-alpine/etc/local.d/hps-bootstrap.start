@@ -1,0 +1,30 @@
+#!/bin/sh
+# The HPS boot hook for an Alpine starter node. Delivered by the IPS in the apkovl
+# that the stock initramfs fetches (apkovl= on the kernel line) and run by OpenRC's
+# own "local" service, as root, near the end of boot. It fetches the bootstrap
+# script from the IPS the kernel line names (hps.ips=) and runs it: the same
+# script the NixOS starter's hook runs (docs/BUNDLE.md "The hook"). Nothing else.
+# POSIX sh (busybox). Everything it and the bundle say is on the console and in
+# /run/hps-boot.log (Alpine has no journal).
+#
+# It goes to the background so that the boot is not held: the local service runs
+# the .start scripts one after the other and waits for each.
+(
+  {
+    ips=
+    for w in $(cat /proc/cmdline); do
+      case "$w" in
+        hps.ips=*) ips="${w#hps.ips=}"; break ;;
+      esac
+    done
+    case "$ips" in
+      '' | *[!0-9A-Za-z.:-]*) echo "[hps-hook] no usable hps.ips= on the kernel command line"; exit 1 ;;
+    esac
+    # the network may not be answering yet: --retry-all-errors waits for it (two minutes)
+    curl -fsS --retry 60 --retry-delay 2 --retry-all-errors --max-time 60 \
+      -o /run/hps-bootstrap.sh "http://$ips/cgi-bin/boot_manager.sh?cmd=node_bootstrap" \
+      || { echo "[hps-hook] cannot fetch the bootstrap script from $ips"; exit 1; }
+    sh /run/hps-bootstrap.sh
+  } 2>&1 | tee -a /run/hps-boot.log > /dev/console
+) < /dev/null &
+exit 0
