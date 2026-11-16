@@ -494,3 +494,12 @@ EOS
   [ "$status" -eq 124 ]
   [[ "$output" != *"Bad file descriptor"* ]]
 }
+
+@test "storage: md assembles nothing by itself here either (a zvol carrying a leg would be held by udev and refuse the export)" {
+  echo SCH > "$TEST_DIR/serve/type"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  grep -qx 'AUTO -all' "$HPS_ROOT/etc/mdadm.conf"
+  [ -x "$HPS_RUN_DIR/md-event" ]
+  [ "$(readlink "$HPS_SYSTEMD_DIR/mdadm-last-resort@.timer")" = /dev/null ]
+}

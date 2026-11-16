@@ -170,6 +170,34 @@ role_shutdown() {
 }
 
 #-------------------------------------------------------------------------------
+# md on a storage or a compute node: HPS assembles every mirror explicitly
+# (mirror-assemble); nothing may start a half mirror by itself. A storage node needs it
+# as much as a compute node: its zvols carry the mirror legs' md superblocks, and the
+# starter's udev rules assemble such a member the moment the pool is imported, which
+# holds the device and refuses the export (lab trial: "Cannot configure StorageObject
+# because device {dev} is already in use"). AUTO -all stops that.
+role_md() {
+  # md mirrors: HPS assembles every mirror explicitly (mirror-assemble); nothing
+  # may start a half mirror by itself (AUTO -all, the last-resort timers off).
+  # The monitor's PROGRAM writes one HPS-ISSUE line per leg event (hps-md-event). The
+  # starter's own mdmonitor.service (started by udev when the first array appears) is the
+  # monitor and reads this file; it has no bash on its PATH, so PROGRAM is a small sh
+  # wrapper that sets one (the pinned image does the same with writeShellScript).
+  write_if_changed "$HPS_RUN_DIR/md-event" 0755 << EOF
+#!/bin/sh
+PATH=$(role_path):/bin:/usr/bin
+export PATH
+exec $(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-md-event "\$@"
+EOF
+  write_if_changed "${HPS_ROOT}/etc/mdadm.conf" 0644 << EOF
+# written by the HPS node bundle (docs/BUNDLE.md)
+PROGRAM $HPS_RUN_DIR/md-event
+AUTO -all
+EOF
+  svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
+}
+
+#-------------------------------------------------------------------------------
 # storage (SCH)
 #-------------------------------------------------------------------------------
 # ZFS is in the starter (the module and the userland, matching its kernel). The
@@ -234,25 +262,6 @@ EOF
     [[ -e "$f" ]] && ln -sf "$f" "${HPS_ROOT}/run/libvirt/nix-ovmf/${f##*/}"
   done
 
-  # md mirrors: HPS assembles every mirror explicitly (mirror-assemble); nothing
-  # may start a half mirror by itself (AUTO -all, the last-resort timers off).
-  # The monitor's PROGRAM writes one HPS-ISSUE line per leg event (hps-md-event). The
-  # starter's own mdmonitor.service (started by udev when the first array appears) is the
-  # monitor and reads this file; it has no bash on its PATH, so PROGRAM is a small sh
-  # wrapper that sets one (the pinned image does the same with writeShellScript).
-  write_if_changed "$HPS_RUN_DIR/md-event" 0755 << EOF
-#!/bin/sh
-PATH=$(role_path):/bin:/usr/bin
-export PATH
-exec $(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-md-event "\$@"
-EOF
-  write_if_changed "${HPS_ROOT}/etc/mdadm.conf" 0644 << EOF
-# written by the HPS node bundle (docs/BUNDLE.md)
-PROGRAM $HPS_RUN_DIR/md-event
-AUTO -all
-EOF
-  svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
-
   # libvirtd does not start virtlogd itself (lab trial: vm-start failed on
   # /run/libvirt/virtlogd-sock); the guests' console logs go through it
   svc_start --opt KillMode=process --opt Restart=on-failure \
@@ -308,6 +317,7 @@ role_pre() {
   log "role: $NODE_TYPE"
   role_try "clock" role_clock
   role_try "log forwarding" role_logs
+  role_try "md" role_md
   role_try "host reserve" role_reserve
   if role_is SCH; then role_try "storage services" role_storage; fi
   if role_is TCH; then role_try "compute services" role_compute; fi
