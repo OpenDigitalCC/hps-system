@@ -278,7 +278,8 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   # compute.nix says the same
   grep -q 'PROGRAM /etc/hps/hps-md-event' "$ROOT/nix/modules/profiles/compute.nix"
   grep -q '^AUTO -all\|^      AUTO -all' "$ROOT/nix/modules/profiles/compute.nix"
-  unit hps-mdmonitor | grep -q "^ExecStart=$HPS_NIX_PROFILE/bin/mdadm --monitor --scan --config=$HPS_ROOT/etc/mdadm.conf"
+  # no array yet at boot: the unit waits for the first one instead of exiting and being restarted
+  unit hps-mdmonitor | grep -q "^ExecStart=.*bash -c 'until grep -q \"^md\[0-9\]\" /proc/mdstat; do sleep 5; done; exec $HPS_NIX_PROFILE/bin/mdadm --monitor --scan --config=$HPS_ROOT/etc/mdadm.conf'"
   unit hps-mdmonitor | grep -qx 'Restart=always'
   # the degraded-start timers are off for this boot
   [ "$(readlink "$HPS_SYSTEMD_DIR/mdadm-last-resort@.timer")" = /dev/null ]
@@ -472,4 +473,14 @@ EOS
     pkg="${want#* }"
     printf '%s\n' "$have" | grep -qx "$pkg" || { echo "no package $pkg for ${want%% *}"; return 1; }
   done
+}
+
+@test "log forwarding: an IPS that does not answer is waited for without an error line from the shell" {
+  mkdir -p "$TEST_DIR/jbin"
+  printf '#!/bin/bash\nprintf "%%s\\n" "{\\"__REALTIME_TIMESTAMP\\":\\"1794321826000000\\",\\"MESSAGE\\":\\"x\\"}"\n' > "$TEST_DIR/jbin/journalctl"
+  chmod +x "$TEST_DIR/jbin/journalctl"
+  echo "hps.ips=127.0.0.1" > "$HPS_CMDLINE"
+  PATH="$TEST_DIR/jbin:$PATH" HPS_LOG_PORT=1 HPS_LOG_ONCE=1 run timeout 7 bash "$TEST_DIR/bundle/lib/hps-log-journal"
+  [ "$status" -eq 124 ]
+  [[ "$output" != *"Bad file descriptor"* ]]
 }

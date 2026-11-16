@@ -58,9 +58,9 @@ send() {
     return 0
   fi
   while IFS= read -r line; do
-    until printf '%s\n' "$line" >&3 2> /dev/null; do
-      exec 3>&-
-      exec 3<> "/dev/tcp/$ips/$HPS_LOG_PORT" 2> /dev/null || sleep 5
+    until printf '%s\n' "$line" 2> /dev/null >&8; do
+      exec 8>&-
+      exec 8<> "/dev/tcp/$ips/$HPS_LOG_PORT" 2> /dev/null || sleep 5
     done
   done
 }

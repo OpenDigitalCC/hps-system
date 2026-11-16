@@ -241,9 +241,11 @@ PROGRAM $HPS_RUN_DIR/bundle/lib/hps-md-event
 AUTO -all
 EOF
   svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
+  # mdadm --monitor --scan exits at once when there is no array (the mirror comes later,
+  # from mirror-assemble), so the unit waits quietly for the first one.
   svc_start --opt Restart=always \
     hps-mdmonitor "PATH=$(role_path)" \
-    "$(role_bin mdadm)" --monitor --scan --config="${HPS_ROOT}/etc/mdadm.conf"
+    "$(command -v bash)" -c "'until grep -q \"^md[0-9]\" /proc/mdstat; do sleep 5; done; exec $(role_bin mdadm) --monitor --scan --config=${HPS_ROOT}/etc/mdadm.conf'"
 
   svc_start --opt KillMode=process --opt Restart=on-failure --opt LimitMEMLOCK=infinity \
     --unit-opt "After=hps-mdmonitor.service" \
