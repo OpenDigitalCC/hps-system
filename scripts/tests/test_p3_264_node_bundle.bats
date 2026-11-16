@@ -133,7 +133,6 @@ repo() {
  "smartmontools":"/nix/store/77777777777777777777777777777777-smartmontools-7.5",
  "tcpdump":"/nix/store/88888888888888888888888888888888-tcpdump-4.99.6",
  "xxd":"/nix/store/99999999999999999999999999999999-xxd-tinyxxd-1.3.15",
- "rsyslog":"/nix/store/abababababababababababababababab-rsyslog-8.2610.0",
  "om3":"/nix/store/cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd-om3-3.0.0-rc62"}}
 EOF
 }
@@ -145,12 +144,12 @@ EOF
   [[ "$output" == *"-ctrl-exec-agent-0.14.7"* ]]
   [[ "$output" == *"-libvirt-12.2.0"* && "$output" == *"-qemu-host-cpu-only-"* ]]
   [[ "$output" != *"targetcli"* ]]
-  [[ "$output" == *"-tcpdump-"* && "$output" == *"-om3-"* && "$output" == *"-rsyslog-"* && "$output" == *"-jq-"* ]]
+  [[ "$output" == *"-tcpdump-"* && "$output" == *"-om3-"* && "$output" == *"-jq-"* ]]
   [[ "$output" != *"smartmontools"* && "$output" != *"-xxd-"* ]]
   run node_role_packages x86_64:nixos:26.05 SCH "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 0 ]
   [[ "$output" == *"targetcli-fb"* && "$output" != *"libvirt"* ]]
-  [[ "$output" == *"smartmontools"* && "$output" == *"-xxd-"* && "$output" == *"-om3-"* && "$output" == *"-rsyslog-"* ]]
+  [[ "$output" == *"smartmontools"* && "$output" == *"-xxd-"* && "$output" == *"-om3-"* ]]
   [[ "$output" != *"tcpdump"* ]]
 }
 

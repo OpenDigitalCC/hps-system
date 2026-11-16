@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# hps-log-journal - send this node's journal to the IPS's syslog, as the pinned
+# images' rsyslog does (nix/modules/hps-common.nix, hps-log-target): one line per
+# journal entry, RFC 3164, TCP port 514. The IPS files each source under
+# <log dir>/<source ip>/YYYY-MM-DD.log, and its issue watcher reads the HPS-ISSUE
+# lines (tag hps-issue) and the node's own errors from there.
+#
+# Runs as a service (role, role_logs), from the start of this boot's journal, so
+# the early lines reach the IPS too. Why not rsyslog: its closure is 112 store
+# paths and 335 MiB of the node's RAM for what jq and the shell do here. The
+# stream waits when the IPS cannot be reached (nothing is read from the journal
+# meanwhile, so nothing is lost) and reconnects every 5 s.
+#
+# The facility and priority are the journal's own (SYSLOG_FACILITY, PRIORITY), so
+# the severity the IPS grades by is kept. A line's text has no newline.
+#
+# Overrides for tests: HPS_CMDLINE (file), HPS_LOG_PORT, HPS_LOG_OUT (a file that
+# takes the lines instead of the IPS), HPS_LOG_ONCE (read what the journal holds
+# and stop, instead of following).
+
+set -uo pipefail
+
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_LOG_PORT:=514}"
+
+log() {
+  printf '[hps-log-journal] %s\n' "$*" >&2
+}
+
+cmdline_ips() {
+  local word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    case "$word" in
+      hps.ips=*) printf '%s\n' "${word#hps.ips=}"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# format: journal entries (journalctl -o json, one per line) in, syslog lines out.
+format() {
+  jq --unbuffered -r '
+    def pri: ((.SYSLOG_FACILITY // "1" | tonumber) * 8) + ((.PRIORITY // "6" | tonumber));
+    def stamp: (.__REALTIME_TIMESTAMP | tonumber / 1000000 | floor | strftime("%b %e %H:%M:%S"));
+    def text: (.MESSAGE // "") | if type == "string" then . else "(binary)" end | gsub("[\r\n]+"; " ");
+    "<\(pri)>" + stamp + " " + (._HOSTNAME // "localhost") + " " + (.SYSLOG_IDENTIFIER // "journal")
+      + (if ._PID then "[" + ._PID + "]" else "" end) + ": " + text'
+}
+
+# send <ips>: lines in, to the IPS. A line that cannot be written waits for a
+# new connection; the next one is tried only when it has gone.
+send() {
+  local ips="$1" line
+  if [[ -n "${HPS_LOG_OUT:-}" ]]; then
+    cat >> "$HPS_LOG_OUT"
+    return 0
+  fi
+  while IFS= read -r line; do
+    until printf '%s\n' "$line" >&3 2> /dev/null; do
+      exec 3>&-
+      exec 3<> "/dev/tcp/$ips/$HPS_LOG_PORT" 2> /dev/null || sleep 5
+    done
+  done
+}
+
+main() {
+  local ips follow=(-f)
+  ips="$(cmdline_ips || true)"
+  if [[ -z "$ips" && -z "${HPS_LOG_OUT:-}" ]]; then
+    log "hps.ips is not on the kernel command line: logs stay local"
+    return 0
+  fi
+  [[ -z "${HPS_LOG_ONCE:-}" ]] || follow=()
+  log "journal of this boot to ${HPS_LOG_OUT:-$ips:$HPS_LOG_PORT} (tcp)"
+  journalctl -b --no-pager -n all -o json "${follow[@]}" | format | send "$ips"
+}
+
+main "$@"

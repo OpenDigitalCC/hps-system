@@ -32,7 +32,7 @@ _node_tree_base() {
 #   nixos-26/scripts/*             as actions/*       (the node actions, not forked)
 #   plugins/hps-node/hps-node.sh   as actions/hps-node
 #   nixos-26/boot/hps-pair.sh      as lib/hps-pair   (the existing pairing flow)
-#   nixos-26/boot/hps-{time,log-target,iscsi-name,osvc-config,md-event,shutdown-storage}.sh
+#   nixos-26/boot/hps-{time,iscsi-name,osvc-config,md-event,shutdown-storage}.sh
 #                                  as lib/hps-*      (what the pinned images run as units; the
 #                                  starter node runs the same files, docs/BUNDLE.md)
 # Returns 1 with a log line when the tree has no bundle.
@@ -50,7 +50,7 @@ node_bundle_tar() {
     --transform='s,^\(hps-[a-z-]*\)\.sh$,lib/\1,' \
     -C "${nm}/bundle" . \
     -C "${nm}/nixos-26" scripts \
-    -C "${nm}/nixos-26/boot" hps-pair.sh hps-time.sh hps-log-target.sh hps-iscsi-name.sh hps-osvc-config.sh hps-md-event.sh hps-shutdown-storage.sh \
+    -C "${nm}/nixos-26/boot" hps-pair.sh hps-time.sh hps-iscsi-name.sh hps-osvc-config.sh hps-md-event.sh hps-shutdown-storage.sh \
     -C "${nm}/plugins/hps-node" hps-node.sh \
     | gzip -n
 }

@@ -141,7 +141,7 @@ programs() {
   printf '#!/bin/bash\n' > "$TEST_DIR/iscsi/sbin/iscsiadm"
   ln -s "$TEST_DIR/iscsi/sbin/iscsid" "$HPS_NIX_PROFILE/sbin/iscsid"
   ln -s "$TEST_DIR/iscsi/sbin/iscsiadm" "$HPS_NIX_PROFILE/sbin/iscsiadm"
-  for p in libvirtd rsyslogd; do
+  for p in libvirtd; do
     printf '#!/bin/bash\n' > "$HPS_NIX_PROFILE/sbin/$p"
   done
   chmod +x "$HPS_NIX_PROFILE"/bin/* "$HPS_NIX_PROFILE"/sbin/* "$TEST_DIR"/qemu/bin/* "$TEST_DIR"/iscsi/sbin/*
@@ -154,7 +154,7 @@ extract_bundle() {
   tar -xzf "$TEST_DIR/serve/bundle.tgz" -C "$TEST_DIR/bundle"
   cp "$TEST_DIR/hps-pair-stub" "$TEST_DIR/bundle/lib/hps-pair"
   local s
-  for s in lib/hps-time lib/hps-log-target actions/host-reserve-apply actions/net-bridge-ensure; do
+  for s in lib/hps-time actions/host-reserve-apply actions/net-bridge-ensure; do
     printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n' "${s##*/}" > "$TEST_DIR/bundle/$s"
   done
   # the initiator name is the FQDN that pairing set
@@ -166,14 +166,14 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
 # --- the bundle carries it ----------------------------------------------------
 
 @test "the bundle carries the role file and the boot scripts the pinned images run as units" {
-  tar -xzf "$TEST_DIR/serve/bundle.tgz" -C "$TEST_DIR" ./role lib
-  for f in role lib/hps-time lib/hps-log-target lib/hps-iscsi-name lib/hps-osvc-config lib/hps-md-event lib/hps-shutdown-storage lib/hps-pair; do
-    [ -f "$TEST_DIR/$f" ] || { echo "no $f"; return 1; }
+  mkdir -p "$TEST_DIR/x" && tar -xzf "$TEST_DIR/serve/bundle.tgz" -C "$TEST_DIR/x"
+  for f in role lib/hps-time lib/hps-log-journal lib/hps-iscsi-name lib/hps-osvc-config lib/hps-md-event lib/hps-shutdown-storage lib/hps-pair; do
+    [ -f "$TEST_DIR/x/$f" ] || { echo "no $f"; return 1; }
   done
-  [ -x "$TEST_DIR/lib/hps-md-event" ]
+  [ -x "$TEST_DIR/x/lib/hps-md-event" ] && [ -x "$TEST_DIR/x/lib/hps-log-journal" ]
   # the same file as in the tree: nothing forked
-  cmp "$TEST_DIR/lib/hps-md-event" "$ROOT/node-manager/nixos-26/boot/hps-md-event.sh"
-  cmp "$TEST_DIR/lib/hps-shutdown-storage" "$ROOT/node-manager/nixos-26/boot/hps-shutdown-storage.sh"
+  cmp "$TEST_DIR/x/lib/hps-md-event" "$ROOT/node-manager/nixos-26/boot/hps-md-event.sh"
+  cmp "$TEST_DIR/x/lib/hps-shutdown-storage" "$ROOT/node-manager/nixos-26/boot/hps-shutdown-storage.sh"
 }
 
 @test "every action the starter node may run is a file of the bundle, including the waiting fixes" {
@@ -192,7 +192,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   [[ "$output" == *"done: bundle"* ]]
   ln() { grep -nE "$1" "$CALLS" | head -1 | cut -d: -f1; }
   pair="$(ln '^hps-pair')"
-  for u in hps-rsyslog hps-mdmonitor libvirtd opensvc-daemon hps-shutdown-storage; do
+  for u in hps-log-journal hps-mdmonitor libvirtd opensvc-daemon hps-shutdown-storage; do
     [ "$(ln "^systemctl start $u.service")" -lt "$pair" ] || { echo "$u not before pairing"; return 1; }
   done
   [ "$(ln '^systemctl start iscsid.service')" -gt "$pair" ]
@@ -200,7 +200,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   # the name is the FQDN pairing set
   grep -qx 'hps-iscsi-name sch-001.lab.test' "$CALLS"
   # clock, reserve and bridges first, then the services
-  [ "$(ln '^hps-time')" -lt "$(ln '^systemctl start hps-rsyslog')" ]
+  [ "$(ln '^hps-time')" -lt "$(ln '^systemctl start hps-log-journal')" ]
   [ "$(ln '^host-reserve-apply')" -lt "$pair" ]
   [ "$(ln '^net-bridge-ensure')" -lt "$pair" ]
 }
@@ -222,7 +222,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   echo CNH > "$TEST_DIR/serve/type"
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 0 ]
-  ! grep -qE 'systemctl start (libvirtd|iscsid|opensvc|hps-rsyslog|hps-mdmonitor)' "$CALLS"
+  ! grep -qE 'systemctl start (libvirtd|iscsid|opensvc|hps-log-journal|hps-mdmonitor)' "$CALLS"
   [ ! -e "$HPS_SYSTEMD_DIR/libvirtd.service" ]
 }
 
@@ -347,14 +347,40 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   grep -qx 'groupadd --system opensvc' "$CALLS"
 }
 
-@test "log forwarding: rsyslog reads the journal and sends it to the IPS through hps-log-target's file" {
+@test "log forwarding: a unit sends the journal to the IPS with the bundle's script, not rsyslog (335 MiB of RAM)" {
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 0 ]
-  c="$HPS_RUN_DIR/rsyslog.conf"
-  grep -q 'module(load="imjournal"' "$c"
-  grep -qF "include(file=\"$HPS_RUN_DIR/rsyslog-target.conf\" mode=\"optional\")" "$c"
-  unit hps-rsyslog | grep -qx "ExecStart=$HPS_NIX_PROFILE/sbin/rsyslogd -n -f $c -i $HPS_RUN_DIR/rsyslogd.pid"
-  grep -q '^hps-log-target' "$CALLS"
+  unit hps-log-journal | grep -qx "ExecStart=$(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-log-journal"
+  unit hps-log-journal | grep -q "^Environment=\"HPS_CMDLINE=$HPS_CMDLINE\""
+  [ ! -e "$HPS_SYSTEMD_DIR/hps-rsyslog.service" ]
+  ! grep -q rsyslog "$ROOT/lib/starter/nixos.packages"
+}
+
+@test "log forwarding: a journal entry becomes one RFC 3164 line with the journal's own facility and priority" {
+  mkdir -p "$TEST_DIR/jbin"
+  cat > "$TEST_DIR/jbin/journalctl" <<'EOS'
+#!/bin/bash
+echo "journalctl $*" >> "$CALLS"
+printf '%s\n' '{"__REALTIME_TIMESTAMP":"1794321826000000","PRIORITY":"4","SYSLOG_FACILITY":"3","_HOSTNAME":"tch-001.lab.hps","SYSLOG_IDENTIFIER":"hps-issue","_PID":"77","MESSAGE":"HPS-ISSUE open kind=mirror-leg host=tch-001 mirror=m1"}'
+printf '%s\n' '{"__REALTIME_TIMESTAMP":"1794321827000000","MESSAGE":"two\nlines"}'
+printf '%s\n' '{"__REALTIME_TIMESTAMP":"1794321828000000","MESSAGE":[104,105]}'
+EOS
+  chmod +x "$TEST_DIR/jbin/journalctl"
+  PATH="$TEST_DIR/jbin:$PATH" HPS_LOG_OUT="$TEST_DIR/syslog.out" HPS_LOG_ONCE=1 run bash "$TEST_DIR/bundle/lib/hps-log-journal"
+  [ "$status" -eq 0 ]
+  grep -q '^journalctl -b --no-pager -n all -o json$' "$CALLS"
+  [ "$(sed -n 1p "$TEST_DIR/syslog.out")" = '<28>Nov 10 14:43:46 tch-001.lab.hps hps-issue[77]: HPS-ISSUE open kind=mirror-leg host=tch-001 mirror=m1' ]
+  # no tag or priority: the journal's defaults (user, notice); a newline is a space; a binary message is said, not sent
+  [ "$(sed -n 2p "$TEST_DIR/syslog.out")" = '<14>Nov 10 14:43:47 localhost journal: two lines' ]
+  [ "$(sed -n 3p "$TEST_DIR/syslog.out")" = '<14>Nov 10 14:43:48 localhost journal: (binary)' ]
+  [ "$(wc -l < "$TEST_DIR/syslog.out")" -eq 3 ]
+}
+
+@test "log forwarding: no IPS on the kernel line keeps the logs local and exits 0" {
+  echo "BOOT_IMAGE=bzImage" > "$HPS_CMDLINE"
+  run bash "$TEST_DIR/bundle/lib/hps-log-journal"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"logs stay local"* ]]
 }
 
 @test "power-off: the shutdown unit runs the bundle's script after the units it needs are still up, with the bundle's actions" {
@@ -364,7 +390,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   [[ "$u" == *"Type=oneshot"* && "$u" == *"RemainAfterExit=yes"* && "$u" == *"TimeoutStopSec=300"* ]]
   [[ "$u" == *"ExecStop="*"$HPS_RUN_DIR/bundle/lib/hps-shutdown-storage"* ]]
   [[ "$u" == *"HPS_SCRIPTS_DIR=$HPS_RUN_DIR/bundle/actions"* ]]
-  for dep in libvirtd.service iscsid.service ctrl-exec-agent.service hps-rsyslog.service network-online.target; do
+  for dep in libvirtd.service iscsid.service ctrl-exec-agent.service hps-log-journal.service network-online.target; do
     [[ "$(printf '%s\n' "$u" | grep '^After=' | tail -1)" == *"$dep"* ]] || { echo "not After=$dep"; return 1; }
   done
 }
@@ -441,7 +467,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
 @test "the programs the storage and compute scripts call are all in the starter or in a role's packages" {
   # the programs a script calls that the starter (a NixOS installer image) does not have must come from a role line
   have="$(sed 's/#.*//' "$ROOT/lib/starter/nixos.packages" | awk 'NF {print $1}')"
-  for want in "jq jq" "smartctl smartmontools" "xxd xxd" "tcpdump tcpdump" "targetcli targetcli-fb" "iscsiadm open-iscsi" "virsh libvirt" "qemu-img qemu-host-cpu-only" "om om3" "rsyslogd rsyslog" "mdadm mdadm"; do
+  for want in "jq jq" "smartctl smartmontools" "xxd xxd" "tcpdump tcpdump" "targetcli targetcli-fb" "iscsiadm open-iscsi" "virsh libvirt" "qemu-img qemu-host-cpu-only" "om om3" "mdadm mdadm"; do
     pkg="${want#* }"
     printf '%s\n' "$have" | grep -qx "$pkg" || { echo "no package $pkg for ${want%% *}"; return 1; }
   done

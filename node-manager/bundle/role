@@ -118,20 +118,12 @@ role_clock() {
   role_lib hps-time HPS_TIMESYNCD_DIR="${HPS_ROOT}/run/systemd/timesyncd.conf.d"
 }
 
-# Logs: journald's lines to the IPS (TCP 514), as the pinned images' rsyslog does:
+# Logs: the journal's lines to the IPS (TCP 514), as the pinned images' rsyslog does:
 # the IPS's issue watcher reads the HPS-ISSUE lines and the node's own logs from there.
-# rsyslog reads the journal itself (imjournal), so the stock journald is left as it is.
+# lib/hps-log-journal (jq and the shell) instead of rsyslog, whose closure is 335 MiB of RAM.
 role_logs() {
-  local rsyslogd
-  rsyslogd="$(role_bin rsyslogd)" || { log "rsyslogd is not installed"; return 1; }
-  role_lib hps-log-target
-  write_if_changed "$HPS_RUN_DIR/rsyslog.conf" 0644 << EOF
-# written by the HPS node bundle (docs/BUNDLE.md)
-global(workDirectory="$HPS_RUN_DIR")
-module(load="imjournal" StateFile="$HPS_RUN_DIR/imjournal.state" Ratelimit.Interval="0")
-include(file="$HPS_RUN_DIR/rsyslog-target.conf" mode="optional")
-EOF
-  svc_start hps-rsyslog "$rsyslogd" -n -f "$HPS_RUN_DIR/rsyslog.conf" -i "$HPS_RUN_DIR/rsyslogd.pid"
+  svc_start hps-log-journal "PATH=$(role_path)" "HPS_CMDLINE=$HPS_CMDLINE" \
+    "$(command -v bash)" "$HPS_RUN_DIR/bundle/lib/hps-log-journal"
 }
 
 # The host's reserve (CPU, memory, ZFS ARC), as hps-host-reserve does on the
@@ -169,7 +161,7 @@ role_osvc() {
 # exported, in that order, while everything they need is still up
 # (hps-shutdown-storage; the unit stops before the units it is After=).
 role_shutdown() {
-  svc_start --unit-opt "After=libvirtd.service iscsid.service ctrl-exec-agent.service ctrl-exec-executor.service hps-rsyslog.service network-online.target systemd-networkd.service systemd-resolved.service local-fs.target" \
+  svc_start --unit-opt "After=libvirtd.service iscsid.service ctrl-exec-agent.service ctrl-exec-executor.service hps-log-journal.service network-online.target systemd-networkd.service systemd-resolved.service local-fs.target" \
     --opt Type=oneshot --opt RemainAfterExit=yes --opt Restart=no --opt TimeoutStopSec=300 \
     --opt "ExecStop=$(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-shutdown-storage" \
     hps-shutdown-storage "PATH=$(role_path)" "HPS_SCRIPTS_DIR=$HPS_RUN_DIR/bundle/actions" \

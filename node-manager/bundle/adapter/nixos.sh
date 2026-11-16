@@ -21,7 +21,7 @@
 # and these variables, set by adapter_init:
 #   PKG_BIN        directory where added packages' programs appear
 #   PKG_SBIN       the same for programs a package installs under sbin (open-iscsi,
-#                  libvirt, rsyslog)
+#                  libvirt)
 #   SYS_BIN        the starter's own program directories, colon separated
 #   LIBVIRT_CONF_DIR  where the libvirt of this OS reads libvirtd.conf and qemu.conf
 #   SUDO_GROUP     the group whose members have sudo

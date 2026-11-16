@@ -16,10 +16,10 @@
 # The ctrl-exec agent and its executor (a local package: its closure carries perl, its modules and openssl).
 *: ctrl-exec-agent
 
-# Storage controller: the iSCSI target, md, SMART, the key converter (xxd), om3 and the log forwarder.
-SCH: targetcli-fb mdadm smartmontools xxd jq rsyslog om3
+# Storage controller: the iSCSI target, md, SMART, the key converter (xxd), and om3.
+SCH: targetcli-fb mdadm smartmontools xxd jq om3
 
 # Compute host: libvirt and QEMU (with all the display and audio libraries the
 # stock qemu-host-cpu-only closure carries: headless QEMU is plan step 5), the
-# iSCSI initiator, md mirrors, frame capture, om3 and the log forwarder.
-TCH: libvirt qemu-host-cpu-only open-iscsi mdadm tcpdump jq rsyslog om3
+# iSCSI initiator, md mirrors, frame capture, and om3.
+TCH: libvirt qemu-host-cpu-only open-iscsi mdadm tcpdump jq om3
