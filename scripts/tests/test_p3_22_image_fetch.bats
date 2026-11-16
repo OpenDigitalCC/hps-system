@@ -208,3 +208,35 @@ SH
   grep -qF "zfs mount lab/enc/images" "$SHIM_LOG"
   [ -f "$HPS_POOL_ROOT/lab/enc/images/base.qcow2" ]
 }
+
+# Plan step 3: the executor's mount namespace ends a script's mounts; a node with the unit
+# hps-zfs-mount (the bundle's role step) has the dataset mounted from PID 1 as well.
+systemctl_shim() {
+  mkdir -p "$TEST_DIR/bin"
+  cat > "$TEST_DIR/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+echo "systemctl $*" >> "$SHIM_LOG"
+[[ "$1" == cat ]] && { [[ -n "${FAKE_UNIT:-}" ]] && exit 0; exit 1; }
+exit 0
+SH
+  chmod +x "$TEST_DIR/bin/systemctl"
+}
+
+@test "a node with the hps-zfs-mount unit mounts the images dataset from PID 1 after creating it" {
+  body
+  zfs_shim
+  systemctl_shim
+  FAKE_UNIT=1 PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/images"
+  [ "$status" -eq 0 ]
+  grep -qx "systemctl start hps-zfs-mount.service" "$SHIM_LOG"
+  [ "$(grep -n '^zfs create' "$SHIM_LOG" | cut -d: -f1)" -lt "$(grep -n '^systemctl start' "$SHIM_LOG" | cut -d: -f1)" ]
+}
+
+@test "a node without that unit (a pinned image) starts nothing" {
+  body
+  zfs_shim
+  systemctl_shim
+  PATH="$TEST_DIR/bin:$PATH" run bash "$S/image-fetch" base --from "$URL" --sha256 "$SUM" --dest "$HPS_POOL_ROOT/lab/enc/images"
+  [ "$status" -eq 0 ]
+  run ! grep -q "^systemctl start" "$SHIM_LOG"
+}

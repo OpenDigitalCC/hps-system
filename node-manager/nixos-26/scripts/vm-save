@@ -109,8 +109,19 @@ state_dataset() {
     log "creating $ds (inherits the encryption of $POOL/enc; the pool has mountpoint=none, so the mountpoint is set here)"
     run zfs create -o mountpoint="$dir" -o recordsize=1M "$ds" >&2 || { log "cannot create $ds"; exit 1; }
   fi
+  persist_mounts
   [[ -d "$HPS_STATE_ROOT$dir" ]] \
     || refuse "$ds exists but $dir is not a directory (the dataset is not mounted there): check zfs get mountpoint,mounted $ds, then zfs set mountpoint=$dir $ds"
+}
+
+# persist_mounts: the executor runs this script in a mount namespace of its own, so a
+# dataset mounted here is gone when the script ends and the next script (vm-image-write,
+# vm-restore) does not see its files. A node that has the unit hps-zfs-mount (the node
+# bundle's role step makes it) mounts the datasets again from PID 1, where the mount stays;
+# a node without it (the pinned images) is as it was.
+persist_mounts() {
+  systemctl cat hps-zfs-mount.service > /dev/null 2>&1 || return 0
+  run systemctl start hps-zfs-mount.service || true
 }
 
 # used_bytes: the guest's memory in bytes, from virsh dominfo.

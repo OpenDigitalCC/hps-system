@@ -503,3 +503,14 @@ EOS
   [ -x "$HPS_RUN_DIR/md-event" ]
   [ "$(readlink "$HPS_SYSTEMD_DIR/mdadm-last-resort@.timer")" = /dev/null ]
 }
+
+@test "zfs: a unit mounts the datasets from PID 1, because the executor's mount namespace ends an action's mounts" {
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  unit hps-zfs-mount | grep -qx 'Type=oneshot'
+  unit hps-zfs-mount | grep -qx "ExecStart=$HPS_NIX_PROFILE/bin/zfs mount -a"
+  # the scripts that mount a dataset start it (and do nothing where it is absent)
+  for s in image-fetch vm-save dataset-unlock; do
+    grep -q 'systemctl start hps-zfs-mount.service' "$ROOT/node-manager/nixos-26/scripts/$s" || { echo "$s does not start it"; return 1; }
+  done
+}

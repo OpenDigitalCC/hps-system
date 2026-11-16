@@ -198,6 +198,17 @@ EOF
 }
 
 #-------------------------------------------------------------------------------
+# ZFS datasets that stay mounted. The executor runs every action in a mount namespace of its
+# own, so what image-fetch, vm-save and dataset-unlock mount is gone when they end and the
+# next action (vm-image-write, vm-restore) does not see the files (lab trial: "--image
+# /lab/enc/images/... does not exist"). The unit mounts from PID 1, where the mount stays
+# and reaches the actions' namespaces; those three scripts start it when it exists.
+role_zfs() {
+  svc_start --opt Type=oneshot --opt Restart=no \
+    hps-zfs-mount "PATH=$(role_path)" "$(role_bin zfs)" mount -a
+}
+
+#-------------------------------------------------------------------------------
 # storage (SCH)
 #-------------------------------------------------------------------------------
 # ZFS is in the starter (the module and the userland, matching its kernel). The
@@ -318,6 +329,7 @@ role_pre() {
   role_try "clock" role_clock
   role_try "log forwarding" role_logs
   role_try "md" role_md
+  role_try "zfs mounts" role_zfs
   role_try "host reserve" role_reserve
   if role_is SCH; then role_try "storage services" role_storage; fi
   if role_is TCH; then role_try "compute services" role_compute; fi
