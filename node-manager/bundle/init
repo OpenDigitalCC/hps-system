@@ -167,7 +167,13 @@ step_sysadmin() {
 # 2. packages
 #-------------------------------------------------------------------------------
 # AGENT: the store path of the ctrl-exec agent (with its executor), set here.
+# NAGIOS_CHECK, NAGIOS_PLUGINS: the monitoring packages of a storage or compute
+# node (role_monitor); like the agent they are run by their path, not put in the
+# profile (nagios-check is a single file, the plugins' directory would add its check_*
+# programs to every PATH).
 AGENT=""
+NAGIOS_CHECK=""
+NAGIOS_PLUGINS=""
 
 step_packages() {
   local list p
@@ -178,10 +184,21 @@ step_packages() {
   for p in "${paths[@]}"; do
     # The agent is run by its path: a new version sits beside the old one and
     # replaces nothing under a running process (docs/BUNDLE.md "The upgrade").
-    if [[ "$p" =~ -ctrl-exec-agent-[0-9][0-9.]*$ ]]; then AGENT="$p"; else rest+=("$p"); fi
+    if [[ "$p" =~ -ctrl-exec-agent-[0-9][0-9.]*$ ]]; then
+      AGENT="$p"
+    elif [[ "$p" =~ -nagios-check$ ]]; then
+      NAGIOS_CHECK="$p"
+    elif [[ "$p" =~ -hps-nagios-plugins$ ]]; then
+      NAGIOS_PLUGINS="$p"
+    else
+      rest+=("$p")
+    fi
   done
   [[ -n "$AGENT" ]] || die "the IPS's package list has no ctrl-exec agent"
   pkg_realise "$AGENT" || die "the ctrl-exec agent $AGENT could not be taken from the IPS repository"
+  for p in "$NAGIOS_CHECK" "$NAGIOS_PLUGINS"; do
+    [[ -z "$p" ]] || pkg_realise "$p" || die "the monitoring package $p could not be taken from the IPS repository"
+  done
   if ((${#rest[@]} > 0)); then
     pkg_add "${rest[@]}" || die "adding the packages failed"
   fi

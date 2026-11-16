@@ -21,6 +21,20 @@ build() {
   tar -tvzf "$TEST_DIR/b.tgz" > "$TEST_DIR/b.list"
 }
 
+@test "the bundle carries the AppArmor profile texts and the monitoring plugins, the tree's own bytes (one source, not forked)" {
+  build
+  mkdir "$TEST_DIR/x"
+  tar -xzf "$TEST_DIR/b.tgz" -C "$TEST_DIR/x"
+  for f in TEMPLATE.qemu libvirt-qemu libvirtd virt-aa-helper; do
+    cmp "$TEST_DIR/x/apparmor/$f" "$ROOT/node-manager/apparmor/$f"
+  done
+  for f in check_cpu check_net check_diskio check_fs check_swap_use check_zpool check_zpool_io check_vms check_osvc_hb; do
+    cmp "$TEST_DIR/x/plugins/$f" "$ROOT/node-manager/nixos-26/plugins/$f"
+    [ -x "$TEST_DIR/x/plugins/$f" ]
+  done
+  [ -x "$TEST_DIR/x/actions/nagios-check" ]
+}
+
 @test "the bundle carries the bundle files, the node actions, the plugin and the pairing script" {
   build
   for f in init bootstrap.sh allowlist adapter/nixos.sh actions/bundle-refresh \
@@ -101,8 +115,15 @@ build() {
 
 @test "the allowlist is the allowlist of the pinned images (hps-ctrl-exec.nix), plus bundle-refresh" {
   nix_names="$(sed -n 's/^ *\([a-z][a-z0-9-]*\)\.source = mkScript.*/\1/p' "$ROOT/nix/modules/hps-ctrl-exec.nix" | sort)"
-  list_names="$(grep -vE '^\s*(#|$)' "$ROOT/node-manager/bundle/allowlist" | awk '{print $1}' | grep -vx bundle-refresh | sort)"
+  list_names="$(grep -vE '^\s*(#|$)' "$ROOT/node-manager/bundle/allowlist" | awk '{print $1}' | grep -vx -e bundle-refresh -e nagios-check | sort)"
   [ "$nix_names" = "$list_names" ]
+  # nagios-check is the pinned images' other script (hps-monitor.nix): same profile, no input, no other option
+  grep -qx 'nagios-check profile=node' "$ROOT/node-manager/bundle/allowlist"
+  grep -q 'services.ctrl-exec-agent.scripts.nagios-check = {' "$ROOT/nix/modules/hps-monitor.nix"
+  grep -q 'options.profile = "node";' "$ROOT/nix/modules/hps-monitor.nix"
+  ! grep -q 'nagios-check.*input' "$ROOT/nix/modules/hps-monitor.nix"
+  # and it is the only script outside hps-ctrl-exec.nix the pinned images allow
+  [ "$(grep -rlE 'services\.ctrl-exec-agent\.scripts\.[a-z-]+ = ' "$ROOT/nix/modules")" = "$ROOT/nix/modules/hps-monitor.nix" ]
   # and the options agree: input=raw where the nix module says raw
   for n in $(sed -n 's/^ *\([a-z][a-z0-9-]*\)\.options\.input = "raw".*/\1/p' "$ROOT/nix/modules/hps-ctrl-exec.nix"); do
     grep -qE "^$n .*input=raw" "$ROOT/node-manager/bundle/allowlist" || { echo "$n: input=raw missing"; return 1; }
@@ -133,7 +154,11 @@ repo() {
  "smartmontools":"/nix/store/77777777777777777777777777777777-smartmontools-7.5",
  "tcpdump":"/nix/store/88888888888888888888888888888888-tcpdump-4.99.6",
  "xxd":"/nix/store/99999999999999999999999999999999-xxd-tinyxxd-1.3.15",
- "om3":"/nix/store/cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd-om3-3.0.0-rc62"}}
+ "om3":"/nix/store/cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd-om3-3.0.0-rc62",
+ "apparmor-parser":"/nix/store/abababababababababababababababab-apparmor-parser-4.1.7",
+ "apparmor-profiles":"/nix/store/acacacacacacacacacacacacacacacac-apparmor-profiles-4.1.7",
+ "nagios-check":"/nix/store/adadadadadadadadadadadadadadadad-nagios-check",
+ "hps-nagios-plugins":"/nix/store/aeaeaeaeaeaeaeaeaeaeaeaeaeaeaeae-hps-nagios-plugins"}}
 EOF
 }
 
@@ -146,11 +171,16 @@ EOF
   [[ "$output" != *"targetcli"* ]]
   [[ "$output" == *"-tcpdump-"* && "$output" == *"-om3-"* && "$output" == *"-jq-"* ]]
   [[ "$output" != *"smartmontools"* && "$output" != *"-xxd-"* ]]
+  # AppArmor for the guests is a compute thing; the monitoring checks are on both roles
+  [[ "$output" == *"-apparmor-parser-"* && "$output" == *"-apparmor-profiles-"* ]]
+  [[ "$output" == *"-nagios-check"* && "$output" == *"-hps-nagios-plugins"* ]]
   run node_role_packages x86_64:nixos:26.05 SCH "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 0 ]
   [[ "$output" == *"targetcli-fb"* && "$output" != *"libvirt"* ]]
   [[ "$output" == *"smartmontools"* && "$output" == *"-xxd-"* && "$output" == *"-om3-"* ]]
   [[ "$output" != *"tcpdump"* ]]
+  [[ "$output" != *"apparmor"* ]]
+  [[ "$output" == *"-nagios-check"* && "$output" == *"-hps-nagios-plugins"* ]]
 }
 
 @test "role packages: a host of two roles gets both, each path once" {

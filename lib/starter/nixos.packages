@@ -34,3 +34,14 @@ xxd /nix/store/anbhv1x4z9s5xpvpi5v4z2dzq0943ma0-xxd-tinyxxd-1.3.15
 # 3.0.0-rc62 has no upstream signature in the lab cache either, so a node takes it
 # unchecked, in its own call.
 om3 /nix/store/icpkmfz7s1kdv444l7sfdsvijk7m7qvx-om3-3.0.0-rc62
+# AppArmor for the guests (docs/BUNDLE.md "AppArmor"): the parser and the abstractions
+# the profiles include, 4.1.7, the store paths of the pinned images (upstream, signed).
+apparmor-parser /nix/store/3imv6g6axmczk448vcd0j0jfb6cil7gl-apparmor-parser-4.1.7
+apparmor-profiles /nix/store/vi6bapcazps48lkkawiih15f6w660lk4-apparmor-profiles-4.1.7
+# The monitoring checks (docs/BUNDLE.md "Monitoring"): two LOCAL packages, the builds
+# of the pinned images from the lab's cache, put on the IPS with `hps-starter add-local`.
+# nagios-check is the ctrl-exec plugin (one file); hps-nagios-plugins is the directory of
+# plugins the pinned node-base image uses (check_disk, check_load, check_procs, check_mem
+# are taken from it; the usage checks come from the bundle).
+nagios-check /nix/store/ybjld8icqjq1lm0ysscyx0i8xn5dcn0x-nagios-check
+hps-nagios-plugins /nix/store/61jhl0q7ydh5mw6cj2xm1j0hyiaqhsds-hps-nagios-plugins

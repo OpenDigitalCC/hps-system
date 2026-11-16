@@ -158,6 +158,66 @@ role_osvc() {
   fw_open 10000
 }
 
+# The monitoring checks, as the pinned images have them (nix/modules/hps-monitor.nix,
+# docs/MONITORING.md): hps-monitor on the IPS asks the allowlisted action nagios-check
+# for the checks named in /etc/nagios-checks/checks.conf, which says how. Nothing
+# runs by itself on the node (no timer, no unit): the IPS asks. What it takes:
+#  - nagios-check, the ctrl-exec plugin (a local package, run by its path:
+#    $HPS_RUN_DIR/nagios-check, which the bundle's actions/nagios-check runs);
+#  - one directory of real files (nagios-check refuses a plugin that resolves
+#    outside it): check_disk, check_load, check_procs, check_mem from the package
+#    hps-nagios-plugins, and the usage checks, the bundle's plugins/ as they are
+#    with the PATH line they all carry filled in (the nix module does the same
+#    with the store paths of its packages).
+# The check set is the module's: checks.conf below is its text for a node of these roles
+# (a test compares the two).
+role_monitor() {
+  local d="$HPS_RUN_DIR/nagios-plugins" p content path_line plugs
+  # HPS_NAGIOS_CHECK_FS, HPS_NAGIOS_PLUGINS_FS (tests): where to look at the two
+  # packages, for store paths that are not on the machine that runs the test
+  local chk="${HPS_NAGIOS_CHECK_FS:-$NAGIOS_CHECK}" plg="${HPS_NAGIOS_PLUGINS_FS:-$NAGIOS_PLUGINS}"
+  if [[ -z "$NAGIOS_CHECK" || -z "$NAGIOS_PLUGINS" ]]; then
+    log "the monitoring packages are not in this node's list (nagios-check, hps-nagios-plugins: lib/starter/nixos.roles)"
+    return 1
+  fi
+  role_need awk jq
+  [[ -x "$chk" ]] || { log "$NAGIOS_CHECK is not a program"; return 1; }
+  run install -d -m 0755 "$d" "${HPS_ROOT}/etc/nagios-checks"
+  for p in check_disk check_load check_procs check_mem; do
+    [[ -e "$plg/$p" ]] || { log "$NAGIOS_PLUGINS has no $p"; return 1; }
+    run install -m 0755 "$plg/$p" "$d/$p"
+  done
+  plugs="check_cpu check_net check_diskio check_fs check_swap_use check_osvc_hb"
+  role_is SCH && plugs="$plugs check_zpool check_zpool_io"
+  role_is TCH && plugs="$plugs check_vms"
+  path_line="export PATH=$(role_path):\"\$PATH\""
+  for p in $plugs; do
+    [[ -f "$HERE/plugins/$p" ]] || { log "the bundle has no plugins/$p"; return 1; }
+    content="$(cat "$HERE/plugins/$p"; printf x)"
+    content="${content%x}"
+    printf '%s' "${content//'# @HPS_PATH@'/$path_line}" > "$d/$p.new"
+    chmod 0755 "$d/$p.new"
+    mv -f "$d/$p.new" "$d/$p"
+  done
+  run ln -sfn "$NAGIOS_CHECK" "$HPS_RUN_DIR/nagios-check"
+  {
+    printf '# Written by the HPS node bundle (role_monitor); the IPS (hps-monitor) names the checks, this file says how.\n'
+    printf 'plugin_dir = %s\ntimeout = 10\nbudget = 50\n' "$d"
+    printf 'disk_root = check_disk -w 20%% -c 10%% -p /\n'
+    printf 'load = check_load -r -w 1.5,1.2,1 -c 3,2.5,2\n'
+    printf 'mem = check_mem -w 10 -c 5\n'
+    printf 'swap = check_swap_use -w 50 -c 80\n'
+    printf 'procs = check_procs -k -w 1000 -c 2000\n'
+    printf 'cpu = check_cpu\nnet = check_net\ndiskio = check_diskio\n'
+    printf 'disk_other = check_fs -a -w 80 -c 90\n'
+    printf 'osvc_hb = check_osvc_hb\n'
+    if role_is SCH; then
+      printf 'zpool = check_zpool\nzpool_io = check_zpool_io\nzpool_cap = check_zpool -m cap -w 80 -c 90\n'
+    fi
+    if role_is TCH; then printf 'vms = check_vms\n'; fi
+  } | write_if_changed "${HPS_ROOT}/etc/nagios-checks/checks.conf" 0644
+}
+
 # Power-off: guests stop, mirrors stop, targets and sessions go, pools are
 # exported, in that order, while everything they need is still up
 # (hps-shutdown-storage; the unit stops before the units it is After=).
@@ -226,14 +286,84 @@ role_storage() {
 # compute (TCH)
 #-------------------------------------------------------------------------------
 # libvirt and QEMU/KVM, md mirrors, the iSCSI initiator (its name and daemon
-# follow pairing: role_iscsi). The settings are those of compute.nix, except
-# AppArmor: the starter's kernel does not have it in its security modules, so the
-# guests are confined by the DAC model, seccomp and cleared capabilities
-# (docs/BUNDLE.md "What is not carried").
+# follow pairing: role_iscsi). The settings are those of compute.nix, AppArmor
+# included: the profiles are loaded and the kernel's AppArmor is checked before
+# libvirtd starts, and the step fails (libvirtd is not started) when it is not
+# active, never falling back to the DAC model alone (role_apparmor).
+
+# role_aa_fill <file>: a profile text of the bundle (apparmor/, the files the pinned
+# images' nix module reads too) with the store paths of this node's packages put
+# in place of its @@NAME@@ markers.
+role_aa_fill() {
+  sed -e "s|@@LIBVIRT@@|$AA_LIBVIRT|g" -e "s|@@QEMU@@|$AA_QEMU|g" -e "s|@@APPARMOR_PARSER@@|$AA_PARSER|g" "$HERE/apparmor/$1"
+}
+
+# role_apparmor: AppArmor for the guests, as the pinned images have it
+# (nix/modules/profiles/compute-apparmor.nix, docs/CONFINEMENT.md "AppArmor layer"):
+# the kernel's AppArmor is active; the libvirtd and virt-aa-helper profiles are
+# loaded (enforce); the abstraction, the template and the parser's include path
+# are where libvirt and the parser look. Called before libvirtd starts: the daemon
+# is only confined if its profile is in the kernel when it is exec'd, and the
+# apparmor security driver needs that and TEMPLATE.qemu.
+role_apparmor() {
+  local enabled="${HPS_AA_ENABLED:-/sys/module/apparmor/parameters/enabled}"
+  local profiles="${HPS_AA_PROFILES:-/sys/kernel/security/apparmor/profiles}"
+  local parser f
+  role_need apparmor_parser || return 1
+  if [[ "$(cat "$enabled" 2> /dev/null || true)" != Y || ! -r "$profiles" ]]; then
+    log "ERROR: AppArmor is not active in this kernel ($enabled is not Y, or $profiles is not there)."
+    log "ERROR: the kernel line needs lsm=...,apparmor,... apparmor=1 (the IPS issues it; a node booted before that needs a reboot)."
+    log "ERROR: libvirtd is NOT started: guests would run with the DAC model alone, and the pinned images never do."
+    return 1
+  fi
+  parser="$(readlink -f "$(role_bin apparmor_parser)")"
+  AA_PARSER="${parser%/bin/*}"
+  AA_LIBVIRT="$(readlink -f "$(role_bin libvirtd)")"
+  AA_LIBVIRT="${AA_LIBVIRT%/sbin/*}"
+  AA_QEMU="$(readlink -f "$(role_bin qemu-system-x86_64)")"
+  AA_QEMU="${AA_QEMU%/bin/*}"
+  [[ -d "$PKG_ETC/apparmor.d/abstractions" ]] || { log "$PKG_ETC/apparmor.d/abstractions is not there (the package apparmor-profiles)"; return 1; }
+
+  run install -d -m 0755 "${HPS_ROOT}/etc/apparmor.d/abstractions" "${HPS_ROOT}/etc/apparmor.d/hps" \
+    "${HPS_ROOT}/etc/apparmor" "${HPS_ROOT}/var/lib/apparmor.d/libvirt" "${HPS_ROOT}/sbin"
+  # the parser's include path: the abstractions of the package, the one this file
+  # adds, and /var/lib/apparmor.d (libvirt writes libvirt/<uuid>.files there; its
+  # APPARMOR_DIR is compiled in)
+  write_if_changed "${HPS_ROOT}/etc/apparmor/parser.conf" 0644 << EOF
+# written by the HPS node bundle (docs/BUNDLE.md "AppArmor")
+skip-cache
+Include /etc/apparmor.d
+Include $PKG_ETC/apparmor.d
+Include /var/lib/apparmor.d
+EOF
+  role_aa_fill libvirt-qemu | write_if_changed "${HPS_ROOT}/etc/apparmor.d/abstractions/libvirt-qemu" 0644
+  role_aa_fill TEMPLATE.qemu | write_if_changed "${HPS_ROOT}/var/lib/apparmor.d/libvirt/TEMPLATE.qemu" 0644
+  role_aa_fill libvirtd | write_if_changed "${HPS_ROOT}/etc/apparmor.d/hps/libvirtd" 0644
+  role_aa_fill virt-aa-helper | write_if_changed "${HPS_ROOT}/etc/apparmor.d/hps/virt-aa-helper" 0644
+  # virt-aa-helper runs the parser by this absolute path (libvirt's compiled-in name)
+  run ln -sfn "$AA_PARSER/bin/apparmor_parser" "${HPS_ROOT}/sbin/apparmor_parser"
+
+  for f in libvirtd virt-aa-helper; do
+    run "$AA_PARSER/bin/apparmor_parser" -r -K "${HPS_ROOT}/etc/apparmor.d/hps/$f" || {
+      log "ERROR: apparmor_parser could not load the $f profile"
+      return 1
+    }
+  done
+  # the daemon's profile is what libvirt's probe looks for; without it the driver is unusable
+  if ! grep -qF "$AA_LIBVIRT/sbin/.libvirtd-wrapped (enforce)" "$profiles"; then
+    log "ERROR: the libvirtd profile ($AA_LIBVIRT/sbin/.libvirtd-wrapped) is not in $profiles after loading"
+    return 1
+  fi
+  log "AppArmor active; libvirtd and virt-aa-helper profiles loaded (enforce)"
+}
+
 role_compute() {
   local libvirtd qemu_bin edk2 f
   role_need virsh libvirtd virtlogd qemu-img qemu-system-x86_64 iscsiadm iscsid mdadm tcpdump jq
   libvirtd="$(role_bin libvirtd)"
+  # AppArmor first: when it is not active the step stops here, before anything
+  # that starts a guest (libvirtd, the mirror monitor) is started
+  role_apparmor
   role_modules vhost_net 8021q bridge raid1 iscsi_tcp
   # KVM: the module of the CPU's vendor (the one that is not there always fails)
   if grep -q '^vendor_id[[:space:]]*:[[:space:]]*GenuineIntel' "${HPS_CPUINFO:-/proc/cpuinfo}"; then
@@ -262,6 +392,7 @@ allow_disk_format_probing = 0
 security_default_confined = 1
 security_require_confined = 0
 set_process_name = 1
+security_driver = "apparmor"
 EOF
 
   # The UEFI firmware the guest definitions name (vm-define: HPS_OVMF_CODE, HPS_OVMF_VARS):
@@ -335,6 +466,7 @@ role_pre() {
   if role_is TCH; then role_try "compute services" role_compute; fi
   role_try "bridges" role_bridges
   role_try "om3" role_osvc
+  role_try "monitoring checks" role_monitor
   role_try "shutdown unit" role_shutdown
 }
 

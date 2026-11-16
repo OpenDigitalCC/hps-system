@@ -23,6 +23,8 @@
 #   PKG_BIN        directory where added packages' programs appear
 #   PKG_SBIN       the same for programs a package installs under sbin (open-iscsi,
 #                  libvirt)
+#   PKG_ETC        the same for the files a package installs under etc (the AppArmor
+#                  abstractions: etc/apparmor.d)
 #   SYS_BIN        the starter's own program directories, colon separated
 #   LIBVIRT_CONF_DIR  where the libvirt of this OS reads libvirtd.conf and qemu.conf
 #   SUDO_GROUP     the group whose members have sudo
@@ -44,6 +46,7 @@ adapter_init() {
   SUDO_GROUP=wheel
   PKG_BIN="$NIX_PROFILE/bin"
   PKG_SBIN="$NIX_PROFILE/sbin"
+  PKG_ETC="$NIX_PROFILE/etc"
   SYS_BIN="/run/wrappers/bin:/run/current-system/sw/bin"
   LIBVIRT_CONF_DIR=/var/lib/libvirt
   return 0

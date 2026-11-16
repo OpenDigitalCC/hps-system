@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# nagios-check - the allowlisted action hps-monitor on the IPS calls on a node
+# (docs/MONITORING.md, docs/BUNDLE.md "Monitoring"). On a pinned image the action
+# is the ctrl-exec plugin itself; on a starter node the plugin is a local package
+# that the node realised by its store path, and the role step (role_monitor) linked
+# it to ${HPS_RUN_DIR}/nagios-check and wrote /etc/nagios-checks/checks.conf. This
+# file runs it with the arguments it was given and nothing else: the plugin takes
+# check names (or --all) and refuses any other, and it reads no input.
+set -euo pipefail
+
+PLUGIN="${HPS_RUN_DIR:-/run/hps}/nagios-check"
+if [[ ! -x "$PLUGIN" ]]; then
+  echo "nagios-check: $PLUGIN is not there: the node's role step has not set up the monitoring checks (see its console or journal)" >&2
+  exit 3
+fi
+exec "$PLUGIN" "$@"

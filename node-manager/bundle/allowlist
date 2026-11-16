@@ -2,8 +2,9 @@
 # ctrl-exec agent of a starter node may run, and nothing else. One per line:
 #   name [key=value ...]     key=value is a scripts.conf option (profile, input)
 # name is a file under actions/ in the bundle. These are the scripts of the
-# pinned images (nix/modules/hps-ctrl-exec.nix) plus bundle-refresh; a test keeps
-# the two lists the same until the pinned images are retired (plan step 7).
+# pinned images (nix/modules/hps-ctrl-exec.nix, and nagios-check of
+# nix/modules/hps-monitor.nix, same profile, no input) plus bundle-refresh; a test
+# keeps the two lists the same until the pinned images are retired (plan step 7).
 hps-node profile=node
 storage-pool-inspect profile=node
 storage-disks profile=node
@@ -67,4 +68,5 @@ net-vlan-address profile=node
 net-vxlan-ensure profile=node
 host-reserve-apply profile=node
 host-resources profile=node
+nagios-check profile=node
 bundle-refresh profile=node
