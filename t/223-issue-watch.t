@@ -22,8 +22,8 @@ my $RULES = "$Bin/../lib/hps-issue-rules.conf";
 my $rules = HPS::IssueWatch::load_rules($RULES);
 is_deeply($rules->{marker}{'mirror-leg'}, { severity => 'warning', key_fields => [qw(host mirror)] },
     'shipped: mirror-leg markers keyed by host,mirror');
-is(scalar @{ $rules->{rules} }, 8, 'shipped: eight raw-line rules');
-is(scalar(grep { ($_->{from} // '') eq 'ips' } @{ $rules->{rules} }), 3, 'three of them for the IPS\'s own lines (from=ips)');
+is(scalar @{ $rules->{rules} }, 9, 'shipped: nine raw-line rules');
+is(scalar(grep { ($_->{from} // '') eq 'ips' } @{ $rules->{rules} }), 4, 'four of them for the IPS\'s own lines (from=ips)');
 
 for my $bad (
     [ 'nonsense', qr/line 1: a rule is/ ],
@@ -340,7 +340,7 @@ is($total, 10, 'a backlog larger than max_read is read over several polls');
 # the watcher binary checks its rules
 my $o = qx($^X $Bin/../bin/hps-issue-watch check-rules $RULES 2>&1);
 is($? >> 8, 0, 'hps-issue-watch check-rules: exit 0');
-like($o, qr/1 marker rule\(s\), 8 line rule\(s\)/, 'and counts them');
+like($o, qr/2 marker rule\(s\), 9 line rule\(s\)/, 'and counts them');
 my $badf = "$base/bad.conf";
 append($badf, "open x\n");
 $o = qx($^X $Bin/../bin/hps-issue-watch check-rules $badf 2>&1);

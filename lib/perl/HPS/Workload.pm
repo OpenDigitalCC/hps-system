@@ -40,7 +40,7 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 # vm-define takes --disk 1..8 times.
 my $MAX_DISKS = 8;
 
-my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console suspend resume);
+my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console suspend resume resume-paused);
 my %TOP = map { $_ => 1 } qw(name project access vms class);
 # The workload's class (docs/WORKLOADS.md "Classes"): what
 # happens to it when its host must go down (hps-workload drain). Not the
@@ -1146,6 +1146,43 @@ sub _steps_resume ($self, $def, %a) {
     return @s;
 }
 
+# resume-paused: a guest the hypervisor paused on a disk I/O error (vm_disk_error_policy
+# stop), resumed once its disks can be read again. NOT resume, which restores a
+# suspended guest from its state file (vm-restore). Per VM (start order) vm-resume on
+# its compute host; the node script refuses (3) a guest that is not paused, one paused
+# by an operator (unless --any-reason), and one whose disks are not healthy, naming why.
+# With no --vm the VMs of the workload are looked at first (vm-status) and only the
+# paused ones get vm-resume, so the others of a multi-VM workload do not stop the
+# verb; with --vm the call is made as asked, and its refusal is the answer. A
+# suspended VM and a draining host are refused as for start and resume. The
+# healer does the same by itself for a guest-paused issue (HPS::GuestHeal).
+sub _steps_resume_paused ($self, $def, %a) {
+    my $rec = $self->_need_record($def->{name}, 'resume-paused');
+    my @s;
+    $self->{notes} = [];
+    my %paused;
+    for my $vm ($self->_ordered($def, %a)) {
+        my $vname = $vm->{name};
+        _refuse_suspended($rec, $vname, 'resume-paused');
+        $self->_refuse_draining('resume-paused', $vm->{compute}, %a);
+        my $in = $self->_vm_info($def, $vm);
+        my @args = ($vname, ($a{any_reason} ? ('--any-reason') : ()));
+        if (defined $a{vm}) {
+            push @s, _step($in->{mac}, 'vm-resume', \@args);
+            next;
+        }
+        push @s, _step($in->{mac}, 'vm-status', [$vname], ok_rc => [4], seen => sub ($r) {
+            my $st = ($r->{stdout} // '') =~ /^VM \Q$vname\E (.+?)\s*$/m ? $1 : '';
+            $paused{$vname} = $r->{rc} == 0 && $st eq 'paused' ? 1 : 0;
+            push @{ $self->{notes} }, "VM $vname is " . ($r->{rc} == 0 ? $st : 'not defined') . ", not paused: not resumed"
+                unless $paused{$vname};
+        });
+        push @s, _step($in->{mac}, 'vm-resume', \@args, when => sub { $paused{$vname} },
+            only => "only if vm-status reports $vname paused");
+    }
+    return @s;
+}
+
 sub _steps_status ($self, $def, %a) {
     $self->_need_record($def->{name}, 'status');
     my @s;
@@ -1315,7 +1352,8 @@ sub _steps_grow_disk ($self, $def, %a) {
 
 my %STEPS = (create => '_steps_create', start => '_steps_start', stop => '_steps_stop',
     destroy => '_steps_destroy', status => '_steps_status', 'grow-disk' => '_steps_grow_disk',
-    console => '_steps_console', suspend => '_steps_suspend', resume => '_steps_resume');
+    console => '_steps_console', suspend => '_steps_suspend', resume => '_steps_resume',
+    'resume-paused' => '_steps_resume_paused');
 
 sub _prepare ($self, $op, $name, %a) {
     my $m = $STEPS{ $op // '' } // _fail('usage', 'unknown operation; one of: ' . join(', ', ops()));
@@ -1325,6 +1363,7 @@ sub _prepare ($self, $op, $name, %a) {
     _fail('usage', '--image-written is only for create --resume') if $a{image_written} && !($op eq 'create' && $a{resume});
     _fail('usage', '--disk and --size are only for grow-disk') if (defined $a{disk} || defined $a{size}) && $op ne 'grow-disk';
     _fail('usage', '--lines is only for console') if defined $a{lines} && $op ne 'console';
+    _fail('usage', '--any-reason is only for resume-paused') if $a{any_reason} && $op ne 'resume-paused';
     my $def = $self->load($name);
     return ($def, $self->$m($def, %a));
 }
@@ -1489,7 +1528,7 @@ sub run ($self, $op, $name, %a) {
         }
     }
     my $out = { op => $op, name => $name, ok => (@pending ? 0 : 1), steps => \@results,
-        ($op eq 'destroy' || $op eq 'grow-disk' || $op eq 'create' ? (notes => $self->{notes} // []) : ()) };
+        ($op eq 'destroy' || $op eq 'grow-disk' || $op eq 'create' || $op eq 'resume-paused' ? (notes => $self->{notes} // []) : ()) };
     $out->{pending} = \@pending if @pending;
     $self->_post($op, $def, $out, %a);
     if ($op eq 'status' || $op eq 'console') { $self->_log('info', "$op $name ok") }
@@ -1628,6 +1667,9 @@ sub _post_status ($self, $def, $out) {
         if ($r->{script} eq 'vm-status') {
             my ($l) = reverse grep { /^VM \S+ / } @lines;
             $v->{state} = $l =~ s/^VM \S+ //r if defined $l;
+            # a paused guest: why (an older node image prints no PAUSED line)
+            my ($pl) = reverse grep { /^PAUSED \S+ reason=[a-z0-9]+$/ } @lines;
+            $v->{pause_reason} = $pl =~ s/^.*reason=//r if defined $pl && ($v->{state} // '') eq 'paused';
         }
         else {
             my ($l) = reverse grep { /^MIRROR \S+ / } @lines;

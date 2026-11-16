@@ -235,7 +235,15 @@ Virtual-machine workloads. `<name>` is the workload, stored as
   survives a planned host reboot.
 
 `hps-workload resume <name> [--vm <vm>] [--dry-run] [--json]`
-: Brings a suspended VM back where it left off.
+: Brings a suspended VM back where it left off (a guest paused by a disk I/O
+  error is `resume-paused`).
+
+`hps-workload resume-paused <name> [--vm <vm>] [--any-reason] [--dry-run] [--json]`
+: Resumes a guest paused by a disk I/O error (not `resume`, which restores a
+  suspended guest from its state file): `vm-resume`, which checks every disk
+  of the guest first and refuses (3) naming what is unhealthy. Without `--vm`
+  only the paused VMs are resumed. A guest an operator paused is refused unless
+  `--any-reason`. The healer does this by itself for `guest-paused` issues.
 
 `hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]`
 : Removes the instance and keeps the definition; `--forget` removes that too.
@@ -579,6 +587,9 @@ pool, `define` over an existing definition, a disk with a signature without
   `hps-log host <host>` reads what a host sent to the IPS; `hps-log ips` reads
   the IPS's own lines.
 - `hps-metrics last <host>` shows the latest check results.
+- A guest paused by a disk I/O error shows in `hps-log attention` as a workload
+  `paused` line (subject `<workload>/<vm>`) and in `hps-issues list` as a
+  `guest-paused` issue, until the healer resumes it (`resumed`).
 - `hps-issues list` shows what is unresolved; `hps-issues show <id>` shows the
   trail.
 - Workload tools log every node call, its exit status and every refusal to
@@ -597,7 +608,7 @@ Works at once on the IPS, with no node involved
 
 Needs a booted, paired node
 : `hps-node`, `hps-storage`, `hps-osvc` and the `hps-workload` verbs that act
-  on VMs (create, start, stop, suspend, resume, drain, undrain, destroy,
+  on VMs (create, start, stop, suspend, resume, resume-paused, drain, undrain, destroy,
   status, grow-disk, console) call node scripts through the IPS's dispatcher. `hps-node net-up`
   needs a NixOS host.
 
@@ -605,6 +616,13 @@ Needs a node image or a reboot
 : `hps-onboard repin` points a host at another pin. `hps-onboard set-key`
   `boot_bridge` is read at boot. `hps-onboard reaudit` takes effect at the
   node's next boot.
+
+Needs a node image (the paused-guest path)
+: `check_vms` reporting paused guests, `vm-resume`, the `PAUSED` line of
+  `vm-status`, `vm-stop` refusing a paused guest and the allowlist entry take
+  effect at a node's next boot of the new image. Until then that node reports no
+  paused guest ("cannot tell", not "none paused"), though `hps-workload
+  resume-paused` and the healer are ready on the IPS.
 
 Needs a BMC driver
 : `hps-bmc` actions, and the power-state confirmation in `hps-node power-off`.

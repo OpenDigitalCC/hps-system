@@ -227,13 +227,16 @@ nothing). A node call that exits non-zero ends the run at once.
     be refused) and are shown `(skipped, not needed)` when the VM was defined.
 
 `stop`
-:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped` and `stopped_at`. A VM that is itself a cluster node (the builder) is then stopped, not down: `hps-monitor` does not call it while its record says `stopped` or `suspended` (docs/MONITORING.md). `vm-stop` waits for the guest's own shutdown and never forces; `stop --force` passes `vm-stop --force` (the graceful wait, then `virsh destroy`) for a guest that cannot shut down, such as one whose root filesystem went read-only.
+:   Reverse priority (consumers before providers at one priority): `vm-stop`, then `mirror-stop`. Records `stopped` and `stopped_at`. A VM that is itself a cluster node (the builder) is then stopped, not down: `hps-monitor` does not call it while its record says `stopped` or `suspended` (docs/MONITORING.md). `vm-stop` waits for the guest's own shutdown and never forces (a paused guest cannot shut down, so `vm-stop` refuses it with 3 and names `resume-paused` and `--force`; with `--force` it is destroyed at once); `stop --force` passes `vm-stop --force` (the graceful wait, then `virsh destroy`) for a guest that cannot shut down, such as one whose root filesystem went read-only.
 
 `suspend [--vm <vm>]`
 :   Saves each VM's memory to a file and stops it, so a planned host reboot does not end a long job (see "Suspend and resume"). Per VM, consumers first like `stop`: `vm-save <vm> --state /<pool>/enc/state/<vm>.save`. Nothing else stops. Records `suspended` with `state_file`, `saved_at` and `size_bytes`. A suspended VM refuses `suspend`, `start` and `stop` (3), each pointing to `resume`.
 
 `resume [--vm <vm>]`
-:   Per VM in start order: the VXLAN links and `mirror-assemble` (a rebooted host lost both), `vm-status` and, when the host lost libvirt's definition, `vm-define` from the definition and the record (as `start` does, with the same refusal when the definition has changed), then `vm-restore <vm> --state <file>`, which removes the state file. Records `running`. A VM that is not suspended refuses (3).
+:   Per VM in start order: the VXLAN links and `mirror-assemble` (a rebooted host lost both), `vm-status` and, when the host lost libvirt's definition, `vm-define` from the definition and the record (as `start` does, with the same refusal when the definition has changed), then `vm-restore <vm> --state <file>`, which removes the state file. Records `running`. A VM that is not suspended refuses (3). For a guest that is paused in memory (a disk I/O error), not suspended to a file, the verb is `resume-paused`.
+
+`resume-paused [--vm <vm>] [--any-reason]`
+:   Resumes a guest the hypervisor paused on a disk I/O error (`vm_disk_error_policy` `stop`, the default; `docs/STORAGE-FAULTS.md`). It is not `resume`: `resume` restores a guest that `suspend` saved to a state file and stopped (`vm-restore`, the guest is not running); `resume-paused` un-freezes a guest that is still in memory on its compute host (`vm-resume`, `virsh resume`). Per VM in start order, `vm-status` and then `vm-resume <vm>` for each VM that is paused (with `--vm`, only `vm-resume` for that VM, and its refusal is the answer). `vm-resume` checks every disk of the guest first (a mirror assembled with a leg in sync, a zvol pool ONLINE) and refuses (3) naming what is wrong, and refuses a guest paused by an operator unless `--any-reason`. A VM that is not paused is left alone and noted (`note: VM <vm> is running, not paused: not resumed`). Changes no record. A suspended VM and a draining host are refused (3). The healer does the same by itself for a `guest-paused` issue (`docs/ISSUES.md`), never for an operator's pause, a VM recorded `stopped` or `suspended` or a draining host.
 
 `destroy`
 :   Allowed in every recorded state (who may run it is ctrl-exec's decision, ADR 0007). From an unfinished create (`creating`) only what the create attempted (its `done` steps and the one running when it stopped, `attempting`) is stopped, undefined or destroyed; the other steps are skipped with a `note:` line. Reverse priority: `vm-stop` (a VM that is not
@@ -702,6 +705,10 @@ Authorisation is ctrl-exec's alone (ADR 0007, owner ruling 2026-11-11): who may
 run `hps-workload` is decided there. An operator reaches it through the
 `ips-admin` allowlist and the operator API's auth hook (`docs/OPERATOR.md`), or
 runs it as root on the IPS.
+
+## A guest paused by a disk error
+
+`vm_disk_error_policy` `stop` (the default) makes libvirt pause a guest whose disk I/O fails, instead of giving it EIO that would remount its filesystem read-only. A paused guest is down until something resumes it. `hps-monitor` shows it (`check_vms` is WARNING, `paused=<n>`), the register opens a `guest-paused` issue per guest and the healer resumes it with the node script `vm-resume` once its disks are healthy (`docs/ISSUES.md`). By hand: `hps-workload resume-paused <name> [--vm <vm>] [--any-reason]`. `hps-workload status` shows `node paused (ioerror)` and `pause_reason` in `--json`. Stopping a paused guest: `vm-stop` refuses without `--force`; resume it first for a clean stop. Event lines: kind `workload`, subject `<workload>/<vm>`, states `paused` and `resumed` (`docs/LOGGING.md`).
 
 ## Exit codes and logging
 

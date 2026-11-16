@@ -5,13 +5,18 @@
 # ctrl-exec allowlisted node script.
 #
 # Usage: vm-stop <vm> [--timeout <seconds, default 60>] [--force]
-# Not defined: 4. Already shut off: nothing to do, exit 0. Otherwise
+# Not defined: 4. Already shut off: nothing to do, exit 0. A paused guest cannot
+# act on a shutdown request, so without --force it is refused (3) with a message
+# that names the way out: vm-resume (hps-workload resume-paused) first, or
+# --force (power off). With --force the graceful wait is skipped for it and it
+# is destroyed at once. Otherwise
 # virsh shutdown, then wait for "shut off". If the guest has not stopped when
 # the timeout is up: without --force the script exits 1 (the guest keeps
 # running; a later call can wait again); with --force it runs virsh destroy
 # (power off, like pulling the plug) and waits for "shut off".
 # Last line on success: VM <vm> shut off
-# Exit: 0 shut off, 2 usage, 4 not defined, 1 failed or still running.
+# Exit: 0 shut off, 2 usage, 3 refused (paused, no --force), 4 not defined,
+# 1 failed or still running.
 
 set -euo pipefail
 
@@ -40,7 +45,7 @@ run_q() {
 usage() {
   cat >&2 <<'USAGE'
 Usage: vm-stop <vm> [--timeout <seconds>] [--force]
-Exit: 0 ok, 2 usage, 4 not defined, 1 failed.
+Exit: 0 ok, 2 usage, 3 refused (paused), 4 not defined, 1 failed.
 USAGE
 }
 
@@ -92,6 +97,20 @@ main() {
   fi
   if [[ "$state" == "shut off" ]]; then
     log "$VM is already shut off; nothing to do"
+    printf 'VM %s shut off\n' "$VM"
+    return 0
+  fi
+  if [[ "$state" == "paused" ]]; then
+    if ((FORCE == 0)); then
+      log "refused: $VM is paused, so it cannot shut down by itself. Resume it first (hps-workload resume-paused, node script vm-resume) for a clean stop, or use --force to power it off"
+      exit 3
+    fi
+    log "$VM is paused: no graceful shutdown is possible; --force destroys it"
+    run virsh -c qemu:///system destroy "$VM"
+    if ! wait_off 10; then
+      log "$VM is still not shut off after destroy"
+      exit 1
+    fi
     printf 'VM %s shut off\n' "$VM"
     return 0
   fi

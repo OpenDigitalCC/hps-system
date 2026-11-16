@@ -127,7 +127,7 @@ bold: 1
 ---
 issue | The issue register (`hps-issues`): open, escalated, needs-human, resolved.
 monitor | hps-monitor: a host unreachable, reachable again, pair failed, stopped; a check that is warning, critical, unknown or ok again. The subject is the host, or host/check.
-workload | A `hps-workload` operation: the subject is the workload name.
+workload | A `hps-workload` operation: the subject is the workload name. A guest paused by a disk I/O error (the healer, `HPS::GuestHeal`): the subject is `<workload>/<vm>`, or `<host>/<vm>` when no workload has the guest.
 job | A privileged job of `hps-jobs`: the subject is the job kind and its first argument.
 pairing | A node's pairing: approved, refused, held. The subject is the host key (MAC).
 storage | A storage operation (derived line).
@@ -148,8 +148,8 @@ columns: Class | States | Meaning
 widths: 2.5cm | 7cm | X
 bold: 1
 ---
-standing | open, escalated, needs-human, warning, critical, unknown, unreachable, pair-failed, boot-stalled, gave-up, unreadable, reset-failed, tripped | The problem holds until a clearing line of the same kind and subject. The emitter repeats it every 50 minutes.
-clearing | resolved, ok, reachable, stopped, booted, cleared | The subject is well again, or stopped on purpose.
+standing | open, escalated, needs-human, warning, critical, unknown, unreachable, pair-failed, boot-stalled, gave-up, unreadable, reset-failed, tripped, paused | The problem holds until a clearing line of the same kind and subject. The emitter repeats it every 50 minutes.
+clearing | resolved, ok, reachable, stopped, booted, cleared, resumed | The subject is well again, or stopped on purpose.
 point | started, ended, done, failed, refused, error, requested, defined, created, destroyed, on, off, up, down, paired, held, rotated, reset, bad-setting | Something that happened once. At warning or urgent it stays a problem until a later line of the same kind and subject that does not need attention.
 ```
 
@@ -188,6 +188,7 @@ hps-monitor | UNREACHABLE (warning), REACHABLE (notice), PAIR_FAILED (urgent), S
 hps-workload (`HPS::Workload`) | the result of every operation except `status` and `console`: done (notice), refused (notice), failed (warning). `set-class`: done (notice).
 hps-workload drain and undrain (`HPS::Workload::Drain`) | kind node, the host as subject: started (notice), done (notice), refused (notice), and failed (warning) when a drain leaves guests running or an undrain does not bring them all back. Each guest action is kind workload with the workload as subject: done (info), failed (warning).
 Boot-stalled watch and readiness gate (`HPS::BootWatch`, `HPS::BootReady`; `docs/BOOT-RELIABILITY.md`) | kind boot, the workload/VM or host as subject: boot-stalled (warning, also while the boot services do not answer), reset-failed and gave-up (warning), unreadable (warning), booted (notice, clears them), cleared (notice, clears them: the node left the watch's scope, or the watch was switched off, or its state was written by an older rule set), tripped (warning, subject watch: many nodes look stalled at once, no reset was made; the breaker), reset (notice), failed and bad-setting (warning). The standing ones repeat every 50 minutes while they hold. A start or power-on refused because the boot services do not answer (`hps-workload start`, `hps-bmc on` and `pxe-once`): refused (notice), kind workload or power. `hps-ips-check --boot-ready` writes no line.
+Paused guests (`HPS::GuestHeal`, run by the healer in `hps-issue-watch`; `docs/STORAGE-FAULTS.md`) | kind workload, subject `<workload>/<vm>` (`<host>/<vm>` when no workload has it), one per unresolved `guest-paused` issue: paused (warning, urgent once the issue is; repeated every 50 minutes while it holds), unreadable (warning: the record, drain mark or node state needed to decide could not be read; nothing was resumed), resumed (notice, clears them) or stopped (notice: the guest is shut off or gone) when the issue resolves, by the healer or by hand. `hps-log attention` shows the guest while it is paused and drops it at resumed.
 hps-jobs | a job that ended (notice, or warning when its exit status is not 0) and a job refused at once (notice).
 Pairing (`ce_approve`) | approved (notice), refused or gave up (warning).
 hps-log-rotate | rotated (notice) and any error (warning).

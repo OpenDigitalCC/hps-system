@@ -2,7 +2,8 @@
 
 The IPS keeps a register of the problems it has seen that have to be
 addressed: a lost mirror leg, a lost or returned ZFS pool disk, a storage path
-or an OpenSVC heartbeat that fails. Each problem is an issue with a trail of
+or an OpenSVC heartbeat that fails, a guest the hypervisor paused on a disk
+I/O error. Each problem is an issue with a trail of
 what happened to it. The IPS fixes what it can by itself and leaves the trail;
 what it cannot fix stays open for a human. Nothing is deleted: a resolved issue
 is history.
@@ -30,7 +31,7 @@ is history.
   `program:hps-issue-watch` running `hps-issue-watch loop` as root. It follows
   every node's log files and the IPS's own `ips/hps/` file (hps-monitor's
   results), opens and resolves issues by the trigger rules, and heals
-  mirror-leg and zfs-vdev issues. Its own lines go to syslog (tag `hps`) as
+  mirror-leg, zfs-vdev and guest-paused issues. Its own lines go to syslog (tag `hps`) as
   `hps-issue: opened <id> <key>`, `hps-issue: resolved <id> by <...>` and
   `hps-issue: heal <id> <outcome>: <detail>`; supervisor's copy of its output
   is filed under `ips/hps-issue-watch/`.
@@ -48,7 +49,7 @@ sequence from 001 each day).
 | --- | --- |
 | `id` | `20261112-001` |
 | `key` | `<kind>:<value>:<value>...`, the values of the kind's key fields in order, e.g. `mirror-leg:tch-002:probe-tch-002-root` |
-| `kind` | `mirror-leg`, `storage-path`, `zfs-vdev`, `zfs-pool`, `om3-hb`, or any kind a marker names |
+| `kind` | `mirror-leg`, `storage-path`, `zfs-vdev`, `zfs-pool`, `om3-hb`, `guest-paused`, or any kind a marker names |
 | `severity` | `warning` or `urgent` |
 | `state` | `open`, `healing`, `needs-human`, `resolved` |
 | `opened_at`, `resolved_at` | ISO UTC; `resolved_at` is null until resolved |
@@ -113,6 +114,10 @@ report themselves: a Perl regex on `<tag>: <message>`, its named captures plus
 `host` are the fields. Options, between the key fields and the regex:
 
 - `after=N/S` (open): opens only at the Nth match of a key within S seconds;
+- `each=1` (open or resolve): the rule acts on every match in the line, not the
+  first only; the fields captured by an earlier match of the line carry on to the
+  next (a host named at the start of a monitor line, a guest per match; an
+  alternative `(?!\A)\G` continues where the last match ended);
 - `urgent_after=S` (open): a new issue records `urgent_at`; still unresolved S
   seconds after it opened, the watcher makes it urgent (once; checked every
   30 s);
@@ -143,6 +148,8 @@ Shipped:
 | (`from=ips`) `... check=zpool state=OK ZPOOL OK - n pools: <pool>=ONLINE` | resolve `zfs-pool` of that host and the first pool listed (an HPS storage host has one pool) |
 | `om: [time level ]daemon: hb: ucast: tx: hb#N: begin a send error period for node <peer>...` | open `om3-hb` keyed by host and peer (short), warning, `urgent_after=600` |
 | `om: ... end a send error period for node <peer>...` | resolve `om3-hb` of that host and peer, `settle=30` |
+| `marker guest-paused warning host,guest` | a node marker of that kind, keyed by host and guest |
+| (`from=ips`, `each=1`) `hps-monitor: host=<h> check=vms state=WARNING ... \| ... <vm>_paused_ioerror=1` | open `guest-paused` keyed by host and guest (one per label of the line), warning; the reason is a field. Healed and resolved by state below, never by a rule |
 
 The kernel's `md/raid1:mdN: Disk failure on <dev>` is not a rule: the mdadm
 monitor's marker reports the same failure by mirror name, and an issue keyed by
@@ -189,6 +196,47 @@ issues due at once, below); `zfs-pool` resolves by state already (hps-monitor's
 OK line, or its last vdev healed); `mirror-leg` and `zfs-vdev` are healed by
 reading state (`mirror-status`, `storage-vdev-online`).
 
+## A paused guest: guest-paused
+
+`check_vms` (`docs/MONITORING.md`) is WARNING while the hypervisor holds a guest
+paused by a disk I/O error (the `vm_disk_error_policy` `stop` default pauses it
+rather than hand it EIO), and names it as a perfdata label
+`<vm>_paused_ioerror=1`. The rule above opens one `guest-paused` issue per
+guest, fields `host`, `guest`, `reason` and, once the healer finds the guest in
+a workload record, `workload`. A guest an operator paused is not reported (the
+check stays OK). A node on an image without the figure prints nothing, so no
+issue opens for it: that is "cannot tell", and no rule resolves an issue because
+a line stopped naming the guest. The healer decides by asking the node
+(`HPS::GuestHeal`, `docs/STORAGE-FAULTS.md`):
+
+1. Records first. The host must be known; the workload record that has the VM on
+   that host (if any) must not record the VM or the workload `stopped` or
+   `suspended` (needs-human: a guest meant to be down is never resumed); a record
+   that cannot be read, or an unreadable drain mark, is `unreadable` (an event
+   line, no try spent, looked at again in a minute); a host with the host key
+   `drain` waits.
+2. `vm-status <guest>` on the host: running resolves it (`by vm-status: <guest>
+   running`); shut off or not defined resolves it too; paused with the reason
+   `ioerror` goes on; paused for another reason, with no reason line (an older
+   node image) or in any other state is needs-human, never resumed.
+3. A `mirror-leg` or `storage-path` issue of the same host that is open or
+   healing goes first: the guest waits (no try spent) for up to 10 minutes from
+   its own opening, then tries anyway, because the node checks the disks itself.
+4. `vm-resume <guest>`: exit 0 is `healing`, checked 30 s later; running resolves
+   it (action `vm-resume <guest>`, result `vm-status: <guest> running after
+   vm-resume`), paused again is a failed attempt. Exit 3 `REFUSED disk <reason>`,
+   exit 1 and a node that does not answer are failed attempts (the backoff 60 s,
+   2 min, 5 min, 15 min); `REFUSED operator-paused` is needs-human; exit 4
+   (not defined) resolves it. After 6 failed attempts the issue is needs-human
+   and urgent with the last refusal in its trail (`hps-issues retry <id>` starts
+   again).
+
+Event lines: kind `workload`, subject `<workload>/<vm>` (`<host>/<vm>` without a
+workload), state `paused` while the issue is unresolved (repeated every 50
+minutes), `resumed` or `stopped` when it resolves, `unreadable` when the state
+cannot be read (`docs/LOGGING.md`). An issue resolved by hand is closed in the
+event view too.
+
 ## Following the logs
 
 The watcher reads the newest `<log>/<sender ip>/<YYYY-MM-DD>.log` of every
@@ -215,7 +263,7 @@ something in `issues/.watch-state.json`.
 The healer runs in the watcher's loop after each poll (one process, one place
 that writes the schedule; a heal of a few node calls delays the next poll by
 that long, and lines are only read later, never lost). For each `open` or
-`healing` mirror-leg or zfs-vdev issue whose `heal.next_at` has come, through
+`healing` mirror-leg, zfs-vdev (below) or guest-paused ("A paused guest", above) issue whose `heal.next_at` has come, through
 `scripts/hps-run.sh` (HPS::Storage's runner, as HPS::Workload).
 
 mirror-leg issues:

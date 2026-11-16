@@ -10,14 +10,19 @@ package HPS::IssueWatch;
 #       kind is keyed (fields comma-separated, e.g. host,mirror) and its default
 #       severity. A marker of a kind with no marker rule is keyed by host,
 #       severity warning. A marker's own severity=urgent|warning wins.
-#   open <kind> <severity> <key fields> [from=ips] [after=N/S] [urgent_after=S] <regex>
-#   resolve <kind> - <key fields> [from=ips] [settle=S] <regex>
+#   open <kind> <severity> <key fields> [from=ips] [each=1] [after=N/S] [urgent_after=S] <regex>
+#   resolve <kind> - <key fields> [from=ips] [each=1] [settle=S] <regex>
 #       a Perl regex matched against "<tag>: <message>" of a line; its named
 #       captures, plus host (the line's host, short name), are the fields.
 #       after=N/S: open only at the Nth match of the same key within S seconds.
 #       settle=S (resolve rules): the resolve is held S seconds; an open of
 #       the same key meanwhile cancels it. urgent_after=S (open rules): a new
 #       issue becomes urgent when still unresolved S seconds after it opened.
+#       each=1: the regex acts on every match in the line, not the first only
+#       (a monitor line that names several guests): the fields captured by an
+#       earlier match of the line carry on to the next one (a host named once
+#       at the start of the line, a guest per match; \G continues where the last
+#       match ended).
 #       from=ips: a rule for the IPS's own hps lines (ips/hps/<date>.log, where
 #       hps-monitor's results are filed), and only for them. Node lines go
 #       through the other rules and the markers; the IPS's lines through the
@@ -90,9 +95,14 @@ sub parse_rules ($text, $where = 'rules') {
             $marker{$kind} = { severity => $sev, key_fields => \@kf };
             next;
         }
-        my ($an, $as, $from, $settle, $urgent);
-        while (defined $rest && $rest =~ s/\A(after|from|settle|urgent_after)=(\S+)\s+//) {
+        my ($an, $as, $from, $settle, $urgent, $each);
+        while (defined $rest && $rest =~ s/\A(after|from|settle|urgent_after|each)=(\S+)\s+//) {
             my ($opt, $v) = ($1, $2);
+            if ($opt eq 'each') {
+                $bad->("each=$v: the only value is each=1") unless $v eq '1';
+                $each = 1;
+                next;
+            }
             if ($opt eq 'from') {
                 $bad->("from=$v: the only source is from=ips") unless $v eq 'ips';
                 $from = $v;
@@ -114,7 +124,7 @@ sub parse_rules ($text, $where = 'rules') {
         $bad->("the regex does not compile: " . ($@ =~ s/ at \S+ line \d+.*//sr)) unless $re;
         push @rules, { action => $action, kind => $kind, severity => ($sev eq '-' ? undef : $sev),
             key_fields => \@kf, re => $re, after_n => $an, after_s => $as, from => $from,
-            settle => $settle, urgent_after => $urgent, n => $n };
+            settle => $settle, urgent_after => $urgent, each => $each, n => $n };
     }
     return { marker => \%marker, rules => \@rules };
 }
@@ -166,6 +176,17 @@ sub match ($rules, $rec, $local = 0) {
     my $text = length($rec->{tag} // '') ? "$rec->{tag}: $msg" : $msg;
     for my $r (@{ $rules->{rules} }) {
         next if ($r->{from} ? 1 : 0) != ($local ? 1 : 0);
+        if ($r->{each}) {
+            my %carry;
+            while ($text =~ /$r->{re}/g) {
+                %carry = (%carry, %+);
+                my %f = %carry;
+                $f{host} //= $host;
+                push @out, { action => $r->{action}, kind => $r->{kind}, severity => $r->{severity},
+                    key_fields => $r->{key_fields}, fields => \%f, rule => $r };
+            }
+            next;
+        }
         next unless $text =~ $r->{re};
         my %f = %+;
         $f{host} //= $host;

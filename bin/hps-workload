@@ -29,6 +29,7 @@ Usage:
   hps-workload stop    <name> [--vm <vm>] [--force] [--dry-run] [--json]
   hps-workload suspend <name> [--vm <vm>] [--dry-run] [--json]
   hps-workload resume  <name> [--vm <vm>] [--dry-run] [--json]
+  hps-workload resume-paused <name> [--vm <vm>] [--any-reason] [--dry-run] [--json]
   hps-workload destroy <name> [--forget] [--dry-run] [--json] [--allow-any-pool-name]
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]   (per VM: its latest utilisation from the hypervisor)
   hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]
@@ -48,6 +49,12 @@ suspend saves each VM's memory to /<pool>/enc/state/<vm>.save on its compute hos
 stops it (a long job survives a planned host reboot); resume brings it back where it
 left off and removes the file. A 40 GB guest takes about 10 minutes each way. start and
 stop of a suspended VM refuse and point to resume; destroy removes the saved state.
+resume-paused resumes a guest the hypervisor paused on a disk I/O error (it is a different thing
+from resume, which restores a suspended guest from its state file): vm-resume on the compute host,
+which first checks that every disk of the guest is healthy again (a mirror assembled with a leg in
+sync, a pool ONLINE) and refuses, naming why, when not (exit 3). Without --vm only the paused VMs
+of the workload are resumed; with --vm the call is made as asked. A guest paused by an operator is
+refused unless --any-reason. The healer does the same by itself for a guest-paused issue.
 <name> is the workload: workloads/<name>.json under the cluster's config directory.
 create refuses a workload that already exists unless --resume (continue an
 unfinished create). destroy removes the instance (VMs, zvols, mirrors, record) and
@@ -123,7 +130,8 @@ sub render_status {
     my $out = "Workload $r->{name}: $r->{state} (class " . ($r->{class} // 'unreadable') . ")\n";
     for my $v (@{ $r->{vms} }) {
         $out .= sprintf("  %-20s host %-14s recorded %-9s node %s%s\n", $v->{vm}, $v->{host} // '-',
-            $v->{recorded_state} // '-', $v->{state}, $v->{ok} ? '' : ' (a node call failed)');
+            $v->{recorded_state} // '-', $v->{state} . (defined $v->{pause_reason} ? " ($v->{pause_reason})" : ''),
+            $v->{ok} ? '' : ' (a node call failed)');
         $out .= "    mirror $_->{name}: $_->{state}\n" for @{ $v->{mirrors} };
         if (my $u = $v->{utilisation}) {
             $out .= sprintf("    utilisation (%s): cpu %s%% rss %s of %s MiB, %s vcpus, disk rd %s wr %s B/s, net rx %s tx %s B/s\n",
@@ -267,18 +275,18 @@ sub drain_verb {
 
 sub main {
     my @argv = @_;
-    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw, $nodes, $nobw);
+    my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw, $nodes, $nobw, $anyr);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget, 'image-written' => \$imgw,
         'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
         'include-nodes' => \$nodes,
-        'no-boot-wait' => \$nobw,
+        'no-boot-wait' => \$nobw, 'any-reason' => \$anyr,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images';
     my $name = shift @argv // return usage($op eq 'drain' || $op eq 'undrain' ? 'host required' : 'workload name required');
-    my $other = ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw);
+    my $other = ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw || $anyr);
     return drain_verb($op, $name, \@argv, json => $json, dry_run => $dry, include_nodes => $nodes, other => $other)
         if $op eq 'drain' || $op eq 'undrain';
     return usage('--include-nodes is only for drain') if $nodes;
@@ -303,12 +311,13 @@ sub main {
     return usage('--forget is only for destroy') if $forget && $op ne 'destroy';
     return usage('--force is only for stop') if $force && $op ne 'stop';
     return usage('--no-boot-wait is only for start') if $nobw && $op ne 'start';
+    return usage('--any-reason is only for resume-paused') if $anyr && $op ne 'resume-paused';
     return usage("--vm is not for $op") if defined $vm && ($op eq 'create' || $op eq 'destroy');
     return usage('--allow-any-pool-name is only for create and destroy') if $any && $op ne 'create' && $op ne 'destroy';
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
     my $rc = eval {
         my $wl = HPS::Workload->new(allow_any_pool_name => $any);
-        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, image_written => $imgw, disk => $disk, size => $size, lines => $lines, force => $force);
+        my %a = (vm => $vm, resume => $resume, dry_run => $dry, forget => $forget, image_written => $imgw, disk => $disk, size => $size, lines => $lines, force => $force, any_reason => $anyr);
         if ($dry) {
             my $r = $wl->run($op, $name, %a);
             if ($json) { print $js->encode($r) }

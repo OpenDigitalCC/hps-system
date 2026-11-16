@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# check_vms - Nagios plugin: resource use of the running libvirt guests.
+# check_vms - Nagios plugin: resource use of the running libvirt guests, and the
+# paused ones.
 #
 # Run by nagios-check (ctrl-exec) on compute nodes. Runs
-#   virsh -c qemu:///system domstats --raw --list-running --nowait --cpu-total
-#         --balloon --vcpu --block --interface
+#   virsh -c qemu:///system domstats --raw --list-running --list-paused --nowait
+#         --state --cpu-total --balloon --vcpu --block --interface
 # ONCE per run and reports per running guest (name lower-cased, characters
 # outside [a-z0-9_-] become "_"):
 #   <vm>_vcpus     vcpu.current
@@ -15,8 +16,27 @@
 #                  one full vCPU, so a guest with several vCPUs can exceed 100
 #   <vm>_rd_Bps <vm>_wr_Bps   block.N.rd.bytes / wr.bytes summed over its disks
 #   <vm>_rx_Bps <vm>_tx_Bps   net.N.rx.bytes / tx.bytes summed over its NICs
-# plus vms=<n>. A usage check: always OK when virsh answers; no running guest is
-# OK.
+# plus vms=<n> (running guests). A usage check: OK when virsh answers, whatever
+# the guests do, with one exception, a paused guest below; no running guest is OK.
+#
+# Paused guests. A guest the hypervisor paused (state.state=3; libvirt pauses a
+# guest whose disk I/O fails, vm-define's error_policy stop) is not running and
+# leaves the running figures and the saved sample. It is reported with the
+# reason libvirt gives (state.reason, the words of virsh domstate --reason; the
+# one call carries it, so the 8 s budget is shared, not doubled):
+#   paused=<n>             every run of this version, 0 included. A node on an
+#                          older image prints no such figure: "cannot tell",
+#                          never "none paused" (docs/MONITORING.md)
+#   <vm>_paused_<reason>=1 one per paused guest; <reason> is ioerror (a disk I/O
+#                          error), user (an operator paused it), migrating,
+#                          saving, dumping, watchdog, fromsnapshot, shuttingdown,
+#                          creatingsnapshot, crashed, startingup, postcopy,
+#                          postcopyfailed, unknown, or code<N> for a code this
+#                          table does not know
+# and the text names them: ", 1 paused: web (ioerror)". A guest paused by an I/O
+# error makes the check WARNING (exit 1): it is an outage nothing else shows, and
+# the IPS opens a guest-paused issue from it (lib/hps-issue-rules.conf). A guest
+# paused for any other reason (an operator's pause) is reported and stays OK.
 #
 # One call, not two: a nested libvirtd under I/O load (guests being created on
 # the same host) could not answer twice inside nagios-check's 10 s budget
@@ -36,13 +56,13 @@
 # example, by an earlier domstats it is still answering for a caller that gave
 # up); it leaves out the values that need the lock. A label whose value a
 # sample lacks is left out for that guest (a rate needs both samples).
-# Output: "VMS OK - 2 running VMs (rss 4.0 GiB) | vms=2 <vm>_cpu_pct=..% ..."
+# Output: "VMS OK - 2 running VMs (rss 4.0 GiB) | vms=2 paused=0 <vm>_cpu_pct=..% ..."
 #
 # Usage: check_vms          (no options)
 # Environment (tests): HPS_VIRSH (the virsh command, default virsh),
 #   HPS_VMS_STATE (default /run/hps/check_vms.prev), HPS_NOW (epoch seconds,
 #   default the clock).
-# Exit: 0 OK, 3 UNKNOWN.
+# Exit: 0 OK, 1 WARNING (a guest paused by an I/O error), 3 UNKNOWN.
 
 set -uo pipefail
 
@@ -61,12 +81,13 @@ unknown() {
 
 [[ $# -eq 0 ]] || unknown "usage: check_vms (no options)"
 
-# One line per guest: name cpu_ns vcpus rss_kib mem_kib rd wr rx tx, "-" for a
-# value the sample did not carry. On failure: the reason, and return 1.
+# One line per guest: name cpu_ns vcpus rss_kib mem_kib rd wr rx tx state reason
+# (state and reason the libvirt codes), "-" for a value the sample did not carry.
+# On failure: the reason, and return 1.
 sample() {
   local raw rc
-  raw=$(timeout "$LIMIT" "$VIRSH" -c qemu:///system domstats --raw --list-running \
-    --nowait --cpu-total --balloon --vcpu --block --interface 2>&1)
+  raw=$(timeout "$LIMIT" "$VIRSH" -c qemu:///system domstats --raw --list-running --list-paused \
+    --nowait --state --cpu-total --balloon --vcpu --block --interface 2>&1)
   rc=$?
   if (( rc == 124 )); then
     echo "timed out after ${LIMIT}s"
@@ -78,8 +99,8 @@ sample() {
   fi
   printf '%s\n' "$raw" | awk '
   function flush(  i, out) {
-    if (name != "") { out = name; for (i = 2; i <= 9; i++) out = out " " v[i]; print out }
-    name = ""; for (i = 2; i <= 9; i++) v[i] = "-"
+    if (name != "") { out = name; for (i = 2; i <= 11; i++) out = out " " v[i]; print out }
+    name = ""; for (i = 2; i <= 11; i++) v[i] = "-"
   }
   function add(i, x) { v[i] = (v[i] == "-") ? x + 0 : v[i] + x }
   BEGIN { flush() }
@@ -88,7 +109,9 @@ sample() {
     line = $0; sub(/^ +/, "", line)
     split(line, kv, "=")
     k = kv[1]; x = substr(line, length(k) + 2)
-    if (k == "cpu.time") v[2] = x + 0
+    if (k == "state.state") v[10] = x + 0
+    else if (k == "state.reason") v[11] = x + 0
+    else if (k == "cpu.time") v[2] = x + 0
     else if (k == "vcpu.current") v[3] = x + 0
     else if (k == "balloon.rss") v[4] = x + 0
     else if (k == "balloon.current") v[5] = x + 0
@@ -120,17 +143,26 @@ save() {
 
 b=$(sample) || unknown "virsh domstats ${b//$'\n'/ }"
 a=$(previous)
-save "$b"
-if [[ -z $b ]]; then
-  echo "VMS OK - no running VMs | vms=0"
-  exit 0
-fi
+# A guest the sample does not give a state for (or any state but paused, 3) is a
+# running one, as before. The saved sample holds the running guests only, in the
+# form earlier runs wrote.
+running=$(printf '%s\n' "$b" | awk 'NF && $10 != 3 { NF = 9; print }')
+paused=$(printf '%s\n' "$b" | awk 'NF && $10 == 3 { print $1, $11 }')
+save "$running"
+st=OK
+[[ -z $(printf '%s\n' "$paused" | awk '$2 == 5') ]] || st=WARNING
 
-awk -v a="$a" -v b="$b" -v now="$NOW" -v max_age="$MAX_AGE" '
+awk -v a="$a" -v b="$running" -v p="$paused" -v st="$st" -v now="$NOW" -v max_age="$MAX_AGE" '
 function level(lbl, val, fmt) { if (val != "-") perf = perf sprintf(" %s_" lbl "=" fmt, name, val) }
 function delta(i) { return y[i] > x[i] ? y[i] - x[i] : 0 }
+function reason(c) {
+  if (c == "-" || c == "") return "unknown"
+  return (c in R) ? R[c] : "code" c
+}
 function rate(lbl, i) { if (x[i] != "-" && y[i] != "-") perf = perf sprintf(" %s_%s=%.0f", name, lbl, delta(i) / iv) }
 BEGIN {
+  split("unknown user migrating saving dumping ioerror watchdog fromsnapshot shuttingdown creatingsnapshot crashed startingup postcopy postcopyfailed", rn, " ")
+  for (i = 1; i <= 14; i++) R[i - 1] = rn[i]
   na = split(a, la, "\n"); nb = split(b, lb, "\n")
   why = "no previous sample"; iv = 0
   if (na > 0 && la[1] ~ /^ts=[0-9.]+$/) {
@@ -156,5 +188,17 @@ BEGIN {
     if (y[1] in earlier) { rate("rd_Bps", 6); rate("wr_Bps", 7); rate("rx_Bps", 8); rate("tx_Bps", 9) }
   }
   note = rated ? "" : ", rates: " why
-  printf "VMS OK - %d running VMs (rss %.1f GiB%s) | vms=%d%s\n", n, rss / 1073741824, note, n, perf
+  head = n ? sprintf("%d running VMs (rss %.1f GiB%s)", n, rss / 1073741824, note) : "no running VMs"
+  np = split(p, lp, "\n"); pn = 0; plist = ""; pperf = ""
+  for (k = 1; k <= np; k++) {
+    if (lp[k] == "") continue
+    split(lp[k], z, " ")
+    pn++; r = reason(z[2])
+    plist = plist (plist == "" ? "" : ", ") z[1] " (" r ")"
+    lab = tolower(z[1]); gsub(/[^a-z0-9_-]/, "_", lab)
+    pperf = pperf sprintf(" %s_paused_%s=1", lab, r)
+  }
+  if (pn) head = head sprintf(", %d paused: %s", pn, plist)
+  printf "VMS %s - %s | vms=%d paused=%d%s%s\n", st, head, n, pn, pperf, perf
 }'
+[[ $st == OK ]] || exit 1

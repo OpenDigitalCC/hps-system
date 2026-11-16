@@ -28,7 +28,7 @@ text: 4*2 5*2
 ---
 1 Command size on the initiator | Nothing sets `max_sectors_kb`; the kernel default (up to 1 MB per command) applies | `iscsi_max_sectors_kb` = 256, applied by `leg-resolve` once the device exists | A 256 KB command needs a 256 KB contiguous buffer on the target, not 1 MB; fragmentation then fails fewer allocations | More, smaller commands: some throughput cost on large sequential writes (to measure). Applies only to legs resolved after the new script runs
 2 Replacement timeout | `replacement_timeout=15`, `noop_out` 5 s and 5 s, `login_timeout` 15 s (owner ruling 2026-11-12) | Unchanged at 15. New key `iscsi_replacement_timeout` (5-600, default 15) so the lab can measure other values | A longer timeout would ride through a short common stall, but it conflicts with the ruling and with md failing a dead leg quickly | A value above 15 delays leg failure and blocks guests for that long. Not changed without the measurements below
-3 Guest error policy | No `error_policy` or `rerror_policy`: libvirt's default reports the error to the guest | `vm_disk_error_policy` = `stop`: `vm-define` writes both attributes as `stop` | A paused guest keeps its filesystem; a guest that saw EIO is read-only until it reboots | A paused guest is down until something resumes it, and `vm-stop` on a paused guest needs `--force`. Needs the detection and resume path below
+3 Guest error policy | No `error_policy` or `rerror_policy`: libvirt's default reports the error to the guest | `vm_disk_error_policy` = `stop`: `vm-define` writes both attributes as `stop` | A paused guest keeps its filesystem; a guest that saw EIO is read-only until it reboots | A paused guest is down until something resumes it. The detection and resume path below is built: `check_vms` reports it, a `guest-paused` issue follows, the healer runs `vm-resume`. `vm-stop` on a paused guest refuses without `--force`
 4 Target memory | ARC capped at 25 % of RAM (at least 1024 MiB) on SCH. `vm.min_free_kbytes` is not set | `storage_min_free_pct` = 2: `vm.min_free_kbytes` raised to 2 % of RAM, between 128 and 2048 MiB, never lowered | A higher watermark makes reclaim and compaction start earlier, so contiguous free memory exists when `iscsi_trx` asks | Memory held back from the ZFS ARC and page cache (164 MiB on an 8 GiB host). Does not guarantee order-4 blocks; compaction settings are untested
 ```
 
@@ -45,12 +45,12 @@ bold: 1
 2 Replacement timeout | 15 s, with `noop_out_interval` 5, `noop_out_timeout` 5, `login_timeout` 15. Written to the node record before each login, and set as the iscsid.conf default | `node-manager/nixos-26/scripts/leg-resolve:41-46` and `:106`; `nix/modules/profiles/compute.nix:162-167`; ruling in `CHANGELOG.md:464-470`, measured gaps in `.nonfunctional-report.md:350`
 2 md failfast | `--failfast` on create, assemble (sysfs `failfast` on each member) and `--re-add --failfast` on rejoin | `scripts/tests/test_p3_240_iscsi_failfast.bats:92-168`
 3 Guest error policy | Absent. The disk element is `<driver name='qemu' type='raw' cache='none' io='native'/>` | `node-manager/nixos-26/scripts/vm-define:451`
-3 Guest paused | `vm-start` refuses a paused guest (3). `vm-stop` runs `virsh shutdown` and waits, so a paused guest times out unless `--force`. No script resumes a guest | `vm-start:16`, `vm-stop:98-111`
+3 Guest paused | `vm-start` refused a paused guest (3, unchanged). `vm-stop` ran `virsh shutdown` and waited, so a paused guest timed out unless `--force`. No script resumed a guest. Now: `vm-resume`, and `vm-stop` refuses a paused guest without `--force` | `vm-start:16`, `vm-stop`, `vm-resume`
 4 ARC cap | Role SCH: `zfs_arc_max` = `zfs_arc_max_pct` (default 25 %) of RAM, at least 1024 MiB, at boot; shown as `arc_max_mib` in the `RESERVE` line of `hps-node resources` | `node-manager/nixos-26/scripts/host-reserve-apply:226-240`; key in `lib/perl/HPS/ClusterConfig.pm:201`
 4 `vm.min_free_kbytes` | Absent. No sysctl is set in any Nix module | grep of `nix/` finds nothing
 Monitor: mirror leg | The mdadm monitor's PROGRAM logs `HPS-ISSUE open kind=mirror-leg`; `hps-issue-watch` opens an issue and the healer runs `mirror-rejoin` | `node-manager/nixos-26/boot/hps-md-event.sh`; `docs/ISSUES.md` "Healing"
 Monitor: iSCSI session | Raw-line rules open `storage-path` after three `iscsid ... connect failed` in 300 s and resolve on recovery | `lib/hps-issue-rules.conf`, `docs/ISSUES.md` "Shipped"
-Monitor: paused guest | None. `check_vms` samples `--list-running`, so a paused guest drops out of the `vms` figures without a word | `node-manager/nixos-26/plugins/check_vms:6`
+Monitor: paused guest | None. `check_vms` sampled `--list-running`, so a paused guest dropped out of the `vms` figures without a word. Now it also lists paused guests (below) | `node-manager/nixos-26/plugins/check_vms`
 ```
 
 # What this change does
@@ -108,19 +108,76 @@ Resume path | Pause a guest, run the resume step | Does it come back with the ap
 
 # A paused guest: detect, report, resume
 
-Today nothing notices a paused guest and nothing resumes one. The proposal reuses the monitor and the issue register and adds no new daemon. None of it is implemented in this change, because it touches the monitor's line formats (being changed on another branch) and needs a node script that is not allowlisted yet.
+Owner ruling 2026-11-15: a guest pauses on a disk I/O error (`vm_disk_error_policy` `stop`, the default) and is resumed, instead of being handed the error. This is that resume, as built. It reuses the monitor and the issue register and adds no daemon. The node side needs a node image build and takes effect at a node's next boot; the IPS side works at once and treats a node that has not got it as "cannot tell", never as "none paused".
 
-Detect
-: `check_vms` samples with `--list-running`, which leaves paused guests out. Add a second `virsh` call for paused guests (`domstate --reason` per guest, or `list --state-paused`), and report `paused=<n>` and the names. State WARNING when any guest is paused for an I/O error, CRITICAL when it has been paused longer than a limit. The check stays one `virsh` call away from its 8 s budget, so the paused query has to share it.
+## Detect
 
-Report
-: A `from=ips` rule in `lib/hps-issue-rules.conf`, in the pattern of the `zfs-pool` rules, opens an issue of kind `guest-paused` keyed by host and guest from the `vms` check line, and resolves it when the line no longer names the guest. Severity warning, urgent after a limit.
+`check_vms` (node plugin) asks `virsh domstats` once for the running and the paused guests, with `--state`, in the one call that carries its 8 s budget. A guest in the paused state (`state.state=3`) leaves the running figures and the saved sample, and is reported with its reason (`state.reason`, named as `virsh domstate --reason` words, lower case and joined: `ioerror`, `user`, `migrating`, `saving`, `dumping`, `watchdog`, `fromsnapshot`, `shuttingdown`, `creatingsnapshot`, `crashed`, `startingup`, `postcopy`, `postcopyfailed`, `unknown`, or `code<N>` for a code that list does not know).
 
-Resume
-: A new node script `vm-resume <vm>` (allowlisted in `nix/modules/hps-ctrl-exec.nix`) that resumes only a guest whose reason is an I/O error, and only when `mirror-status` of its disks is not absent. The healer in `lib/perl/HPS/IssueHeal.pm` runs it after the mirror-leg heal has finished and `mirror-status` is clean or resyncing, then checks `domstate`. A guest that pauses again is a failed attempt and follows the healer's existing backoff to `needs-human`.
+```datatable
+columns: Figure | Meaning
+widths: 4.5cm | X
+bold: 1
+---
+`paused=<n>` | The paused guests, printed on every run of this version, 0 included. A node on an older image prints no such figure: that is "cannot tell", and the IPS never reads it as "none paused"
+`<vm>_paused_<reason>=1` | One per paused guest, with the reason in the label
+Text | `, 1 paused: web (ioerror)` after the running count
+`vms`, `<vm>_cpu_pct` and the rest | Unchanged, for running guests only
+```
 
-Operator
-: `hps-issues list` shows the issue; `vm-resume` through `hps-run` is the manual step. `hps-workload stop` of a paused guest needs `vm-stop --force`; the stop order should resume first, or force after the timeout.
+Choice: a guest paused by an I/O error makes the check WARNING (exit 1), because it is an outage nothing else shows; a guest paused for any other reason (an operator's `virsh suspend`, a migration) is reported and the check stays OK. A pause that is not an I/O error is therefore not an issue. There is no CRITICAL after a time limit: the issue turns urgent through the healer's own escalation (below), which is the same "unresolved for long" signal the other kinds use. `vm-status` prints a line `PAUSED <vm> reason=<token>` before the `VM <vm> paused` line of a paused guest (the `VM` line is unchanged), and `hps-workload status` shows `node paused (ioerror)`.
+
+## Report
+
+The monitor logs `check=vms state=WARNING` with the perfdata. A `from=ips` rule in `lib/hps-issue-rules.conf` with the new option `each=1` (the rule acts on every match in the line, the host captured at its start carrying on to the next) opens one issue of kind `guest-paused` per guest named by a `<vm>_paused_ioerror=1` label, keyed by host and guest, severity warning, with the reason as a field; the healer adds the workload name once it finds the guest in a workload record. A marker `HPS-ISSUE open kind=guest-paused host=<h> guest=<g>` works too (keyed the same). No rule resolves it: a line that no longer names the guest is also the line of a node without the figure, so absence proves nothing. The healer resolves by state.
+
+Event lines (`docs/LOGGING.md`): kind `workload`, subject `<workload>/<vm>` (or `<host>/<vm>` when no workload has the guest), state `paused` (standing, warning, urgent once the issue is) repeated every 50 minutes while the issue is unresolved, and `resumed` (clearing, notice) when it resolves, or `stopped` when the guest is found shut off or gone. `unreadable` (standing) says that the state needed to decide could not be read. `hps-log attention` shows the guest while it is paused and drops it when the `resumed` line comes.
+
+## Resume
+
+Node script `vm-resume <vm> [--any-reason]`, allowlisted in `nix/modules/hps-ctrl-exec.nix`.
+
+```datatable
+columns: Situation | Result
+widths: 6cm | X
+bold: 1
+---
+Not defined | exit 4
+Not paused (running, shut off, ...) | exit 3, `REFUSED not-paused`
+Paused for a reason other than an I/O error (an operator's pause) | exit 3, `REFUSED operator-paused`, unless `--any-reason`
+Paused by an I/O error, a disk not healthy | exit 3, `REFUSED disk <reason>`: a mirror (`/dev/md/<name>`) not assembled, failed or inactive, or with no leg in sync (`Active Devices` below 1); a zvol whose pool is not ONLINE; a disk that is neither, or no disk to check at all. A degraded mirror with one leg in sync is healthy enough
+Guest state or disk list cannot be read | exit 1, nothing resumed
+Healthy | `virsh resume`; the guest must be running and still running after a short settle (`HPS_VM_SETTLE`, 2 s), else exit 1; last line `VM <vm> running`; exit 0
+```
+
+`--any-reason` skips the reason check only: a guest paused by an I/O error is still checked against its disks. `hps-workload resume-paused <name> [--vm <vm>] [--any-reason]` runs it from the IPS. It is not `hps-workload resume`, which restores a guest that was suspended to a state file (`vm-save`, `vm-restore`): `resume` brings a guest back from a file after a planned stop, `resume-paused` un-freezes a guest that is still in memory on its host. Without `--vm` it looks at each VM first (`vm-status`) and resumes only the paused ones; with `--vm` it calls `vm-resume` as asked and its refusal is the answer (exit 3).
+
+The healer (`HPS::IssueHeal`, `HPS::GuestHeal`) does it by itself for an open `guest-paused` issue, the first try 30 s after it sees it:
+
+```datatable
+columns: What it finds | What it does
+widths: 6cm | X
+bold: 1
+---
+The host is unknown, or the issue names no guest | needs-human
+The workload records the VM or the workload `stopped` or `suspended` | needs-human, no resume: a guest meant to be down is never resumed
+A workload record that cannot be read (and none names the guest), or the drain mark of the host cannot be read | `unreadable`: reported, no try spent, looked at again in a minute; never a resume
+The host carries the host key `drain` | waits (no try spent, looked at again in a minute)
+`vm-status`: running | resolved, `resumed`
+`vm-status`: shut off, or not defined | resolved, `stopped`
+`vm-status`: paused with no reason line (an older node image), another state, or a reason other than `ioerror` | needs-human: an operator's pause is never resumed automatically
+Paused by an I/O error, and a mirror-leg or storage-path issue of the host is still open or healing | waits for it, up to 10 minutes from the opening of the guest issue; then tries anyway, because the node's own disk check decides
+Otherwise | `vm-resume`: exit 0 is `healing` and is checked again 30 s later: running resolves it (resolution action `vm-resume <vm>`), paused again is a failed attempt; exit 3 `disk` and any other failure are failed attempts with the backoff of the other kinds (60 s, 2 min, 5 min, 15 min); `operator-paused` is needs-human; exit 4 resolves it
+After 6 failed attempts | needs-human and urgent, the last refusal in the trail
+```
+
+## Operator
+
+`hps-issues list` shows the issue; `hps-workload resume-paused <name>` is the manual step, and `hps-issues retry <id>` puts a needs-human issue back for the healer. `hps-workload stop` of a paused guest: `vm-stop` refuses it (exit 3) without `--force`, naming `resume-paused` and `--force`, because a shutdown request cannot be acted on by a frozen guest and forcing it silently would power it off; with `--force` it destroys the guest at once (no graceful wait). A stop with a clean shutdown is `resume-paused` first, then `stop`.
+
+## What needs a node image
+
+`check_vms`, `vm-resume`, `vm-status` (the `PAUSED` line), `vm-stop` (the refusal) and the allowlist in `nix/modules/hps-ctrl-exec.nix` are node-side: they take effect at a node's next boot of the new image. Until then the node prints no `paused` figure, so no issue opens; an issue filed by hand (`hps-issues open --kind guest-paused ...`) finds no reason line from `vm-status` and goes to needs-human rather than being resumed. The IPS side (`hps-issue-watch`, `hps-workload resume-paused`) works at once; `resume-paused` on a node without `vm-resume` fails (exit 1) with the node's refusal.
 
 # Out of scope
 
@@ -128,6 +185,5 @@ Operator
 - A udev rule that sets `max_sectors_kb` on every iSCSI disk, as a second line behind `leg-resolve` for devices that appear outside it (needs a `.nix` change).
 - `vm.watermark_scale_factor`, `vm.compaction_proactiveness` and `vm.min_free_kbytes` on compute nodes: untested, and the failure was on the target.
 - The target's own settings on non-HPS NAS hardware, such as the dev host's project NAS: the lever applies to HPS storage hosts only.
-- The paused-guest check, rule and `vm-resume` script above.
 - Tuning ZFS (`zfs_arc_max_pct`, `zfs_dirty_data_max`, `volblocksize`) beyond the existing cap.
 - Any change to a running node: all of this takes effect at image build and boot.

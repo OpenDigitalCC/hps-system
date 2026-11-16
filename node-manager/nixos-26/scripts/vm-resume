@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+#
+# vm-resume - resume a paused guest, once the storage under it is healthy again.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-resume <vm> [--any-reason]
+#
+# A guest pauses on a disk I/O error (vm-define: error_policy stop) instead of
+# being handed the error; nothing resumes it by itself. This is the step that
+# does (docs/STORAGE-FAULTS.md "A paused guest"). It is not hps-workload's
+# `resume` (vm-restore: a guest suspended to a state file).
+#
+# Not defined: 4. The guest must be paused (virsh domstate --reason), else
+# refused (3, REFUSED not-paused). A guest paused for a reason other than an
+# I/O error (user: an operator paused it; migrating; saving; ...) is refused
+# (3, REFUSED operator-paused) unless --any-reason says the operator means it.
+#
+# A guest paused by an I/O error is resumed only when every disk it has
+# (virsh domblklist) can be read again:
+#   $HPS_DEV/md/<name>      the mirror is assembled (mdadm --detail), its State
+#                           is not failed or inactive, and at least one leg is
+#                           in sync (Active Devices >= 1)
+#   $HPS_DEV/zvol/<pool>/.. the pool is ONLINE (zpool list -H -o health)
+#   a path outside $HPS_DEV is a file: not checked (said in the log)
+#   any other device under $HPS_DEV, or no disk to check at all, cannot be
+#   judged and is refused
+# otherwise REFUSED disk <reason> (3); nothing is resumed. --any-reason does not
+# skip this check for an I/O-error pause (it skips the reason check only).
+# State that cannot be read (virsh domstate or domblklist failing) is exit 1:
+# never a resume.
+#
+# Then virsh resume, and the guest must be running and still running after
+# HPS_VM_SETTLE seconds (a guest whose I/O still fails pauses again within
+# moments): exit 1 when it is not (the node does not retry).
+#
+# Output: on a refusal the line "REFUSED <code> <reason>" (codes not-paused,
+# operator-paused, disk). On success the last line "VM <vm> running".
+# Exit: 0 running, 1 failed or state unreadable or paused again, 2 usage,
+# 3 refused, 4 not defined.
+
+set -euo pipefail
+
+: "${HPS_VM_WAIT:=10}"
+: "${HPS_VM_STEP:=1}"
+: "${HPS_VM_SETTLE:=2}"
+: "${HPS_DEV:=/dev}"
+
+VM=""
+ANY_REASON=0
+
+log() {
+  printf '[vm-resume] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-resume <vm> [--any-reason]
+Exit: 0 running, 1 failed, 2 usage, 3 refused, 4 not defined.
+USAGE
+}
+
+# refuse <code> <reason>: nothing is resumed.
+refuse() {
+  printf 'REFUSED %s %s\n' "$1" "$2"
+  log "refused: $1: $2"
+  exit 3
+}
+
+# unreadable <what>: state that cannot be read is never a resume.
+unreadable() {
+  log "cannot read $1: nothing resumed"
+  exit 1
+}
+
+parse_args() {
+  [[ $# -ge 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --any-reason) ANY_REASON=1; shift ;;
+      *) log "unknown argument: $1"; usage; exit 2 ;;
+    esac
+  done
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+}
+
+# reason_token <text>: libvirt's words as one lower-case token: "I/O error" and
+# "ioerror" are both ioerror; "from snapshot" is fromsnapshot; empty is unknown.
+reason_token() {
+  local t
+  t=$(tr -d -c 'a-z0-9' <<< "${1,,}")
+  printf '%s\n' "${t:-unknown}"
+}
+
+# check_md <name>: the mirror is assembled, not failed, with a leg in sync.
+check_md() {
+  local name=$1 detail state active
+  detail=$(run_q mdadm --detail "$HPS_DEV/md/$name") || refuse disk "mirror $name is not assembled"
+  state=$(sed -n -E '/^[[:space:]]*State[[:space:]]*:/{s/^[^:]*:[[:space:]]*//;p;q}' <<< "$detail")
+  [[ -n "$state" ]] || refuse disk "mirror $name reports no State"
+  state=${state,,}
+  if [[ "$state" == *failed* || "$state" == *inactive* ]]; then
+    refuse disk "mirror $name is $state"
+  fi
+  active=$(awk -F: '/^[[:space:]]*Active Devices[[:space:]]*:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' <<< "$detail")
+  [[ "$active" =~ ^[0-9]+$ ]] || refuse disk "mirror $name reports no Active Devices figure"
+  ((active >= 1)) || refuse disk "mirror $name has no leg in sync"
+  log "mirror $name: $state, $active leg(s) in sync"
+}
+
+# check_pool <pool>: the pool is ONLINE.
+check_pool() {
+  local pool=$1 health
+  health=$(run_q zpool list -H -o health "$pool") || refuse disk "pool $pool is not imported"
+  [[ "$health" == ONLINE ]] || refuse disk "pool $pool is $health"
+  log "pool $pool: ONLINE"
+}
+
+# check_disks: every disk of the guest, or a refusal.
+check_disks() {
+  local list target source checked=0 rest
+  list=$(run_q virsh -c qemu:///system domblklist "$VM") || unreadable "the disk list of $VM"
+  while read -r target source; do
+    [[ -n "$target" && "$target" != Target && "$target" != -* && -n "$source" && "$source" != - ]] || continue
+    case "$source" in
+      "$HPS_DEV"/md/*)
+        check_md "${source#"$HPS_DEV"/md/}"
+        checked=$((checked + 1))
+        ;;
+      "$HPS_DEV"/zvol/*)
+        rest=${source#"$HPS_DEV"/zvol/}
+        check_pool "${rest%%/*}"
+        checked=$((checked + 1))
+        ;;
+      "$HPS_DEV"/*) refuse disk "disk $target ($source) is neither a mirror nor a zvol: its health cannot be judged here" ;;
+      *) log "disk $target ($source) is a file: not checked" ;;
+    esac
+  done <<< "$list"
+  ((checked > 0)) || refuse disk "$VM has no mirror or zvol to check"
+}
+
+# state_of: sets DOM_STATE and DOM_REASON from virsh domstate --reason ("paused (I/O error)").
+state_of() {
+  local out
+  if ! out=$(run_q virsh -c qemu:///system domstate --reason "$VM"); then
+    return 1
+  fi
+  DOM_STATE=${out%% (*}
+  DOM_REASON=""
+  if [[ "$out" == *" ("*")"* ]]; then
+    DOM_REASON=${out#*(}
+    DOM_REASON=${DOM_REASON%%)*}
+  fi
+  return 0
+}
+
+# wait_running: running within HPS_VM_WAIT, and still running after the settle.
+wait_running() {
+  local waited=0
+  while :; do
+    state_of || unreadable "the state of $VM after the resume"
+    [[ "$DOM_STATE" == running ]] && break
+    if [[ "$DOM_STATE" == paused ]]; then
+      log "$VM paused again ($DOM_REASON): the storage is not usable yet"
+      exit 1
+    fi
+    if ((waited >= HPS_VM_WAIT)); then
+      log "$VM is $DOM_STATE, not running, after $HPS_VM_WAIT s"
+      exit 1
+    fi
+    waited=$((waited + 1))
+    sleep "$HPS_VM_STEP"
+  done
+  sleep "$HPS_VM_SETTLE"
+  state_of || unreadable "the state of $VM after the settle"
+  if [[ "$DOM_STATE" != running ]]; then
+    log "$VM is $DOM_STATE ($DOM_REASON) ${HPS_VM_SETTLE}s after the resume: the storage is not usable yet"
+    exit 1
+  fi
+}
+
+main() {
+  local kind
+  DOM_STATE=""
+  DOM_REASON=""
+  parse_args "$@"
+  if ! run_q virsh -c qemu:///system dominfo "$VM" > /dev/null; then
+    log "$VM is not defined"
+    exit 4
+  fi
+  state_of || unreadable "the state of $VM"
+  [[ "$DOM_STATE" == paused ]] || refuse not-paused "$VM is $DOM_STATE, not paused"
+  kind=$(reason_token "$DOM_REASON")
+  if [[ "$kind" == ioerror ]]; then
+    check_disks
+  elif ((ANY_REASON == 0)); then
+    refuse operator-paused "$VM is paused ($kind), not by an I/O error: it is resumed only with --any-reason"
+  else
+    log "--any-reason: resuming $VM paused ($kind); the disk check is for an I/O-error pause only"
+  fi
+  run virsh -c qemu:///system resume "$VM"
+  wait_running
+  printf 'VM %s running\n' "$VM"
+}
+
+main "$@"

@@ -122,6 +122,37 @@ First deploy of `2f84242` on the lab; four defects.
   running. `vm-restore` with no state file says whether the dataset is missing,
   not mounted or mounted and empty of it.
 
+## A paused guest is seen and resumed (2026-11-15)
+
+- **New** `vm-resume <vm> [--any-reason]` (node script, allowlisted): resumes a
+  guest the hypervisor paused on a disk I/O error (`vm_disk_error_policy`
+  `stop`), once every disk it has is healthy (a mirror assembled with a leg in
+  sync, a pool ONLINE); refuses (3) naming why otherwise, and refuses a guest an
+  operator paused unless `--any-reason`. `hps-workload resume-paused <name>
+  [--vm <vm>] [--any-reason]` runs it (not `resume`, which restores a suspended
+  guest from its state file).
+- **New** `check_vms` also reports paused guests, with the reason libvirt gives,
+  from the one `domstats` call: `paused=<n>` on every run and
+  `<vm>_paused_<reason>=1` per guest; a guest paused by an I/O error makes the
+  check WARNING. Figures of running guests are unchanged. A node without the
+  figure is "cannot tell", never "none paused". `vm-status` prints
+  `PAUSED <vm> reason=<token>`; `hps-workload status` shows it.
+- **New** issue kind `guest-paused` (one per paused guest, from the monitor line
+  through the new rule option `each=1`), healed by `HPS::GuestHeal`: `vm-resume`
+  with the backoff and a bound of 6 attempts, then needs-human with the last
+  refusal; it waits while the host's mirror-leg and storage-path issues heal or
+  the host drains, and never resumes an operator's pause, a VM recorded
+  `stopped` or `suspended`, or state it cannot read (reported as `unreadable`).
+- **New** event states `paused` (standing) and `resumed` (clearing) for kind
+  `workload`, subject `<workload>/<vm>`; `hps-log attention` shows a paused guest
+  and drops it when resumed.
+- **Changed** `vm-stop` of a paused guest refuses (3) without `--force`, naming
+  `resume-paused`; with `--force` it destroys it without the graceful wait.
+- Node side: `check_vms`, `vm-resume`, `vm-status`, `vm-stop` and one line in
+  `nix/modules/hps-ctrl-exec.nix` take effect at a node's next boot of a new image
+  (the `.nix` line is unchecked on the host that wrote it). `docs/STORAGE-FAULTS.md`
+  is the design as built.
+
 ## Boot reliability joins the log split and the drain (2026-11-15)
 
 - **Changed** The boot-stalled watch (`HPS::BootWatch`) writes event lines

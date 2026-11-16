@@ -55,7 +55,7 @@ The IPS sends the script name and `--all` and nothing else.
 | `cpu` | `check_cpu` (CPU time by state, see below) | every node |
 | `net` | `check_net` (traffic per interface, see below) | every node |
 | `diskio` | `check_diskio` (throughput per whole disk, see below) | every node |
-| `vms` | `check_vms` (CPU, memory, disk and network per running guest, see below) | compute nodes |
+| `vms` | `check_vms` (CPU, memory, disk and network per running guest, and the paused guests, see below) | compute nodes |
 
 A netbooted node runs from RAM: `/` is a tmpfs and the store is a squashfs.
 `disk_root` therefore measures RAM taken by files written to `/`, and `mem` the
@@ -147,9 +147,9 @@ first). The suffix says what the number is:
 | `net` | `NET OK - rx 1.2 Mbit/s tx 0.4 Mbit/s (3 interfaces)`; per interface `<if>_rx_Bps`, `_tx_Bps`, `_rx_pps`, `_tx_pps` and `_rx_errors`, `_tx_errors`, `_rx_dropped`, `_tx_dropped` (counter deltas, `c`). Left out: `lo`, `veth*`, `vnet*` (guest taps; see `vms`) and interfaces that are down |
 | `diskio` | `DISKIO OK - read 1.2 MB/s write 3.4 MB/s (2 disks)`; `disks`, and per whole disk (`sd*`, `vd*`, `xvd*`, `nvme<N>n<M>`; no partitions, `dm-*`, `md*`, `zd*`, `loop*`, `ram*`) `<dev>_rd_Bps`, `_wr_Bps` (sectors x 512), `_rd_iops`, `_wr_iops`, `<dev>_busy` (% of the interval with I/O in flight). A RAM node has no disk: `DISKIO OK - no disks | disks=0` |
 | `zpool_io` | `ZPOOL_IO OK - read 2.0 MB/s write 3.5 MB/s (2 pools)`; `pools`, per pool `<pool>_alloc`, `_free` (B), `_rd_iops`, `_wr_iops`, `_rd_Bps`, `_wr_Bps`. No pool: `ZPOOL_IO OK - no pools` |
-| `vms` | `VMS OK - 2 running VMs (rss 1.5 GiB)`; `vms`, per running guest `<vm>_cpu_pct` (guest CPU time / the time since the previous run; 100% is one full vCPU, so it can exceed 100), `_vcpus`, `_rss` (host memory the guest process holds), `_mem` (memory given to the guest), `_rd_Bps`, `_wr_Bps` (summed over its disks), `_rx_Bps`, `_tx_Bps` (summed over its NICs). No guest: `VMS OK - no running VMs | vms=0` |
+| `vms` | `VMS OK - 2 running VMs (rss 1.5 GiB)`; `vms`, per running guest `<vm>_cpu_pct` (guest CPU time / the time since the previous run; 100% is one full vCPU, so it can exceed 100), `_vcpus`, `_rss` (host memory the guest process holds), `_mem` (memory given to the guest), `_rd_Bps`, `_wr_Bps` (summed over its disks), `_rx_Bps`, `_tx_Bps` (summed over its NICs). Also `paused=<n>` (every run, 0 included) and per paused guest `<vm>_paused_<reason>=1`; a guest paused by a disk I/O error makes the check `VMS WARNING - 1 running VMs (rss 1.5 GiB), 1 paused: web (ioerror)` (exit 1). No guest: `VMS OK - no running VMs | vms=0 paused=0` |
 
-`vms` asks `virsh domstats --nowait` once per run: libvirtd does not wait for a
+`vms` asks `virsh domstats --list-running --list-paused --nowait --state` once per run: libvirtd does not wait for a
 guest's state-change lock, which an earlier `domstats` it is still answering
 can hold on a slow (nested) host, and leaves out the values that need it. A
 label whose value a sample lacks is left out for that guest that time. The one
@@ -174,6 +174,30 @@ would not be. Each plugin finds its tools itself: the build
 puts coreutils and awk on its `PATH` and, for `zpool_io` and `vms`, the
 absolute store path of `zpool` and `virsh` (libvirt is on compute nodes with the
 compute profile).
+
+### Paused guests
+
+libvirt pauses a guest whose disk I/O fails when its disks carry
+`error_policy stop` (`vm_disk_error_policy`, the default; `docs/STORAGE-FAULTS.md`).
+Such a guest is not running, so it is not in `vms`, `<vm>_cpu_pct` or the saved
+sample, and before this nothing showed it. `check_vms` now reads each guest's
+state and pause reason from the same `domstats` call (no second call, so the
+8 s budget is shared) and reports:
+
+- `paused=<n>`, on every run of this version, 0 included. A node on an older
+  image prints no such figure; the IPS reads a missing `paused` as "cannot tell",
+  never as "none paused", so nothing opens or resolves because it is absent.
+- `<vm>_paused_<reason>=1` per paused guest, with `<reason>` one of `ioerror`,
+  `user`, `migrating`, `saving`, `dumping`, `watchdog`, `fromsnapshot`,
+  `shuttingdown`, `creatingsnapshot`, `crashed`, `startingup`, `postcopy`,
+  `postcopyfailed`, `unknown`, or `code<N>`.
+- WARNING (exit 1) when a guest is paused for `ioerror`: it is an outage. A guest
+  paused for any other reason (an operator's `virsh suspend`) is named in the text
+  and the check stays OK.
+
+The IPS opens a `guest-paused` issue per `ioerror` guest from that line and the
+healer resumes it once its disks are healthy (`docs/ISSUES.md`, "A paused
+guest"). A guest that is resumed leaves `paused` at the next run.
 
 ### swap and osvc_hb
 

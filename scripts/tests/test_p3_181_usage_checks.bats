@@ -212,7 +212,7 @@ virsh_shim() {
   cat > "$TEST_DIR/bin/virsh" <<EOT
 #!/bin/sh
 echo "\$*" >> "$TEST_DIR/virsh.calls"
-[ "\$*" = "-c qemu:///system domstats --raw --list-running --nowait --cpu-total --balloon --vcpu --block --interface" ] || { echo "bad args: \$*" >&2; exit 2; }
+[ "\$*" = "-c qemu:///system domstats --raw --list-running --list-paused --nowait --state --cpu-total --balloon --vcpu --block --interface" ] || { echo "bad args: \$*" >&2; exit 2; }
 cat "$TEST_DIR/root/virsh.out"
 EOT
   chmod +x "$TEST_DIR/bin/virsh"
@@ -255,7 +255,7 @@ EOT
   { dom web-1 10000000000 1048576 2097152 2 1000 2000 500 0 10000 20000; dom Db.2 1000000000 524288 1048576 1 0 0 0 0 0 0; } > "$TEST_DIR/root/virsh.out"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 2 running VMs (rss 1.5 GiB, rates: no previous sample) | vms=2 web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B" ]
+  [ "$output" = "VMS OK - 2 running VMs (rss 1.5 GiB, rates: no previous sample) | vms=2 paused=0 web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B" ]
   [ "$(wc -l < "$TEST_DIR/virsh.calls")" -eq 1 ]
   [ "$(cat "$HPS_VMS_STATE")" = $'ts=1000\nweb-1 10000000000 2 1048576 2097152 1500 2000 10000 20000\nDb.2 1000000000 1 524288 1048576 0 0 0 0' ]
   run ls "$TEST_DIR/run/hps"
@@ -270,12 +270,12 @@ EOT
   { dom web-1 11500000000 1048576 2097152 2 3000 5000 1500 1000 15000 21000; dom Db.2 1250000000 524288 1048576 1 0 0 0 0 0 0; dom late 5 1 1 1 0 0 0 0 0 0; } > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1001 run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 3 running VMs (rss 1.5 GiB) | vms=3 web-1_cpu_pct=150.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=3000 web-1_wr_Bps=4000 web-1_rx_Bps=5000 web-1_tx_Bps=1000 db_2_cpu_pct=25.0% db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B db_2_rd_Bps=0 db_2_wr_Bps=0 db_2_rx_Bps=0 db_2_tx_Bps=0 late_vcpus=1 late_rss=1024B late_mem=1024B" ]
+  [ "$output" = "VMS OK - 3 running VMs (rss 1.5 GiB) | vms=3 paused=0 web-1_cpu_pct=150.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=3000 web-1_wr_Bps=4000 web-1_rx_Bps=5000 web-1_tx_Bps=1000 db_2_cpu_pct=25.0% db_2_vcpus=1 db_2_rss=536870912B db_2_mem=1073741824B db_2_rd_Bps=0 db_2_wr_Bps=0 db_2_rx_Bps=0 db_2_tx_Bps=0 late_vcpus=1 late_rss=1024B late_mem=1024B" ]
   [ "$(wc -l < "$TEST_DIR/virsh.calls")" -eq 2 ]
   # 30 s apart (the lab's monitor interval): the same deltas, a thirtieth of the rate
   { dom web-1 16000000000 1048576 2097152 2 3000 5000 1500 1000 15000 21000; } > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1031 run "$P/check_vms"
-  [ "$output" = "VMS OK - 1 running VMs (rss 1.0 GiB) | vms=1 web-1_cpu_pct=15.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=0 web-1_wr_Bps=0 web-1_rx_Bps=0 web-1_tx_Bps=0" ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 1.0 GiB) | vms=1 paused=0 web-1_cpu_pct=15.0% web-1_vcpus=2 web-1_rss=1073741824B web-1_mem=2147483648B web-1_rd_Bps=0 web-1_wr_Bps=0 web-1_rx_Bps=0 web-1_tx_Bps=0" ]
   [ "$(head -n 1 "$HPS_VMS_STATE")" = "ts=1031" ]
 }
 
@@ -287,16 +287,16 @@ EOT
   dom web 2000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1901 run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: previous sample too old) | vms=1 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: previous sample too old) | vms=1 paused=0 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
   dom web 3000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1903 run "$P/check_vms"
-  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB) | vms=1 web_cpu_pct=50.0% web_vcpus=1 web_rss=1048576B web_mem=2097152B web_rd_Bps=0 web_wr_Bps=0 web_rx_Bps=0 web_tx_Bps=0" ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB) | vms=1 paused=0 web_cpu_pct=50.0% web_vcpus=1 web_rss=1048576B web_mem=2097152B web_rd_Bps=0 web_wr_Bps=0 web_rx_Bps=0 web_tx_Bps=0" ]
   HPS_NOW=1903 run "$P/check_vms"
   [[ "$output" == *"rates: previous sample not before now)"* ]]
   # a restarted guest: its counters went backwards, which counts as 0
   dom web 5 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1904 run "$P/check_vms"
-  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB) | vms=1 web_cpu_pct=0.0% web_vcpus=1 web_rss=1048576B web_mem=2097152B web_rd_Bps=0 web_wr_Bps=0 web_rx_Bps=0 web_tx_Bps=0" ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB) | vms=1 paused=0 web_cpu_pct=0.0% web_vcpus=1 web_rss=1048576B web_mem=2097152B web_rd_Bps=0 web_wr_Bps=0 web_rx_Bps=0 web_tx_Bps=0" ]
 }
 
 @test "check_vms: no running VMs is OK and saves an empty sample; a failing virsh is UNKNOWN and saves nothing" {
@@ -304,11 +304,11 @@ EOT
   : > "$TEST_DIR/root/virsh.out"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - no running VMs | vms=0" ]
+  [ "$output" = "VMS OK - no running VMs | vms=0 paused=0" ]
   [ "$(cat "$HPS_VMS_STATE")" = "ts=1000" ]
   dom web 1000000000 1024 2048 1 0 0 0 0 0 0 > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1001 run "$P/check_vms"
-  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: no guest in the previous sample) | vms=1 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: no guest in the previous sample) | vms=1 paused=0 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
   printf '#!/bin/sh\necho "error: failed to connect to the hypervisor" >&2\nexit 1\n' > "$TEST_DIR/bin/virsh"
   HPS_NOW=1002 run "$P/check_vms"
   [ "$status" -eq 3 ]
@@ -342,11 +342,11 @@ EOT
   printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n" >> "$TEST_DIR/root/virsh.out"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB, rates: no previous sample) | vms=2 web_vcpus=2" ]
+  [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB, rates: no previous sample) | vms=2 paused=0 web_vcpus=2" ]
   { dom web 1500000000 1024 2048 2 10 20 0 0 300 200; printf "Domain: 'bare'\n  cpu.time=5\n  block.count=0\n  net.count=0\n\n"; } > "$TEST_DIR/root/virsh.out"
   HPS_NOW=1001 run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB) | vms=2 web_cpu_pct=50.0% web_vcpus=2 web_rss=1048576B web_mem=2097152B web_rx_Bps=200 web_tx_Bps=100 bare_cpu_pct=0.0% bare_rd_Bps=0 bare_wr_Bps=0 bare_rx_Bps=0 bare_tx_Bps=0" ]
+  [ "$output" = "VMS OK - 2 running VMs (rss 0.0 GiB) | vms=2 paused=0 web_cpu_pct=50.0% web_vcpus=2 web_rss=1048576B web_mem=2097152B web_rx_Bps=200 web_tx_Bps=100 bare_cpu_pct=0.0% bare_rd_Bps=0 bare_wr_Bps=0 bare_rx_Bps=0 bare_tx_Bps=0" ]
 }
 
 @test "check_vms: an unwritable state directory costs the rates, never the check; options are refused" {
@@ -356,7 +356,7 @@ EOT
   chmod 0555 "$TEST_DIR/run/hps"
   run "$P/check_vms"
   [ "$status" -eq 0 ]
-  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: no previous sample) | vms=1 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
+  [ "$output" = "VMS OK - 1 running VMs (rss 0.0 GiB, rates: no previous sample) | vms=1 paused=0 web_vcpus=1 web_rss=1048576B web_mem=2097152B" ]
   chmod 0755 "$TEST_DIR/run/hps"
   run "$P/check_vms" -i 1
   [ "$status" -eq 3 ]

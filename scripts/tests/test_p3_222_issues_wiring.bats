@@ -91,7 +91,7 @@ gate() {
 @test "the shipped rules parse, and the tools pass perl -c" {
   run perl -I "$ROOT/lib/perl" "$ROOT/bin/hps-issue-watch" check-rules "$ROOT/lib/hps-issue-rules.conf"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"1 marker rule(s), 8 line rule(s)"* ]]
+  [[ "$output" == *"2 marker rule(s), 9 line rule(s)"* ]]
   run perl -I "$ROOT/lib/perl" -c "$ROOT/bin/hps-issues"
   [ "$status" -eq 0 ]
   run perl -I "$ROOT/lib/perl" -c "$ROOT/bin/hps-issue-watch"

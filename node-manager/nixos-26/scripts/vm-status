@@ -7,8 +7,13 @@
 # one): virsh dominfo, virsh domblklist, one NIC line per interface
 #   NIC <vm> <index> <tap|-> <bridge> <mac> vlans=<vid[P][U],...|->
 # and a line  VM <vm> <state>  where
-# state is what virsh domstate prints (running, shut off, paused, ...). The
-# last line is always a VM line, or "no VMs" when none is defined.
+# state is what virsh domstate prints (running, shut off, paused, ...). A paused
+# guest also gets, just before its VM line,
+#   PAUSED <vm> reason=<token>
+# the pause reason of virsh domstate --reason as one lower-case token: ioerror
+# (a disk I/O error: vm-resume can resume it), user (an operator paused it),
+# migrating, saving, ..., unknown (libvirt gave none, or it could not be read).
+# The last line is always a VM line, or "no VMs" when none is defined.
 # Exit: 0, 2 usage, 4 the named VM is not defined.
 
 set -euo pipefail
@@ -42,7 +47,24 @@ report_one() {
   run virsh -c qemu:///system domblklist "$vm"
   state=$(run virsh -c qemu:///system domstate "$vm")
   report_nics "$vm"
+  if [[ "$state" == paused ]]; then
+    report_pause "$vm"
+  fi
   printf 'VM %s %s\n' "$vm" "$state"
+}
+
+# report_pause <vm>: the PAUSED line, the reason as a token ("I/O error" and
+# "ioerror" are both ioerror). A reason that cannot be read is unknown.
+report_pause() {
+  local vm=$1 out reason=""
+  if out=$(run_q virsh -c qemu:///system domstate --reason "$vm"); then
+    if [[ "$out" == *" ("*")"* ]]; then
+      reason=${out#*(}
+      reason=${reason%%)*}
+    fi
+  fi
+  reason=$(tr -d -c 'a-z0-9' <<< "${reason,,}")
+  printf 'PAUSED %s reason=%s\n' "$vm" "${reason:-unknown}"
 }
 
 # report_nics <vm>: one line per interface,

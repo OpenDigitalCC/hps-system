@@ -38,6 +38,24 @@ package HPS::IssueHeal;
 #        otherwise                    -> a failed attempt
 # zfs-pool issues are not healed themselves (see above, and the monitor's OK).
 #
+# guest-paused (a guest the hypervisor paused on a disk I/O error; fields host,
+# guest, reason, and workload once known): HPS::GuestHeal. vm-status on the host
+# says whether the guest is still paused and why; a guest paused for an I/O error
+# is resumed with vm-resume (which checks every disk of the guest itself) once the
+# host's mirror-leg and storage-path issues have had their turn (up to
+# HPS::GuestHeal::WAIT_CAP seconds); a guest paused by an operator, of a workload
+# recorded stopped or suspended, or on a host with the key drain is never resumed;
+# state that cannot be read is reported (event state unreadable), never acted on.
+#        running / shut off / not defined -> resolved (resumed, or stopped)
+#        vm-resume exit 0                 -> healing; checked again in CHECK_DELAY;
+#                                            paused again by then is a failed attempt
+#        wait (draining, other issues)    -> nothing tried, nothing counted, looked at
+#                                            again in HPS::GuestHeal::WAIT_DELAY
+#        refusal for the disks, node down -> a failed attempt (backoff); after
+#                                            HPS::GuestHeal::MAX_TRIES the issue needs a
+#                                            human, with the last refusal in its trail
+#        operator pause, recorded stopped -> needs-human at once
+#
 # A failed attempt waits by the backoff (DELAYS, then the cap); at the cap the
 # issue is escalated to urgent once. The first attempt is FIRST_DELAY after the
 # healer first sees the issue. Every attempt and check is in the trail with the
@@ -66,6 +84,7 @@ use warnings;
 use feature qw(signatures);
 no warnings 'experimental::signatures';
 
+use HPS::GuestHeal ();
 use HPS::Issues ();
 use HPS::Log ();
 use HPS::Registry ();
@@ -86,7 +105,7 @@ sub new ($class, %o) {
         $runner = HPS::Storage::Runner::HpsRun->new;
     }
     return bless { issues => $issues, runner => $runner, now => $o{now} // sub { time },
-        kinds => { 'mirror-leg' => 1, 'zfs-vdev' => 1 }, om3_next => {} }, $class;
+        kinds => { 'mirror-leg' => 1, 'zfs-vdev' => 1, 'guest-paused' => 1 }, om3_next => {} }, $class;
 }
 
 sub _now ($self) { return $self->{now}->() }
@@ -116,6 +135,8 @@ sub tick ($self) {
         $self->heal($rec);
         $n++;
     }
+    # the standing lines of the paused guests, and the clearing ones
+    $n += eval { HPS::GuestHeal::events($self) } // 0;
     return $n;
 }
 
@@ -339,6 +360,7 @@ sub _mirror ($self, $mac, $host, $mirror, $hint) {
 
 # attempt($rec): the outcome {outcome, detail, attempted, by} of one heal.
 sub attempt ($self, $rec) {
+    return HPS::GuestHeal::attempt($self, $rec) if $rec->{kind} eq 'guest-paused';
     my $f = $rec->{fields} // {};
     my $host = $f->{host} // '';
     my $mac = $self->find_host($host);
@@ -408,6 +430,20 @@ sub heal ($self, $rec) {
         # resolve comes later (a mirror-status check, a marker, the monitor)
         $h->{last_action} = HPS::Issues::clean_text($res->{action})
             if defined $res->{action} && ($o eq 'healing' || $o eq 'clean');
+        # guest-paused: what the attempt learned (the workload, the reason) and
+        # what it wants remembered (resumed: vm-resume ran, so a pause now is a failure)
+        if (ref $res->{set_fields} eq 'HASH') {
+            my $f = $r->{fields} //= {};
+            for my $k (sort keys %{ $res->{set_fields} }) {
+                my $v = $res->{set_fields}{$k};
+                $f->{$k} = HPS::Issues::clean_text($v) if defined $v && length $v;
+            }
+        }
+        if (ref $res->{mark} eq 'HASH') {
+            for my $k (sort keys %{ $res->{mark} }) {
+                if (defined $res->{mark}{$k}) { $h->{$k} = $res->{mark}{$k} } else { delete $h->{$k} }
+            }
+        }
         $healed_before = 1 if $r->{state} eq 'healing';
         if ($res->{attempted} || $o eq 'failed') {
             $h->{attempts}++;
@@ -419,8 +455,11 @@ sub heal ($self, $rec) {
             $resolved = 1;
             delete $h->{next_at};
         } elsif ($o eq 'healing') {
-            $issues->set_state($r, 'healing', 'resync running');
+            $issues->set_state($r, 'healing', $r->{kind} eq 'guest-paused' ? 'resumed; checking that it stays up' : 'resync running');
             $h->{next_at} = $now + CHECK_DELAY;
+        } elsif ($o eq 'wait' || $o eq 'unreadable') {
+            # nothing was tried and no try is spent: looked at again later (the issue stays as it is)
+            $h->{next_at} = $now + HPS::GuestHeal::WAIT_DELAY;
         } elsif ($o eq 'human') {
             $issues->set_state($r, 'needs-human', $res->{detail});
             if ($r->{severity} ne 'urgent') {
@@ -432,7 +471,14 @@ sub heal ($self, $rec) {
             $issues->set_state($r, 'open', 'back to open: not healed');
             my $wait = backoff($h->{attempts});
             $h->{next_at} = $now + $wait;
-            if ($wait == $DELAYS[-1] && $r->{severity} ne 'urgent') {
+            if ($r->{kind} eq 'guest-paused' && $h->{attempts} >= HPS::GuestHeal::MAX_TRIES) {
+                # bounded: the guest stays paused, so a person has to decide (the trail holds every refusal)
+                $issues->set_state($r, 'needs-human', "gave up after $h->{attempts} attempts; the last: $res->{detail}");
+                $r->{severity} = 'urgent';
+                $issues->trail($r, 'escalated', "$h->{attempts} attempts to resume did not work");
+                delete $h->{next_at};
+            }
+            elsif ($wait == $DELAYS[-1] && $r->{severity} ne 'urgent') {
                 $r->{severity} = 'urgent';
                 $issues->trail($r, 'escalated', "still not healed after $h->{attempts} attempts; retrying every ${wait}s");
             }
@@ -446,6 +492,7 @@ sub heal ($self, $rec) {
         $self->_pool_resolved($rec, $res) if $rec->{kind} eq 'zfs-vdev';
     }
     my $after = $issues->get($rec->{id});
+    HPS::GuestHeal::unreadable_event($self, $after, $res->{detail}) if $rec->{kind} eq 'guest-paused' && $res->{outcome} eq 'unreadable';
     unless ($res->{outcome} eq 'healing' && !$res->{attempted}) {
         my $text = "hps-issue: heal $rec->{id} $res->{outcome}: " . HPS::Issues::clean_text($res->{detail});
         if ($after->{state} eq 'needs-human') { $issues->event(pri => 'urgent', subject => $rec->{key}, state => 'needs-human', text => $text) }

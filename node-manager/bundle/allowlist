@@ -46,6 +46,7 @@ vm-disk-resize profile=node
 vm-disk-hotplug profile=node
 vm-save profile=node
 vm-restore profile=node
+vm-resume profile=node
 vm-status profile=node
 vm-undefine profile=node
 vm-console-log profile=node

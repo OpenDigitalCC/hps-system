@@ -135,6 +135,9 @@ in
       vm-save.options.profile = "node";
       vm-restore.source = mkScript "vm-restore" (scriptsDir + "/vm-restore");
       vm-restore.options.profile = "node";
+      # Resume of a guest paused by a disk I/O error, once its disks are healthy again (the healer runs it).
+      vm-resume.source = mkScript "vm-resume" (scriptsDir + "/vm-resume");
+      vm-resume.options.profile = "node";
       vm-status.source = mkScript "vm-status" (scriptsDir + "/vm-status");
       vm-status.options.profile = "node";
       vm-undefine.source = mkScript "vm-undefine" (scriptsDir + "/vm-undefine");
