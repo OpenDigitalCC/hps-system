@@ -242,6 +242,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
     grep -q "^$k = " "$q" || { echo "qemu.conf lacks the setting $k of compute.nix"; return 1; }
   done
   # the guests' firmware: the files of the QEMU package, linked where vm-define reads them
+  [ -d "$HPS_ROOT/var/log/libvirt/qemu" ]
   [ -L "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-x86_64-code.fd" ]
   [ -L "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-i386-vars.fd" ]
   [ "$(readlink "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-x86_64-code.fd")" = "$TEST_DIR/qemu/share/qemu/edk2-x86_64-code.fd" ]

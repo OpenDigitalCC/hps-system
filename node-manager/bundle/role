@@ -209,6 +209,8 @@ role_compute() {
   role_user qemu-libvirtd kvm
 
   run install -d -m 0755 "${HPS_ROOT}$LIBVIRT_CONF_DIR" "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu"
+  # the guests' logs (vm-define sends the serial console to /var/log/libvirt/qemu/<vm>-serial.log)
+  run install -d -m 0755 "${HPS_ROOT}/var/log/libvirt/qemu"
   write_if_changed "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu.conf" 0644 << 'EOF'
 # written by the HPS node bundle (docs/BUNDLE.md); the settings of nix/modules/profiles/compute.nix
 user = "qemu-libvirtd"
