@@ -1,0 +1,21 @@
+# Packages the NixOS package repository holds (hps-starter sync nixos).
+# One per line: NAME [OUTPUT]. NAME is the nixpkgs package name without its
+# version; the release's own store-paths list says which store path that is
+# (the one whose closure holds the starter's glibc, that is x86_64). With no
+# OUTPUT the default output is meant, else the named one. A name that the
+# release holds in several versions (openssl) is refused as ambiguous, so it
+# is not listed: step 2 decides how the agent gets openssl.
+# The repository holds each package's whole closure. ZFS is in the stock
+# starter and is not listed.
+libvirt
+qemu-host-cpu-only
+open-iscsi
+mdadm
+targetcli-fb
+perl
+# Perl modules the ctrl-exec agent uses (a perl module is listed by its
+# name without the perl5.NN.N- prefix). A pure-Perl module (JSON) has no glibc
+# in its closure, so its x86_64 copy cannot be told from the others by that
+# test: it is not listed. Step 2 settles how the agent gets JSON.
+IO-Socket-SSL
+Net-SSLeay
