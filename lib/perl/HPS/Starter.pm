@@ -522,7 +522,7 @@ sub _which ($cmd) {
 # _parse_narinfo($text, $what): {url, filehash, filesize, refs => [hash], raw}
 sub _parse_narinfo ($text, $what) {
     my %f;
-    for my $l (split /\n/, $text) { $f{$1} = $2 if $l =~ /\A([A-Za-z]+): (.*)\z/ }
+    for my $l (split /\n/, $text) { $f{$1} = $2 // '' if $l =~ /\A([A-Za-z]+):(?: (.*))?\z/ }  # an empty value (References:) has no space after the colon
     for my $k (qw(StorePath URL FileHash FileSize References)) {
         _fail('failed', "$what: narinfo has no $k") unless exists $f{$k};
     }
