@@ -141,7 +141,7 @@ programs() {
   printf '#!/bin/bash\n' > "$TEST_DIR/iscsi/sbin/iscsiadm"
   ln -s "$TEST_DIR/iscsi/sbin/iscsid" "$HPS_NIX_PROFILE/sbin/iscsid"
   ln -s "$TEST_DIR/iscsi/sbin/iscsiadm" "$HPS_NIX_PROFILE/sbin/iscsiadm"
-  for p in libvirtd; do
+  for p in libvirtd virtlogd; do
     printf '#!/bin/bash\n' > "$HPS_NIX_PROFILE/sbin/$p"
   done
   chmod +x "$HPS_NIX_PROFILE"/bin/* "$HPS_NIX_PROFILE"/sbin/* "$TEST_DIR"/qemu/bin/* "$TEST_DIR"/iscsi/sbin/*
@@ -267,6 +267,10 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   [ "$status" -eq 0 ]
   unit libvirtd | grep -qx "ExecStart=$HPS_NIX_PROFILE/sbin/libvirtd"
   unit libvirtd | grep -qx 'KillMode=process'
+  # the guests' log daemon runs first: libvirtd does not start it (vm-start: no /run/libvirt/virtlogd-sock)
+  unit virtlogd | grep -qx "ExecStart=$HPS_NIX_PROFILE/sbin/virtlogd"
+  unit libvirtd | grep -q '^After=.*virtlogd.service'
+  grep -q 'systemctl start virtlogd.service' "$CALLS"
   unit libvirtd | grep -q "^Environment=\"PATH=$HPS_NIX_PROFILE/bin:$HPS_NIX_PROFILE/sbin:"
 }
 

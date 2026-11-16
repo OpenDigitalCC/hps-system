@@ -193,7 +193,7 @@ role_storage() {
 # (docs/BUNDLE.md "What is not carried").
 role_compute() {
   local libvirtd qemu_bin edk2 f
-  role_need virsh libvirtd qemu-img qemu-system-x86_64 iscsiadm iscsid mdadm tcpdump jq
+  role_need virsh libvirtd virtlogd qemu-img qemu-system-x86_64 iscsiadm iscsid mdadm tcpdump jq
   libvirtd="$(role_bin libvirtd)"
   role_modules vhost_net 8021q bridge raid1 iscsi_tcp
   # KVM: the module of the CPU's vendor (the one that is not there always fails)
@@ -247,8 +247,12 @@ EOF
     hps-mdmonitor "PATH=$(role_path)" \
     "$(command -v bash)" -c "'until grep -q \"^md[0-9]\" /proc/mdstat; do sleep 5; done; exec $(role_bin mdadm) --monitor --scan --config=${HPS_ROOT}/etc/mdadm.conf'"
 
+  # libvirtd does not start virtlogd itself (lab trial: vm-start failed on
+  # /run/libvirt/virtlogd-sock); the guests' console logs go through it
+  svc_start --opt KillMode=process --opt Restart=on-failure \
+    virtlogd "PATH=$(role_path)" "$(role_bin virtlogd)"
   svc_start --opt KillMode=process --opt Restart=on-failure --opt LimitMEMLOCK=infinity \
-    --unit-opt "After=hps-mdmonitor.service" \
+    --unit-opt "After=hps-mdmonitor.service virtlogd.service" \
     libvirtd "PATH=$(role_path)" "$libvirtd"
 }
 
