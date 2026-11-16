@@ -35,10 +35,30 @@ starter_files() {
   p1_50_host "$MAC" os_id x86_64:nixos:26.05
   run nixos_starter_boot_lines "$MAC" 26.05
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == "kernel http://10.0.0.1/starter/nixos/26.05/bzImage init=/nix/store/abc-nixos-system-nixos-kexec-26.05.1.abc/init initrd=initrd nohibernate root=fstab loglevel=4 lsm=landlock,yama,bpf console=ttyS0,115200 hps.ips=10.0.0.1 hps.mac=$MAC hps.os=x86_64:nixos:26.05 hps.profile=STARTER "* ]]
+  [[ "${lines[0]}" == "kernel http://10.0.0.1/starter/nixos/26.05/bzImage init=/nix/store/abc-nixos-system-nixos-kexec-26.05.1.abc/init initrd=initrd nohibernate root=fstab loglevel=4 lsm=landlock,yama,apparmor,bpf apparmor=1 console=ttyS0,115200 hps.ips=10.0.0.1 hps.mac=$MAC hps.os=x86_64:nixos:26.05 hps.profile=STARTER "* ]]
   [ "${lines[1]}" = "initrd http://10.0.0.1/starter/nixos/26.05/initrd" ]
   [ "${lines[2]}" = "boot" ]
   [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "starter boot lines: AppArmor is in the lsm list and on, as on a pinned node (lsm=landlock,yama,apparmor,bpf apparmor=1)" {
+  # the stock starter's kernel has AppArmor built in but its lsm= list leaves it out
+  run nixos_starter_apparmor_args "init=/x/init nohibernate lsm=landlock,yama,bpf loglevel=4"
+  [ "$status" -eq 0 ]
+  [ "$output" = "init=/x/init nohibernate lsm=landlock,yama,apparmor,bpf loglevel=4 apparmor=1" ]
+  # a list that already has it is left, a stock apparmor=0 is replaced, no second copy
+  run nixos_starter_apparmor_args "a lsm=landlock,yama,apparmor,bpf apparmor=0 b"
+  [ "$output" = "a lsm=landlock,yama,apparmor,bpf b apparmor=1" ]
+  # no bpf: appended; no lsm= at all: the pinned list
+  run nixos_starter_apparmor_args "a lsm=yama b"
+  [ "$output" = "a lsm=yama,apparmor b apparmor=1" ]
+  run nixos_starter_apparmor_args "a b"
+  [ "$output" = "a b lsm=landlock,yama,apparmor,bpf apparmor=1" ]
+}
+
+@test "starter boot lines: the pinned images' own lines are not touched" {
+  # one caller, in the starter's line maker
+  [ "$(grep -c 'nixos_starter_apparmor_args "' "$ROOT/lib/functions.d/nixos-boot-functions.sh")" -eq 1 ]
 }
 
 @test "starter boot lines carry what the node bundle needs: the IPS, the MAC, the OS, the profile, the DNS domain" {

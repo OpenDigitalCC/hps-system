@@ -30,6 +30,9 @@ _node_tree_base() {
 # The node bundle, a gzip-compressed tar, on stdout.
 #   bundle/*                       as they are (init, role, adapter/, allowlist, bootstrap.sh, actions/)
 #   nixos-26/scripts/*             as actions/*       (the node actions, not forked)
+#   nixos-26/plugins/*             as plugins/*       (the monitoring checks, as they are)
+#   apparmor/*                     as apparmor/*      (the libvirt profile texts the pinned
+#                                  images' nix module reads as well)
 #   plugins/hps-node/hps-node.sh   as actions/hps-node
 #   nixos-26/boot/hps-pair.sh      as lib/hps-pair   (the existing pairing flow)
 #   nixos-26/boot/hps-{time,iscsi-name,osvc-config,md-event,shutdown-storage}.sh
@@ -49,7 +52,8 @@ node_bundle_tar() {
     --transform='s,^hps-node\.sh$,actions/hps-node,' \
     --transform='s,^\(hps-[a-z-]*\)\.sh$,lib/\1,' \
     -C "${nm}/bundle" . \
-    -C "${nm}/nixos-26" scripts \
+    -C "${nm}/nixos-26" scripts plugins \
+    -C "${nm}" apparmor \
     -C "${nm}/nixos-26/boot" hps-pair.sh hps-time.sh hps-iscsi-name.sh hps-osvc-config.sh hps-md-event.sh hps-shutdown-storage.sh \
     -C "${nm}/plugins/hps-node" hps-node.sh \
     | gzip -n

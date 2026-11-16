@@ -287,6 +287,36 @@ nixos_starter_hook() {
   printf ' systemd.run_success_action=none systemd.run_failure_action=none systemd.wants=kernel-command-line.service'
 }
 
+# nixos_starter_apparmor_args <stock cmdline>
+# The boot-arguments part of AppArmor on a starter node (docs/BUNDLE.md
+# "AppArmor"): the stock starter's kernel has AppArmor built in but its
+# lsm= list leaves it out (lsm=landlock,yama,bpf). The kernel line becomes what a
+# pinned node's has, lsm=landlock,yama,apparmor,bpf apparmor=1: apparmor is added
+# to the stock list before bpf (at the end when there is no bpf), a stock line
+# with no lsm= gets the whole pinned list, and apparmor=1 follows. Prints the
+# arguments.
+nixos_starter_apparmor_args() {
+  local cmdline="$1" word out="" lsm_seen=""
+  for word in $cmdline; do
+    case "$word" in
+      lsm=*)
+        lsm_seen=1
+        if [[ ",${word#lsm=}," != *",apparmor,"* ]]; then
+          if [[ ",${word#lsm=}," == *",bpf,"* ]]; then
+            word="lsm=$(printf '%s' "${word#lsm=}" | sed 's/\(^\|,\)bpf\(,\|$\)/\1apparmor,bpf\2/')"
+          else
+            word="${word},apparmor"
+          fi
+        fi
+        ;;
+      apparmor=*) continue ;;
+    esac
+    out="${out:+$out }$word"
+  done
+  [[ -n "$lsm_seen" ]] || out="${out:+$out }lsm=landlock,yama,apparmor,bpf"
+  printf '%s apparmor=1\n' "$out"
+}
+
 # nixos_starter_boot_lines <mac> <version>
 # The iPXE kernel/initrd/boot lines of the stock starter of a NixOS release:
 # the distribution's own netboot kernel and initramfs that hps-starter sync
@@ -327,6 +357,7 @@ nixos_starter_boot_lines() {
   fi
   local os_id domain cluster args
   os_id="$(host_registry "$mac" get os_id 2>/dev/null)" || os_id=""
+  cmdline="$(nixos_starter_apparmor_args "$cmdline")"
   args="${cmdline} console=ttyS0,115200 hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.os=${os_id} hps.profile=STARTER"
   # The node's own ZFS hostid, as on the pinned images (nixos_boot_lines): the stock
   # starter has one hostid for every node, so a pool left imported by a power loss
