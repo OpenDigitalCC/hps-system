@@ -212,6 +212,27 @@ reaches the profile only by being added to the allowlist in the image; `default`
 stays the restrictive baseline for anything that names no profile. The control
 directories of the agent stay read-only to every profile.
 
+## Guest confinement
+
+A guest is a QEMU process that runs as the unprivileged `qemu-libvirtd` user
+with the seccomp sandbox, cleared capabilities and no namespaces, and, on top, an
+AppArmor profile of its own that libvirt's `virt-aa-helper` generates when the guest
+starts (`docs/CONFINEMENT.md`): QEMU may read and map the store, execute only its
+own binaries and write only that guest's disks, log, pid and monitor socket.
+`security_driver = "apparmor"` makes libvirtd fail to start rather than run
+guests under the DAC model alone.
+
+This is the same on a node booted from the stock starter (`docs/BUNDLE.md`
+"AppArmor"). The kernel line the IPS issues carries `lsm=landlock,yama,apparmor,bpf
+apparmor=1`; the profile text is one set of files read by the pinned images' nix
+module and carried in the bundle; the role step loads the profiles and checks the
+daemon's own profile is in the kernel's list before `libvirtd` starts. If the kernel
+has no active AppArmor the compute role step fails with an error that says so and
+`libvirtd` is not started: a starter node never runs guests unconfined by
+default. The profiles come from the IPS with the bundle, over the provisioning
+network, like every script (`STRATEGY.md` "Trust"). The parser and the abstractions
+are upstream packages with their signatures checked.
+
 ## Verification method
 
 Threat-model items are checked at close-out with the security tooling in

@@ -45,6 +45,8 @@ node runs it by its store path.
 | `init`, `role`, `bootstrap.sh`, `allowlist`, `adapter/`, `actions/bundle-refresh`, `lib/hps-log-journal` | `node-manager/bundle/` |
 | `actions/<name>` | `node-manager/nixos-26/scripts/<name>`, as they are |
 | `actions/hps-node` | `node-manager/plugins/hps-node/hps-node.sh` |
+| `plugins/<check>` | `node-manager/nixos-26/plugins/`, the monitoring checks as they are ("Monitoring") |
+| `apparmor/<profile>` | `node-manager/apparmor/`, the libvirt profile texts the pinned images' nix module reads too ("AppArmor") |
 | `lib/hps-pair` | `node-manager/nixos-26/boot/hps-pair.sh`, the existing pairing flow |
 | `lib/hps-time`, `hps-iscsi-name`, `hps-osvc-config`, `hps-md-event`, `hps-shutdown-storage` | `node-manager/nixos-26/boot/hps-*.sh`: the scripts the pinned images run as units, as they are |
 
@@ -176,8 +178,8 @@ the executor is a file in the package.
 
 ```
 *:   ctrl-exec-agent
-SCH: targetcli-fb mdadm smartmontools xxd jq om3
-TCH: libvirt qemu-host-cpu-only open-iscsi mdadm tcpdump jq om3
+SCH: targetcli-fb mdadm smartmontools xxd jq om3 nagios-check hps-nagios-plugins
+TCH: libvirt qemu-host-cpu-only open-iscsi mdadm tcpdump jq om3 apparmor-parser apparmor-profiles nagios-check hps-nagios-plugins
 ```
 
 A role is a word of the host's registry `TYPE` (`SCH,TCH` gets both lines);
@@ -298,7 +300,7 @@ file), the agent, the allowlist, the pairing. The adapter also sets two
 variables: where added packages' programs appear (`PKG_BIN`) and the sudo group.
 
 **Alpine** (plan step 4) adds `adapter/alpine.sh` with the same functions and
-variables and one branch in `init`'s `case "$OS_NAME"`, which marks the place;
+variables (`PKG_ETC`, where a package's `etc` files appear, is the one AppArmor added) and one branch in `init`'s `case "$OS_NAME"`, which marks the place;
 the IPS side adds its kernel line and its package repository. There is no Alpine
 code now, and `init` refuses an OS it has no adapter for by name.
 
@@ -326,9 +328,10 @@ those images start as units travel in the bundle as `lib/*`. This is plan step 3
 | | log forwarding | unit `hps-log-journal`: the journal of this boot, one RFC 3164 line per entry, to the IPS on TCP 514 with the journal's own facility and priority (`lib/hps-log-journal`; jq and the shell, no package) |
 | | host reserve | `actions/host-reserve-apply`, the allowlisted script itself: CPU, memory and IO kept for the host, the ZFS ARC cap, `min_free_kbytes` |
 | | storage (SCH) | `zfs` and the LIO modules, `/etc/target` for targetcli's saved configuration, port 3260 in the firewall |
-| | compute (TCH) | KVM module of the CPU vendor, `vhost_net`, `8021q`, `bridge`, `raid1`, `iscsi_tcp`; the user `qemu-libvirtd`; libvirt's `qemu.conf`; the UEFI firmware linked into `/run/libvirt/nix-ovmf`; `mdadm.conf`; the units `virtlogd` and `libvirtd` |
+| | compute (TCH) | KVM module of the CPU vendor, `vhost_net`, `8021q`, `bridge`, `raid1`, `iscsi_tcp`; AppArmor (`role_apparmor`, "AppArmor"); the user `qemu-libvirtd`; libvirt's `qemu.conf`; the UEFI firmware linked into `/run/libvirt/nix-ovmf`; `mdadm.conf`; the units `virtlogd` and `libvirtd` |
 | | bridges | `actions/net-bridge-ensure`, once, so they exist before any workload |
 | | om3 | the unit `opensvc-daemon`; ports 1215 and 10000; the group `opensvc` |
+| | monitoring | the plugin directory, the link to `nagios-check` and `checks.conf` (`role_monitor`, "Monitoring"); no unit |
 | | power-off | the unit `hps-shutdown-storage`: guests, mirrors, targets, sessions and pools stop in that order while everything they need is still up |
 | after pairing | initiator (TCH) | `lib/hps-iscsi-name` writes the initiator name from the FQDN pairing set; `iscsid` with the package's own `iscsid.conf` and the fail-fast timeouts |
 
@@ -355,24 +358,14 @@ nor `TCH` gets the agent and nothing else.
 | `services.openiscsi` with `extraConfig` | the package's `iscsid.conf` plus the four fail-fast lines (`replacement_timeout` 15, `noop_out_interval` 5, `noop_out_timeout` 5, `login_timeout` 15), the same values `leg-resolve` writes per record (a test compares the two) |
 | `boot.swraid` with `PROGRAM` and `AUTO -all`, the last-resort units suppressed | `/etc/mdadm.conf` with the same two lines, `PROGRAM` an sh wrapper (`/run/hps/md-event`) that gives the bundle's `lib/hps-md-event` a PATH; the monitor is the starter's own `mdmonitor.service`, which udev starts with the first array; the last-resort timer and service are linked to `/dev/null` for the boot; written on storage nodes too, or udev assembles a zvol that carries a mirror leg and the export is refused |
 | `virtualisation.libvirtd` (`qemu_kvm`, `runAsRoot = false`, `verbatimConfig`) | `libvirtd` from the package, `/var/lib/libvirt/qemu.conf` with the same settings and the same unprivileged user, `KillMode=process` so that a restart of the daemon leaves the guests running |
+| `security.apparmor` with `compute-apparmor.nix`; `security_driver = "apparmor"` | the kernel line's `lsm=` and `apparmor=1`, the parser as a package, the same profile files, loaded before `libvirtd` starts (see "AppArmor") |
+| `hps-monitor.nix`: `nagios-check` in the agent's scripts and `/etc/nagios-checks/checks.conf` | the allowlist entry, the plugin and the plugin directory, the same `checks.conf` (see "Monitoring") |
 | libvirtd-config linking QEMU's firmware into `/run/libvirt/nix-ovmf` | the same links, made by the role step, for `vm-define` |
 | `hps-kvm` (the vendor's KVM module) | the same decision, read from `/proc/cpuinfo` |
 | `hps-host-reserve`, `hps-iscsi-initiator`, `hps-shutdown-storage`, `opensvc-daemon`, `hps-time`, `hps-log-target` + rsyslog | the same scripts as units of the bundle (log forwarding by `hps-log-journal`, see below) |
 
 ### What is not carried
 
-- **AppArmor.** The starter's kernel line has `lsm=landlock,yama,bpf`, and neither
-  the parser nor the profiles of `compute-apparmor.nix` are in the starter. The
-  guests are confined by the DAC model (the unprivileged `qemu-libvirtd` user,
-  disks relabelled to it for the guest's life), the seccomp sandbox, cleared
-  capabilities and no namespaces: `qemu.conf` has no `security_driver` line, so
-  libvirtd takes what the kernel has. `vm-confinement-report` says `model=none` (libvirt names no security model) with `qemu_user=qemu-libvirtd`, `seccomp=2` and no capabilities. AppArmor for the starter is a decision of its own (a `lsm=` argument
-  from the IPS, the parser as a package, the profile text in the bundle).
-- **`nagios-check` and the usage checks** (`check_vms`, `check_zpool_io`, the
-  monitoring plugins). The agent's allowlist has no `nagios-check`, so the IPS's
-  `hps-monitor` has nothing to ask a starter node, and the paused-guest rule of the
-  guest-resume fix (below) has no `check_vms` reading on it. `vm-resume` and the
-  rules work; what feeds them does not.
 - **`hps-net`.** The stock starter's own DHCP serves the boot NIC; a second NIC on a
   foreign LAN is not made unmanaged. Nothing in step 3 uses a second NIC.
 - **Headless QEMU** is plan step 5. `qemu-host-cpu-only` is the QEMU the repository
@@ -383,6 +376,73 @@ nor `TCH` gets the agent and nothing else.
   step 3 adds `tcpdump` and `jq` and om3 (96 MiB) on top. A 6,144 MiB node
   therefore has about 3.5 GiB left for the base, ZFS's ARC, the host reserve and the
   guests; 4,096 MiB is not enough for a compute node with a guest.
+
+### AppArmor
+
+A compute node confines each guest's QEMU by an AppArmor profile, as the pinned
+images do (`docs/CONFINEMENT.md` "AppArmor layer"). Four parts:
+
+| part | where |
+| --- | --- |
+| **kernel arguments** | The stock starter kernel has AppArmor built in (the decompressed kernel of the 26.05 starter carries "AppArmor initialized") and its line has `lsm=landlock,yama,bpf`, which leaves it out. `nixos_starter_boot_lines` (the adapter's boot-arguments part, on the IPS) adds `apparmor` to the list before `bpf` and `apparmor=1`, so a starter node's line carries `lsm=landlock,yama,apparmor,bpf apparmor=1` as a pinned node's does. It is on every starter node, not only compute ones: with no profile loaded it changes nothing, and one line is simpler than one per role. Adding it to a node that already runs is the one kernel change that needs a reboot. |
+| **packages** | `apparmor-parser` and `apparmor-profiles` (4.1.7, upstream, signed; the store paths of the pinned images) on the `TCH` line of `nixos.roles`. The parser's closure is small (about 2.3 MiB, with bash and glibc). `virt-aa-helper` needs nothing more: it runs `/sbin/apparmor_parser`, a link the role step makes to the package's parser. |
+| **profile text** | `node-manager/apparmor/`: `libvirtd`, `virt-aa-helper`, `libvirt-qemu` (the guest abstraction) and `TEMPLATE.qemu`. One copy. The files hold `@@LIBVIRT@@`, `@@QEMU@@` and `@@APPARMOR_PARSER@@` where a store path goes. `nix/modules/profiles/compute-apparmor.nix` reads them and fills the markers in with `builtins.replaceStrings`; the bundle carries them as `apparmor/` and `role_apparmor` fills them in with `sed` from the paths of the node's own packages (`readlink -f` of `libvirtd`, `qemu-system-x86_64`, `apparmor_parser`). The node's libvirt is whatever the repository holds, not necessarily the pinned one's path, which is why nothing is written with a path in it. |
+| **loading** | `role_apparmor`, the first thing `role_compute` does after the program check. |
+
+`role_apparmor` in order: the kernel's `/sys/module/apparmor/parameters/enabled` must be
+`Y` and `/sys/kernel/security/apparmor/profiles` readable; it writes the abstraction
+to `/etc/apparmor.d/abstractions/libvirt-qemu`, `TEMPLATE.qemu` to
+`/var/lib/apparmor.d/libvirt/` (libvirt's compiled-in `APPARMOR_DIR`), the two
+policies to `/etc/apparmor.d/hps/`, and `/etc/apparmor/parser.conf` with the Include
+lines (`/etc/apparmor.d`, the profile's `etc/apparmor.d` that the `apparmor-profiles`
+package fills, and `/var/lib/apparmor.d` for the per-guest `libvirt/<uuid>.files`);
+it links `/sbin/apparmor_parser`; it loads `libvirtd` and `virt-aa-helper` with
+`apparmor_parser -r -K`; and it checks that the daemon's own profile
+(`<libvirt>/sbin/.libvirtd-wrapped (enforce)`) is in the kernel's list, because
+libvirt's driver probe looks for exactly that. Only then do `libvirtd` and the mirror
+monitor start, so the daemon is confined from its first `exec`. `qemu.conf` carries
+`security_driver = "apparmor"` as `compute.nix` does.
+
+**No quiet fall back.** If the kernel's AppArmor is off (a node booted before the IPS
+issued the new line, or a kernel without it), if the parser fails or if the daemon's
+profile is not in the list afterwards, the step prints `ERROR: AppArmor is not active
+in this kernel ...` and `libvirtd is NOT started`, the role step "compute services" is
+recorded as failed (the IPS log gets `error: role step failed: compute services`), and
+`init` ends with exit 1. Pairing still goes on, as for any failed role step, so the
+node can be looked at. The guests never run with the DAC model alone.
+
+What the nix side keeps: the profile text is in the plain files and `compute-apparmor.nix`
+only fills in store paths. That change is mechanical and **unevaluated** (the host
+that made it has no Nix): `checks.<system>.apparmor-profiles` and an evaluation of
+`node-converged` have to be run where Nix is (the lab builder) before the next image
+build. The text is byte for byte what the module held, so the check is expected to
+pass unchanged.
+
+### Monitoring
+
+`hps-monitor` on the IPS asks each paired node to run the allowlisted action
+`nagios-check --all` and grades the lines it gets back; it asks every node the same
+way (`bin/hps-monitor`), so a starter node is one more node once it answers. The
+pinned image answers with the ctrl-exec plugin `nagios-check.pl` and
+`/etc/nagios-checks/checks.conf` (`nix/modules/hps-monitor.nix`). A starter node:
+
+| what | how |
+| --- | --- |
+| the action | `nagios-check profile=node` on the bundle's allowlist (the pinned image's own entry: same profile, no `input`). The bundle's `actions/nagios-check` runs the plugin through `/run/hps/nagios-check` with the arguments it was given and nothing else; the plugin takes check names or `--all` and refuses the rest. No link yet (a node whose role step failed) is a plain message and exit 3. |
+| the plugin | `nagios-check`, a local package (the pinned image's build, from the lab's cache, one 13 KiB file whose only reference is Perl). Realised by its store path outside the profile, as the agent is, and linked to `/run/hps/nagios-check`. |
+| the plugin directory | `/run/hps/nagios-plugins/`, one directory of real files (nagios-check refuses a plugin that resolves outside its directory). `check_disk`, `check_load`, `check_procs` and `check_mem` come from the local package `hps-nagios-plugins` (the pinned `node-base` build, which holds them next to the `monitoring-plugins` they were copied from). The usage checks (`check_cpu`, `check_net`, `check_diskio`, `check_fs`, `check_swap_use`, `check_osvc_hb`, and `check_zpool`, `check_zpool_io` on a storage node and `check_vms` on a compute node) are the bundle's `plugins/` files, copied as they are with their one `# @HPS_PATH@` line replaced by a `PATH` of the program directories (the nix module replaces it with the store paths of its tools). |
+| the checks | `/etc/nagios-checks/checks.conf`, written by `role_monitor`: the set `hps-monitor.nix` generates for the node's roles, line for line (a test compares each line with the module's). |
+| what starts | Nothing. The pinned images run no timer or unit for monitoring; the IPS asks, and the checks run when it does. |
+
+`check_vms` reports a paused guest (`PAUSED <vm> reason=...`), `hps-monitor` writes the
+line into the IPS log, and the `guest-paused` rule of `lib/hps-issue-rules.conf` opens
+the issue (`docs/ISSUES.md` "A paused guest"); the healer then runs `vm-resume`, which
+was already on the bundle's allowlist. The missing piece on a starter node was the
+reading, and it is now there. `hps-nagios-plugins` and `nagios-check` are put on the IPS
+with `hps-starter add-local` like `om3` (`plans/step3b-trial.md`). The packages'
+closure beyond the repository (the `monitoring-plugins` libraries that `check_disk`
+and the others link) has not been measured on a node; it adds to the RAM of every
+storage and compute node.
 
 ### The waiting fixes
 
@@ -426,11 +486,14 @@ the boot (`plans/step3-trial.md`).
 | change an action | change the file under `node-manager/nixos-26/scripts/`, then `hps-run <host> bundle-refresh` |
 | see why a node did not come up | its console, or `journalctl -u kernel-command-line` over SSH as `sysadmin` |
 | see what a storage or compute node runs | `systemctl list-units 'hps-*' libvirtd iscsid opensvc-daemon` over SSH; the units are in `/run/systemd/system` and say what they run |
+| see that guests are confined | on a compute node, `cat /sys/kernel/security/apparmor/profiles` lists the `libvirtd` and `virt-aa-helper` profiles, and `hps-run <host> vm-confinement-report <vm>` says `model=apparmor` with a `libvirt-<uuid>` label |
+| see what the monitor gets from a node | `hps-run <host> nagios-check --all`, or `hps-monitor run --host <host>` on the IPS |
 | add a program to a role | name it in `nixos.packages`, put it on the role line of `nixos.roles`, `hps-starter sync nixos --only repository`, then `hps-run <host> bundle-refresh`; `role` then finds it, or says `missing programs: ...` |
 
 ## Not in this step
 
 The IPS-side sysadmin key extraction by the installer; an Alpine adapter (plan step
-4); headless QEMU, which brings the compute node's RAM down (plan step 5); the
-monitoring checks, AppArmor and `hps-net` on starter nodes (see "What is not
-carried").
+4); headless QEMU, which brings the compute node's RAM down (plan step 5); and
+`hps-net` on starter nodes (see "What is not carried"). The monitoring checks are
+on storage and compute nodes only: a starter node of another `TYPE` has no
+`checks.conf` and the IPS's `hps-monitor` gets the action's plain message from it.

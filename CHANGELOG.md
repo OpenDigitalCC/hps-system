@@ -12,6 +12,39 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## AppArmor and the monitoring checks on the stock starter (2026-11-16)
+
+Step 3 of `plans/PLAN.md` continued (`docs/BUNDLE.md` "AppArmor", "Monitoring"). The
+pinned images are unchanged in what they do; the profile text moved (below).
+
+- **New** AppArmor for guests on a `STARTER` compute node, equal to the pinned
+  images. The kernel line gains `apparmor` in `lsm=` and `apparmor=1`
+  (`nixos_starter_boot_lines`; the stock starter kernel has AppArmor built in). The
+  role step `role_apparmor` loads the `libvirtd` and `virt-aa-helper` profiles
+  before `libvirtd` starts and `qemu.conf` has `security_driver = "apparmor"`. A
+  kernel without an active AppArmor fails the compute step loudly and `libvirtd` is
+  not started; there is no fall back to the DAC model. Packages `apparmor-parser`
+  and `apparmor-profiles` 4.1.7 (upstream, signed) on `TCH`. Reaching a node that
+  is already up needs a reboot for the kernel line (the one legitimate reboot).
+- **Changed** the four AppArmor profile texts (libvirtd, virt-aa-helper, the
+  libvirt-qemu abstraction, TEMPLATE.qemu) moved from
+  `nix/modules/profiles/compute-apparmor.nix` to plain files in
+  `node-manager/apparmor/`, one copy that the nix module and the node bundle both
+  read (`@@NAME@@` marks a store path). The nix change is mechanical and has **not
+  been evaluated** (no Nix on the host that made it): run
+  `checks.<system>.apparmor-profiles` and evaluate `node-converged` before the next
+  image build.
+- **New** the monitoring checks on `STARTER` storage and compute nodes: the action
+  `nagios-check` joins the bundle allowlist with the pinned images' profile, the
+  bundle carries the plugins (`node-manager/nixos-26/plugins/`, as they are), the
+  role step `role_monitor` builds the plugin directory and writes
+  `/etc/nagios-checks/checks.conf` (the checks of `hps-monitor.nix`, line for line).
+  `hps-monitor` on the IPS treats the node as any other, and a guest paused on an I/O
+  error on a starter node now opens the `guest-paused` issue the healer resumes.
+  Nothing is started on the node: the pinned images run no unit for monitoring.
+  Local packages `nagios-check` and `hps-nagios-plugins` (the pinned images'
+  builds, put on the IPS with `hps-starter add-local`) on `SCH` and `TCH`.
+
 ## Storage and compute on the stock starter (2026-11-16)
 
 Step 3 of `plans/PLAN.md` (`docs/BUNDLE.md` "Storage and compute"). The pinned

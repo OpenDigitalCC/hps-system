@@ -69,6 +69,12 @@ Shipped by `nix/modules/profiles/compute-apparmor.nix` (imported by
 | `TEMPLATE.qemu`, upstream's, unchanged | `/var/lib/apparmor.d/libvirt/TEMPLATE.qemu` (tmpfiles link) |
 | Per-guest profile `libvirt-<uuid>` and its disks file `libvirt-<uuid>.files`, written by `virt-aa-helper` when a guest starts | `/var/lib/apparmor.d/libvirt/` |
 
+The profile text is in plain files, `node-manager/apparmor/` (`libvirtd`,
+`virt-aa-helper`, `libvirt-qemu`, `TEMPLATE.qemu`), with `@@LIBVIRT@@`, `@@QEMU@@`
+and `@@APPARMOR_PARSER@@` for the store paths; the nix module fills them in, and the
+node bundle of a node booted from the stock starter carries the same files
+(`docs/BUNDLE.md` "AppArmor"). There is no second copy.
+
 The profiles are upstream libvirt v12.2.0's with the Debian paths replaced by
 store paths. The guest abstraction allows read and map (not write, not execute)
 on `/nix/store/**` and execute only on the QEMU binary; it leaves out sound, USB,
