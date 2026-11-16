@@ -241,14 +241,25 @@ sub check_files ($self, $dir, $files) {
 
 #--- sync -------------------------------------------------------------------
 
-# sync($os, $ver): fill the starter and the repository. Returns
-# {os, version, release, starter => {...}, repo => {...}}.
-sub sync ($self, $os, $ver = undef) {
+# sync($os, $ver, only => 'starter'|'repository'): fill the starter and the
+# repository (or one of them; the repository needs a synced starter, whose
+# release it follows). Returns {os, version, release, starter => {...},
+# repo => {...}}, a part not run is undef.
+sub sync ($self, $os, $ver = undef, %o) {
     $ver = $self->_check_os_version($os, $ver);
     _fail('refused', "$os: not yet implemented (plan step $OS{$os}{step})") unless $OS{$os}{implemented};
-    my $st = $self->_sync_nixos_starter($ver);
-    my $rp = $self->_sync_nixos_repo($ver, $st);
-    return { os => $os, version => $ver, release => $st->{release}, starter => $st, repo => $rp };
+    my $only = $o{only};
+    _fail('usage', "--only '$only' must be starter or repository") if defined $only && $only !~ /\A(?:starter|repository)\z/;
+    my $st = defined $only && $only eq 'repository' ? $self->_starter_state($ver) : $self->_sync_nixos_starter($ver);
+    my $rp = defined $only && $only eq 'starter' ? undef : $self->_sync_nixos_repo($ver, $st);
+    return { os => $os, version => $ver, release => $st->{release}, starter => defined $only && $only eq 'repository' ? undef : $st, repo => $rp };
+}
+
+# _starter_state($ver): what the repository needs of the synced starter.
+sub _starter_state ($self, $ver) {
+    my $dir = $self->starter_dir('nixos', $ver);
+    my $m = $self->read_manifest($dir) // _fail('notfound', "no starter synced for nixos $ver: run hps-starter sync nixos first");
+    return { dir => $dir, release => $m->{release}, build => $m->{build}, init => $m->{init} };
 }
 
 # --- NixOS starter ---

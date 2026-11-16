@@ -190,6 +190,24 @@ remove_tree("$w5->{up}/releases");
 my $r5 = $w5->{new}->(store_paths => "$w5->{root}/sp.txt")->sync('nixos');
 is($r5->{repo}{paths}, 4, 'a store path list given on the command line replaces the release download');
 
+# --- --only: the starter alone, then the repository that follows it -----------
+my $w7 = world();
+$e = err_of(sub { $w7->{new}->()->sync('nixos', undef, only => 'repository') });
+is($e && $e->kind, 'notfound', 'the repository alone needs a synced starter');
+$e = err_of(sub { $w7->{new}->()->sync('nixos', undef, only => 'both') });
+is($e && $e->kind, 'usage', '--only takes starter or repository');
+my $r7 = $w7->{new}->()->sync('nixos', undef, only => 'starter');
+ok($r7->{starter} && !defined $r7->{repo}, 'only starter: the starter is synced, the repository not run');
+ok(!-e "$w7->{root}/res/packages", 'only starter: no repository directory');
+$r7 = $w7->{new}->()->sync('nixos', undef, only => 'repository');
+ok(!defined $r7->{starter} && $r7->{repo}{paths} == 4, 'only repository: follows the starter\'s release');
+is($r7->{release}, $REL, 'only repository: release of the starter');
+{
+    my $out = `$^X $BIN sync nixos --only starter --hydra file://$w7->{up}/hydra --resources $w7->{root}/res2 2>/dev/null`;
+    is($? >> 8, 0, 'hps-starter sync --only starter: exit 0');
+    like($out, qr/^SYNCED nixos 26\.05 release=\Q$REL\E starter\(files=3 fetched=3 reused=0 bytes=\d+\)$/m, 'the last line names the starter only');
+}
+
 # --- refusals ----------------------------------------------------------------
 $e = err_of(sub { $w->{new}->()->sync('alpine') });
 is($e && $e->kind, 'refused', 'alpine is refused');

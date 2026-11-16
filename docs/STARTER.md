@@ -55,7 +55,8 @@ resolved to (`roots`); a file's URL is the upstream cache plus its path.
 ## The verb
 
 ```
-hps-starter sync <os> [--release V] [--proxy http://HOST:PORT] [--packages FILE] [--store-paths FILE]
+hps-starter sync <os> [--release V] [--only starter|repository] [--proxy http://HOST:PORT]
+                      [--packages FILE] [--store-paths FILE] [--hydra URL] [--releases URL] [--cache URL]
 hps-starter list [--json]
 hps-starter verify [<os> [--release V]]
 ```
@@ -76,6 +77,11 @@ On the IPS: `docker exec hps-lab-ips /srv/hps-system/bin/hps-starter sync nixos`
   `upstream refused or unreachable via proxy http://10.100.1.2:3128: host
   hydra.nixos.org: curl: (56) CONNECT tunnel failed, response 403`.
   `sync alpine` stops with exit 3, "not yet implemented (plan step 4)".
+  `--only starter` or `--only repository` fills one part (the repository
+  follows the release of the synced starter). `--hydra`, `--releases` and
+  `--cache` replace the three upstream roots with a mirror, or with a
+  `file:///dir` laid out the same way (the tests and the first lab trial use
+  that: no network).
 
 `list`
 : One row per synced starter and repository: OS, release, release identity,
