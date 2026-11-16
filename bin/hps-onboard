@@ -50,11 +50,13 @@ Usage:
       without --attach: the networks attached to the host. With --attach:
       REPLACE the list (names from the cluster network layout; an empty
       --attach '' clears it).
-  hps-onboard forget <mac> [--dry-run]
+  hps-onboard forget <mac> [--dry-run] [--force]
       Remove a host that will not come back: its ctrl-exec agent registration, its
       registry entry, and its DHCP reservation and DNS entries (files regenerated,
       dnsmasq reloaded); each removal is printed. Refused for a host with storage
       exports, a pool or workloads recorded. --dry-run lists what would be removed.
+      --force forgets a host that has a pool recorded anyway and discards the pool
+      entry with it (one "discarded ..." line); exports and workloads still refuse.
   hps-onboard prune-agents [--dry-run]
       Remove the ctrl-exec agent registrations that are not the FQDN agent of a
       registry host (stale-*, old short-name or hps-<mac> duplicates, agents of
@@ -178,11 +180,11 @@ sub render_nets {
 sub main {
     my @argv = @_;
     my @host_keys;
-    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach, $all, $dry);
+    my ($json, $type, $profile, $os, $pin, $storage, $to_latest, $attach, $all, $dry, $force);
     my $cmd = shift @argv // return usage('command required');
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'type=s' => \$type, 'profile=s' => \$profile,
-        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all, 'dry-run' => \$dry, 'host-key=s' => \@host_keys,
+        'os=s' => \$os, 'pin=s' => \$pin, 'storage=s' => \$storage, 'to-latest' => \$to_latest, 'attach=s' => \$attach, 'all' => \$all, 'dry-run' => \$dry, 'force' => \$force, 'host-key=s' => \@host_keys,
     ) or return usage();
     my $ob = HPS::Onboard->new;
     my $js = JSON::PP->new->canonical->pretty->allow_nonref;
@@ -228,7 +230,7 @@ sub main {
         }
         elsif ($cmd eq 'forget') {
             return usage('forget needs one MAC') unless @argv == 1;
-            my $r = $ob->forget($argv[0], dry_run => $dry);
+            my $r = $ob->forget($argv[0], dry_run => $dry, force => $force);
             if ($json) { print $js->encode($r) }
             else {
                 print(($r->{dry_run} ? 'Dry run' : 'Forgot') . " host $r->{mac}" . (defined $r->{hostname} ? " ($r->{hostname})" : '') . ", agent name $r->{fqdn}\n");

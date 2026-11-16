@@ -122,9 +122,12 @@ Held hosts and their assignment.
 : Shows the networks attached to the host. With `--attach` the list is
   replaced; `--attach ''` clears it.
 
-`hps-onboard forget <mac> [--dry-run]`
+`hps-onboard forget <mac> [--dry-run] [--force]`
 : Removes a host that will not come back: agent registration, registry entry,
   DHCP and DNS entries. Refused for a host with exports, a pool or workloads.
+  `--force` forgets a host with a pool recorded anyway and discards the pool
+  entry with it, printing one `discarded` line; exports and workloads still
+  refuse.
 
 `hps-onboard prune-agents [--dry-run]`
 : Removes agent registrations that are not the FQDN agent of a registry host.

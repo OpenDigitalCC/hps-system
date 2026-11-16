@@ -424,16 +424,23 @@ sub workloads_on ($self, $mac) {
     return @found;
 }
 
-sub _forget_refusals ($self, $mac) {
+# _forget_refusals($mac, $force): (\@why, \@discard). @why are the reasons forget is
+# refused. With $force the recorded pool is no reason but a thing forget discards
+# (hps-onboard forget --force, owner ruling 2026-11-16); storage exports and
+# workloads still refuse: other hosts' targets and the workload records depend on them.
+sub _forget_refusals ($self, $mac, $force = 0) {
     my $reg = $self->{registry};
-    my @why;
+    my (@why, @discard);
     my $ex = $reg->host_exists($mac, 'storage_exports') ? $reg->host_get_json($mac, 'storage_exports') : undef;
     push @why, 'storage exports are recorded (' . scalar(@$ex) . ')' if ref $ex eq 'ARRAY' && @$ex;
     my $pool = $reg->host_get($mac, 'storage_pool');
-    push @why, "a pool is recorded ($pool)" if defined $pool && length $pool;
+    if (defined $pool && length $pool) {
+        if ($force) { push @discard, "recorded pool entry $pool" }
+        else        { push @why, "a pool is recorded ($pool); --force forgets the host and discards it" }
+    }
     my @wl = $self->workloads_on($mac);
     push @why, 'workloads are recorded (' . join(', ', @wl) . ')' if @wl;
-    return @why;
+    return (\@why, \@discard);
 }
 
 sub forget ($self, $mac, %opt) {
@@ -445,14 +452,15 @@ sub forget ($self, $mac, %opt) {
     my $agent = eval { $self->agent_name($m) };
     _fail('refused', "Host $m has no usable FQDN: $@") unless defined $agent;
     my @freed = $reg->host_macs($m);
-    my @why = $self->_forget_refusals($m);
-    _fail('refused', "Host $m is not forgotten: " . join('; ', @why)) if @why;
+    my ($why, $discard) = $self->_forget_refusals($m, $opt{force});
+    _fail('refused', "Host $m is not forgotten: " . join('; ', @$why)) if @$why;
 
     my @steps;
-    my $res = { mac => $m, hostname => $hostname, fqdn => $agent, dry_run => $opt{dry_run} ? 1 : 0, steps => \@steps };
+    my $res = { mac => $m, hostname => $hostname, fqdn => $agent, dry_run => $opt{dry_run} ? 1 : 0, force => $opt{force} ? 1 : 0, steps => \@steps };
     if ($opt{dry_run}) {
         push @steps, "would remove ctrl-exec agent $agent";
         push @steps, "would remove registry host $m" . (defined $hostname ? " ($hostname)" : '');
+        push @steps, "would discard $_" for @$discard;
         push @steps, 'would free MACs ' . join(', ', @freed) if @freed > 1;
         push @steps, 'would regenerate DHCP and DNS files and reload dnsmasq';
         return $res;
@@ -467,6 +475,7 @@ sub forget ($self, $mac, %opt) {
 
     $reg->host_remove($m);
     push @steps, "removed registry host $m" . (defined $hostname ? " ($hostname)" : '');
+    push @steps, "discarded $_" for @$discard;
     push @steps, 'freed MACs ' . join(', ', @freed) if @freed > 1;
 
     if (defined $self->_forget_cmd) {

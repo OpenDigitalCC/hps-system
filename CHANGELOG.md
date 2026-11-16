@@ -12,6 +12,18 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## hps-onboard forget --force (2026-11-16)
+
+- **New** `hps-onboard forget <mac> --force`: a host with a pool recorded is forgotten
+  anyway. The ctrl-exec agent registration, the registry host (and so the recorded pool
+  entry) and the DHCP and DNS entries go as in a plain forget, and one
+  `discarded recorded pool entry <pool>` line says what was thrown away (`would
+  discard` under `--dry-run`). Storage exports and workloads still refuse, with or
+  without `--force`.
+- **Changed** the refusal for a recorded pool names `--force`. Without it `forget` is
+  unchanged. Usage text, `docs/NAMING.md`, `docs/QUICKREF.md` and `docs/OPERATOR.md`
+  say so.
+
 ## A paused guest on a broken mirror is reassembled by the healer (2026-11-16)
 
 Lab trial of step 3 (`docs/STORAGE-FAULTS.md` "A broken mirror"). On kernel 6.18 a

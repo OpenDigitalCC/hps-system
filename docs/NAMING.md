@@ -75,8 +75,11 @@ kernel command line (a label for log naming), `hps.domain=` (the domain).
 
 ## Forgetting a host
 
-`hps-onboard forget <mac> [--dry-run]`
+`hps-onboard forget <mac> [--dry-run] [--force]`
 refuses a host with storage exports, a pool or a workload instance recorded.
+`--force` forgets a host whose only obstacle is a recorded pool: the pool entry goes with
+the registry host and each is printed as `discarded recorded pool entry <pool>` (`would
+discard ...` under `--dry-run`). Storage exports and workloads still refuse.
 Otherwise it removes, in this order, and prints each step: the ctrl-exec agent
 registration (`ctrl-exec-dispatcher unpair <fqdn>`), the registry host, then
 regenerates the DHCP and DNS files and reloads
