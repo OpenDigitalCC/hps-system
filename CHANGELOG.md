@@ -12,6 +12,22 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## The IPS holds a stock starter and a package repository (2026-11-16)
+
+Step 1 of `plans/PLAN.md` (`docs/STARTER.md`).
+
+- **New** `hps-starter sync|list|verify`: fills `<resources>/starter/<os>/<release>/`
+  (the distribution's own netboot kernel and initramfs) and
+  `<resources>/packages/<os>/<release>/` (a plain HTTP package repository) from
+  upstream through the egress proxy, safe to repeat, with a manifest of size and
+  sha256 per file. NixOS only; `sync alpine` says it is not yet implemented
+  (plan step 4).
+- **New** `hps-onboard assign --profile STARTER` (no pin): the host boots the
+  stock starter over iPXE, with nothing of HPS on it. Pinned profiles are
+  unchanged.
+- **Changed** the IPS web server serves `/starter/`, and a package repository's
+  `nix-cache-info` as text/plain.
+
 ## Deploy fixes: the boot watch, the log reads, foreign lines (2026-11-15)
 
 First deploy of `2f84242` on the lab; four defects.
