@@ -367,3 +367,16 @@ resumed() { grep -q '^virsh resume vm1' "$SHIM_LOG"; }
   grep -q 'guest-paused' "$root/docs/ISSUES.md"
   grep -q 'paused=' "$root/docs/MONITORING.md"
 }
+
+@test "vm-resume: a mirror the kernel calls broken is refused even when mdadm says clean with both legs back" {
+  mkdir -p "$HPS_DEV" "$TEST_DIR/sys/block/md127/md"
+  ln -sf "$HPS_DEV/md127" "$HPS_DEV/md/vm1-disk0" 2> /dev/null || { mkdir -p "$HPS_DEV/md"; ln -sf "$HPS_DEV/md127" "$HPS_DEV/md/vm1-disk0"; }
+  echo broken > "$TEST_DIR/sys/block/md127/md/array_state"
+  HPS_SYS="$TEST_DIR/sys" run bash "$S/vm-resume" vm1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"REFUSED disk mirror vm1-disk0 is broken"* ]]
+  run ! grep -q '^virsh resume' "$SHIM_LOG"
+  echo clean > "$TEST_DIR/sys/block/md127/md/array_state"
+  HPS_SYS="$TEST_DIR/sys" run bash "$S/vm-resume" vm1
+  [ "$status" -eq 0 ]
+}

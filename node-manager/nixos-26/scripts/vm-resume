@@ -45,6 +45,7 @@ set -euo pipefail
 : "${HPS_VM_STEP:=1}"
 : "${HPS_VM_SETTLE:=2}"
 : "${HPS_DEV:=/dev}"
+: "${HPS_SYS:=/sys}"
 
 VM=""
 ANY_REASON=0
@@ -118,6 +119,15 @@ check_md() {
   state=${state,,}
   if [[ "$state" == *failed* || "$state" == *inactive* ]]; then
     refuse disk "mirror $name is $state"
+  fi
+  # A raid1 that lost every leg is marked "broken" by the kernel and fails writes until it is
+  # assembled again, whatever mdadm --detail says once the legs are back (lab trial 2026-11-16:
+  # State clean, 2 active, yet the resumed guest paused again at once).
+  local dev as
+  dev=$(readlink -f "$HPS_DEV/md/$name" 2> /dev/null || true)
+  as="$HPS_SYS/block/${dev##*/}/md/array_state"
+  if [[ -n "$dev" && -r "$as" && "$(< "$as")" == broken ]]; then
+    refuse disk "mirror $name is broken (the kernel fails its writes after it lost every leg): power the guest off, stop and assemble the mirror again"
   fi
   active=$(awk -F: '/^[[:space:]]*Active Devices[[:space:]]*:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' <<< "$detail")
   [[ "$active" =~ ^[0-9]+$ ]] || refuse disk "mirror $name reports no Active Devices figure"
