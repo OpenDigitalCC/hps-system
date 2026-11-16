@@ -320,9 +320,37 @@ step_pair() {
   esac
 }
 
+#-------------------------------------------------------------------------------
+# hostname that stays
+#-------------------------------------------------------------------------------
+# hps-pair sets the kernel hostname (<name>.<domain>). The stock starter has a
+# static hostname ("nixos"), and systemd-hostnamed, which starts on demand,
+# puts it back whenever it starts (lab trial 2026-11-16: the agent was then
+# listed as "nixos.<domain>" and hps-run --ping failed). So the name is made the
+# static one: /etc/hostname, a link into the store on NixOS, becomes a real file.
+persist_hostname() {
+  local f="${HPS_ROOT}/etc/hostname" cur want="" old=""
+  cur="$(hostname 2> /dev/null || true)"
+  [[ ! -f "$f" ]] || old="$(cat "$f")"
+  if [[ "$cur" == *.* ]]; then
+    want="$cur"
+  elif [[ "$old" == *.* ]]; then
+    want="$old"
+    run hostname "$want"
+  else
+    return 0
+  fi
+  if [[ "$old" != "$want" ]]; then
+    printf '%s\n' "$want" > "$f.new"
+    run mv -f "$f.new" "$f"
+    systemctl try-restart systemd-hostnamed.service 2> /dev/null || true
+  fi
+}
+
 step_sysadmin
 step_packages
 step_agent
 step_legacy
 step_pair
+persist_hostname
 log "done: bundle ${HERE##*/}"

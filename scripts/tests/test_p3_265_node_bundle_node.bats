@@ -94,6 +94,10 @@ while [[ $# -gt 0 ]]; do
 done
 /usr/bin/install "${args[@]}"
 EOF
+  cat > "$b/hostname" <<'EOS'
+#!/bin/bash
+if [[ $# -gt 0 ]]; then echo "hostname $*" >> "$CALLS"; printf '%s\n' "$1" > "$TEST_DIR/khost"; else cat "$TEST_DIR/khost" 2> /dev/null || echo nixos; fi
+EOS
   for s in usermod chown chgrp passwd systemctl iptables sshd; do
     printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n[[ "%s" == iptables && "$1" == -C ]] && exit 1\nexit 0\n' "$s" "$s" > "$b/$s"
   done
@@ -566,4 +570,29 @@ extract_bundle() {
 @test "the agent is not run as root and not through the profile-less path: no unit runs it without User=, init has no executor-less branch" {
   ! grep -qi 'without the executor\|no executor' "$ROOT/node-manager/bundle/init"
   grep -q 'executor_socket' "$ROOT/node-manager/bundle/init"
+}
+
+@test "hostname: the FQDN hps-pair set becomes the static hostname, so systemd-hostnamed cannot put the starter's name back" {
+  extract_bundle
+  echo tch-001.lab.hps > "$TEST_DIR/khost"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HPS_ROOT/etc/hostname")" = tch-001.lab.hps ]
+  grep -q '^systemctl try-restart systemd-hostnamed' "$CALLS"
+}
+
+@test "hostname: after hostnamed reset the kernel name, a refresh sets it again from /etc/hostname" {
+  extract_bundle
+  echo tch-001.lab.hps > "$HPS_ROOT/etc/hostname"
+  echo nixos > "$TEST_DIR/khost"
+  run bash "$TEST_DIR/bundle/init" refresh
+  [ "$status" -eq 0 ]
+  grep -q '^hostname tch-001.lab.hps' "$CALLS"
+}
+
+@test "hostname: a node that was never named (no FQDN) leaves /etc/hostname alone" {
+  extract_bundle
+  echo nixos > "$TEST_DIR/khost"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ ! -e "$HPS_ROOT/etc/hostname" ]
 }
