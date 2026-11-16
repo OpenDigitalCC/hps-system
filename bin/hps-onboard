@@ -32,7 +32,10 @@ Usage:
       whether its last init succeeded (FAILED marks a failed init).
   hps-onboard show <mac> [--json]
   hps-onboard assign <mac> --type SCH,TCH,DRH,CNH,BLD --profile NAME \
-      --os arch:name:version --pin PIN [--storage "note"] [--host-key NAME=VALUE ...]
+      --os arch:name:version (--pin PIN | no pin with --profile STARTER)
+      [--storage "note"] [--host-key NAME=VALUE ...]
+      --profile STARTER boots the stock starter of the OS release (hps-starter sync, docs/STARTER.md)
+      instead of a built image: no --pin; nothing runs on it and it does not pair.
       --host-key (repeatable) sets a host key with the assignment, before the node's
       first converged boot. Allowed: boot_bridge=br-NAME (the boot NIC bridge a VM on
       the provisioning network needs).

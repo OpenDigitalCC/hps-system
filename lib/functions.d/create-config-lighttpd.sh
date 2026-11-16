@@ -9,7 +9,8 @@
 #   - Writes lighttpd.conf in the cluster services directory
 #   - Static files from <system_base>/http, CGI (mod_cgi, run by /bin/bash)
 #     for /cgi-bin/ and /api/, resource trees aliased under /distros/,
-#     /packages/, /nixos/ and /nix-cache/
+#     /packages/, /nixos/, /starter/ and /nix-cache/ (hps-starter fills
+#     /starter/<os>/<version>/ and /packages/<os>/<version>/)
 #   - Binds to network_dhcp_ip only; refuses to generate without it
 #   - Access and error log go to syslog (ident "lighttpd")
 #
@@ -44,6 +45,7 @@ create_config_lighttpd() {
   local distros_dir="${resources}/distros"
   local packages_dir="${resources}/packages"
   local nixos_dir="${resources}/nixos"
+  local starter_dir="${resources}/starter"
   local nix_cache_dir="${resources}/nix-cache"
   local images_dir="${resources}/images"
   local upload_dir="${cluster_services}/lighttpd-upload"
@@ -114,6 +116,7 @@ alias.url = (
   "/distros/"   => "${distros_dir}/",
   "/packages/"  => "${packages_dir}/",
   "/nixos/"     => "${nixos_dir}/",
+  "/starter/"   => "${starter_dir}/",
   "/nix-cache/" => "${nix_cache_dir}/",
   "/images/"    => "${images_dir}/"
 )
@@ -128,6 +131,11 @@ alias.url = (
   dir-listing.activate = "disable"
 }
 \$HTTP["url"] =~ "^/nix-cache/nix-cache-info\$" {
+  mimetype.assign = ( "" => "text/plain" )
+}
+
+# A package repository of hps-starter is a Nix binary cache too
+\$HTTP["url"] =~ "^/packages/[^/]+/[^/]+/nix-cache-info\$" {
   mimetype.assign = ( "" => "text/plain" )
 }
 

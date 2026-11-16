@@ -105,7 +105,7 @@ teardown() {
   run create_config_lighttpd
   [ "$status" -eq 0 ]
   conf="$TEST_DIR/services/lighttpd.conf"
-  for t in distros packages nixos nix-cache images; do
+  for t in distros packages nixos starter nix-cache images; do
     grep -qF "\"/$t/\"" "$conf"
     grep -qF "\"$TEST_DIR/res/$t/\"" "$conf"
   done
@@ -119,6 +119,13 @@ teardown() {
   grep -qF 'mimetype.assign = ( "" => "text/plain" )' "$conf"
   run awk '/=~ "\^\/nix-cache\/" \{/{f=1;next} f&&/dir-listing.activate = "disable"/{print "ok";exit} /^\}/{f=0}' "$conf"
   [ "$output" = "ok" ]
+}
+
+@test "lighttpd serves a package repository's nix-cache-info as text/plain" {
+  run create_config_lighttpd
+  [ "$status" -eq 0 ]
+  conf="$TEST_DIR/services/lighttpd.conf"
+  grep -qF '$HTTP["url"] =~ "^/packages/[^/]+/[^/]+/nix-cache-info$" {' "$conf"
 }
 
 @test "lighttpd lists /images/ never" {

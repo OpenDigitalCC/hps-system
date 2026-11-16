@@ -267,6 +267,60 @@ nixos_emit_boot() {
   echo "$lines"
 }
 
+# nixos_starter_boot_lines <mac> <version>
+# The iPXE kernel/initrd/boot lines of the stock starter of a NixOS release:
+# the distribution's own netboot kernel and initramfs that hps-starter sync
+# nixos put under <resources>/starter/nixos/<version>/, with the stock kernel
+# arguments its manifest records and a serial console. No pin, no hps.*
+# arguments: the starter does nothing of its own (plan step 1).
+# Returns 1 with a log line (no output) when the starter is not usable.
+nixos_starter_boot_lines() {
+  local mac="${1:-}"
+  local version="${2:-}"
+  local root manifest ips cmdline
+
+  if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
+    hps_log error "[$mac] NixOS starter: invalid release '${version}' (the host's os_id must end in the release, x86_64:nixos:26.05)"
+    return 1
+  fi
+  root="$(hps_get_config resources)" || return 1
+  manifest="${root}/starter/nixos/${version}/manifest.json"
+  if [[ ! -r "$manifest" || ! -r "${manifest%/*}/bzImage" || ! -r "${manifest%/*}/initrd" ]]; then
+    hps_log error "[$mac] NixOS starter ${version} missing under ${manifest%/*}: run hps-starter sync nixos"
+    return 1
+  fi
+  ips="$(nixos_ips_address)" || ips=""
+  if [[ -z "$ips" ]]; then
+    hps_log error "[$mac] NixOS starter boot: IPS address (network_dhcp_ip) not set"
+    return 1
+  fi
+  cmdline="$(jq -r '.cmdline // ""' "$manifest")" || return 1
+  if [[ " ${cmdline} " != *" init="* ]]; then
+    hps_log error "[$mac] NixOS starter manifest has no init= in its cmdline: ${manifest}"
+    return 1
+  fi
+  local base="http://${ips}/starter/nixos/${version}"
+  printf 'kernel %s/bzImage %s console=ttyS0,115200\n' "$base" "$cmdline"
+  printf 'initrd %s/initrd\n' "$base"
+  printf 'boot\n'
+}
+
+# nixos_emit_starter_boot <mac> <version>
+# Full iPXE script for the stock starter; on failure sends the iPXE error screen.
+nixos_emit_starter_boot() {
+  local mac="$1"
+  local version="$2"
+  local lines
+  lines="$(nixos_starter_boot_lines "$mac" "$version")" || {
+    cgi_auto_fail "NixOS starter ${version} unavailable: run hps-starter sync nixos on the IPS"
+    return 1
+  }
+  ipxe_header
+  echo "# Required to prevent corrupt initrd"
+  echo "imgfree"
+  echo "$lines"
+}
+
 # ipxe_boot_audit <mac>
 # Held hosts boot the audit profile at the cluster default pin, else latest
 # (they have no system_pin yet).
@@ -501,10 +555,18 @@ nixos_image_profile() {
 
 # ipxe_boot_nixos <mac>
 # Network boot of an assigned NixOS host: image profile from HOST_PROFILE.
+# HOST_PROFILE STARTER boots the stock starter of the release in the host's
+# os_id (x86_64:nixos:<release>) instead of a built image: no pin, no pairing.
 ipxe_boot_nixos() {
   local mac="${1:-${mac:-}}"
-  local host_profile image
+  local host_profile image os_id
   host_profile="$(host_registry "$mac" get HOST_PROFILE 2>/dev/null)" || host_profile=""
+  if [[ "$host_profile" == STARTER ]]; then
+    os_id="$(host_registry "$mac" get os_id 2>/dev/null)" || os_id=""
+    hps_log info "[$mac] NixOS network boot: stock starter ${os_id##*:}"
+    nixos_emit_starter_boot "$mac" "${os_id##*:}"
+    return $?
+  fi
   image="$(nixos_image_profile "$host_profile")" || {
     cgi_auto_fail "No NixOS image profile for host profile '${host_profile}' (known: CONVERGED, CONTAINER_HOST, BUILDER, DEFAULT)"
     return 1

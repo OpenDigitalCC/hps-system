@@ -177,6 +177,12 @@ sub _validate_args ($self, $a) {
     _fail('usage', 'os is required (arch:name:version)')
         unless defined $os && $os =~ /^[^:\s\/]+:[^:\s\/]+:[^:\s\/]+$/;
     my $pin = $a->{pin};
+    if ($profile eq 'STARTER') {
+        # The stock starter (hps-starter) is no built image: nothing to pin.
+        _fail('usage', 'profile STARTER boots the stock starter of the OS release and takes no pin')
+            if defined $pin && length $pin;
+        return 1;
+    }
     _fail('usage', "pin '" . ($pin // '') . "' must match ^[a-z0-9][a-z0-9.-]+\$")
         unless defined $pin && $pin =~ /^[a-z0-9][a-z0-9.-]+$/;
     return 1;
@@ -226,13 +232,14 @@ sub assign ($self, $mac, $a) {
     my $hk = $self->host_keys($a->{host_keys});
     _fail('notfound', "OS $a->{os} is not in the OS registry") unless $reg->os_exists($a->{os});
     # assign has never required the pin directory to exist; one that does is verified.
-    $self->_verify_pin($a->{pin}) if -d $self->nixos_dir . "/$a->{pin}";
+    $self->_verify_pin($a->{pin}) if defined $a->{pin} && -d $self->nixos_dir . "/$a->{pin}";
 
     $reg->host_set($m, 'TYPE',         $a->{type});
     $reg->host_set($m, 'HOST_PROFILE', $a->{profile});
     $reg->host_set($m, 'PROFILE',      $a->{profile});
     $reg->host_set($m, 'os_id',        $a->{os});
-    $reg->host_set($m, 'system_pin',   $a->{pin});
+    if (defined $a->{pin}) { $reg->host_set($m, 'system_pin', $a->{pin}) }
+    elsif ($reg->host_exists($m, 'system_pin')) { $reg->host_unset($m, 'system_pin') }
     $reg->host_set($m, 'storage_note', $a->{storage_note})
         if defined $a->{storage_note} && length $a->{storage_note};
     $reg->host_set($m, 'assigned_at',  $reg->timestamp);
@@ -331,6 +338,8 @@ sub repin ($self, $mac, $a) {
     my $state = $reg->host_get($m, 'STATE');
     _fail('refused', "Host $m has no STATE; only assigned hosts can be repinned") unless defined $state && length $state;
     _fail('refused', "Host $m is HELD; assign it first") if $state eq 'HELD';
+    _fail('refused', "Host $m boots the stock starter (profile STARTER), which has no pin")
+        if ($reg->host_get($m, 'HOST_PROFILE') // '') eq 'STARTER';
     my $old = $reg->host_get($m, 'system_pin');
     _fail('refused', "Host $m is already pinned to $pin") if defined $old && $old eq $pin;
     $self->_check_pin_artefacts($pin);
