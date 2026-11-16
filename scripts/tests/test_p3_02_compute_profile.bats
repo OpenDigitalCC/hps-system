@@ -76,6 +76,20 @@ setup() {
   grep -qF '@@QEMU@@/bin/.qemu-kvm-wrapped rmix,' "$aa"
 }
 
+@test "confinement: the guest abstraction allows the two md queue limits QEMU reads, and nothing wider, in the one file the nix module reads" {
+  local aa="$ROOT/node-manager/apparmor/libvirt-qemu" nix
+  nix="$(dirname "$COMPUTE")/compute-apparmor.nix"
+  grep -qxF '/sys/devices/virtual/block/md*/queue/discard_granularity r,' "$aa"
+  grep -qxF '/sys/devices/virtual/block/md*/queue/zoned r,' "$aa"
+  [ "$(grep -c 'block/md\*/queue/' "$aa")" -eq 2 ]
+  # read only, no write or wildcard on the file name
+  run ! grep -E 'block/md\*/queue/(\*|[a-z_]*\*)' "$aa"
+  run ! grep -E 'block/md\*/queue/.* (w|rw|rwk|a),' "$aa"
+  # one source: the nix module has no copy of the rule
+  run ! grep -qF 'discard_granularity' "$nix"
+  run ! grep -qF 'queue/zoned' "$nix"
+}
+
 @test "confinement: the nix module reads its profile text from the plain files, and has no second copy" {
   local aa="$(dirname "$COMPUTE")/compute-apparmor.nix"
   for n in TEMPLATE.qemu libvirt-qemu libvirtd virt-aa-helper; do

@@ -12,6 +12,15 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
+
+- **Changed** the guest abstraction `node-manager/apparmor/libvirt-qemu` allows read of
+  `/sys/devices/virtual/block/md*/queue/discard_granularity` and
+  `/sys/devices/virtual/block/md*/queue/zoned`, which QEMU reads of a guest disk that is
+  an md mirror and the lab denied. Only those two files. The pinned images
+  (`compute-apparmor.nix`) and the starter's role step read the same file, so there is
+  still one copy; the test checks the two lines and that the nix module has none.
+
 ## hps-onboard forget --force (2026-11-16)
 
 - **New** `hps-onboard forget <mac> --force`: a host with a pool recorded is forgotten

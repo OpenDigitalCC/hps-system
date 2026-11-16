@@ -62,6 +62,10 @@ owner /{,var/}tmp/**/ r,
 
 # Host resource information QEMU gathers.
 /sys/devices/**/block/*/queue/max_segments r,
+# A guest whose disk is an md mirror: QEMU reads two queue limits of the md device
+# (denied in the lab, 2026-11-16). Only these two files, only of md devices.
+/sys/devices/virtual/block/md*/queue/discard_granularity r,
+/sys/devices/virtual/block/md*/queue/zoned r,
 /sys/devices/system/cpu/ r,
 /sys/devices/system/node/ r,
 /sys/devices/system/node/node[0-9]*/meminfo r,

@@ -80,7 +80,9 @@ store paths. The guest abstraction allows read and map (not write, not execute)
 on `/nix/store/**` and execute only on the QEMU binary; it leaves out sound, USB,
 spice, swtpm, passt, ceph, save/restore helpers and PPC lines, and keeps only
 `setuid`, `setgid` and `ipc_lock` of upstream's capabilities (QEMU runs with
-none). Each guest's disks are not in the abstraction: `virt-aa-helper` resolves
+none). It adds read of `/sys/devices/virtual/block/md*/queue/discard_granularity`
+and `.../zoned`, the two queue limits QEMU reads of a guest disk that is an md
+mirror (denied in the lab, 2026-11-16), and no other file. Each guest's disks are not in the abstraction: `virt-aa-helper` resolves
 the disk path in the domain XML (`/dev/md/$NAME` becomes `/dev/mdN`) and writes
 `"/dev/mdN" rwk,` into the guest's `.files`, with the guest's log, pid and
 monitor socket.
