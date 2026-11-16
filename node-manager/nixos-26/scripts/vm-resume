@@ -25,6 +25,9 @@
 #   a path outside $HPS_DEV is a file: not checked (said in the log)
 #   any other device under $HPS_DEV, or no disk to check at all, cannot be
 #   judged and is refused
+# A mirror the kernel marks broken (/sys/block/mdX/md/array_state) is refused as
+# REFUSED broken-mirror <reason> (3): it fails writes until it is assembled again, which
+# a resume cannot do (a guest holds the device open); the way out is vm-reassemble.
 # otherwise REFUSED disk <reason> (3); nothing is resumed. --any-reason does not
 # skip this check for an I/O-error pause (it skips the reason check only).
 # State that cannot be read (virsh domstate or domblklist failing) is exit 1:
@@ -35,7 +38,7 @@
 # moments): exit 1 when it is not (the node does not retry).
 #
 # Output: on a refusal the line "REFUSED <code> <reason>" (codes not-paused,
-# operator-paused, disk). On success the last line "VM <vm> running".
+# operator-paused, disk, broken-mirror). On success the last line "VM <vm> running".
 # Exit: 0 running, 1 failed or state unreadable or paused again, 2 usage,
 # 3 refused, 4 not defined.
 
@@ -127,7 +130,7 @@ check_md() {
   dev=$(readlink -f "$HPS_DEV/md/$name" 2> /dev/null || true)
   as="$HPS_SYS/block/${dev##*/}/md/array_state"
   if [[ -n "$dev" && -r "$as" && "$(< "$as")" == broken ]]; then
-    refuse disk "mirror $name is broken (the kernel fails its writes after it lost every leg): power the guest off, stop and assemble the mirror again"
+    refuse broken-mirror "mirror $name is broken (the kernel fails its writes after it lost every leg): vm-reassemble $VM stops the guest, assembles the mirror again and starts it (the healer does this by itself)"
   fi
   active=$(awk -F: '/^[[:space:]]*Active Devices[[:space:]]*:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' <<< "$detail")
   [[ "$active" =~ ^[0-9]+$ ]] || refuse disk "mirror $name reports no Active Devices figure"

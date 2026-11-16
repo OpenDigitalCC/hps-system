@@ -12,6 +12,33 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A paused guest on a broken mirror is reassembled by the healer (2026-11-16)
+
+Lab trial of step 3 (`docs/STORAGE-FAULTS.md` "A broken mirror"). On kernel 6.18 a
+raid1 that lost both legs is marked `broken` and fails writes until it is stopped and
+assembled again; `vm-resume` refused it (344250b) and the healer retried until it
+escalated. The owner ruled that the healer reassembles the mirror.
+
+- **New** node script `vm-reassemble <vm>` (allowlisted under profile `node` in
+  `hps-ctrl-exec.nix` and `node-manager/bundle/allowlist`; no input). Only for a guest
+  paused by an I/O error with a mirror whose `array_state` reads `broken`, and only
+  when both legs of that mirror resolve (present, iSCSI logged in); else exit 3 with
+  `REFUSED not-paused | not-ioerror | no-broken-mirror | legs`, nothing changed. Then
+  `vm-stop --force`, `mdadm --stop`, `mirror-assemble --drop-bbl` from the sidecar's
+  legs, `vm-start` with the guest's priority. The guest is powered off and started,
+  not resumed: QEMU holds the md device open while its process exists.
+- **New** `mirror-assemble --drop-bbl`: when the plain assemble fails, one retry with
+  `mdadm --assemble --update=force-no-bbl` (the bad-block-log case of the lab: "not a
+  valid v1.2 superblock"), logged as a WARNING and as `BBL-DROPPED <name>`. Never the
+  default; a plain `start` is unchanged.
+- **Changed** `vm-resume` refuses a broken mirror with the code `broken-mirror` (was
+  `disk`) and names `vm-reassemble`. `HPS::GuestHeal` runs `vm-reassemble` in the
+  same attempt on that refusal: exit 0 is `healing`, exit 3 a failed attempt, any
+  other exit needs-human at once (the guest may be off).
+- **To prove live**: the sequence in `docs/STORAGE-FAULTS.md` (nothing was run on a
+  node). Keeping the guest's memory (`virsh save` and `restore` around the
+  reassembly) is not built.
+
 ## AppArmor and the monitoring checks on the stock starter (2026-11-16)
 
 Step 3 of `plans/PLAN.md` continued (`docs/BUNDLE.md` "AppArmor", "Monitoring"). The

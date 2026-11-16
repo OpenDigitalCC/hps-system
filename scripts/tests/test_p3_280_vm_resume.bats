@@ -374,7 +374,8 @@ resumed() { grep -q '^virsh resume vm1' "$SHIM_LOG"; }
   echo broken > "$TEST_DIR/sys/block/md127/md/array_state"
   HPS_SYS="$TEST_DIR/sys" run bash "$S/vm-resume" vm1
   [ "$status" -eq 3 ]
-  [[ "$output" == *"REFUSED disk mirror vm1-disk0 is broken"* ]]
+  [[ "$output" == *"REFUSED broken-mirror mirror vm1-disk0 is broken"* ]]
+  [[ "$output" == *"vm-reassemble vm1"* ]]
   run ! grep -q '^virsh resume' "$SHIM_LOG"
   echo clean > "$TEST_DIR/sys/block/md127/md/array_state"
   HPS_SYS="$TEST_DIR/sys" run bash "$S/vm-resume" vm1

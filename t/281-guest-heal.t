@@ -202,6 +202,63 @@ set_workload();
     $is->resolve($id, 'test');
     @log = ();
 }
+
+#--- a mirror the kernel calls broken: vm-reassemble, never a retry loop of vm-resume -------------
+{
+    my $id = open_gp();
+    my ($h, $ce) = healer(out => {
+        'vm-status' => [ paused_out('ioerror'), "VM t0-app running\n" ],
+        'vm-resume' => "REFUSED broken-mirror t0-app is paused: mirror t0-app-root is broken\n",
+        'vm-reassemble' => "REASSEMBLED t0-app t0-app-root\nVM t0-app running\n" },
+        rc => { 'vm-resume' => 3 });
+    $h->tick;
+    due($h);
+    is_deeply([ $ce->scripts ], [qw(vm-status vm-resume vm-reassemble)], 'vm-status, vm-resume refused as broken, then vm-reassemble');
+    my @c = $ce->calls;
+    is_deeply($c[2]{args}, ['t0-app'], 'vm-reassemble names the guest');
+    is($c[2]{mac}, $StorageFixture::MAC, 'on the issue\'s host');
+    my $r = $is->get($id);
+    is($r->{state}, 'healing', 'reassembled and started: healing, to be checked');
+    is($r->{heal}{resumed}, 1, 'remembered, so a pause now is a failed attempt');
+    like((grep { $_->{event} eq 'heal' } @{ $r->{trail} })[0]{detail}, qr/vm-resume t0-app exit 3.*; vm-reassemble t0-app exit 0: VM t0-app running \(the mirror was assembled again/, 'the trail has both calls');
+    $now += 30;
+    $h->tick;
+    $r = $is->get($id);
+    is($r->{state}, 'resolved', 'running at the check: resolved');
+    is($r->{resolution}{action}, 'vm-reassemble t0-app', 'the action is vm-reassemble');
+}
+{
+    # a leg is not back: vm-reassemble refuses (3) with nothing changed; a failed try, retried
+    my $id = open_gp();
+    my @st = (paused_out('ioerror')) x 3;
+    my ($h, $ce) = healer(out => { 'vm-status' => \@st,
+        'vm-resume' => [ ("REFUSED broken-mirror t0-app is paused: mirror t0-app-root is broken\n") x 3 ],
+        'vm-reassemble' => [ ("REFUSED legs leg(s) not present or not logged in: iscsi:x:y (mirror t0-app-root); t0-app is untouched\n") x 3 ] },
+        rc => { 'vm-resume' => [ (3) x 3 ], 'vm-reassemble' => [ (3) x 3 ] });
+    $h->tick;
+    due($h);
+    my $r = $is->get($id);
+    is($r->{state}, 'open', 'a leg missing: back to open, retried by the backoff');
+    like($r->{heal}{last_result}, qr/\Afailed: .*vm-reassemble t0-app exit 3.*\(legs: leg\(s\) not present or not logged in: iscsi:x:y/, 'the missing leg is in the result');
+    is($r->{heal}{next_at}, $now + 60, 'backoff 60 s');
+    ok(!exists $r->{heal}{resumed}, 'nothing was started, so no resume is remembered');
+    $is->resolve($id, 'test');
+}
+{
+    # vm-reassemble failed after it powered the guest off: nothing automatic can mend it
+    my $id = open_gp();
+    my ($h, $ce) = healer(out => { 'vm-status' => paused_out('ioerror'),
+        'vm-resume' => "REFUSED broken-mirror t0-app is paused: mirror t0-app-root is broken\n",
+        'vm-reassemble' => "FAILED t0-app mirror-assemble of t0-app-root failed\n" },
+        rc => { 'vm-resume' => 3, 'vm-reassemble' => 1 });
+    $h->tick;
+    due($h);
+    my $r = $is->get($id);
+    is($r->{state}, 'needs-human', 'a failure after the power-off: needs-human at once');
+    like($r->{heal}{last_result}, qr/vm-reassemble t0-app exit 1.*powered off with its mirror stopped/, 'says the guest may be off');
+    $is->resolve($id, 'test');
+    @log = ();
+}
 {
     # a node that does not answer is a failed attempt too
     my $id = open_gp();

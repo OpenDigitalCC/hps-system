@@ -56,6 +56,9 @@ case "$1" in
   --assemble)
     n=$(name_of "$@")
     { echo "           State : clean, degraded"; echo "   Active Devices : 1"; devs "$@"; } > "$STATE/detail.$n"
+    # --update=force-no-bbl succeeds even when FAKE_ASSEMBLE_RC fails the plain assemble
+    # (the lab's rejected superblock); FAKE_BBL_RC overrides that result.
+    if [[ " $* " == *" --update=force-no-bbl "* ]]; then exit "${FAKE_BBL_RC:-0}"; fi
     exit "${FAKE_ASSEMBLE_RC:-0}" ;;
   --stop)
     rm -f "$STATE/detail.$(basename "$2")"; exit 0 ;;

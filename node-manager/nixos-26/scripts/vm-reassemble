@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+#
+# vm-reassemble - a guest paused on a broken mirror: power it off, assemble the
+# mirror again from its recorded legs, start the guest.
+#
+# ctrl-exec allowlisted node script.
+#
+# Usage: vm-reassemble <vm>
+#
+# Why. A guest whose disk is an md raid1 over two iSCSI legs pauses (ioerror)
+# when both legs are lost. On kernel 6.18 the raid1 is then marked "broken"
+# (/sys/block/mdX/md/array_state) and fails every write until it is stopped and
+# assembled again, even when mdadm --detail says clean with both legs back
+# (vm-resume refuses that state: REFUSED broken-mirror). The owner ruled that
+# the healer reassembles the mirror (docs/STORAGE-FAULTS.md "A paused guest").
+#
+# The guest is powered off, not resumed. QEMU holds the md device open for as
+# long as the guest process exists, paused or not, and mdadm --stop of an array
+# that is open fails; so the only path that works is the one the lab recovery
+# took by hand: forced guest stop, stop and assemble the array, start. The
+# guest's memory is lost and it boots from its disk (it was paused on failed
+# writes; its filesystems recover as after a power cut). Keeping the memory would
+# need vm-save/vm-restore on a pool, with a save of an I/O-error-paused guest
+# that is not yet proven (docs/STORAGE-FAULTS.md names the trial).
+#
+# Acts only when ALL hold; otherwise refused (3, "REFUSED <code> <reason>") and
+# nothing is changed:
+#   not-paused / not-ioerror   the guest is paused and the reason is an I/O error
+#   no-broken-mirror           at least one disk of it is $HPS_DEV/md/<name> whose
+#                              array_state reads "broken" (a mirror that is not
+#                              broken is left alone; use vm-resume for it)
+#   legs                       every broken mirror has its sidecar
+#                              ($HPS_MIRROR_DIR/<name>.json, from mirror-assemble)
+#                              and both of its legs resolve (leg-resolve: the zvol
+#                              exists, or the iSCSI session is logged in and the
+#                              LUN is there); the message names each leg missing
+# Then, in this order, each step logged and a failure of one is exit 1:
+#   1. vm-stop <vm> --force            (the guest process, and so its hold on the device, ends)
+#   2. mdadm --stop /dev/md/<name>     (directly, not mirror-stop: that would log the legs out)
+#   3. mirror-assemble <name> --leg .. --leg .. --drop-bbl [--remote-index N]
+#                                      (the legs from the sidecar; --drop-bbl retries
+#                                      once with mdadm --update=force-no-bbl when the plain
+#                                      assemble fails, and prints BBL-DROPPED <name>)
+#   4. vm-start <vm> --priority P [--provides-storage]   (P from the stop-order record the
+#                                      guest had, default 3)
+# After step 1 a failure leaves the guest off: the message says so (exit 1; the
+# healer hands that to a person). Last line on success: VM <vm> running.
+# Test hooks: HPS_DEV, HPS_SYS, HPS_MIRROR_DIR, HPS_GUEST_ORDER_DIR, HPS_VM_STOP,
+# HPS_VM_START, HPS_MIRROR_ASSEMBLE, HPS_LEG_RESOLVE.
+# Exit: 0 running, 1 failed (after step 1: the guest is off), 2 usage,
+# 3 refused (nothing changed), 4 not defined.
+
+set -euo pipefail
+
+: "${HPS_DEV:=/dev}"
+: "${HPS_SYS:=/sys}"
+: "${HPS_MIRROR_DIR:=/run/hps/mirrors}"
+: "${HPS_GUEST_ORDER_DIR:=/run/hps/guests}"
+: "${HPS_VM_STOP:=$(dirname "$0")/vm-stop}"
+: "${HPS_VM_START:=$(dirname "$0")/vm-start}"
+: "${HPS_MIRROR_ASSEMBLE:=$(dirname "$0")/mirror-assemble}"
+: "${HPS_LEG_RESOLVE:=$(dirname "$0")/leg-resolve}"
+
+VM=""
+BROKEN=()
+
+log() {
+  printf '[vm-reassemble] %s\n' "$*" >&2
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+# run_q <command...>: log, then execute with stderr silenced (a probe).
+run_q() {
+  printf '+ %s\n' "$*" >&2
+  "$@" 2> /dev/null
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: vm-reassemble <vm>
+Exit: 0 running, 1 failed, 2 usage, 3 refused, 4 not defined.
+USAGE
+}
+
+# refuse <code> <reason>: nothing has been changed.
+refuse() {
+  printf 'REFUSED %s %s\n' "$1" "$2"
+  log "refused: $1: $2"
+  exit 3
+}
+
+# failed_off <what>: a step after the guest was powered off failed.
+failed_off() {
+  printf 'FAILED %s %s\n' "$VM" "$1"
+  log "$1: $VM is powered off and its mirror is not usable; hps-workload start of its workload assembles the mirror and starts it"
+  exit 1
+}
+
+parse_args() {
+  [[ $# -eq 1 ]] || { usage; exit 2; }
+  case "$1" in
+    -*) usage; exit 2 ;;
+  esac
+  VM=$1
+  [[ "$VM" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { log "bad vm name"; usage; exit 2; }
+}
+
+# check_paused: the guest is paused by an I/O error.
+check_paused() {
+  local out state reason="" kind
+  if ! out=$(run_q virsh -c qemu:///system domstate --reason "$VM"); then
+    log "cannot read the state of $VM: nothing changed"
+    exit 1
+  fi
+  state=${out%% (*}
+  if [[ "$out" == *" ("*")"* ]]; then
+    reason=${out#*(}
+    reason=${reason%%)*}
+  fi
+  [[ "$state" == paused ]] || refuse not-paused "$VM is $state, not paused"
+  kind=$(tr -d -c 'a-z0-9' <<< "${reason,,}")
+  [[ "$kind" == ioerror ]] || refuse not-ioerror "$VM is paused (${kind:-unknown}), not by an I/O error"
+}
+
+# find_broken: BROKEN = the names of the guest's mirrors the kernel calls broken.
+find_broken() {
+  local list target source name dev as
+  list=$(run_q virsh -c qemu:///system domblklist "$VM") || { log "cannot read the disk list of $VM: nothing changed"; exit 1; }
+  while read -r target source; do
+    [[ -n "$target" && "$target" != Target && "$target" != -* && -n "$source" && "$source" != - ]] || continue
+    case "$source" in
+      "$HPS_DEV"/md/*)
+        name=${source#"$HPS_DEV"/md/}
+        dev=$(readlink -f "$source" 2> /dev/null || true)
+        as="$HPS_SYS/block/${dev##*/}/md/array_state"
+        if [[ -n "$dev" && -r "$as" && "$(< "$as")" == broken ]]; then
+          BROKEN+=("$name")
+        else
+          log "mirror $name is not broken: left alone"
+        fi
+        ;;
+    esac
+  done <<< "$list"
+  ((${#BROKEN[@]} > 0)) || refuse no-broken-mirror "$VM has no mirror the kernel calls broken (array_state): use vm-resume"
+}
+
+# check_legs: every broken mirror has its sidecar and both legs resolve. Names every
+# leg that does not.
+check_legs() {
+  local name side spec i missing=""
+  for name in "${BROKEN[@]}"; do
+    side="$HPS_MIRROR_DIR/$name.json"
+    [[ -r "$side" ]] || refuse legs "mirror $name has no sidecar $side, so its legs are not known: assemble it by hand (mirror-assemble)"
+    for i in 0 1; do
+      spec=$(jq -r ".legs[$i].spec // empty" "$side")
+      [[ -n "$spec" ]] || refuse legs "the sidecar of $name does not record two legs"
+      if ! run_q "$HPS_LEG_RESOLVE" "$spec" > /dev/null; then
+        missing+="${missing:+, }$spec (mirror $name)"
+      fi
+    done
+  done
+  [[ -z "$missing" ]] || refuse legs "leg(s) not present or not logged in: $missing; $VM is untouched"
+}
+
+# stop_order: "<priority> <provides storage>" the guest had, as vm-start recorded.
+stop_order() {
+  local rec="$HPS_GUEST_ORDER_DIR/$VM" p=3 s=0
+  if [[ -r "$rec" ]]; then
+    read -r p s < "$rec" || true
+  fi
+  [[ "$p" =~ ^[1-5]$ ]] || p=3
+  printf '%s %s\n' "$p" "$s"
+}
+
+# reassemble <name>: stop the array, assemble it from the sidecar's legs.
+reassemble() {
+  local name=$1 side="$HPS_MIRROR_DIR/$1.json" ri
+  local legs=()
+  legs=(--leg "$(jq -r '.legs[0].spec' "$side")" --leg "$(jq -r '.legs[1].spec' "$side")")
+  ri=$(jq -r '.remote_index // empty' "$side")
+  run mdadm --stop "/dev/md/$name" || failed_off "mdadm --stop of $name failed"
+  run "$HPS_MIRROR_ASSEMBLE" "$name" "${legs[@]}" ${ri:+--remote-index "$ri"} --drop-bbl \
+    || failed_off "mirror-assemble of $name failed"
+}
+
+main() {
+  local name order prio prov start
+  parse_args "$@"
+  if ! run_q virsh -c qemu:///system dominfo "$VM" > /dev/null; then
+    log "$VM is not defined"
+    exit 4
+  fi
+  check_paused
+  find_broken
+  check_legs
+  order=$(stop_order)
+  prio=${order%% *}
+  prov=${order##* }
+  log "$VM is paused on broken mirror(s) ${BROKEN[*]}: powering it off, assembling again, starting it"
+  run "$HPS_VM_STOP" "$VM" --force || failed_off "vm-stop --force failed"
+  for name in "${BROKEN[@]}"; do
+    reassemble "$name"
+    printf 'REASSEMBLED %s %s\n' "$VM" "$name"
+  done
+  start=("$HPS_VM_START" "$VM" --priority "$prio")
+  if [[ "$prov" == 1 ]]; then
+    start+=(--provides-storage)
+  fi
+  run "${start[@]}" || failed_off "vm-start failed"
+}
+
+main "$@"

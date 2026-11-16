@@ -145,6 +145,7 @@ bold: 1
 Not defined | exit 4
 Not paused (running, shut off, ...) | exit 3, `REFUSED not-paused`
 Paused for a reason other than an I/O error (an operator's pause) | exit 3, `REFUSED operator-paused`, unless `--any-reason`
+Paused by an I/O error, a mirror the kernel calls `broken` (`array_state`) | exit 3, `REFUSED broken-mirror <reason>`, even when `mdadm --detail` says clean with both legs back; the way out is `vm-reassemble` (next sections)
 Paused by an I/O error, a disk not healthy | exit 3, `REFUSED disk <reason>`: a mirror (`/dev/md/<name>`) not assembled, failed or inactive, or with no leg in sync (`Active Devices` below 1); a zvol whose pool is not ONLINE; a disk that is neither, or no disk to check at all. A degraded mirror with one leg in sync is healthy enough
 Guest state or disk list cannot be read | exit 1, nothing resumed
 Healthy | `virsh resume`; the guest must be running and still running after a short settle (`HPS_VM_SETTLE`, 2 s), else exit 1; last line `VM <vm> running`; exit 0
@@ -168,8 +169,21 @@ The host carries the host key `drain` | waits (no try spent, looked at again in 
 `vm-status`: paused with no reason line (an older node image), another state, or a reason other than `ioerror` | needs-human: an operator's pause is never resumed automatically
 Paused by an I/O error, and a mirror-leg or storage-path issue of the host is still open or healing | waits for it, up to 10 minutes from the opening of the guest issue; then tries anyway, because the node's own disk check decides
 Otherwise | `vm-resume`: exit 0 is `healing` and is checked again 30 s later: running resolves it (resolution action `vm-resume <vm>`), paused again is a failed attempt; exit 3 `disk` and any other failure are failed attempts with the backoff of the other kinds (60 s, 2 min, 5 min, 15 min); `operator-paused` is needs-human; exit 4 resolves it
+`vm-resume` refused with `REFUSED broken-mirror` | `vm-reassemble <vm>` in the same attempt (next section): exit 0 is `healing`, checked 30 s later like a resume (resolution action `vm-reassemble <vm>`); exit 3 (a leg missing, nothing changed) is a failed attempt with the backoff and the missing leg in the result; any other exit means the guest may be off with its mirror stopped, so needs-human at once
 After 6 failed attempts | needs-human and urgent, the last refusal in the trail
 ```
+
+## A broken mirror: reassemble, then run
+
+When both legs of a guest's md raid1 were lost, the guest pauses (`ioerror`) and, on kernel 6.18, the array is marked `broken` (`/sys/block/mdX/md/array_state`). It then fails every write until it is stopped and assembled again, even when `mdadm --detail` says `clean` with both legs back; a resume pauses the guest again at once. `vm-resume` therefore refuses it as `REFUSED broken-mirror`, and the owner's ruling is that the healer reassembles the mirror (2026-11-16).
+
+Node script `vm-reassemble <vm>`, allowlisted like `vm-resume` (`nix/modules/hps-ctrl-exec.nix`, `node-manager/bundle/allowlist`); no argument but the guest, so the agent runs a preset action and no code comes from the IPS. It acts only when the guest is paused by an I/O error, a disk of it is `/dev/md/<name>` whose `array_state` reads `broken` (a mirror that is not broken is left alone), and both legs the sidecar `/run/hps/mirrors/<name>.json` records resolve through `leg-resolve` (the zvol is there, or the iSCSI session is logged in and the LUN present). Otherwise exit 3 with `REFUSED not-paused`, `not-ioerror`, `no-broken-mirror` or `legs` (naming each leg that is missing), and nothing is changed. Then, in this order: `vm-stop --force`, `mdadm --stop /dev/md/<name>` (not `mirror-stop`, which would log the legs out), `mirror-assemble <name> --leg .. --leg .. --drop-bbl` from the sidecar's legs, and `vm-start` with the priority the guest had. Last line `VM <vm> running`.
+
+The guest is powered off and started, not resumed, and its memory is lost. QEMU holds the md device open for as long as its process exists, paused or not, so `mdadm --stop` cannot succeed before the guest is gone; the lab recovery by hand was the same sequence. The guest boots from its disk, as after a power cut.
+
+`mirror-assemble --drop-bbl` tries the plain `mdadm --assemble` first. Only when that fails does it stop any half-assembled array and retry once with `--update=force-no-bbl`, which clears the bad-block log of each leg, and then it prints `BBL-DROPPED <name>` and a `WARNING` in the log. Lab 2026-11-16: after a double outage both legs had bad-block-log entries, the kernel refused the superblock (`not a valid v1.2 superblock`) and only that update assembled the array. The divergence check of `mirror-assemble` still runs first; the option is not `--force`, and a plain `start` never uses it.
+
+To prove on a node (written without one; the lab evidence is the hand recovery only): with a probe guest on a two-leg mirror, take both legs away for longer than the 15 s timeout, bring them back, and confirm `cat /sys/block/mdX/md/array_state` reads `broken` and the guest is `paused (I/O error)`. Then `hps-workload resume-paused <name>` must exit 3 with `REFUSED broken-mirror`; run `ctrl-exec` `vm-reassemble <vm>` (or let the healer do it) and read `mdadm --stop` succeeding after `vm-stop --force`, `array_state` `clean` after the assemble, whether `BBL-DROPPED` appears, and `VM <vm> running`. A mirror with a leg not logged in must give `REFUSED legs` naming it. A keep-the-memory path (`virsh save` of the I/O-error-paused guest, stop and assemble, `virsh restore`, on a state pool as `vm-save` uses) is not built because a save of that state is not proven; try it by hand first.
 
 ## Operator
 

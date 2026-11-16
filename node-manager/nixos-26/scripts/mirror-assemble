@@ -5,7 +5,16 @@
 # ctrl-exec allowlisted node script. Who may run it is ctrl-exec's decision
 # (the agent's script allowlist and the dispatcher's auth hook; docs/adr/0007).
 #
-# Usage: mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--peer-gone]
+# Usage: mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--peer-gone] [--drop-bbl]
+#
+# --drop-bbl (vm-reassemble only): when the plain assemble of two present legs
+# fails, retry once with mdadm --assemble --update=force-no-bbl, which clears
+# the bad-block log of each member. Lab 2026-11-16: after both legs were lost,
+# both carried bad-block-log entries, the kernel rejected the superblock ("not
+# a valid v1.2 superblock") and only that update assembled the array. It is an
+# explicit option, never the default: the log is dropped, and the line
+# "BBL-DROPPED <name>" on stdout and a WARNING in the log say so. It is not
+# --force (no stale leg is forced in); the divergence check above still runs.
 #
 # Both legs resolved (leg-resolve), both superblocks read (mdadm --examine) BEFORE
 # anything is assembled:
@@ -45,6 +54,7 @@ NAME=""
 LEGS=()
 REMOTE_INDEX=""
 PEER_GONE=0
+DROP_BBL=0
 DEVS=()
 
 log() {
@@ -53,7 +63,7 @@ log() {
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--peer-gone]
+Usage: mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--peer-gone] [--drop-bbl]
 Exit: 0 ok, 2 usage, 3 refused (incl. DIVERGED), 1 failed.
 USAGE
 }
@@ -162,6 +172,10 @@ parse_args() {
         ;;
       --peer-gone)
         PEER_GONE=1
+        shift
+        ;;
+      --drop-bbl)
+        DROP_BBL=1
         shift
         ;;
       -*) log "unknown option: $arg"; usage; exit 2 ;;
@@ -286,7 +300,14 @@ assemble_both() {
   read_sb 0 "${DEVS[0]}" "${LEGS[0]}"
   read_sb 1 "${DEVS[1]}" "${LEGS[1]}"
   check_consistent "${LEGS[0]}" "${LEGS[1]}"
-  run mdadm --assemble "/dev/md/$NAME" "${DEVS[0]}" "${DEVS[1]}"
+  local rc=0
+  run mdadm --assemble "/dev/md/$NAME" "${DEVS[0]}" "${DEVS[1]}" || rc=$?
+  ((rc != 0)) || return 0
+  ((DROP_BBL == 1)) || exit "$rc"
+  log "WARNING: the plain assemble of $NAME failed (exit $rc); retrying once with --update=force-no-bbl (--drop-bbl): the bad-block log of each leg is dropped"
+  mdadm --stop "/dev/md/$NAME" > /dev/null 2>&1 || true
+  run mdadm --assemble --update=force-no-bbl "/dev/md/$NAME" "${DEVS[0]}" "${DEVS[1]}"
+  printf 'BBL-DROPPED %s\n' "$NAME"
 }
 
 assemble_degraded() {

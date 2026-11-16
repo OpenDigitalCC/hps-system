@@ -177,10 +177,35 @@ sub attempt ($heal, $rec) {
         my ($code, $why) = parse_refusal($r->{stdout});
         $code //= 'refused';
         return { outcome => 'human', set_fields => \%set, attempted => 1, detail => "$d (paused by an operator)" } if $code eq 'operator-paused';
+        return reassemble($heal, $mac, $guest, \%set, $d) if $code eq 'broken-mirror';
         return { outcome => 'failed', set_fields => \%set, attempted => 1, detail => "$d ($code: " . ($why // $line) . ')' };
     }
     return { outcome => 'clean', set_fields => \%set, by => "vm-resume: $guest is not defined on $host", detail => $d, stopped => 1 } if $r->{rc} == 4;
     return { outcome => 'failed', set_fields => \%set, attempted => 1, detail => $d };
+}
+
+# reassemble($heal, $mac, $guest, $set, $detail): vm-resume refused because the kernel
+# calls the guest's mirror broken (it fails writes until it is assembled again, and the
+# paused guest holds the device open, so a resume cannot fix it; owner ruling 2026-11-16).
+# The node script vm-reassemble powers the guest off, assembles the mirror from its
+# recorded legs and starts the guest; it checks for itself that both legs are present and
+# logged in. Exit 0: running again, checked later like a resume. Exit 3: refused with
+# nothing changed (a leg is missing, ...): a failed try, retried by the backoff, the
+# reason in the detail. Anything else: the guest may be off with its mirror stopped,
+# which no automatic retry can mend: a decision for a person.
+sub reassemble ($heal, $mac, $guest, $set, $detail) {
+    my $r = $heal->_call($mac, 'vm-reassemble', $guest);
+    my $line = HPS::IssueHeal::result_line($r);
+    my $d = "$detail; vm-reassemble $guest exit $r->{rc}" . (length $line ? ": $line" : '');
+    return { outcome => 'healing', set_fields => $set, attempted => 1, action => "vm-reassemble $guest", mark => { resumed => 1 },
+        detail => "$d (the mirror was assembled again and the guest started; checked again later)" } if $r->{rc} == 0;
+    if ($r->{rc} == 3) {
+        my ($code, $why) = parse_refusal($r->{stdout});
+        return { outcome => 'failed', set_fields => $set, attempted => 1, detail => "$d (" . ($code // 'refused') . ': ' . ($why // $line) . ')' };
+    }
+    return { outcome => 'clean', set_fields => $set, by => "vm-reassemble: $guest is not defined", detail => $d, stopped => 1 } if $r->{rc} == 4;
+    return { outcome => 'human', set_fields => $set, attempted => 1,
+        detail => "$d (the guest may be powered off with its mirror stopped: hps-workload start assembles and starts it)" };
 }
 
 # events($heal): the standing state of each unresolved guest-paused issue as an

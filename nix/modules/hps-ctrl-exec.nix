@@ -138,6 +138,8 @@ in
       # Resume of a guest paused by a disk I/O error, once its disks are healthy again (the healer runs it).
       vm-resume.source = mkScript "vm-resume" (scriptsDir + "/vm-resume");
       vm-resume.options.profile = "node";
+      vm-reassemble.source = mkScript "vm-reassemble" (scriptsDir + "/vm-reassemble");
+      vm-reassemble.options.profile = "node";
       vm-status.source = mkScript "vm-status" (scriptsDir + "/vm-status");
       vm-status.options.profile = "node";
       vm-undefine.source = mkScript "vm-undefine" (scriptsDir + "/vm-undefine");

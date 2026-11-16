@@ -230,6 +230,13 @@ a line stopped naming the guest. The healer decides by asking the node
    (not defined) resolves it. After 6 failed attempts the issue is needs-human
    and urgent with the last refusal in its trail (`hps-issues retry <id>` starts
    again).
+5. `REFUSED broken-mirror` (the kernel marks a raid1 that lost every leg broken;
+   it fails writes until assembled again): the same attempt runs `vm-reassemble
+   <guest>`, which powers the guest off, assembles the mirror from its recorded
+   legs and starts the guest (`docs/STORAGE-FAULTS.md` "A broken mirror"). Exit 0
+   is `healing`, checked 30 s later (action `vm-reassemble <guest>`); exit 3 (a
+   leg missing, nothing changed) is a failed attempt; any other exit is
+   needs-human at once, because the guest may be off.
 
 Event lines: kind `workload`, subject `<workload>/<vm>` (`<host>/<vm>` without a
 workload), state `paused` while the issue is unresolved (repeated every 50

@@ -185,3 +185,46 @@ assemble_gone() {
   FAKE_ASSEMBLE_RC=1 assemble
   [ "$status" -eq 1 ]
 }
+
+@test "--drop-bbl: a plain assemble that works is not retried, and no update is used" {
+  p3_sb_agreeing
+  assemble --drop-bbl
+  [ "$status" -eq 0 ]
+  run ! grep -F -- '--update' "$SHIM_LOG"
+  [[ "$output" != *BBL-DROPPED* ]]
+}
+
+@test "--drop-bbl: a plain assemble that fails is retried once with --update=force-no-bbl, logged, and BBL-DROPPED printed" {
+  p3_sb_agreeing
+  FAKE_ASSEMBLE_RC=1 assemble --drop-bbl
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- '^mdadm --assemble' "$SHIM_LOG")" -eq 2 ]
+  grep -qxF "mdadm --assemble --update=force-no-bbl /dev/md/vm1-disk0 $LOCDEV $REMDEV" "$SHIM_LOG"
+  [[ "$output" == *"BBL-DROPPED vm1-disk0"* ]]
+  [[ "$stderr" == *"WARNING: the plain assemble of vm1-disk0 failed"* ]]
+  run ! grep -E -- '--force( |$)' "$SHIM_LOG"
+  [ -s "$HPS_MIRROR_DIR/vm1-disk0.json" ]
+}
+
+@test "--drop-bbl: when the retry fails too it is exit 1 and no BBL-DROPPED line" {
+  p3_sb_agreeing
+  FAKE_ASSEMBLE_RC=1 FAKE_BBL_RC=1 assemble --drop-bbl
+  [ "$status" -eq 1 ]
+  [[ "$output" != *BBL-DROPPED* ]]
+}
+
+@test "without --drop-bbl the update is never used, even when the plain assemble fails" {
+  p3_sb_agreeing
+  FAKE_ASSEMBLE_RC=1 assemble
+  [ "$status" -eq 1 ]
+  run ! grep -F -- '--update' "$SHIM_LOG"
+}
+
+@test "--drop-bbl does not skip the divergence check" {
+  p3_sb "$LOCDEV" "$P3_UUID" 60 "$P3_T2" 0 'A.'
+  p3_sb "$REMDEV" "$P3_UUID" 61 "$P3_T2" 1 '.A'
+  assemble --drop-bbl
+  [ "$status" -eq 3 ]
+  [[ "$output" == *DIVERGED* ]]
+  run ! grep -F -- '--assemble' "$SHIM_LOG"
+}

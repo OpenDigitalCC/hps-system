@@ -454,7 +454,7 @@ the script side is in the tree, and so in the bundle, and the settings side is i
 | fix | script side (bundle `actions/`) | settings side |
 | --- | --- | --- |
 | suspend state (`suspend-state`): `vm-save` mounts its state dataset | `vm-save`, `vm-restore`; the tests of `test_p3_257` and `test_p3_26` | none: the dataset's mountpoint is set by the script |
-| paused-guest resume (`guest-resume`) | `vm-resume`, `vm-status` (`PAUSED <vm> reason=`), `vm-stop` (refuses a paused guest), `check_vms`; the IPS healer (`HPS::GuestHeal`, `IssueHeal`, the issue rules) and their tests | `vm-resume` is in the allowlist of the pinned images (`hps-ctrl-exec.nix`) and of the bundle; no setting |
+| paused-guest resume (`guest-resume`) | `vm-resume`, `vm-status` (`PAUSED <vm> reason=`), `vm-stop` (refuses a paused guest), `check_vms`; the IPS healer (`HPS::GuestHeal`, `IssueHeal`, the issue rules) and their tests | `vm-resume` and `vm-reassemble` (a paused guest on a mirror the kernel calls broken: forced stop, `mdadm --stop`, `mirror-assemble --drop-bbl`, start) are in the allowlist of the pinned images (`hps-ctrl-exec.nix`) and of the bundle; no setting |
 | fail fast (`iscsi-failfast`) | `leg-resolve`, `mirror-*`: already on `main` (merged through `storage-faults`); the branch's copy is older and was not taken | the 15 s iSCSI timeouts in `iscsid.conf`, the `PROGRAM` and `AUTO -all` of `mdadm.conf` and the `hps-md-event` script, all by `role_compute` and `role_iscsi` |
 
 The error policy and command size of `storage-faults` (`iscsi_max_sectors_kb`, the

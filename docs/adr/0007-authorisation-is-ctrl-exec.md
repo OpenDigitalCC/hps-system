@@ -60,7 +60,7 @@ hps-storage <host> create <pool> --disk <by-id> --disk <by-id> [--disk <by-id>].
     [--dry-run] [--json] [--allow-any-pool-name]
 storage-pool-create <pool> --disk <by-id> --disk <by-id> [--disk <by-id> ...] [--wipe]   (stdin: {"key_hex":"<64 hex>"})
 mirror-create <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--wipe]
-mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--peer-gone]
+mirror-assemble <name> --leg <spec> --leg <spec> [--remote-index 0|1] [--peer-gone] [--drop-bbl]
 ```
 
 `create` takes 2 to 4 distinct by-id names (with or without
