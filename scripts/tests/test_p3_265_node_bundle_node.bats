@@ -532,7 +532,7 @@ extract_bundle() {
 # firewall port a service needs, fw_open)
 @test "adapter: the three per-OS things are all it defines (plus its variables); Alpine has no code" {
   grep -qE '^(pkg_add|svc_start|svc_reload|adapter_init)\(\)' "$ROOT/node-manager/bundle/adapter/nixos.sh"
-  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init fw_open pkg_add pkg_realise svc_mask svc_reload svc_restart_later svc_start " ]
+  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init fw_open pkg_add pkg_realise svc_env svc_mask svc_reload svc_restart_later svc_start " ]
   [ ! -e "$ROOT/node-manager/bundle/adapter/alpine.sh" ]
 }
 
@@ -581,6 +581,8 @@ extract_bundle() {
   [ "$status" -eq 0 ]
   [ "$(cat "$HPS_ROOT/etc/hostname")" = tch-001.lab.hps ]
   grep -q '^systemctl try-restart systemd-hostnamed' "$CALLS"
+  # the lab trial (2026-11-16): NixOS's hostnamed reads /etc/static/hostname, not /etc/hostname
+  grep -qx "Environment=SYSTEMD_ETC_HOSTNAME=$HPS_ROOT/etc/hostname" "$HPS_SYSTEMD_DIR/systemd-hostnamed.service.d/zz-hps.conf"
 }
 
 @test "hostname: after hostnamed reset the kernel name, a refresh sets it again from /etc/hostname" {

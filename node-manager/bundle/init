@@ -350,6 +350,11 @@ persist_hostname() {
   if [[ "$old" != "$want" ]]; then
     printf '%s\n' "$want" > "$f.new"
     run mv -f "$f.new" "$f"
+  fi
+  # hostnamed reads the static name from the OS's own file unless told otherwise (NixOS: a
+  # link into the store); so it is told to read this one
+  svc_env systemd-hostnamed "SYSTEMD_ETC_HOSTNAME=${HPS_ROOT}/etc/hostname"
+  if [[ -n "$want" ]]; then
     systemctl try-restart systemd-hostnamed.service 2> /dev/null || true
   fi
 }

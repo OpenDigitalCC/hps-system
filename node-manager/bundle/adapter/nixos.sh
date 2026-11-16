@@ -14,6 +14,7 @@
 #   svc_reload      reload a service the starter already has (sshd)
 #   svc_restart_later  restart services from a timer, after the caller has answered
 #   svc_mask        keep a unit the OS ships from ever starting (the md last-resort timers)
+#   svc_env         give a service of the OS a setting of its environment (hostnamed's file)
 #   fw_open         open a TCP port in the host firewall (the iSCSI portal, om3)
 #
 # What an adapter for another OS provides (Alpine: plan step 4, adapter/alpine.sh,
@@ -202,4 +203,17 @@ svc_mask() {
     [[ "$(readlink "$SYSTEMD_RUN_DIR/$u" 2> /dev/null)" == /dev/null ]] || run ln -sf /dev/null "$SYSTEMD_RUN_DIR/$u"
   done
   run systemctl daemon-reload
+}
+
+# svc_env <unit> <VAR=value>: the service <unit> (one the OS ships) gets this environment
+# variable from now on, by a run-time drop-in that sorts after the OS's own (zz-), and is
+# restarted if it runs. NixOS points systemd-hostnamed at /etc/static/hostname, a link into
+# the store that no node can change: SYSTEMD_ETC_HOSTNAME=/etc/hostname makes it read the
+# file the bundle writes.
+svc_env() {
+  local d="${SYSTEMD_RUN_DIR}/${1}.service.d"
+  mkdir -p "$d"
+  printf '[Service]\nEnvironment=%s\n' "$2" > "$d/zz-hps.conf"
+  run systemctl daemon-reload
+  systemctl try-restart "${1}.service" > /dev/null 2>&1 || true
 }
