@@ -2,7 +2,8 @@
 #
 # Plan step 1: a host assigned HOST_PROFILE STARTER boots the stock starter
 # that hps-starter put under <resources>/starter/nixos/<release>/, not a built
-# pinned image (nixos-boot-functions.sh). Pinned boots stay as they were.
+# pinned image (nixos-boot-functions.sh). Plan step 2 adds the hook and the hps.*
+# arguments the node bundle needs. Pinned boots stay as they were.
 
 setup() {
   TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p3-263.XXXXXX")"
@@ -29,21 +30,66 @@ starter_files() {
     "${1:-init=/nix/store/abc-nixos-system-nixos-kexec-26.05.1.abc/init initrd=initrd nohibernate root=fstab loglevel=4 lsm=landlock,yama,bpf}" > "$SDIR/manifest.json"
 }
 
-@test "starter boot lines: stock kernel and initramfs from the IPS, the stock arguments, a serial console" {
+@test "starter boot lines: stock kernel and initramfs from the IPS, the stock arguments first, a serial console" {
   starter_files
+  p1_50_host "$MAC" os_id x86_64:nixos:26.05
   run nixos_starter_boot_lines "$MAC" 26.05
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "kernel http://10.0.0.1/starter/nixos/26.05/bzImage init=/nix/store/abc-nixos-system-nixos-kexec-26.05.1.abc/init initrd=initrd nohibernate root=fstab loglevel=4 lsm=landlock,yama,bpf console=ttyS0,115200" ]
+  [[ "${lines[0]}" == "kernel http://10.0.0.1/starter/nixos/26.05/bzImage init=/nix/store/abc-nixos-system-nixos-kexec-26.05.1.abc/init initrd=initrd nohibernate root=fstab loglevel=4 lsm=landlock,yama,bpf console=ttyS0,115200 hps.ips=10.0.0.1 hps.mac=$MAC hps.os=x86_64:nixos:26.05 hps.profile=STARTER "* ]]
   [ "${lines[1]}" = "initrd http://10.0.0.1/starter/nixos/26.05/initrd" ]
   [ "${lines[2]}" = "boot" ]
   [ "${#lines[@]}" -eq 3 ]
 }
 
-@test "starter boot lines carry no hps.* argument: nothing of HPS runs on the starter" {
+@test "starter boot lines carry what the node bundle needs: the IPS, the MAC, the OS, the profile, the DNS domain" {
   starter_files
+  p1_50_host "$MAC" os_id x86_64:nixos:26.05
+  printf 'cluster.test' > "$TEST_DIR/cluster/network_dns_domain"
   run nixos_starter_boot_lines "$MAC" 26.05
   [ "$status" -eq 0 ]
-  [[ "$output" != *"hps."* ]]
+  for a in hps.ips=10.0.0.1 "hps.mac=$MAC" hps.os=x86_64:nixos:26.05 hps.profile=STARTER hps.domain=cluster.test; do
+    [[ "${lines[0]}" == *" $a "* ]] || { echo "missing $a"; return 1; }
+  done
+  # no pin, no secret, no host key beyond those
+  [[ "${lines[0]}" != *"hps.pin"* ]]
+}
+
+@test "the hook: systemd.run runs one pipe, curl to the IPS into a shell, and does not power off" {
+  run nixos_starter_hook 10.0.0.1
+  [ "$status" -eq 0 ]
+  [[ "$output" == 'systemd.run="/bin/sh -c '\''/run/current-system/sw/bin/curl '* ]]
+  [[ "$output" == *"http://10.0.0.1/cgi-bin/boot_manager.sh?cmd=node_bootstrap | /bin/sh'\"" ]] || [[ "$output" == *"http://10.0.0.1/cgi-bin/boot_manager.sh?cmd=node_bootstrap | /bin/sh'\" "* ]]
+  [[ "$output" == *" systemd.run_success_action=none"* ]]
+  [[ "$output" == *" systemd.run_failure_action=none"* ]]
+  # NixOS's default target beats the generated one: without this the unit never starts
+  [[ "$output" == *" systemd.wants=kernel-command-line.service" ]]
+}
+
+@test "the hook has none of the characters iPXE or the kernel line would mangle" {
+  run nixos_starter_hook 10.0.0.1
+  # iPXE reads && and || (and ;) as operators of its own: the lab trial found this
+  [[ "$output" != *"&"* && "$output" != *"||"* && "$output" != *";"* ]]
+  [[ "$output" != *'$'* && "$output" != *'\'* && "$output" != *'`'* && "$output" != *'#'* ]]
+  # exactly one quoted argument: the kernel reads systemd.run="..." as one word
+  [ "$(printf '%s' "$output" | tr -cd '"' | wc -c)" -eq 2 ]
+  # and it fetches nothing but this IPS
+  [ "$(printf '%s\n' "$output" | grep -o 'http://[^/ ]*' | sort -u)" = "http://10.0.0.1" ]
+}
+
+@test "the hook fetches the one bootstrap script and nothing is built into the image: no key, no token in the line" {
+  starter_files
+  p1_50_host "$MAC" os_id x86_64:nixos:26.05
+  run nixos_starter_boot_lines "$MAC" 26.05
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" != *"key"* && "${lines[0]}" != *"token"* && "${lines[0]}" != *"secret"* && "${lines[0]}" != *"password"* ]]
+}
+
+@test "an IPS address that is not safe in a kernel line is refused" {
+  starter_files
+  printf '10.0.0.1 evil=1' > "$TEST_DIR/cluster/network_dhcp_ip"
+  run nixos_starter_boot_lines "$MAC" 26.05
+  [ "$status" -eq 1 ]
+  grep -q "not usable in a kernel line" "$TEST_DIR/hps.log"
 }
 
 @test "a host with profile STARTER gets the starter script of its os_id release, pin or no pin" {
@@ -59,15 +105,46 @@ starter_files() {
   [[ "$output" != *"/nixos/"*"/node-"* ]]
 }
 
-@test "the starter boot ignores a leftover system_pin and opens no pairing window" {
+@test "the starter boot ignores a leftover system_pin and opens the pairing window, as a pinned boot does" {
   starter_files
   p1_50_host "$MAC" HOST_PROFILE STARTER
   p1_50_host "$MAC" os_id x86_64:nixos:26.05
   p1_50_host "$MAC" system_pin oldpin
-  ce_pairing_window_open() { echo "window" >> "$CALL_LOG"; }
+  ce_pairing_window_open() { echo "window $1" >> "$CALL_LOG"; }
   run ipxe_boot_nixos "$MAC"
   [ "$status" -eq 0 ]
   [[ "$output" != *"oldpin"* ]]
+  grep -q "^window 300" "$CALL_LOG"
+}
+
+@test "a starter host is offered pairing like a pinned one: the old pairing record is cleared" {
+  starter_files
+  p1_50_host "$MAC" HOST_PROFILE STARTER
+  p1_50_host "$MAC" os_id x86_64:nixos:26.05
+  p1_50_host "$MAC" ctrl_exec_paired_at 123
+  p1_50_host "$MAC" ctrl_exec_paired 123
+  ce_pairing_window_open() { :; }
+  # the shared stub has no delete: this one removes the key
+  host_registry() {
+    local d="$TEST_DIR/hosts/${1//:/}"
+    case "$2" in
+      get) [[ -f "$d/$3" ]] && cat "$d/$3" ;;
+      delete) rm -f "$d/$3" ;;
+      *) return 0 ;;
+    esac
+  }
+  run ipxe_boot_nixos "$MAC"
+  [ "$status" -eq 0 ]
+  [ ! -e "$TEST_DIR/hosts/525400aabb01/ctrl_exec_paired_at" ]
+  [ ! -e "$TEST_DIR/hosts/525400aabb01/ctrl_exec_paired" ]
+}
+
+@test "no window is opened for a boot that failed (no starter synced)" {
+  p1_50_host "$MAC" HOST_PROFILE STARTER
+  p1_50_host "$MAC" os_id x86_64:nixos:26.05
+  ce_pairing_window_open() { echo "window" >> "$CALL_LOG"; }
+  run ipxe_boot_nixos "$MAC"
+  [ "$status" -eq 1 ]
   ! grep -q window "$CALL_LOG"
 }
 

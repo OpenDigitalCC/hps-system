@@ -267,12 +267,34 @@ nixos_emit_boot() {
   echo "$lines"
 }
 
+# nixos_starter_hook <ips>
+# The kernel arguments that make the unmodified starter run one script from the
+# IPS, as root, at boot (plan step 2, docs/BUNDLE.md "The hook"): systemd's own
+# systemd.run=, which the stock systemd turns into a unit,
+# kernel-command-line.service. systemd.wants= is needed as well: the starter's
+# default target is multi-user.target (a link in /etc), which beats the target
+# the generator makes, so the unit would be written and never started. The
+# unit does not power the node off afterwards. The command waits for the network
+# (curl retries), fetches the bootstrap script and pipes it to a shell.
+# iPXE has command operators of its own: a && or || or ; in this line would end
+# the kernel command and start another (lab 2026-11-16: "exec: command not
+# found" at the && of an earlier form), so the command uses a single pipe and
+# none of those. iPXE passes the other words on joined by single spaces, and
+# the quotes arrive as characters (the nested guest booted through iPXE 1.21).
+nixos_starter_hook() {
+  local ips="$1"
+  printf 'systemd.run="/bin/sh -c '\''/run/current-system/sw/bin/curl -fsS --retry 60 --retry-delay 2 --retry-all-errors http://%s/cgi-bin/boot_manager.sh?cmd=node_bootstrap | /bin/sh'\''"' "$ips"
+  printf ' systemd.run_success_action=none systemd.run_failure_action=none systemd.wants=kernel-command-line.service'
+}
+
 # nixos_starter_boot_lines <mac> <version>
 # The iPXE kernel/initrd/boot lines of the stock starter of a NixOS release:
 # the distribution's own netboot kernel and initramfs that hps-starter sync
 # nixos put under <resources>/starter/nixos/<version>/, with the stock kernel
-# arguments its manifest records and a serial console. No pin, no hps.*
-# arguments: the starter does nothing of its own (plan step 1).
+# arguments its manifest records and a serial console, followed by what the
+# node bundle needs (plan step 2): the hook (nixos_starter_hook) and hps.ips,
+# hps.mac, hps.os, hps.profile and, when the cluster has one, hps.domain. No pin,
+# and nothing of HPS is in the image: everything arrives from the IPS after boot.
 # Returns 1 with a log line (no output) when the starter is not usable.
 nixos_starter_boot_lines() {
   local mac="${1:-}"
@@ -299,8 +321,23 @@ nixos_starter_boot_lines() {
     hps_log error "[$mac] NixOS starter manifest has no init= in its cmdline: ${manifest}"
     return 1
   fi
+  if [[ ! "$ips" =~ ^[0-9A-Za-z.:-]+$ ]]; then
+    hps_log error "[$mac] NixOS starter boot: IPS address '${ips}' is not usable in a kernel line"
+    return 1
+  fi
+  local os_id domain cluster args
+  os_id="$(host_registry "$mac" get os_id 2>/dev/null)" || os_id=""
+  args="${cmdline} console=ttyS0,115200 hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.os=${os_id} hps.profile=STARTER"
+  cluster="$(hps_get_config active_cluster 2>/dev/null)" || cluster=""
+  domain=""
+  if [[ -n "$cluster" ]]; then
+    domain="$(cluster_registry "$cluster" get network_dns_domain 2>/dev/null)" || domain=""
+  fi
+  if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
+    args="${args} hps.domain=${domain}"
+  fi
   local base="http://${ips}/starter/nixos/${version}"
-  printf 'kernel %s/bzImage %s console=ttyS0,115200\n' "$base" "$cmdline"
+  printf 'kernel %s/bzImage %s %s\n' "$base" "$args" "$(nixos_starter_hook "$ips")"
   printf 'initrd %s/initrd\n' "$base"
   printf 'boot\n'
 }
@@ -556,7 +593,9 @@ nixos_image_profile() {
 # ipxe_boot_nixos <mac>
 # Network boot of an assigned NixOS host: image profile from HOST_PROFILE.
 # HOST_PROFILE STARTER boots the stock starter of the release in the host's
-# os_id (x86_64:nixos:<release>) instead of a built image: no pin, no pairing.
+# os_id (x86_64:nixos:<release>) instead of a built image: no pin. It pairs like
+# any RAM-booted node, so its boot opens the pairing window; the node bundle
+# (nixos_starter_hook) does the pairing.
 ipxe_boot_nixos() {
   local mac="${1:-${mac:-}}"
   local host_profile image os_id
@@ -564,8 +603,9 @@ ipxe_boot_nixos() {
   if [[ "$host_profile" == STARTER ]]; then
     os_id="$(host_registry "$mac" get os_id 2>/dev/null)" || os_id=""
     hps_log info "[$mac] NixOS network boot: stock starter ${os_id##*:}"
-    nixos_emit_starter_boot "$mac" "${os_id##*:}"
-    return $?
+    nixos_emit_starter_boot "$mac" "${os_id##*:}" || return 1
+    nixos_open_pairing_window "$mac"
+    return 0
   fi
   image="$(nixos_image_profile "$host_profile")" || {
     cgi_auto_fail "No NixOS image profile for host profile '${host_profile}' (known: CONVERGED, CONTAINER_HOST, BUILDER, DEFAULT)"
