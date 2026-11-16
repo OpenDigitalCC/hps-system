@@ -69,10 +69,25 @@ setup() {
 }
 
 @test "confinement: the guest abstraction allows the wrapped QEMU ELFs nixpkgs execs" {
+  # the text is a plain file of the tree (node-manager/apparmor/), shared with the starter node's bundle
+  local aa="$ROOT/node-manager/apparmor/libvirt-qemu"
+  grep -qF '@@QEMU@@/bin/qemu-system-x86_64 rmix,' "$aa"
+  grep -qF '@@QEMU@@/bin/.qemu-system-x86_64-wrapped rmix,' "$aa"
+  grep -qF '@@QEMU@@/bin/.qemu-kvm-wrapped rmix,' "$aa"
+}
+
+@test "confinement: the nix module reads its profile text from the plain files, and has no second copy" {
   local aa="$(dirname "$COMPUTE")/compute-apparmor.nix"
-  grep -qF '${qemu}/bin/qemu-system-x86_64 rmix,' "$aa"
-  grep -qF '${qemu}/bin/.qemu-system-x86_64-wrapped rmix,' "$aa"
-  grep -qF '${qemu}/bin/.qemu-kvm-wrapped rmix,' "$aa"
+  for n in TEMPLATE.qemu libvirt-qemu libvirtd virt-aa-helper; do
+    test -s "$ROOT/node-manager/apparmor/$n"
+    grep -qF "aaText \"$n\"" "$aa"
+  done
+  # no profile rule is left in the module
+  ! grep -qE '^ +(capability|network|mount|ptrace|signal|unix) ' "$aa"
+  # every marker in the files is one the module fills in
+  for m in $(grep -ohE '@@[A-Z_]+@@' "$ROOT"/node-manager/apparmor/* | sort -u); do
+    grep -qF "\"$m\"" "$aa" || { echo "$m is not filled in by the nix module"; return 1; }
+  done
 }
 
 @test "open-iscsi is an initiator whose name comes from the runtime file, not the image" {

@@ -1,0 +1,128 @@
+#include <tunables/global>
+
+@{hextet}=[0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+@{UUID}=@{hextet}@{hextet}-@{hextet}-@{hextet}-@{hextet}-@{hextet}@{hextet}@{hextet}
+@{LIBVIRT}="libvirt"
+
+@@LIBVIRT@@/sbin/.libvirtd-wrapped flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/dbus>
+
+  capability kill,
+  capability net_admin,
+  capability net_raw,
+  capability setgid,
+  capability sys_admin,
+  capability sys_module,
+  capability sys_ptrace,
+  capability sys_pacct,
+  capability sys_nice,
+  capability sys_chroot,
+  capability setuid,
+  capability dac_override,
+  capability dac_read_search,
+  capability fowner,
+  capability chown,
+  capability setpcap,
+  capability mknod,
+  capability fsetid,
+  capability audit_write,
+  capability ipc_lock,
+  capability sys_rawio,
+  capability bpf,
+  capability perfmon,
+  capability sys_resource,
+
+  mount options=(rw,rslave)  -> /,
+  mount options=(rw, nosuid) -> /{var/,}run/libvirt/qemu/*.dev/,
+  umount /{var/,}run/libvirt/qemu/*.dev/,
+  umount /dev/,
+  mount options=(rw, move) /dev/ -> /{,var/}run/libvirt/qemu/*.dev/,
+  mount options=(rw, move) /dev/** -> /{,var/}run/libvirt/qemu/*{,/},
+  mount options=(rw, move) /{,var/}run/libvirt/qemu/*.dev/ -> /dev/,
+  mount options=(rw, move) /{,var/}run/libvirt/qemu/*{,/} -> /dev/**,
+  umount /{,var/}run/libvirt/qemu/*{,/},
+
+  network inet stream,
+  network inet dgram,
+  network inet6 stream,
+  network inet6 dgram,
+  network netlink raw,
+  network packet dgram,
+  network packet raw,
+
+  unix (send, receive) type=stream addr=none peer=(label=unconfined addr=none),
+
+  ptrace (read,trace) peer=unconfined,
+  ptrace (read,trace) peer=@{profile_name},
+  ptrace (read,trace) peer=dnsmasq,
+  ptrace (read,trace) peer=libvirt-*,
+
+  signal (send) peer=dnsmasq,
+  signal (read, send) peer=libvirt-*,
+  signal (send) set=("kill", "term") peer=unconfined,
+
+  # qemu-bridge-helper child profile (below).
+  unix (send, receive) type=stream addr=none peer=(label=@@LIBVIRT@@/sbin/.libvirtd-wrapped//qemu_bridge_helper),
+  signal (send) set=("term") peer=@@LIBVIRT@@/sbin/.libvirtd-wrapped//qemu_bridge_helper,
+
+  unix (send, receive) type=stream addr=none peer=(label=libvirt-@{UUID}),
+  unix (send, receive) type=stream addr=none peer=(label=unconfined),
+  signal (read, send) peer=unconfined,
+
+  / r,
+  /** rwmkl,
+
+  # Programs the daemon starts (qemu-img, ip, dnsmasq, iptables, ...). The
+  # store is the NixOS equivalent of /usr/bin and /usr/sbin.
+  /nix/store/*/bin/* PUx,
+  /nix/store/*/sbin/* PUx,
+  /run/current-system/sw/bin/* PUx,
+  @@LIBVIRT@@/sbin/virtlogd pix,
+  @@LIBVIRT@@/libexec/* PUxr,
+  @@LIBVIRT@@/libexec/libvirt_parthelper ix,
+  @@LIBVIRT@@/libexec/libvirt_iohelper ix,
+  @@LIBVIRT@@/libexec/virt-aa-helper PUx,
+  /var/lib/libvirt/virtd* ixr,
+  /var/lib/libvirt/hooks/** rmix,
+
+  # Force the use of virt-aa-helper: no parser, no profile writes. The
+  # parser is reached through /sbin and through its store path (the kernel
+  # mediates the resolved path).
+  audit deny /sbin/apparmor_parser rwxl,
+  audit deny @@APPARMOR_PARSER@@/bin/apparmor_parser rwxl,
+  audit deny /var/lib/apparmor.d/libvirt/** wxl,
+  audit deny /sys/kernel/security/apparmor/features rwxl,
+  audit deny /sys/kernel/security/apparmor/matching rwxl,
+  audit deny /sys/kernel/security/apparmor/.* rwxl,
+  /sys/kernel/security/apparmor/profiles r,
+
+  # Allow changing to the per-guest profiles.
+  change_profile -> @{LIBVIRT}-@{UUID},
+
+  @@QEMU@@/libexec/qemu-bridge-helper Cx -> qemu_bridge_helper,
+  /run/wrappers/wrappers.*/qemu-bridge-helper Cx -> qemu_bridge_helper,
+  profile qemu_bridge_helper {
+    #include <abstractions/base>
+
+    capability setuid,
+    capability setgid,
+    capability setpcap,
+    capability net_admin,
+
+    network inet stream,
+
+    unix (send, receive) type=stream addr=none peer=(label=@@LIBVIRT@@/sbin/.libvirtd-wrapped),
+    signal (receive) set=("term") peer=@@LIBVIRT@@/sbin/.libvirtd-wrapped,
+
+    /dev/net/tun rw,
+    /etc/qemu/** r,
+    /nix/store/** mr,
+    owner @{PROC}/*/status r,
+
+    @@QEMU@@/libexec/qemu-bridge-helper rmix,
+    /run/wrappers/wrappers.*/qemu-bridge-helper rmix,
+  }
+
+  include if exists <local/usr.sbin.libvirtd>
+}

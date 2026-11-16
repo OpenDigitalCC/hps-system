@@ -1,0 +1,74 @@
+#include <abstractions/base>
+#include <abstractions/consoles>
+#include <abstractions/nameservice>
+
+# QEMU runs as qemu-libvirtd with cleared capabilities (docs/CONFINEMENT.md);
+# these are the ceiling, not a grant of anything it does not already lack.
+capability setgid,
+capability setuid,
+capability ipc_lock,
+deny capability kill,
+
+network inet stream,
+network inet6 stream,
+
+ptrace (readby, tracedby) peer=@@LIBVIRT@@/sbin/.libvirtd-wrapped,
+signal (receive) peer=@@LIBVIRT@@/sbin/.libvirtd-wrapped,
+unix (send, receive) type=stream addr=none peer=(label=@@LIBVIRT@@/sbin/.libvirtd-wrapped),
+
+/dev/kvm rw,
+/dev/vhost-net rw,
+/dev/net/tun rw,
+/dev/ptmx rw,
+@{PROC}/*/status r,
+# QEMU reads the cmdline of the process that signals it to terminate.
+@{PROC}/@{pid}/cmdline r,
+owner @{PROC}/@{pid}/task/@{tid}/comm rw,
+@{PROC}/sys/kernel/cap_last_cap r,
+@{PROC}/sys/vm/max_map_count r,
+@{PROC}/sys/vm/overcommit_memory r,
+owner @{PROC}/*/auxv r,
+/etc/libnl{,-3}/classid r,
+
+# Hugepage-backed guests.
+/dev/hugepages/libvirt/qemu/ r,
+owner /dev/hugepages/libvirt/qemu/** rw,
+
+# Shared libraries, QEMU modules and firmware are in the store: read and map
+# only. No write, and no execute (the binaries are listed below).
+/nix/store/** mr,
+
+# libvirtd links the firmware it found in QEMU's descriptions here.
+/run/libvirt/nix-ovmf/ r,
+/run/libvirt/nix-ovmf/* r,
+
+# UEFI variable stores.
+owner /var/lib/libvirt/qemu/nvram/*_VARS.fd rwk,
+owner /var/lib/libvirt/qemu/nvram/*_VARS.ms.fd rwk,
+
+# The QEMU binaries. nixpkgs wraps them like the daemon: bin/qemu-system-x86_64
+# is a makeWrapper script that execs bin/.qemu-system-x86_64-wrapped (the ELF),
+# and the exec of the ELF is mediated by this profile too. Lab 2026-11-10:
+# without the wrapped names every guest start failed with "process exited
+# while connecting to monitor" (apparmor="DENIED" operation="exec" on
+# .qemu-system-x86_64-wrapped).
+@@QEMU@@/bin/qemu-system-x86_64 rmix,
+@@QEMU@@/bin/.qemu-system-x86_64-wrapped rmix,
+@@QEMU@@/bin/qemu-kvm rmix,
+@@QEMU@@/bin/.qemu-kvm-wrapped rmix,
+
+/{,var/}tmp/ r,
+owner /{,var/}tmp/**/ r,
+
+# Host resource information QEMU gathers.
+/sys/devices/**/block/*/queue/max_segments r,
+/sys/devices/system/cpu/ r,
+/sys/devices/system/node/ r,
+/sys/devices/system/node/node[0-9]*/meminfo r,
+/sys/devices/system/node/*/cpumap r,
+/sys/module/vhost/parameters/max_mem_regions r,
+
+deny /dev/shm/lttng-ust-wait-* r,
+deny /run/shm/lttng-ust-wait-* r,
+
+include if exists <abstractions/libvirt-qemu.d>
