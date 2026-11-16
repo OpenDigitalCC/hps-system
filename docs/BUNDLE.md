@@ -31,9 +31,9 @@ All of it is plain HTTP on the provisioning network, from the CGI
 | `node_packages` | the store paths of this node's role, one per line | `lib/starter/<os>.roles`, resolved through the repository manifest |
 | `node_sysadmin_keys` | the installation's sysadmin SSH public key(s) | `<config>/sysadmin_authorized_keys` |
 
-The agent itself is not in the bundle: it comes from the IPS package area,
-`/packages/ctrl-exec/ctrl-exec-latest.tar.gz`, the same file the IPS installs
-its own dispatcher from.
+The agent is not in the bundle: it is a **local package** of the IPS
+repository (see "Local packages"), named in the node's package list, and the
+node runs it by its store path.
 
 ### The bundle
 
@@ -119,9 +119,13 @@ kernel-command-line`) and the main events on the IPS log.
    which is inside the boundary of `SECURITY-MODEL.md`.
 2. **packages.** Asks the IPS for this node's package list and adds it from the
    IPS repository (`/packages/<os>/<release>/`) and nothing else.
-3. **agent.** Fetches the ctrl-exec agent from the IPS package area, writes
-   `agent.conf` and `scripts.conf` (from `allowlist`), and defines the agent's
-   service. The service starts when `agent.crt` exists.
+3. **agent.** Takes the ctrl-exec agent, with its executor, from the IPS
+   repository by store path; creates the service user `ctrl-exec-agent` (not
+   `sysadmin`, which has sudo); writes `agent.conf` with the profiles of the
+   pinned images and `scripts.conf` (from `allowlist`); and starts two
+   services: the executor (root) and the agent (the service user, no
+   capability, the sandbox of ctrl-exec's own NixOS module). The agent starts
+   when `agent.crt` exists.
 4. **legacy bundle.** Fetches the older function bundle (`get_remote_functions`)
    into `/run/hps/functions.sh`, which the allowlisted `hps-node` plugin
    sources. Not fatal. It goes with the pinned images (plan step 7).
@@ -143,20 +147,25 @@ The agent assumes its dispatcher is compromised: it runs only what the list
 names, with the arguments the action itself checks. There is **no action that
 runs a command or script a dispatcher sends**, and a test says so.
 
-The agent runs without the executor in this step. The executor is a C program
-that must be compiled, and plan step 5 packages it. Without it the agent runs
-each action itself, as root (the pinned images run them as root through the
-executor with a capability list, so the privilege of an action is the same);
-the `[profile ...]` sections of `agent.conf` are written for the day the
-executor is there and are not applied. The control is the allowlist and each
-action's own argument checks (`docs/SECURITY.md`).
+The agent that takes requests from the network is not root. It is the user
+`ctrl-exec-agent` with no capabilities and the unit sandbox of ctrl-exec's own
+module (`ProtectSystem=strict`, `PrivateDevices`, a system call filter,
+`MemoryDenyWriteExecute`, ...). Only the executor, a small root service the
+agent talks to over a socket, raises privilege, per action and per profile: the
+profiles in `agent.conf` are those of the pinned images word for word
+(`nix/modules/hps-ctrl-exec.nix`; a test compares the capability list), so an
+action runs as root with that capability set, `no_new_privileges`, in a
+private mount namespace of its own, and with the agent's own configuration
+read-only to it. This is the same arrangement as `docs/SECURITY.md` "Node
+scripts under the executor". No compiler is on the node and none runs at boot:
+the executor is a file in the package.
 
 ### Packages: the role-to-package mapping
 
 `lib/starter/nixos.roles` is the mapping, as plain data:
 
 ```
-*:   perl JSON IO-Socket-SSL Net-SSLeay openssl
+*:   ctrl-exec-agent
 SCH: targetcli-fb mdadm
 TCH: libvirt qemu-host-cpu-only open-iscsi mdadm
 ```
@@ -169,21 +178,7 @@ name the repository does not hold is an error that names it (the node reports
 it and stops), never a silent omission. What the storage and compute scripts
 need beyond this (smartmontools, xxd, tcpdump and the rest) is step 3.
 
-**openssl and Perl JSON.** The agent needs both. The release holds several
-openssl versions, so a name cannot pick one, and the starter holds only the
-library output of its own openssl (no `bin/openssl`); `JSON` is pure Perl, so
-its x86_64 copy cannot be told from the other systems' by the glibc test.
-Settled in `nixos.packages` by naming a store path (`NAME /nix/store/...`, used
-as it stands, no search):
-
-- **JSON**: the path the starter already holds, `perl5.42.3-JSON-4.10` (the
-  exact store path in the starter's own closure). The node installs it from
-  itself; the repository also holds it so that the IPS is the one source.
-- **openssl**: the bin output of the starter's own version,
-  `openssl-3.6.5-bin`, which the starter lacks and the repository now holds.
-
-A new release of the starter needs these two lines checked (a path from the old
-release may be gone from the cache; `hps-starter sync` stops and names it).
+**openssl and Perl JSON.** The agent needs both, and they are in its package's closure: the JSON module is the starter's own path (`perl5.42.3-JSON-4.10`), openssl is the bin output of the starter's own version (`openssl-3.6.5-bin`). Nothing is listed for them any more; a new agent build brings its own.
 
 ### The sysadmin key
 
@@ -194,22 +189,68 @@ installation's key extraction is outside this step). The IPS serves only
 well-formed lines without options in front (no `command=`, no `from=`), and the
 node checks the same again. A public key is not a secret.
 
-## The refresh
+## The refresh and the upgrade
 
 `bundle-refresh` is an allowlisted action with no arguments. It runs the
 `bootstrap.sh` that is inside the bundle with `refresh`: the same fetch, from
 the address on the node's own kernel line, then `init` again. Nothing a
 dispatcher sends names the address or the file: a dispatcher credential can ask
-for a refresh and cannot change what is fetched. After it, a script changed on
-the IPS is live (the agent reads the script through the `bundle` link at each
-run), the allowlist is rewritten if it changed (the agent reloads it by
-itself), packages the role gained are added, and a node that is paired is not
-paired again. The agent itself is not replaced by a refresh; a new agent
-version arrives with the next boot (hosts are transient, `STRATEGY.md`).
+for a refresh and cannot change what is fetched. The agent's configuration is
+read-only to every action, so the action does the work in a transient systemd
+unit (`systemd-run --wait --pipe`), outside the executor, and relays its output.
+
+After a refresh, with **no reboot**:
+
+- a script changed on the IPS is live (the agent runs each action through the
+  `bundle` link);
+- the allowlist is rewritten if it changed (the agent reloads it by itself);
+- a package the node's role gained on the IPS is installed (`nix profile
+  install` of the new path only; what the node has is left alone);
+- a node that is paired is not paired again;
+- **a new agent version** is taken: the IPS lists the agent by store path, so a
+  new version is a new path. The refresh fetches it beside the old one,
+  rewrites the two unit files to point at it, and, because a unit changed,
+  starts a timer unit (`systemd-run --on-active=5`) that restarts exactly the
+  executor and the agent. The action has answered by then, so the agent is not
+  killed in the middle of its own reply. Nothing else is restarted: guests,
+  storage services, sshd and the rest of the node run on. An unchanged agent is
+  not restarted by a refresh.
+
+A base OS or a storage host therefore never needs a reboot for a new agent, a
+new script or a new package of its role. (A new kernel still does.)
 
 ```
 hps-run <host> bundle-refresh
 ```
+
+## Local packages
+
+A package that is not in nixpkgs (the ctrl-exec agent, later om3 and others the
+builder compiles) is a **local package**. Three lines:
+
+1. A store path, built elsewhere (the builder), as a narinfo and a nar, goes into
+   the IPS with `hps-starter add-local nixos --from <cache dir> <store path>`:
+   its closure, minus what the repository already holds, lands in
+   `<resources>/local/nixos/<release>/`.
+2. `lib/starter/nixos.packages` names it by path (`NAME /nix/store/...`), and
+   `hps-starter sync nixos` puts it in the repository beside the upstream ones,
+   with the same manifest (size and sha256, so `verify` and the pruning treat
+   it like any other file).
+3. `lib/starter/nixos.roles` says which roles get it. It then arrives on a node
+   like any package of the repository.
+
+The repository has no signing key of its own, and STRATEGY.md keeps the
+upstream signatures as they are, so a local package is a narinfo without a
+`Sig:` line and a node installs it knowing so: upstream packages with their
+signatures checked against the stock key, local ones in a separate call without
+the check (`require-sigs false`), after the signed ones. A package with a
+signature is never installed unchecked. Delivery from the IPS is plain
+(`STRATEGY.md`).
+
+The agent: the lab's Nix cache holds the build the pinned images use
+(`ctrl-exec-agent-0.14.7`, with `bin/ctrl-exec-executor`; no compiler is
+needed to use it). To change version: `add-local` the new path, change the
+list line, `sync`; the nodes take it at their next refresh.
 
 ## The adapter
 
@@ -219,14 +260,13 @@ holds them for one OS:
 | thing | NixOS | where |
 | --- | --- | --- |
 | how to boot it | the kernel line: the stock arguments, the hook, `hps.*` | the IPS, `nixos_starter_boot_lines` |
-| how to add a package | `nix profile install` of store paths, substituted from the IPS repository only; the stock upstream key | `pkg_add` |
-| how to start a service | a unit in `/run/systemd/system`, started; its port opened in the host firewall | `svc_start`, `svc_reload` |
+| how to add a package | `nix profile install` of store paths, substituted from the IPS repository only; the stock upstream key; `pkg_realise` for the agent, outside the profile | `pkg_add`, `pkg_realise` |
+| how to start a service | a unit in `/run/systemd/system`, started; its port opened in the host firewall; a restart from a timer | `svc_start`, `svc_reload`, `svc_restart_later` |
 
 Everything else in the bundle is OS-neutral: the user, the SSH key, the
 `sshd_config` change (the starter's link into the store is replaced by a real
-file), the agent, the allowlist, the pairing. The adapter also sets three
-variables: where added packages' programs and Perl modules appear
-(`PKG_BIN`, `PKG_PERL5LIB`) and the sudo group.
+file), the agent, the allowlist, the pairing. The adapter also sets two
+variables: where added packages' programs appear (`PKG_BIN`) and the sudo group.
 
 **Alpine** (plan step 4) adds `adapter/alpine.sh` with the same functions and
 variables and one branch in `init`'s `case "$OS_NAME"`, which marks the place;
@@ -247,7 +287,8 @@ registry host as for every node (state, source address, FQDN, window).
 | to | do |
 | --- | --- |
 | give the installation's sysadmin key | write `<config>/sysadmin_authorized_keys` |
-| fill the repository for the new package list | `hps-starter sync nixos --only repository` (the list changed, so the repository is rebuilt) |
+| put a locally built package (a new agent) on the IPS | `hps-starter add-local nixos --from <cache> <store path>`, name it in `nixos.packages`, then `hps-starter sync nixos --only repository` |
+| bring running nodes to the new agent | `hps-run <host> bundle-refresh` on each (no reboot) |
 | see what a node will get | `curl 'http://<ips>/cgi-bin/boot_manager.sh?cmd=node_packages'` from the node; or the IPS log `node packages served` |
 | see the bundle a node runs | `ls -l /run/hps/bundle` on the node; the id is in the IPS log line `node bundle served` |
 | change an action | change the file under `node-manager/nixos-26/scripts/`, then `hps-run <host> bundle-refresh` |
@@ -258,5 +299,5 @@ registry host as for every node (state, source address, FQDN, window).
 The IPS-side sysadmin key extraction by the installer; the waiting fixes
 (suspend state, paused-guest resume, storage-fault settings, host reserve at
 boot), which are bundle content for step 3 where there are workloads to carry
-them; an Alpine adapter; the agent's executor (step 5); the bridges that
+them; an Alpine adapter; the bridges that
 `hps-node-init` builds at boot for the networks attached to a host (step 3).

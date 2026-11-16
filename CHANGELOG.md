@@ -28,14 +28,25 @@ Step 2 of `plans/PLAN.md` (`docs/BUNDLE.md`). The pinned images are unchanged.
   SSH key (`<config>/sysadmin_authorized_keys`, served as
   `cmd=node_sysadmin_keys`) and sudo, makes sshd refuse root, adds the role's
   packages from the IPS repository (`lib/starter/nixos.roles`,
-  `cmd=node_packages`), installs the ctrl-exec agent with its preset allowlist
-  (`node-manager/bundle/allowlist`) and pairs with the existing flow.
+  `cmd=node_packages`), installs the ctrl-exec agent and its executor with the
+  preset allowlist (`node-manager/bundle/allowlist`) and pairs with the existing
+  flow. The agent runs as its own unprivileged user with no capabilities; the
+  executor applies the pinned images' profiles and capability list.
+- **New** local packages: `hps-starter add-local` puts a store path built
+  elsewhere (the ctrl-exec agent, with its executor, from the builder's cache)
+  into `<resources>/local/<os>/<release>/`; `sync` takes it into the repository
+  beside the upstream ones when `nixos.packages` names it (`NAME /nix/store/...`).
+  It has no upstream signature and a node installs it knowing so.
+- **New** no reboot for a new agent, script or role package: `bundle-refresh`
+  fetches the bundle again, installs what the role gained, takes a new agent
+  version beside the old one and restarts the agent and the executor from a
+  timer after the action has answered. Guests and storage services are not touched.
 - **New** the NixOS adapter (`node-manager/bundle/adapter/nixos.sh`): how to add
   a package and how to start a service; the place for Alpine is marked.
 - **Changed** a boot of a `STARTER` host opens the pairing window, as a pinned
   boot does.
 - **Changed** the package list takes `NAME /nix/store/<path>` lines (a root named
-  as it stands); `JSON` and `openssl` for the agent are named that way.
+  as it stands); the agent is named that way.
 - **Changed** `hps-pair` sets the kernel hostname with `hostname(1)` when
   `hostnamectl --transient` changed nothing (the stock starter has a static
   hostname).
