@@ -328,6 +328,19 @@ nixos_starter_boot_lines() {
   local os_id domain cluster args
   os_id="$(host_registry "$mac" get os_id 2>/dev/null)" || os_id=""
   args="${cmdline} console=ttyS0,115200 hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.os=${os_id} hps.profile=STARTER"
+  # The node's own ZFS hostid, as on the pinned images (nixos_boot_lines): the stock
+  # starter has one hostid for every node, so a pool left imported by a power loss
+  # would import on any other node without -f. The spl module reads the argument
+  # when it loads and prefers it to /etc/hostid.
+  local zfs_hostid
+  if zfs_hostid="$(nixos_zfs_hostid "$mac")"; then
+    args="${args} spl.spl_hostid=0x${zfs_hostid}"
+    if [[ "$(host_registry "$mac" get zfs_hostid 2>/dev/null)" != "$zfs_hostid" ]]; then
+      host_registry "$mac" set zfs_hostid "$zfs_hostid" > /dev/null 2>&1 || hps_log warn "[$mac] could not record zfs_hostid"
+    fi
+  else
+    hps_log warn "[$mac] no ZFS hostid derived (malformed host key MAC); the starter's own applies"
+  fi
   cluster="$(hps_get_config active_cluster 2>/dev/null)" || cluster=""
   domain=""
   if [[ -n "$cluster" ]]; then

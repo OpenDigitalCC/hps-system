@@ -184,3 +184,25 @@ starter_files() {
   run nixos_starter_boot_lines "$MAC" ""
   [ "$status" -eq 1 ]
 }
+
+# Plan step 3: the stock starter has one hostid for every node, so the boot line gives
+# each node its own, as the pinned images' lines do (spl reads it when the module loads).
+@test "starter boot lines carry the node's own ZFS hostid: the same on every boot, different per host, recorded" {
+  source "$ROOT/lib/functions.d/network-functions.sh"
+  starter_files
+  p1_50_host "$MAC" os_id x86_64:nixos:26.05
+  p1_50_host 52:54:00:aa:bb:02 os_id x86_64:nixos:26.05
+  run nixos_starter_boot_lines "$MAC" 26.05
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" =~ \ spl\.spl_hostid=0x([0-9a-f]{8})\  ]]
+  h1="${BASH_REMATCH[1]}"
+  [ "$h1" = "$(nixos_zfs_hostid "$MAC")" ]
+  [ "$h1" != 00000000 ]
+  run nixos_starter_boot_lines "$MAC" 26.05
+  [[ "${lines[0]}" == *" spl.spl_hostid=0x$h1 "* ]]
+  run nixos_starter_boot_lines 52:54:00:aa:bb:02 26.05
+  [[ "${lines[0]}" =~ \ spl\.spl_hostid=0x([0-9a-f]{8})\  ]]
+  [ "${BASH_REMATCH[1]}" != "$h1" ]
+  # nothing else about the line changed: the hook is still the last thing on it
+  [[ "${lines[0]}" == *" systemd.wants=kernel-command-line.service" ]]
+}
