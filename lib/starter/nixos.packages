@@ -2,9 +2,9 @@
 # One per line: NAME [OUTPUT], or NAME STORE-PATH. NAME is the nixpkgs package
 # name without its version; the release's own store-paths list says which store
 # path that is (the one whose closure holds the starter's glibc, that is
-# x86_64). With no OUTPUT the default output is meant, else the named one. A
-# name that the release holds in several versions is refused as ambiguous: it
-# is given as a store path instead, which is used as it stands.
+# x86_64). With no OUTPUT the default output is meant, else the named one.
+# NAME STORE-PATH takes the path as it stands, with no search: for a name the
+# release holds in several versions, or a package nixpkgs does not have.
 # The repository holds each package's whole closure. ZFS is in the stock
 # starter and is not listed. Which node gets which package is
 # lib/starter/nixos.roles.
@@ -13,15 +13,10 @@ qemu-host-cpu-only
 open-iscsi
 mdadm
 targetcli-fb
-perl
-# The ctrl-exec agent needs Perl modules and openssl (plan step 2).
-IO-Socket-SSL
-Net-SSLeay
-# JSON is pure Perl, so its x86_64 copy cannot be told from the other systems'
-# by the glibc test; this is the path the stock starter already holds (the
-# exact store path in its own closure), so a node installs it from itself.
-JSON /nix/store/pra9339n8dyc3dzd7csid66y4byws0ba-perl5.42.3-JSON-4.10
-# openssl: the release holds several versions, and the starter's own copy is
-# only the library output (no bin/openssl). The agent calls openssl by name for
-# pairing, so the bin output of the starter's own version (3.6.5) is named.
-openssl /nix/store/fya253x5ky7rhfz6rkgdwjr1fzf7fy71-openssl-3.6.5-bin
+# The ctrl-exec agent and its executor: a LOCAL package, built by the builder
+# (nix/package.nix of ctrl-exec), not in nixpkgs. Its path is put in the local
+# area with `hps-starter add-local` (docs/BUNDLE.md "Local packages") and named
+# here. A new version is a new line: add-local, change the path, sync, and a node
+# takes it at its next bundle-refresh. Its closure holds the Perl modules (JSON is
+# the starter's own path) and openssl the agent needs, so none is listed.
+ctrl-exec-agent /nix/store/s9s4irf45ylxa3s6cmvl3c6iq9prbq9b-ctrl-exec-agent-0.14.7

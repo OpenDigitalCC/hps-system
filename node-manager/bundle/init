@@ -11,9 +11,10 @@
 #
 #   1. sysadmin   the user, its ssh key (from the IPS), sudo, sshd refusing root
 #   2. packages   the role's packages, from the IPS repository (cmd=node_packages)
-#   3. agent      the ctrl-exec agent from the IPS package area, its configuration,
-#                 the preset allowlist (allowlist) pointing at actions/, its
-#                 service
+#   3. agent      the ctrl-exec agent and its executor (a local package from the IPS
+#                 repository), a service user for the agent, agent.conf with the
+#                 profiles of the pinned images, the preset allowlist (allowlist)
+#                 pointing at actions/, the two services
 #   4. legacy     the older function bundle that the hps-node plugin sources
 #   5. pairing    hps-pair, the existing pairing flow: registry hostname, pairing
 #                 request, report to the IPS, certificate, agent restart
@@ -24,7 +25,7 @@
 #
 # Usage: init [boot|refresh]
 # Overrides for tests: HPS_RUN_DIR, HPS_CMDLINE, HPS_ROOT (prefix of /etc and
-# /var), HPS_PATH_EXTRA, and the adapter's HPS_NIX_PROFILE, HPS_SYSTEMD_DIR.
+# /var), HPS_AGENT_FS (a directory standing in for the agent package), HPS_PATH_EXTRA, and the adapter's HPS_NIX_PROFILE, HPS_SYSTEMD_DIR.
 
 set -euo pipefail
 
@@ -158,83 +159,93 @@ step_sysadmin() {
 #-------------------------------------------------------------------------------
 # 2. packages
 #-------------------------------------------------------------------------------
+# AGENT: the store path of the ctrl-exec agent (with its executor), set here.
+AGENT=""
+
 step_packages() {
-  local list
-  local -a paths=()
+  local list p
+  local -a paths=() rest=()
   list="$(fetch_text node_packages)" || die "the IPS gave no package list for this node (is the repository synced: hps-starter sync ${OS_NAME}?)"
   mapfile -t paths < <(printf '%s\n' "$list" | grep -E '^/nix/store/' || true)
   ((${#paths[@]} > 0)) || die "the IPS's package list for this node is empty"
-  pkg_add "${paths[@]}" || die "adding the packages failed"
+  for p in "${paths[@]}"; do
+    # The agent is run by its path: a new version sits beside the old one and
+    # replaces nothing under a running process (docs/BUNDLE.md "The upgrade").
+    if [[ "$p" =~ -ctrl-exec-agent-[0-9][0-9.]*$ ]]; then AGENT="$p"; else rest+=("$p"); fi
+  done
+  [[ -n "$AGENT" ]] || die "the IPS's package list has no ctrl-exec agent"
+  pkg_realise "$AGENT" || die "the ctrl-exec agent $AGENT could not be taken from the IPS repository"
+  if ((${#rest[@]} > 0)); then
+    pkg_add "${rest[@]}" || die "adding the packages failed"
+  fi
   adapter_init "$IPS" "$OS_VERSION"
 }
 
 #-------------------------------------------------------------------------------
-# 3. the ctrl-exec agent and its preset allowlist
+# 3. the ctrl-exec agent, its executor and the preset allowlist
 #-------------------------------------------------------------------------------
-# write_if_changed <file> <mode>: stdin to the file, replaced only when it
-# differs (the agent reloads its configuration whenever a file changes).
+# write_if_changed <file> <mode> [group]: stdin to the file, replaced only when
+# it differs (the agent reloads its configuration whenever a file changes).
 write_if_changed() {
-  local file="$1" mode="$2"
+  local file="$1" mode="$2" group="${3:-}"
   cat > "$file.new"
   if cmp -s "$file.new" "$file" 2> /dev/null; then
     rm -f "$file.new"
   else
     chmod "$mode" "$file.new"
+    [[ -z "$group" ]] || chgrp "$group" "$file.new"
     mv -f "$file.new" "$file"
   fi
 }
 
-step_agent() {
-  local dir="$HPS_RUN_DIR/ctrl-exec" tar="$HPS_RUN_DIR/ctrl-exec.tar.gz" version
-  if [[ ! -f "$dir/VERSION" ]]; then
-    run curl -fsS --max-time 120 -o "$tar" "http://${IPS}/packages/ctrl-exec/ctrl-exec-latest.tar.gz" \
-      || die "cannot fetch the ctrl-exec agent from the IPS (packages/ctrl-exec/ctrl-exec-latest.tar.gz)"
-    rm -rf "$dir.new"
-    mkdir -p "$dir.new"
-    run tar -xzf "$tar" --strip-components=1 -C "$dir.new" \
-      || die "the ctrl-exec tarball does not unpack"
-    version="$(tr -d '[:space:]' < "$dir.new/VERSION")"
-    # as nix/package.nix does: the bin script reports the release's version
-    sed -i "s/our \$VERSION = 'UNINSTALLED'/our \$VERSION = '${version}'/" "$dir.new/bin/ctrl-exec-agent"
-    rm -rf "$dir"
-    mv "$dir.new" "$dir"
-    rm -f "$tar"
-  fi
-  version="$(tr -d '[:space:]' < "$dir/VERSION")"
-  log "ctrl-exec agent $version in $dir"
+# The profiles of the pinned images (nix/modules/hps-ctrl-exec.nix), word for
+# word: the executor applies them, so an action runs as root with exactly this
+# capability set, in its own mount namespace, and the agent that takes the
+# network's requests has no privilege at all.
+NODE_CAPS="CAP_SYS_ADMIN,CAP_SYSLOG,CAP_SYS_RAWIO,CAP_DAC_OVERRIDE,CAP_DAC_READ_SEARCH,CAP_FOWNER,CAP_CHOWN,CAP_FSETID,CAP_MKNOD,CAP_SYS_MODULE,CAP_NET_ADMIN,CAP_NET_RAW,CAP_NET_BIND_SERVICE,CAP_KILL,CAP_SETUID,CAP_SETGID,CAP_SYS_RESOURCE,CAP_SYS_NICE,CAP_IPC_LOCK,CAP_SYS_BOOT,CAP_SYS_PTRACE,CAP_LINUX_IMMUTABLE"
 
-  # The program: perl from the packages, with their modules and openssl.
+step_agent() {
+  local svc=ctrl-exec-agent var="${HPS_ROOT}/var/lib/ctrl-exec-agent" sock=/run/ctrl-exec-agent/exec.sock
+  # HPS_AGENT_FS (tests): where to look at the package, for a store path that is not here
+  local fs="${HPS_AGENT_FS:-$AGENT}"
+  [[ -x "$fs/bin/ctrl-exec-executor" ]] || die "$AGENT has no bin/ctrl-exec-executor: not an agent package with its executor"
+  log "ctrl-exec agent $("$fs/bin/ctrl-exec-agent" --version 2> /dev/null || echo "?") at $AGENT"
+
+  # The network-facing agent is its own user, never root and never sysadmin.
+  if ! id "$svc" > /dev/null 2>&1; then
+    run useradd --system --no-create-home --user-group --shell "$(command -v nologin || echo /bin/false)" "$svc"
+  fi
+  mkdir -p "$AGENT_ETC" "$var"
+  run chgrp "$svc" "$AGENT_ETC"
+  run chmod 0750 "$AGENT_ETC"
+  run install -d -m 0750 -o "$svc" -g "$svc" "$var" "$var/runs"
+
+  # The program, by name, for hps-pair; rewritten when the version changes.
   write_if_changed "$HPS_RUN_DIR/bin/ctrl-exec-agent" 0755 << EOF
 #!/bin/sh
-PATH="${PKG_BIN}:\$PATH"
-PERL5LIB="${PKG_PERL5LIB}"
-export PATH PERL5LIB
-exec perl "$dir/bin/ctrl-exec-agent" "\$@"
+exec "$AGENT/bin/ctrl-exec-agent" "\$@"
 EOF
   export PATH="$HPS_RUN_DIR/bin:$PKG_BIN:$PATH"
 
-  mkdir -p "$AGENT_ETC" "${HPS_ROOT}/var/lib/ctrl-exec-agent"
-  chmod 0750 "$AGENT_ETC"
-  # agent.conf: the standard keys, the PATH of the actions, and the profiles
-  # scripts.conf names. There is no executor in step 2 (it is a C program that
-  # needs building, plan step 5): the agent runs the actions itself, as root,
-  # and the profiles below are not applied. The allowlist and each action's own
-  # argument checks are the control.
-  write_if_changed "$AGENT_ETC/agent.conf" 0640 << EOF
+  # agent.conf: the standard keys, the executor socket, the PATH of the actions,
+  # and the profiles scripts.conf names (those of the pinned images).
+  write_if_changed "$AGENT_ETC/agent.conf" 0640 "$svc" << EOF
 # written by the HPS node bundle (docs/BUNDLE.md); changes are replaced at the next refresh
 port = ${AGENT_PORT}
 cert = ${AGENT_ETC}/agent.crt
 key = ${AGENT_ETC}/agent.key
 ca = ${AGENT_ETC}/ca.crt
 script_path = ${PKG_BIN}:/run/wrappers/bin:/run/current-system/sw/bin
+executor_socket = ${sock}
 
 [profile default]
-run_as = nobody
+run_as = root
 no_new_privileges = yes
 
 [profile node]
 run_as = root
 no_new_privileges = yes
+caps = ${NODE_CAPS}
 EOF
 
   # scripts.conf from the allowlist: one line per action, the path through the
@@ -250,13 +261,36 @@ EOF
       fi
       printf '%s = %s/bundle/actions/%s%s\n' "$name" "$HPS_RUN_DIR" "$name" "${opts:+ $opts}"
     done < "$HERE/allowlist"
-  } | write_if_changed "$AGENT_ETC/scripts.conf" 0640
+  } | write_if_changed "$AGENT_ETC/scripts.conf" 0640 "$svc"
   log "allowlist: $(grep -vc '^#' "$AGENT_ETC/scripts.conf") actions"
 
-  # The service starts once there is a certificate; pairing (step 5) restarts it.
-  svc_start --when-exists "$AGENT_ETC/agent.crt" --port "$AGENT_PORT" ctrl-exec-agent \
-    "PATH=${PKG_BIN}:${PATH}" "PERL5LIB=${PKG_PERL5LIB}" \
-    "$(command -v perl)" "$dir/bin/ctrl-exec-agent" serve
+  # The executor: root, not sandboxed (it applies the profile to each action and
+  # re-reads the allowlist from its own root-owned files). Then the agent.
+  SVC_CHANGED=0
+  svc_start --opt RuntimeDirectory=ctrl-exec-agent --opt RuntimeDirectoryMode=0755 ctrl-exec-executor \
+    "$AGENT/bin/ctrl-exec-executor" serve "$sock" "$AGENT_ETC/agent.conf" "$AGENT_ETC/scripts.conf" "$svc"
+  # The agent: the service user, no capability, the unit's own sandbox
+  # (nix/modules, ctrl-exec's module.nix). It starts once there is a
+  # certificate; pairing (step 5) restarts it.
+  svc_start --when-exists "$AGENT_ETC/agent.crt" --port "$AGENT_PORT" \
+    --opt "User=$svc" --opt "Group=$svc" \
+    --opt "ExecStartPre=+$AGENT/bin/ctrl-exec-agent promote-cert" \
+    --opt 'ExecReload=/run/current-system/sw/bin/kill -HUP $MAINPID' \
+    --opt KillMode=process --opt TimeoutStopSec=10 \
+    --opt NoNewPrivileges=true --opt ProtectSystem=strict --opt ProtectHome=true \
+    --opt PrivateTmp=true --opt PrivateDevices=true \
+    --opt 'SystemCallFilter=@system-service ~@privileged @resources' \
+    --opt CapabilityBoundingSet= --opt AmbientCapabilities= \
+    --opt 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' --opt RestrictNamespaces=true \
+    --opt LockPersonality=true --opt MemoryDenyWriteExecute=true \
+    --opt "ReadWritePaths=$var" --opt "ReadOnlyPaths=-$AGENT_ETC -$HPS_RUN_DIR" \
+    "$svc" "$AGENT/bin/ctrl-exec-agent" serve
+  # A new agent version: the running one is restarted a few seconds from now,
+  # from a timer, after this run (an action of the agent) has answered.
+  if [[ "$SVC_CHANGED" == 1 ]]; then
+    log "the agent or its executor changed: restarting both in a few seconds"
+    svc_restart_later ctrl-exec-executor ctrl-exec-agent
+  fi
 }
 
 #-------------------------------------------------------------------------------

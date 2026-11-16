@@ -13,8 +13,8 @@
 # compute scripts still need beyond these (smartmontools, xxd, tcpdump, ...) is
 # step 3 of plans/PLAN.md.
 
-# The ctrl-exec agent: perl, its modules, and openssl for pairing.
-*: perl JSON IO-Socket-SSL Net-SSLeay openssl
+# The ctrl-exec agent and its executor (a local package: its closure carries perl, its modules and openssl).
+*: ctrl-exec-agent
 
 # Storage controller: the iSCSI target and md mirrors.
 SCH: targetcli-fb mdadm

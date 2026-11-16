@@ -9,14 +9,15 @@
 #   boot arguments  not here: the IPS issues the kernel line
 #                   (lib/functions.d/nixos-boot-functions.sh, nixos_starter_boot_lines)
 #   pkg_add         install store paths from the IPS's binary cache
+#   pkg_realise     the same, one path, outside the profile (the agent)
 #   svc_start       a run-time systemd unit, in RAM (/run/systemd/system)
 #   svc_reload      reload a service the starter already has (sshd)
+#   svc_restart_later  restart services from a timer, after the caller has answered
 #
 # What an adapter for another OS provides (Alpine: plan step 4, adapter/alpine.sh,
 # chosen by init's "case $os"): the same function names, with the same arguments,
 # and these variables, set by adapter_init:
 #   PKG_BIN        directory where added packages' programs appear
-#   PKG_PERL5LIB   directories of the Perl modules added packages carry
 #   SUDO_GROUP     the group whose members have sudo
 #
 # Every command is logged with run (defined by init) before it executes.
@@ -29,62 +30,95 @@ NIX_CACHE_KEY=cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
 # adapter_init <ips> <os version>: set the variables above. PKG_PERL5LIB is
 # read from the profile as it is now, so call it again after pkg_add.
-# shellcheck disable=SC2034  # SUDO_GROUP, PKG_BIN and PKG_PERL5LIB are read by init, which sources this file
+# shellcheck disable=SC2034  # SUDO_GROUP and PKG_BIN are read by init, which sources this file
 adapter_init() {
   ADAPTER_IPS="$1"
   ADAPTER_VERSION="$2"
   SUDO_GROUP=wheel
   PKG_BIN="$NIX_PROFILE/bin"
-  PKG_PERL5LIB=""
-  local d
-  for d in "$NIX_PROFILE"/lib/perl5/site_perl/*/ ; do
-    [[ -d "$d" ]] || continue
-    d="${d%/}"
-    PKG_PERL5LIB="${PKG_PERL5LIB:+$PKG_PERL5LIB:}$d"
-    [[ -d "$d/x86_64-linux-thread-multi" ]] && PKG_PERL5LIB="$PKG_PERL5LIB:$d/x86_64-linux-thread-multi"
-  done
   return 0
 }
 
-# pkg_add <store path>...: make the packages available. The paths come from the
-# IPS (cmd=node_packages); the closure is substituted from the IPS repository,
-# the plain HTTP Nix binary cache hps-starter filled, and nothing else. A path
-# the node already holds (it is in the starter) costs nothing.
+# _unsigned <store path>: true when the IPS repository's narinfo of the path has
+# no signature: a local package (docs/BUNDLE.md "Local packages"). The upstream
+# packages keep their upstream signatures and are checked against the stock key.
+_unsigned() {
+  local h="${1#/nix/store/}"
+  h="${h:0:32}"
+  ! curl -fs --max-time 20 "http://${ADAPTER_IPS}/packages/nixos/${ADAPTER_VERSION}/${h}.narinfo" | grep -q '^Sig:'
+}
+
+_nix_opts() {
+  printf '%s\n' --option substituters "http://${ADAPTER_IPS}/packages/nixos/${ADAPTER_VERSION}" \
+    --option trusted-public-keys "$NIX_CACHE_KEY" --option connect-timeout 5
+}
+
+# pkg_add <store path>...: make the packages available in the profile. The paths
+# come from the IPS (cmd=node_packages); the closure is substituted from the IPS
+# repository, the plain HTTP Nix binary cache hps-starter filled, and nothing
+# else. A path the node already holds costs nothing. Upstream packages are
+# installed with their signatures checked; a local package (no signature) in a
+# second call without the check, after the signed ones, so that what it shares
+# with them is already there.
 pkg_add() {
-  local -a todo=()
+  local -a signed=() unsigned=() opts=()
   local p
+  mapfile -t opts < <(_nix_opts)
   for p in "$@"; do
     [[ "$p" =~ ^/nix/store/[0-9a-z]{32}-[A-Za-z0-9._+-]+$ ]] || { log "pkg_add: '$p' is not a store path"; return 1; }
     # already in the profile: nothing to install (a second run, a refresh)
     if [[ -e "$NIX_PROFILE/manifest.json" ]] && grep -qF -- "$p" "$NIX_PROFILE/manifest.json" 2> /dev/null; then
       continue
     fi
-    todo+=("$p")
+    if _unsigned "$p"; then unsigned+=("$p"); else signed+=("$p"); fi
   done
-  if ((${#todo[@]} == 0)); then
+  if ((${#signed[@]} + ${#unsigned[@]} == 0)); then
     log "pkg_add: every package is installed already"
     return 0
   fi
-  run nix --extra-experimental-features nix-command profile install \
-    --profile "$NIX_PROFILE" \
-    --option substituters "http://${ADAPTER_IPS}/packages/nixos/${ADAPTER_VERSION}" \
-    --option trusted-public-keys "$NIX_CACHE_KEY" \
-    --option connect-timeout 5 \
-    "${todo[@]}"
+  if ((${#signed[@]} > 0)); then
+    run nix --extra-experimental-features nix-command profile install --profile "$NIX_PROFILE" "${opts[@]}" "${signed[@]}" || return 1
+  fi
+  if ((${#unsigned[@]} > 0)); then
+    log "pkg_add: local (unsigned) packages: ${unsigned[*]}"
+    run nix --extra-experimental-features nix-command profile install --profile "$NIX_PROFILE" "${opts[@]}" --option require-sigs false "${unsigned[@]}" || return 1
+  fi
 }
 
-# svc_start [--when-exists FILE] [--port N] <name> [VAR=value...] <command> [args...]
+# pkg_realise <store path>: have one package's store path here, outside the
+# profile, and print nothing. For a package the node runs by its path, so that
+# a new version sits beside the old one and nothing is replaced under a running
+# process (the agent and its executor). A local package is taken without the
+# signature check, as pkg_add does.
+pkg_realise() {
+  local p="$1"
+  local -a opts=()
+  [[ "$p" =~ ^/nix/store/[0-9a-z]{32}-[A-Za-z0-9._+-]+$ ]] || { log "pkg_realise: '$p' is not a store path"; return 1; }
+  [[ -e "$p" ]] && return 0
+  mapfile -t opts < <(_nix_opts)
+  if _unsigned "$p"; then opts+=(--option require-sigs false); fi
+  run nix-store --realise "${opts[@]}" "$p" > /dev/null
+}
+
+# svc_start [--when-exists FILE] [--port N] [--opt Key=Value]... <name> [VAR=value...] <command> [args...]
 # Define the unit <name>.service in RAM and start it (a no-op when it runs).
 #   --when-exists FILE   the unit is skipped, not failed, until FILE exists (the
 #                        agent has no certificate before it is paired)
 #   --port N             open TCP port N in the host firewall (the NixOS
 #                        firewall is on, and only ssh is open)
+#   --opt Key=Value      one more line of the unit's [Service] section (the user
+#                        and the confinement of the agent; ExecStartPre=+ ...)
+# Sets SVC_CHANGED=1 when the unit's text differs from what was there (a new
+# version of the program): a running service then runs the old one until it is
+# restarted (svc_restart_later).
 svc_start() {
   local when="" port=""
+  local -a opt=()
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
       --when-exists) when="$2"; shift 2 ;;
       --port) port="$2"; shift 2 ;;
+      --opt) opt+=("$2"); shift 2 ;;
       *) log "svc_start: unknown option $1"; return 2 ;;
     esac
   done
@@ -108,14 +142,29 @@ svc_start() {
     printf 'ExecStart=%s\nRestart=on-failure\nRestartSec=5\n' "$*"
     # 78: not paired yet; restarting cannot fix it
     printf 'RestartPreventExitStatus=78\n'
+    for e in "${opt[@]}"; do printf '%s\n' "$e"; done
   } > "${unit}.new"
-  mv -f "${unit}.new" "$unit"
+  if cmp -s "${unit}.new" "$unit" 2> /dev/null; then
+    rm -f "${unit}.new"
+  else
+    # shellcheck disable=SC2034  # read by init
+    [[ -e "$unit" ]] && SVC_CHANGED=1
+    mv -f "${unit}.new" "$unit"
+  fi
   if [[ -n "$port" ]]; then
     iptables -C nixos-fw -p tcp --dport "$port" -j nixos-fw-accept 2> /dev/null \
       || run iptables -I nixos-fw 1 -p tcp --dport "$port" -j nixos-fw-accept
   fi
   run systemctl daemon-reload
   run systemctl start "${name}.service"
+}
+
+# svc_restart_later <name>...: restart these services a few seconds from now, from
+# a transient timer unit, not from the caller: the caller may be an action the
+# agent is running, and the agent must have answered before it is restarted.
+svc_restart_later() {
+  run systemd-run --quiet --no-block --collect --on-active=5 --unit "hps-restart-$$" \
+    systemctl try-restart "${@/%/.service}"
 }
 
 # svc_reload <name>: re-read the configuration of a service the OS already runs.

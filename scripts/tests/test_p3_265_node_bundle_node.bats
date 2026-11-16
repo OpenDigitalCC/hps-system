@@ -8,6 +8,8 @@ setup() {
   TEST_DIR="$(mktemp -d "${BATS_TMPDIR:-/tmp}/p3-265.XXXXXX")"
   ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
   export TEST_DIR ROOT
+  export AGENT_V1=/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ctrl-exec-agent-0.14.7
+  export AGENT_V2=/nix/store/cccccccccccccccccccccccccccccccc-ctrl-exec-agent-0.14.8
   export CALLS="$TEST_DIR/calls.log"
   : > "$CALLS"
   export HPS_RUN_DIR="$TEST_DIR/run"
@@ -17,6 +19,7 @@ setup() {
   export HPS_SYSTEMD_DIR="$TEST_DIR/systemd"
   export HPS_PATH_EXTRA="$TEST_DIR/bin"
   export HPS_FETCH_RETRY=0
+  export HPS_SYSTEMD_RUN="$TEST_DIR/bin/systemd-run"
   mkdir -p "$TEST_DIR/bin" "$TEST_DIR/serve" "$TEST_DIR/home/sysadmin" "$HPS_ROOT/etc/ssh" "$HPS_NIX_PROFILE"
   echo "BOOT_IMAGE=bzImage console=ttyS0 hps.ips=10.9.9.9 hps.mac=aa:bb:cc:dd:ee:ff hps.os=x86_64:nixos:26.05 hps.profile=STARTER hps.domain=lab.test systemd.run=\"/bin/sh -c 'curl hps.ips=6.6.6.6'\"" > "$HPS_CMDLINE"
   printf '# the starter\nPermitRootLogin yes\nPasswordAuthentication yes\nUsePAM yes\n' > "$HPS_ROOT/etc/ssh/sshd_config"
@@ -28,12 +31,14 @@ setup() {
   }
   node_bundle > "$TEST_DIR/serve/bundle.tgz"
   # the agent tarball the IPS serves, in miniature
-  mkdir -p "$TEST_DIR/ce/ctrl-exec-0.14.7/bin" "$TEST_DIR/ce/ctrl-exec-0.14.7/lib/Exec"
-  printf '#!/usr/bin/perl\nour $VERSION = '\''UNINSTALLED'\'';\n' > "$TEST_DIR/ce/ctrl-exec-0.14.7/bin/ctrl-exec-agent"
-  echo 0.14.7 > "$TEST_DIR/ce/ctrl-exec-0.14.7/VERSION"
-  tar -czf "$TEST_DIR/serve/ce.tgz" -C "$TEST_DIR/ce" ctrl-exec-0.14.7
+  # the agent package (a local package): a directory standing in for its store path
+  export HPS_AGENT_FS="$TEST_DIR/agentpkg"
+  mkdir -p "$HPS_AGENT_FS/bin"
+  printf '#!/bin/sh\necho "ctrl-exec-agent 0.14.7"\n' > "$HPS_AGENT_FS/bin/ctrl-exec-agent"
+  printf '#!/bin/sh\n' > "$HPS_AGENT_FS/bin/ctrl-exec-executor"
+  chmod +x "$HPS_AGENT_FS"/bin/*
   echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvZkQ9mXfJq0mG2yQ3nqYk0n1b2c3d4e5f6g7h8i9j0 admin@site' > "$TEST_DIR/serve/keys"
-  printf '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-perl-5.42.3\n/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl-3.6.5-bin\n' > "$TEST_DIR/serve/packages"
+  printf '%s\n' "$AGENT_V1" /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-mdadm-4.4 > "$TEST_DIR/serve/packages"
 }
 
 teardown() {
@@ -57,7 +62,7 @@ case "$url" in
   *cmd=node_bundle) [[ -f "$TEST_DIR/serve/bundle.tgz" && -z "${FAIL_BUNDLE:-}" ]] || exit 22; emit "$TEST_DIR/serve/bundle.tgz" ;;
   *cmd=node_sysadmin_keys) [[ -f "$TEST_DIR/serve/keys" ]] || exit 22; emit "$TEST_DIR/serve/keys" ;;
   *cmd=node_packages) [[ -f "$TEST_DIR/serve/packages" ]] || exit 22; emit "$TEST_DIR/serve/packages" ;;
-  *ctrl-exec-latest.tar.gz) emit "$TEST_DIR/serve/ce.tgz" ;;
+  *.narinfo) if [[ -f "$TEST_DIR/serve/signed" ]]; then printf 'StorePath: x\nSig: cache.nixos.org-1:abc\n'; else printf 'StorePath: x\n'; fi ;;
   *get_remote_functions) exit 22 ;;
   *cmd=log_message*) exit 0 ;;
   *) echo "unexpected url $url" >&2; exit 22 ;;
@@ -66,8 +71,8 @@ EOF
   cat > "$b/id" <<'EOF'
 #!/bin/bash
 case "$*" in
-  "-gn sysadmin") echo users ;;
-  sysadmin) [[ -e "$TEST_DIR/user-exists" ]] || exit 1; echo "uid=1001(sysadmin)" ;;
+  "-gn "*) echo users ;;
+  [a-z]*) [[ -e "$TEST_DIR/user-$1" ]] || exit 1; echo "uid=1001($1)" ;;
   *) /usr/bin/id "$@" ;;
 esac
 EOF
@@ -78,7 +83,7 @@ EOF
   cat > "$b/useradd" <<'EOF'
 #!/bin/bash
 echo "useradd $*" >> "$CALLS"
-touch "$TEST_DIR/user-exists"
+touch "$TEST_DIR/user-${!#}"
 EOF
   cat > "$b/install" <<'EOF'
 #!/bin/bash
@@ -89,7 +94,7 @@ while [[ $# -gt 0 ]]; do
 done
 /usr/bin/install "${args[@]}"
 EOF
-  for s in usermod chown passwd systemctl iptables sshd; do
+  for s in usermod chown chgrp passwd systemctl iptables sshd; do
     printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n[[ "%s" == iptables && "$1" == -C ]] && exit 1\nexit 0\n' "$s" "$s" > "$b/$s"
   done
   cat > "$b/nix" <<'EOF'
@@ -100,7 +105,22 @@ echo "nix $*" >> "$CALLS"
 for a in "$@"; do [[ "$a" == /nix/store/* ]] && echo "$a" >> "$HPS_NIX_PROFILE/manifest.json"; done
 exit 0
 EOF
-  # the pairing step is its own script with its own tests (test_p1_102): a stand-in here
+    cat > "$b/nix-store" <<'EOS'
+#!/bin/bash
+echo "nix-store $*" >> "$CALLS"
+exit 0
+EOS
+  cat > "$b/systemd-run" <<'EOS'
+#!/bin/bash
+echo "systemd-run $*" >> "$CALLS"
+# the refresh action asks for --wait --pipe: run what it was given
+if [[ " $* " == *" --wait "* ]]; then
+  while [[ "$1" == --* ]]; do shift; done
+  exec "$@"
+fi
+exit 0
+EOS
+# the pairing step is its own script with its own tests (test_p1_102): a stand-in here
   cat > "$TEST_DIR/hps-pair-stub" <<'EOF'
 #!/bin/bash
 echo "hps-pair $*" >> "$CALLS"
@@ -202,8 +222,8 @@ extract_bundle() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"done: bundle"* ]]
   order="$(grep -nE '^(useradd|sshd|nix|systemctl start|hps-pair)' "$CALLS" | sed 's/:.*//' | tr '\n' ' ')"
-  [ "$(grep -nE '^useradd' "$CALLS" | cut -d: -f1)" -lt "$(grep -nE '^nix ' "$CALLS" | cut -d: -f1)" ]
-  [ "$(grep -nE '^nix ' "$CALLS" | cut -d: -f1)" -lt "$(grep -nE '^systemctl start ctrl-exec-agent' "$CALLS" | cut -d: -f1)" ]
+  [ "$(grep -nE '^useradd' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -nE '^(nix|nix-store) ' "$CALLS" | head -1 | cut -d: -f1)" ]
+  [ "$(grep -nE '^(nix|nix-store) ' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -nE '^systemctl start ctrl-exec-agent' "$CALLS" | cut -d: -f1)" ]
   [ "$(grep -nE '^systemctl start ctrl-exec-agent' "$CALLS" | cut -d: -f1)" -lt "$(grep -nE '^hps-pair' "$CALLS" | cut -d: -f1)" ]
 }
 
@@ -249,8 +269,23 @@ extract_bundle() {
   [ "$status" -eq 0 ]
   grep -q 'nix --extra-experimental-features nix-command profile install --profile' "$CALLS"
   grep -q -- '--option substituters http://10.9.9.9/packages/nixos/26.05' "$CALLS"
-  grep -q '/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-perl-5.42.3 /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openssl-3.6.5-bin' "$CALLS"
+  grep -q 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-mdadm-4.4' "$CALLS"
   ! grep -q 'cache.nixos.org/' "$CALLS"
+}
+
+@test "init: upstream packages are installed with their signatures checked; a local one (no signature) without, in its own call" {
+  extract_bundle
+  touch "$TEST_DIR/serve/signed"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  ! grep -q 'require-sigs false' "$CALLS"
+  rm "$TEST_DIR/serve/signed"
+  rm -rf "$HPS_NIX_PROFILE"; mkdir -p "$HPS_NIX_PROFILE"
+  : > "$CALLS"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"local (unsigned) packages"* ]]
+  grep -q 'nix-store --realise .*--option require-sigs false /nix/store/aaaa' "$CALLS"
 }
 
 @test "init: a package list that is not store paths is not passed to nix" {
@@ -260,6 +295,15 @@ extract_bundle() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"package list"*"empty"* ]]
   ! grep -q '^nix ' "$CALLS"
+}
+
+@test "init: a package list without the ctrl-exec agent is refused" {
+  extract_bundle
+  printf '/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-mdadm-4.4\n' > "$TEST_DIR/serve/packages"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"has no ctrl-exec agent"* ]]
+  ! grep -q '^hps-pair' "$CALLS"
 }
 
 @test "init: a failed package install stops before the agent and the pairing, with the reason on the log" {
@@ -283,47 +327,121 @@ extract_bundle() {
   grep -qx "bundle-refresh = $HPS_RUN_DIR/bundle/actions/bundle-refresh profile=node" "$conf"
   grep -qx "storage-pool-create = $HPS_RUN_DIR/bundle/actions/storage-pool-create profile=node input=raw" "$conf"
   [ "$(grep -vc '^#' "$conf")" -eq "$(grep -vcE '^\s*(#|$)' "$ROOT/node-manager/bundle/allowlist")" ]
-  # nothing in the file but the allowlist's names
   while read -r name _; do
     grep -qE "^$name " "$ROOT/node-manager/bundle/allowlist" || { echo "not on the allowlist: $name"; return 1; }
   done < <(grep -v '^#' "$conf")
 }
 
-@test "init: agent.conf has the port, the certificate paths, the action PATH, and no executor" {
+@test "init: agent.conf has the executor socket and the profiles of the pinned images, word for word" {
   extract_bundle
   run bash "$TEST_DIR/bundle/init" boot
   conf="$HPS_ROOT/etc/ctrl-exec-agent/agent.conf"
   grep -qx 'port = 7443' "$conf"
   grep -q "^cert = $HPS_ROOT/etc/ctrl-exec-agent/agent.crt" "$conf"
   grep -q "^script_path = $HPS_NIX_PROFILE/bin:" "$conf"
+  grep -qx 'executor_socket = /run/ctrl-exec-agent/exec.sock' "$conf"
   grep -qx '\[profile node\]' "$conf"
   grep -qx '\[profile default\]' "$conf"
-  ! grep -q 'executor_socket' "$conf"
+  # the capability list is the one of nix/modules/hps-ctrl-exec.nix
+  want="$(sed -n '/profiles.node = {/,/};/p' "$ROOT/nix/modules/hps-ctrl-exec.nix" | grep -o '"CAP_[A-Z_]*"' | tr -d '"' | paste -sd, -)"
+  have="$(sed -n 's/^caps = //p' "$conf")"
+  [ -n "$want" ]
+  [ "$want" = "$have" ]
+  [ "$(sed -n '/\[profile node\]/,$p' "$conf" | grep -c 'run_as = root')" -eq 1 ]
 }
 
-@test "init: the agent is a run-time unit that waits for its certificate; its port is opened" {
+@test "init: the agent is its own user, never root and never sysadmin; the executor is the only root part" {
+  extract_bundle
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  grep -q '^useradd --system --no-create-home --user-group --shell .* ctrl-exec-agent' "$CALLS"
+  agent="$HPS_SYSTEMD_DIR/ctrl-exec-agent.service"
+  exec_="$HPS_SYSTEMD_DIR/ctrl-exec-executor.service"
+  grep -qx 'User=ctrl-exec-agent' "$agent"
+  grep -qx 'Group=ctrl-exec-agent' "$agent"
+  ! grep -q '^User=' "$exec_"
+  ! grep -q 'sysadmin' "$agent"
+  # the unit's sandbox is that of ctrl-exec's own module
+  for o in NoNewPrivileges=true ProtectSystem=strict PrivateTmp=true PrivateDevices=true CapabilityBoundingSet= AmbientCapabilities= MemoryDenyWriteExecute=true LockPersonality=true RestrictNamespaces=true; do
+    grep -qx "$o" "$agent" || { echo "missing $o"; return 1; }
+  done
+  grep -q '^ExecStartPre=+.*ctrl-exec-agent promote-cert' "$agent"
+  # the executor serves the socket the agent is told to use, with the allowlist's own files
+  grep -q "^ExecStart=$AGENT_V1/bin/ctrl-exec-executor serve /run/ctrl-exec-agent/exec.sock $HPS_ROOT/etc/ctrl-exec-agent/agent.conf $HPS_ROOT/etc/ctrl-exec-agent/scripts.conf ctrl-exec-agent" "$exec_"
+  grep -qx 'RuntimeDirectory=ctrl-exec-agent' "$exec_"
+  # the configuration is the service user's to read and nobody's to write but root's
+  grep -q '^chgrp ctrl-exec-agent' "$CALLS"
+  [ "$(stat -c %a "$HPS_ROOT/etc/ctrl-exec-agent/agent.conf")" = 640 ]
+  [ "$(stat -c %a "$HPS_ROOT/etc/ctrl-exec-agent/scripts.conf")" = 640 ]
+}
+
+@test "init: the agent waits for its certificate; its port is opened; no secret is in a unit" {
   extract_bundle
   run bash "$TEST_DIR/bundle/init" boot
   unit="$HPS_SYSTEMD_DIR/ctrl-exec-agent.service"
-  [ -f "$unit" ]
   grep -q "^ConditionPathExists=$HPS_ROOT/etc/ctrl-exec-agent/agent.crt" "$unit"
-  grep -q '^ExecStart=.*perl.* .*/ctrl-exec/bin/ctrl-exec-agent serve$' "$unit"
-  grep -q '^Environment="PERL5LIB=' "$unit"
+  grep -q "^ExecStart=$AGENT_V1/bin/ctrl-exec-agent serve\$" "$unit"
   grep -q '^RestartPreventExitStatus=78' "$unit"
   grep -q '^iptables -I nixos-fw 1 -p tcp --dport 7443 -j nixos-fw-accept' "$CALLS"
-  grep -q '^systemctl daemon-reload' "$CALLS"
-  # no secret in the unit
-  ! grep -qiE 'token|secret|password|BEGIN' "$unit"
+  grep -q '^systemctl start ctrl-exec-executor.service' "$CALLS"
+  ! grep -qiE 'token|secret|password|BEGIN' "$unit" "$HPS_SYSTEMD_DIR/ctrl-exec-executor.service"
 }
 
-@test "init: the agent comes from the IPS package area, patched with the release's version, with a wrapper on PATH" {
+@test "init: the agent is taken from the IPS repository by its store path, outside the profile, with a wrapper on PATH" {
   extract_bundle
   run bash "$TEST_DIR/bundle/init" boot
-  grep -q 'http://10.9.9.9/packages/ctrl-exec/ctrl-exec-latest.tar.gz' "$CALLS"
-  grep -q "our \$VERSION = '0.14.7'" "$HPS_RUN_DIR/ctrl-exec/bin/ctrl-exec-agent"
+  grep -q "^nix-store --realise .* $AGENT_V1\$" "$CALLS"
+  ! grep -q "profile install .*ctrl-exec-agent" "$CALLS"
   [ -x "$HPS_RUN_DIR/bin/ctrl-exec-agent" ]
-  grep -q "^PERL5LIB=" "$HPS_RUN_DIR/bin/ctrl-exec-agent"
-  grep -q 'exec perl ".*/ctrl-exec/bin/ctrl-exec-agent" "\$@"' "$HPS_RUN_DIR/bin/ctrl-exec-agent"
+  grep -qx "exec \"$AGENT_V1/bin/ctrl-exec-agent\" \"\$@\"" "$HPS_RUN_DIR/bin/ctrl-exec-agent"
+}
+
+@test "upgrade: a new agent version on the IPS reaches a running node through the refresh, and the restart comes from a timer" {
+  extract_bundle
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  ! grep -q 'hps-restart' "$CALLS"
+  printf '%s\n' "$AGENT_V2" /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-mdadm-4.4 > "$TEST_DIR/serve/packages"
+  : > "$CALLS"
+  run bash "$TEST_DIR/bundle/init" refresh
+  [ "$status" -eq 0 ]
+  grep -q "^nix-store --realise .* $AGENT_V2\$" "$CALLS"
+  grep -q "^ExecStart=$AGENT_V2/bin/ctrl-exec-agent serve\$" "$HPS_SYSTEMD_DIR/ctrl-exec-agent.service"
+  grep -q "^ExecStart=$AGENT_V2/bin/ctrl-exec-executor serve" "$HPS_SYSTEMD_DIR/ctrl-exec-executor.service"
+  grep -qx "exec \"$AGENT_V2/bin/ctrl-exec-agent\" \"\$@\"" "$HPS_RUN_DIR/bin/ctrl-exec-agent"
+  # restarted by a transient timer, after the caller: never by a restart in line, and only these two units
+  grep -q '^systemd-run --quiet --no-block --collect --on-active=5 --unit hps-restart-[0-9]* systemctl try-restart ctrl-exec-executor.service ctrl-exec-agent.service$' "$CALLS"
+  ! grep -qE '^systemctl (restart|try-restart|stop)' "$CALLS"
+  ! grep -qE 'libvirt|virsh|zfs|mdadm\.service|iscsi' <(grep -E '^(systemctl|systemd-run)' "$CALLS")
+  # no reboot, no pairing again
+  ! grep -qE 'reboot|poweroff|kexec' "$CALLS"
+  ! grep -q '^hps-pair' <(grep -v 'certificate' "$CALLS") || true
+}
+
+@test "upgrade: an unchanged agent is not restarted by a refresh" {
+  extract_bundle
+  run bash "$TEST_DIR/bundle/init" boot
+  : > "$CALLS"
+  run bash "$TEST_DIR/bundle/init" refresh
+  [ "$status" -eq 0 ]
+  ! grep -q 'hps-restart' "$CALLS"
+}
+
+@test "refresh: a package added to the node's role on the IPS is installed on the running node, no reboot" {
+  extract_bundle
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 0 ]
+  ! grep -q 'libvirt' "$CALLS"
+  printf '%s\n' "$AGENT_V1" /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-mdadm-4.4 /nix/store/dddddddddddddddddddddddddddddddd-libvirt-12.2.0 > "$TEST_DIR/serve/packages"
+  : > "$CALLS"
+  run bash "$TEST_DIR/bundle/init" refresh
+  [ "$status" -eq 0 ]
+  # only the new one is installed; the ones the node has are left alone
+  grep -q 'profile install .* /nix/store/dddddddddddddddddddddddddddddddd-libvirt-12.2.0$' "$CALLS"
+  ! grep -q 'profile install .*mdadm' "$CALLS"
+  ! grep -qE 'reboot|poweroff|kexec' "$CALLS"
+  # the same agent: nothing restarted
+  ! grep -q 'hps-restart' "$CALLS"
 }
 
 @test "init: refused pairing is exit 3 and says so on the IPS log; another failure is exit 1" {
@@ -345,7 +463,7 @@ extract_bundle() {
   [ "$status" -eq 0 ]
   [ "$(grep -c '^nix ' "$CALLS")" -eq "$nix_before" ]
   [[ "$output" == *"every package is installed already"* ]]
-  [ "$(grep -c '^useradd' "$CALLS")" -eq 1 ]
+  [ "$(grep -c '^useradd' "$CALLS")" -eq 2 ]
   grep -q '^usermod -aG wheel sysadmin' "$CALLS"
   # scripts.conf is rewritten only when it changed: the agent reloads on every write
   [ "$(stat -c %Y "$HPS_ROOT/etc/ctrl-exec-agent/scripts.conf")" = "$m1" ]
@@ -408,7 +526,7 @@ extract_bundle() {
 
 @test "adapter: the three per-OS things are all it defines (plus its variables); Alpine has no code" {
   grep -qE '^(pkg_add|svc_start|svc_reload|adapter_init)\(\)' "$ROOT/node-manager/bundle/adapter/nixos.sh"
-  [ "$(grep -cE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh")" -eq 4 ]
+  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned adapter_init pkg_add pkg_realise svc_reload svc_restart_later svc_start " ]
   [ ! -e "$ROOT/node-manager/bundle/adapter/alpine.sh" ]
 }
 
@@ -435,4 +553,17 @@ extract_bundle() {
   for f in bootstrap.sh init adapter/nixos.sh actions/bundle-refresh; do
     bash -n "$ROOT/node-manager/bundle/$f"
   done
+}
+
+@test "bundle-refresh does its work in a transient unit, outside the executor's read-only agent configuration, and waits for it" {
+  mkdir -p "$HPS_RUN_DIR/bundle"
+  printf '#!/bin/sh\necho ok\n' > "$HPS_RUN_DIR/bundle/bootstrap.sh"
+  run bash "$ROOT/node-manager/bundle/actions/bundle-refresh"
+  [ "$status" -eq 0 ]
+  grep -q '^systemd-run --quiet --wait --pipe --collect --unit=hps-refresh sh .*/bundle/bootstrap.sh refresh$' "$CALLS"
+}
+
+@test "the agent is not run as root and not through the profile-less path: no unit runs it without User=, init has no executor-less branch" {
+  ! grep -qi 'without the executor\|no executor' "$ROOT/node-manager/bundle/init"
+  grep -q 'executor_socket' "$ROOT/node-manager/bundle/init"
 }

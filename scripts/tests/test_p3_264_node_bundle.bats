@@ -123,11 +123,7 @@ repo() {
   mkdir -p "$TEST_DIR/res/packages/nixos/26.05"
   cat > "$TEST_DIR/res/packages/nixos/26.05/manifest.json" <<'EOF'
 {"schema":"hps-repo/1","roots":{
- "perl":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-perl-5.42.3",
- "JSON":"/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-perl5.42.3-JSON-4.10",
- "IO-Socket-SSL":"/nix/store/cccccccccccccccccccccccccccccccc-perl5.42.3-IO-Socket-SSL-2.083",
- "Net-SSLeay":"/nix/store/dddddddddddddddddddddddddddddddd-perl5.42.3-Net-SSLeay-1.92",
- "openssl":"/nix/store/fffffffffffffffffffffffffffffffg-openssl-3.6.5-bin",
+ "ctrl-exec-agent":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ctrl-exec-agent-0.14.7",
  "targetcli-fb":"/nix/store/11111111111111111111111111111111-targetcli-fb-3.0.2",
  "mdadm":"/nix/store/22222222222222222222222222222222-mdadm-4.4",
  "libvirt":"/nix/store/33333333333333333333333333333333-libvirt-12.2.0",
@@ -136,11 +132,11 @@ repo() {
 EOF
 }
 
-@test "role packages: every node gets the agent's set; a role adds its own" {
+@test "role packages: every node gets the agent; a role adds its own" {
   repo
   run node_role_packages x86_64:nixos:26.05 TCH "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"-perl-5.42.3"* && "$output" == *"-JSON-4.10"* && "$output" == *"-openssl-3.6.5-bin"* ]]
+  [[ "$output" == *"-ctrl-exec-agent-0.14.7"* ]]
   [[ "$output" == *"-libvirt-12.2.0"* && "$output" == *"-qemu-host-cpu-only-"* ]]
   [[ "$output" != *"targetcli"* ]]
   run node_role_packages x86_64:nixos:26.05 SCH "$ROOT" "$TEST_DIR/res"
@@ -156,14 +152,14 @@ EOF
   [ "$(printf '%s\n' "$output" | sort | uniq -d | wc -l)" -eq 0 ]
 }
 
-@test "role packages: no TYPE, or an unknown one, gets only the agent's set" {
+@test "role packages: no TYPE, or an unknown one, gets only the agent" {
   repo
   run node_role_packages x86_64:nixos:26.05 "" "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "$output" | wc -l)" -eq 5 ]
+  [ "$(printf '%s\n' "$output" | wc -l)" -eq 1 ]
   run node_role_packages x86_64:nixos:26.05 XYZ "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "$output" | wc -l)" -eq 5 ]
+  [ "$(printf '%s\n' "$output" | wc -l)" -eq 1 ]
 }
 
 @test "role packages: the paths are the repository's roots as they stand (store paths only)" {
@@ -176,11 +172,11 @@ EOF
 
 @test "role packages: a name the repository does not hold is named in the error, never skipped" {
   repo
-  jq 'del(.roots.openssl)' "$TEST_DIR/res/packages/nixos/26.05/manifest.json" > "$TEST_DIR/m.json"
+  jq 'del(.roots["ctrl-exec-agent"])' "$TEST_DIR/res/packages/nixos/26.05/manifest.json" > "$TEST_DIR/m.json"
   mv "$TEST_DIR/m.json" "$TEST_DIR/res/packages/nixos/26.05/manifest.json"
   run node_role_packages x86_64:nixos:26.05 TCH "$ROOT" "$TEST_DIR/res"
   [ "$status" -eq 1 ]
-  grep -q "does not hold: openssl" "$TEST_DIR/hps.log"
+  grep -q "does not hold: ctrl-exec-agent" "$TEST_DIR/hps.log"
 }
 
 @test "role packages: no repository synced says to run hps-starter sync" {
