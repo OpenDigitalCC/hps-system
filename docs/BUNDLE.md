@@ -326,7 +326,7 @@ those images start as units travel in the bundle as `lib/*`. This is plan step 3
 | | log forwarding | unit `hps-log-journal`: the journal of this boot, one RFC 3164 line per entry, to the IPS on TCP 514 with the journal's own facility and priority (`lib/hps-log-journal`; jq and the shell, no package) |
 | | host reserve | `actions/host-reserve-apply`, the allowlisted script itself: CPU, memory and IO kept for the host, the ZFS ARC cap, `min_free_kbytes` |
 | | storage (SCH) | `zfs` and the LIO modules, `/etc/target` for targetcli's saved configuration, port 3260 in the firewall |
-| | compute (TCH) | KVM module of the CPU vendor, `vhost_net`, `8021q`, `bridge`, `raid1`, `iscsi_tcp`; the user `qemu-libvirtd`; libvirt's `qemu.conf`; the UEFI firmware linked into `/run/libvirt/nix-ovmf`; `mdadm.conf`; the unit `libvirtd`, the unit `hps-mdmonitor` |
+| | compute (TCH) | KVM module of the CPU vendor, `vhost_net`, `8021q`, `bridge`, `raid1`, `iscsi_tcp`; the user `qemu-libvirtd`; libvirt's `qemu.conf`; the UEFI firmware linked into `/run/libvirt/nix-ovmf`; `mdadm.conf`; the units `virtlogd` and `libvirtd` |
 | | bridges | `actions/net-bridge-ensure`, once, so they exist before any workload |
 | | om3 | the unit `opensvc-daemon`; ports 1215 and 10000; the group `opensvc` |
 | | power-off | the unit `hps-shutdown-storage`: guests, mirrors, targets, sessions and pools stop in that order while everything they need is still up |
@@ -353,7 +353,7 @@ nor `TCH` gets the agent and nothing else.
 | `services.target` (LIO restore at boot) | `/etc/target` made; the saved configuration is in RAM and gone after a reboot, as on the pinned image (the IPS exports again after `hps-storage up`) |
 | `networking.firewall.allowedTCPPorts = [ 3260 ]`, `[ 1215 10000 ]` | `fw_open` of the adapter, an `iptables` rule of the boot |
 | `services.openiscsi` with `extraConfig` | the package's `iscsid.conf` plus the four fail-fast lines (`replacement_timeout` 15, `noop_out_interval` 5, `noop_out_timeout` 5, `login_timeout` 15), the same values `leg-resolve` writes per record (a test compares the two) |
-| `boot.swraid` with `PROGRAM` and `AUTO -all`, the last-resort units suppressed | `/etc/mdadm.conf` with the same two lines, `PROGRAM` the bundle's `lib/hps-md-event`; `hps-mdmonitor` runs `mdadm --monitor --scan`; the last-resort timer and service are linked to `/dev/null` for the boot |
+| `boot.swraid` with `PROGRAM` and `AUTO -all`, the last-resort units suppressed | `/etc/mdadm.conf` with the same two lines, `PROGRAM` an sh wrapper (`/run/hps/md-event`) that gives the bundle's `lib/hps-md-event` a PATH; the monitor is the starter's own `mdmonitor.service`, which udev starts with the first array; the last-resort timer and service are linked to `/dev/null` for the boot; written on storage nodes too, or udev assembles a zvol that carries a mirror leg and the export is refused |
 | `virtualisation.libvirtd` (`qemu_kvm`, `runAsRoot = false`, `verbatimConfig`) | `libvirtd` from the package, `/var/lib/libvirt/qemu.conf` with the same settings and the same unprivileged user, `KillMode=process` so that a restart of the daemon leaves the guests running |
 | libvirtd-config linking QEMU's firmware into `/run/libvirt/nix-ovmf` | the same links, made by the role step, for `vm-define` |
 | `hps-kvm` (the vendor's KVM module) | the same decision, read from `/proc/cpuinfo` |
@@ -366,8 +366,7 @@ nor `TCH` gets the agent and nothing else.
   guests are confined by the DAC model (the unprivileged `qemu-libvirtd` user,
   disks relabelled to it for the guest's life), the seccomp sandbox, cleared
   capabilities and no namespaces: `qemu.conf` has no `security_driver` line, so
-  libvirtd takes what the kernel has. `vm-confinement-report` says
-  `model=dac`. AppArmor for the starter is a decision of its own (a `lsm=` argument
+  libvirtd takes what the kernel has. `vm-confinement-report` says `model=none` (libvirt names no security model) with `qemu_user=qemu-libvirtd`, `seccomp=2` and no capabilities. AppArmor for the starter is a decision of its own (a `lsm=` argument
   from the IPS, the parser as a package, the profile text in the bundle).
 - **`nagios-check` and the usage checks** (`check_vms`, `check_zpool_io`, the
   monitoring plugins). The agent's allowlist has no `nagios-check`, so the IPS's
