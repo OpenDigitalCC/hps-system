@@ -15,7 +15,8 @@
 # a reboot), and its disks must be as they were when it was saved. On success
 # the state file is removed.
 #
-# Refused (3): no state file, the VM is already running. Not defined: 4.
+# Refused (3): no state file (the message says whether the dataset is missing,
+# not mounted, or mounted and empty of it), the VM is already running. Not defined: 4.
 #
 # Last line: VM-RESTORE <vm> running
 # Exit: 0 ok, 2 usage, 3 refused, 4 not defined, 1 a command failed.
@@ -60,11 +61,26 @@ parse_args() {
   [[ "${BASH_REMATCH[1]}" == "$VM" ]] || { log "the state file must be named for the VM ($VM.save)"; usage; exit 2; }
 }
 
+# no_state_file: refuse, naming the likely cause: the state dataset is missing
+# (never saved on this pool), or exists but is not mounted (pool not imported or
+# <pool>/enc locked after a reboot), or is mounted and simply holds no file.
+no_state_file() {
+  local ds=${STATE_FILE#/}
+  ds=${ds%/*}
+  if ! zfs list -H -o name "$ds" > /dev/null 2>&1; then
+    refuse "no state file $STATE_FILE: the dataset $ds does not exist on this host, so $VM was not saved here (or the pool is not imported: hps-storage <host> up)"
+  fi
+  if [[ "$(run zfs get -H -o value mounted "$ds")" != yes ]]; then
+    refuse "no state file $STATE_FILE: the dataset $ds is not mounted (its pool is imported but the key of ${ds%/state} is not loaded, or the mountpoint is unset): hps-storage <host> up unlocks it; $VM's saved memory is on the dataset"
+  fi
+  refuse "no state file $STATE_FILE: $ds is mounted but holds no $VM.save; $VM was not saved here, or the state was already restored or discarded"
+}
+
 main() {
   local state file
   parse_args "$@"
   file="$HPS_STATE_ROOT$STATE_FILE"
-  [[ -f "$file" ]] || refuse "no state file $STATE_FILE: $VM was not saved here"
+  [[ -f "$file" ]] || no_state_file
   if ! state=$(run virsh -c qemu:///system domstate "$VM" 2> /dev/null); then
     log "$VM is not defined: define it first (the caller does, from the workload definition)"
     exit 4

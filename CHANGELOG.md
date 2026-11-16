@@ -105,6 +105,23 @@ First deploy of `2f84242` on the lab; four defects.
   HPS runs; any other program's err line is derived at `info` (`events`, not
   `attention`).
 
+## Suspend saves into a mounted dataset (2026-11-15)
+
+- **Fixed** `hps-workload suspend` failed on the lab's first live run with
+  `df: /lab/enc/state: No such file or directory`. A pool is created with
+  `mountpoint=none`, so `<pool>/enc/state` made by `vm-save` without a
+  mountpoint was never mounted and its directory did not exist. `vm-save` now
+  creates it with `mountpoint=/<pool>/enc/state` and `recordsize=1M` (under
+  `<pool>/enc`, so the saved memory is encrypted), and sets the mountpoint and
+  mounts an existing dataset that is not mounted (as `image-fetch` does for
+  `<pool>/enc/images`). The change is in a node script: it takes effect on a
+  node's next boot of an image that carries it.
+- **Changed** `vm-save` refuses, before touching the guest, when the pool is not
+  imported, `<pool>/enc` is absent or its key is not loaded, naming the dataset
+  and `hps-storage <host> up`; the free-space refusal says the guest keeps
+  running. `vm-restore` with no state file says whether the dataset is missing,
+  not mounted or mounted and empty of it.
+
 ## Boot reliability joins the log split and the drain (2026-11-15)
 
 - **Changed** The boot-stalled watch (`HPS::BootWatch`) writes event lines

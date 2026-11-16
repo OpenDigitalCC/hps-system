@@ -78,7 +78,7 @@ code() {
   code vm-stop | grep -B6 'run virsh -c qemu:///system destroy' | grep -q 'FORCE == 0'
 }
 
-@test "only the disk-writing script runs qemu-img, only image-fetch runs curl, nothing here touches zpool, mdadm or wipefs, and dd only in vm-image-write (the pacing); zfs only in image-fetch (its images dataset) and vm-save (the state dataset)" {
+@test "only the disk-writing script runs qemu-img, only image-fetch runs curl, nothing here touches zpool, mdadm or wipefs, and dd only in vm-image-write (the pacing); zfs only in image-fetch (its images dataset) and vm-save (the state dataset) and vm-restore (reads it)" {
   local s
   for s in $SCRIPTS; do
     # vm-image-write paces its write with dd (--mbps-max); no other script here runs dd
@@ -88,7 +88,8 @@ code() {
     esac
     case "$s" in
       image-fetch) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs ' | grep -vE 'zfs (list|create|get|set|mount) |command -v zfs '" ;;
-      vm-save) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs ' | grep -vE 'zfs (list|create) '" ;;
+      vm-save) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs ' | grep -vE 'zfs (list|create|get|set|mount) '" ;;
+      vm-restore) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs ' | grep -vE 'zfs (list|get) '" ;;
       *) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])zfs '" ;;
     esac
     case "$s" in

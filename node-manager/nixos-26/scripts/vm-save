@@ -11,7 +11,9 @@
 #   <path>    /<pool>/enc/state/<vm>.save - the state file, on the compute
 #             host's pool; the dataset <pool>/enc/state is created on first use
 #             (zfs create under <pool>/enc, so it inherits the pool's
-#             encryption)
+#             encryption) with mountpoint=/<pool>/enc/state (pools are made
+#             with mountpoint=none); an existing one that is not mounted gets
+#             the mountpoint set and is mounted
 #
 #   virsh save --running <vm> <path>
 # writes the guest's memory and device state to the file and stops the guest:
@@ -21,7 +23,8 @@
 #
 # Refused (3): the VM is not running, the state file exists, the state dataset
 # has less free space than the guest's memory (the figures are named), the
-# pool has no <pool>/enc. --discard removes the state file (destroy of a
+# pool is not imported or has no <pool>/enc, <pool>/enc is locked. Every refusal
+# comes before virsh save: the guest keeps running. --discard removes the state file (destroy of a
 # suspended workload) and does nothing else.
 #
 # Last line: VM-SAVE <vm> <path> <bytes>   (--discard: VM-SAVE <vm> <path> discarded)
@@ -77,15 +80,37 @@ parse_args() {
   [[ "${BASH_REMATCH[2]}" == "$VM" ]] || { log "the state file must be named for the VM ($VM.save)"; usage; exit 2; }
 }
 
-# state_dataset: make sure <pool>/enc/state exists (inherits the encryption of
-# <pool>/enc).
+# state_dataset: make sure <pool>/enc/state exists, is mounted at
+# /<pool>/enc/state, and so has a directory to write into. It inherits the
+# encryption of <pool>/enc (the saved memory is encrypted at rest). Every pool
+# is created with mountpoint=none, so a dataset made without a mountpoint is
+# never mounted and its path does not exist (the lab's first suspend, 2026-11-15:
+# "df: /lab/enc/state: No such file or directory"); the mountpoint is set here,
+# as image-fetch does for <pool>/enc/images. Properties: recordsize=1M (the file
+# is one large sequential write); compression, atime and sync are inherited
+# (lz4 shrinks the zero pages of a guest and costs less than the disk write).
+# Idempotent: an existing, mounted dataset is left as it is.
 state_dataset() {
-  local ds="$POOL/enc/state"
+  local ds="$POOL/enc/state" dir="/$POOL/enc/state" ks
+  zfs list -H -o name "$POOL/enc" > /dev/null 2>&1 \
+    || refuse "$POOL/enc does not exist: pool $POOL is not imported on this host (bring it up with hps-storage <host> up), or it was not created by HPS; the saved memory is kept in $ds, below $POOL/enc, so it is encrypted at rest"
+  ks=$(run zfs get -H -o value keystatus "$POOL/enc") || refuse "cannot read the key status of $POOL/enc"
+  [[ "$ks" == available ]] \
+    || refuse "$POOL/enc is locked (keystatus $ks): its key is not loaded, so $ds cannot be used; unlock it with hps-storage <host> up"
   if zfs list -H -o name "$ds" > /dev/null 2>&1; then
-    return 0
+    if [[ "$(run zfs get -H -o value mounted "$ds")" != yes ]]; then
+      run zfs set mountpoint="$dir" "$ds" >&2 || { log "cannot set the mountpoint of $ds"; exit 1; }
+      # Setting a mountpoint on an unmounted dataset mounts it; mount only when it still is not.
+      if [[ "$(run zfs get -H -o value mounted "$ds")" != yes ]]; then
+        run zfs mount "$ds" >&2 || { log "cannot mount $ds"; exit 1; }
+      fi
+    fi
+  else
+    log "creating $ds (inherits the encryption of $POOL/enc; the pool has mountpoint=none, so the mountpoint is set here)"
+    run zfs create -o mountpoint="$dir" -o recordsize=1M "$ds" >&2 || { log "cannot create $ds"; exit 1; }
   fi
-  zfs list -H -o name "$POOL/enc" > /dev/null 2>&1 || refuse "pool $POOL has no $POOL/enc dataset to keep the saved memory in"
-  run zfs create "$ds" >&2 || { log "cannot create $ds"; exit 1; }
+  [[ -d "$HPS_STATE_ROOT$dir" ]] \
+    || refuse "$ds exists but $dir is not a directory (the dataset is not mounted there): check zfs get mountpoint,mounted $ds, then zfs set mountpoint=$dir $ds"
 }
 
 # used_bytes: the guest's memory in bytes, from virsh dominfo.
@@ -121,7 +146,7 @@ main() {
   have=$(run df -B1 --output=avail "${file%/*}" | tail -n 1 | tr -d ' ')
   [[ "$have" =~ ^[0-9]+$ ]] || { log "cannot read the free space of ${file%/*}"; exit 1; }
   if ((have < need)); then
-    refuse "not enough free space for $VM's memory on $POOL/enc/state: needs $need bytes, has $have bytes"
+    refuse "not enough free space for $VM's memory on $POOL/enc/state: needs $need bytes, has $have bytes; free room on pool $POOL or suspend a smaller guest ($VM keeps running)"
   fi
   run virsh -c qemu:///system save --running "$VM" "$file" >&2 || { log "virsh save of $VM failed"; exit 1; }
   bytes=$(stat -c %s "$file")

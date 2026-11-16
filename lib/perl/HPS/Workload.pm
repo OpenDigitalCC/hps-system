@@ -1080,7 +1080,8 @@ sub _refuse_suspended ($rec, $vname, $op) {
 }
 
 # The guest-memory state file of a VM: /<pool>/enc/state/<vm>.save on the
-# compute host's pool (vm-save creates the dataset <pool>/enc/state on first use).
+# compute host's pool (vm-save creates the dataset <pool>/enc/state on first use,
+# with its mountpoint set: a pool is made with mountpoint=none).
 sub _state_file ($self, $in, $op) {
     _fail('refused', "$op: the compute host $in->{host} of VM $in->{name} has no storage pool of its own, so there is nowhere to keep the "
         . 'saved memory. Give the host a pool (its storage_pool identity, hps-storage pool-create) or put a local disk leg of the VM on it, then run it again')

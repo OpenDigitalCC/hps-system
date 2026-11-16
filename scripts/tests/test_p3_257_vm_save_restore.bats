@@ -18,7 +18,8 @@ setup() {
   mkdir -p "$HPS_STATE_ROOT/lab/enc/state"
   F=/lab/enc/state/s1-sch-001.save
   echo running > "$STATE/domstate.s1-sch-001"
-  touch "$STATE/ds.lab_enc" "$STATE/ds.lab_enc_state"
+  touch "$STATE/ds.lab_enc" "$STATE/ds.lab_enc_state" "$STATE/mounted.lab_enc_state"
+  echo available > "$STATE/keystatus"
   echo 107374182400 > "$STATE/avail"
   cat > "$TEST_DIR/bin/virsh" <<'SHIM'
 #!/usr/bin/env bash
@@ -39,9 +40,23 @@ SHIM
   cat > "$TEST_DIR/bin/zfs" <<'SHIM'
 #!/usr/bin/env bash
 echo "zfs $*" >> "$SHIM_LOG"
+# A dataset created or given a mountpoint is mounted (the pool has mountpoint=none:
+# a dataset made without one is not). $STATE/set-no-mount: a set that leaves it unmounted.
+n=${@: -1}; k=${n//\//_}
 case "$1" in
-  list) n=${@: -1}; [[ -e "$STATE/ds.${n//\//_}" ]] || exit 1 ;;
-  create) touch "$STATE/ds.${2//\//_}" ;;
+  list) [[ -e "$STATE/ds.$k" ]] || exit 1 ;;
+  create)
+    [[ -e "$STATE/create-fails" ]] && exit 1
+    touch "$STATE/ds.$k"
+    [[ "$*" == *"-o mountpoint=/"* ]] && touch "$STATE/mounted.$k"
+    exit 0 ;;
+  set) [[ -e "$STATE/set-no-mount" ]] || touch "$STATE/mounted.${n//\//_}" ;;
+  mount) touch "$STATE/mounted.$k" ;;
+  get)
+    case "$5" in
+      keystatus) cat "$STATE/keystatus" ;;
+      mounted) if [[ -e "$STATE/mounted.$k" ]]; then echo yes; else echo no; fi ;;
+    esac ;;
 esac
 SHIM
   cat > "$TEST_DIR/bin/df" <<'SHIM'
@@ -77,18 +92,77 @@ teardown() {
   run ! grep -q "zfs create" "$SHIM_LOG"
 }
 
-@test "vm-save creates the state dataset on first use, under the encrypted parent" {
-  rm "$STATE/ds.lab_enc_state"
+@test "vm-save creates the state dataset on first use under the encrypted parent, with a mountpoint" {
+  rm "$STATE/ds.lab_enc_state" "$STATE/mounted.lab_enc_state"
   run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
   [ "$status" -eq 0 ]
-  grep -qxF "zfs create lab/enc/state" "$SHIM_LOG"
+  # the pool has mountpoint=none: without -o mountpoint the dataset is never mounted (the 2026-11-15 failure)
+  grep -qxF "zfs create -o mountpoint=/lab/enc/state -o recordsize=1M lab/enc/state" "$SHIM_LOG"
+  grep -qF "virsh -c qemu:///system save --running" "$SHIM_LOG"
 }
 
-@test "vm-save refuses a pool with no enc dataset" {
+@test "vm-save: a second save finds the dataset there and creates nothing" {
+  rm "$STATE/ds.lab_enc_state" "$STATE/mounted.lab_enc_state"
+  bash "$SAVE" s1-sch-001 --state "$F" 2> /dev/null
+  echo running > "$STATE/domstate.s1-sch-001"
+  rm "$HPS_STATE_ROOT$F"
+  : > "$SHIM_LOG"
+  run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
+  [ "$status" -eq 0 ]
+  run ! grep -qE "zfs (create|set|mount)" "$SHIM_LOG"
+}
+
+@test "vm-save: an existing but unmounted dataset gets its mountpoint set, which mounts it, with no second mount" {
+  rm "$STATE/mounted.lab_enc_state"
+  run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
+  [ "$status" -eq 0 ]
+  grep -qxF "zfs set mountpoint=/lab/enc/state lab/enc/state" "$SHIM_LOG"
+  run ! grep -q "zfs mount" "$SHIM_LOG"
+  run ! grep -q "zfs create" "$SHIM_LOG"
+}
+
+@test "vm-save: a mountpoint set that leaves the dataset unmounted is followed by zfs mount" {
+  rm "$STATE/mounted.lab_enc_state"
+  touch "$STATE/set-no-mount"
+  run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
+  [ "$status" -eq 0 ]
+  grep -qxF "zfs mount lab/enc/state" "$SHIM_LOG"
+}
+
+@test "vm-save refuses a pool with no enc dataset, naming the dataset and the fix; the guest keeps running" {
   rm "$STATE/ds.lab_enc_state" "$STATE/ds.lab_enc"
   run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
   [ "$status" -eq 3 ]
-  [[ "$stderr" == *"has no lab/enc dataset"* ]]
+  [[ "$stderr" == *"lab/enc does not exist"* ]]
+  [[ "$stderr" == *"hps-storage <host> up"* ]]
+  run ! grep -qE "virsh.* save|zfs create" "$SHIM_LOG"
+  [ "$(cat "$STATE/domstate.s1-sch-001")" = running ]
+}
+
+@test "vm-save refuses when the key of the parent is not loaded; nothing is created" {
+  rm "$STATE/ds.lab_enc_state"
+  echo unavailable > "$STATE/keystatus"
+  run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"lab/enc is locked (keystatus unavailable)"* ]]
+  run ! grep -qE "virsh.* save|zfs create" "$SHIM_LOG"
+}
+
+@test "vm-save: a failing zfs create is exit 1, the guest keeps running" {
+  rm "$STATE/ds.lab_enc_state" "$STATE/mounted.lab_enc_state"
+  touch "$STATE/create-fails"
+  run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"cannot create lab/enc/state"* ]]
+  run ! grep -q "virsh.* save" "$SHIM_LOG"
+}
+
+@test "vm-save refuses when the dataset is there but its directory is not (named, with the fix)" {
+  rm -r "$HPS_STATE_ROOT/lab"
+  run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"/lab/enc/state is not a directory"* ]]
+  [[ "$stderr" == *"zfs set mountpoint=/lab/enc/state lab/enc/state"* ]]
   run ! grep -q "virsh.* save" "$SHIM_LOG"
 }
 
@@ -113,7 +187,10 @@ teardown() {
   run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
   [ "$status" -eq 3 ]
   [[ "$stderr" == *"needs 4294967296 bytes, has 1000000000 bytes"* ]]
+  [[ "$stderr" == *"keeps running"* ]]
   run ! grep -q "virsh.* save" "$SHIM_LOG"
+  [ "$(cat "$STATE/domstate.s1-sch-001")" = running ]
+  [ ! -e "$HPS_STATE_ROOT$F" ]
   echo 4294967296 > "$STATE/avail"
   run --separate-stderr bash "$SAVE" s1-sch-001 --state "$F"
   [ "$status" -eq 0 ]
@@ -159,11 +236,25 @@ teardown() {
   run --separate-stderr bash "$RESTORE" s1-sch-001 --state "$F"
   [ "$status" -eq 3 ]
   [[ "$stderr" == *"no state file"* ]]
+  [[ "$stderr" == *"lab/enc/state is mounted but holds no s1-sch-001.save"* ]]
   : > "$HPS_STATE_ROOT$F"
   run --separate-stderr bash "$RESTORE" s1-sch-001 --state "$F"
   [ "$status" -eq 3 ]
   [[ "$stderr" == *"already running"* ]]
   [ -f "$HPS_STATE_ROOT$F" ]
+  run ! grep -q "virsh.* restore" "$SHIM_LOG"
+}
+
+@test "vm-restore with the state file absent says why: dataset missing, or not mounted" {
+  rm "$STATE/ds.lab_enc_state" "$STATE/mounted.lab_enc_state"
+  run --separate-stderr bash "$RESTORE" s1-sch-001 --state "$F"
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"the dataset lab/enc/state does not exist on this host"* ]]
+  touch "$STATE/ds.lab_enc_state"
+  run --separate-stderr bash "$RESTORE" s1-sch-001 --state "$F"
+  [ "$status" -eq 3 ]
+  [[ "$stderr" == *"the dataset lab/enc/state is not mounted"* ]]
+  [[ "$stderr" == *"hps-storage <host> up"* ]]
   run ! grep -q "virsh.* restore" "$SHIM_LOG"
 }
 
