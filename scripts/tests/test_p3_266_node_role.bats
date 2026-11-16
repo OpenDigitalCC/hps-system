@@ -192,7 +192,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   [[ "$output" == *"done: bundle"* ]]
   ln() { grep -nE "$1" "$CALLS" | head -1 | cut -d: -f1; }
   pair="$(ln '^hps-pair')"
-  for u in hps-log-journal hps-mdmonitor libvirtd opensvc-daemon hps-shutdown-storage; do
+  for u in hps-log-journal libvirtd opensvc-daemon hps-shutdown-storage; do
     [ "$(ln "^systemctl start $u.service")" -lt "$pair" ] || { echo "$u not before pairing"; return 1; }
   done
   [ "$(ln '^systemctl start iscsid.service')" -gt "$pair" ]
@@ -222,7 +222,7 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
   echo CNH > "$TEST_DIR/serve/type"
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 0 ]
-  ! grep -qE 'systemctl start (libvirtd|iscsid|opensvc|hps-log-journal|hps-mdmonitor)' "$CALLS"
+  ! grep -qE 'systemctl start (libvirtd|iscsid|opensvc|hps-log-journal)' "$CALLS"
   [ ! -e "$HPS_SYSTEMD_DIR/libvirtd.service" ]
 }
 
@@ -278,14 +278,19 @@ unit() { cat "$HPS_SYSTEMD_DIR/$1.service"; }
 @test "compute: md assembles nothing by itself, and its monitor reports through hps-md-event (the iscsi-failfast settings)" {
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 0 ]
-  grep -qx "PROGRAM $HPS_RUN_DIR/bundle/lib/hps-md-event" "$HPS_ROOT/etc/mdadm.conf"
+  grep -qx "PROGRAM $HPS_RUN_DIR/md-event" "$HPS_ROOT/etc/mdadm.conf"
+  # the starter's mdmonitor has no bash on its PATH (lab trial: env: bash: No such file): a wrapper gives one
+  head -1 "$HPS_RUN_DIR/md-event" | grep -qx '#!/bin/sh'
+  grep -q '^PATH=.*profile\|^PATH=.*/bin' "$HPS_RUN_DIR/md-event"
+  grep -q "^exec .*bash $HPS_RUN_DIR/bundle/lib/hps-md-event \"\$@\"$" "$HPS_RUN_DIR/md-event"
+  [ -x "$HPS_RUN_DIR/md-event" ]
   grep -qx 'AUTO -all' "$HPS_ROOT/etc/mdadm.conf"
   # compute.nix says the same
   grep -q 'PROGRAM /etc/hps/hps-md-event' "$ROOT/nix/modules/profiles/compute.nix"
   grep -q '^AUTO -all\|^      AUTO -all' "$ROOT/nix/modules/profiles/compute.nix"
   # no array yet at boot: the unit waits for the first one instead of exiting and being restarted
-  unit hps-mdmonitor | grep -q "^ExecStart=.*bash -c 'until grep -q \"^md\[0-9\]\" /proc/mdstat; do sleep 5; done; exec $HPS_NIX_PROFILE/bin/mdadm --monitor --scan --config=$HPS_ROOT/etc/mdadm.conf'"
-  unit hps-mdmonitor | grep -qx 'Restart=always'
+  # the starter's own mdmonitor runs the monitor: a second one would only abort
+  [ ! -e "$HPS_SYSTEMD_DIR/hps-mdmonitor.service" ]
   # the degraded-start timers are off for this boot
   [ "$(readlink "$HPS_SYSTEMD_DIR/mdadm-last-resort@.timer")" = /dev/null ]
   [ "$(readlink "$HPS_SYSTEMD_DIR/mdadm-last-resort@.service")" = /dev/null ]

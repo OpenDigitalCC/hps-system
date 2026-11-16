@@ -236,25 +236,29 @@ EOF
 
   # md mirrors: HPS assembles every mirror explicitly (mirror-assemble); nothing
   # may start a half mirror by itself (AUTO -all, the last-resort timers off).
-  # The monitor's PROGRAM writes one HPS-ISSUE line per leg event (hps-md-event).
+  # The monitor's PROGRAM writes one HPS-ISSUE line per leg event (hps-md-event). The
+  # starter's own mdmonitor.service (started by udev when the first array appears) is the
+  # monitor and reads this file; it has no bash on its PATH, so PROGRAM is a small sh
+  # wrapper that sets one (the pinned image does the same with writeShellScript).
+  write_if_changed "$HPS_RUN_DIR/md-event" 0755 << EOF
+#!/bin/sh
+PATH=$(role_path):/bin:/usr/bin
+export PATH
+exec $(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-md-event "\$@"
+EOF
   write_if_changed "${HPS_ROOT}/etc/mdadm.conf" 0644 << EOF
 # written by the HPS node bundle (docs/BUNDLE.md)
-PROGRAM $HPS_RUN_DIR/bundle/lib/hps-md-event
+PROGRAM $HPS_RUN_DIR/md-event
 AUTO -all
 EOF
   svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
-  # mdadm --monitor --scan exits at once when there is no array (the mirror comes later,
-  # from mirror-assemble), so the unit waits quietly for the first one.
-  svc_start --opt Restart=always \
-    hps-mdmonitor "PATH=$(role_path)" \
-    "$(command -v bash)" -c "'until grep -q \"^md[0-9]\" /proc/mdstat; do sleep 5; done; exec $(role_bin mdadm) --monitor --scan --config=${HPS_ROOT}/etc/mdadm.conf'"
 
   # libvirtd does not start virtlogd itself (lab trial: vm-start failed on
   # /run/libvirt/virtlogd-sock); the guests' console logs go through it
   svc_start --opt KillMode=process --opt Restart=on-failure \
     virtlogd "PATH=$(role_path)" "$(role_bin virtlogd)"
   svc_start --opt KillMode=process --opt Restart=on-failure --opt LimitMEMLOCK=infinity \
-    --unit-opt "After=hps-mdmonitor.service virtlogd.service" \
+    --unit-opt "After=virtlogd.service" \
     libvirtd "PATH=$(role_path)" "$libvirtd"
 }
 
