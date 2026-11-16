@@ -166,7 +166,7 @@ role_shutdown() {
     --opt Type=oneshot --opt RemainAfterExit=yes --opt Restart=no --opt TimeoutStopSec=300 \
     --opt "ExecStop=$(command -v bash) $HPS_RUN_DIR/bundle/lib/hps-shutdown-storage" \
     hps-shutdown-storage "PATH=$(role_path)" "HPS_SCRIPTS_DIR=$HPS_RUN_DIR/bundle/actions" \
-    "$(command -v true)"
+    "$(type -P true)"
 }
 
 #-------------------------------------------------------------------------------

@@ -387,6 +387,7 @@ EOS
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 0 ]
   u="$(unit hps-shutdown-storage)"
+  [[ "$u" == *"ExecStart=/"* ]]
   [[ "$u" == *"Type=oneshot"* && "$u" == *"RemainAfterExit=yes"* && "$u" == *"TimeoutStopSec=300"* ]]
   [[ "$u" == *"ExecStop="*"$HPS_RUN_DIR/bundle/lib/hps-shutdown-storage"* ]]
   [[ "$u" == *"HPS_SCRIPTS_DIR=$HPS_RUN_DIR/bundle/actions"* ]]
