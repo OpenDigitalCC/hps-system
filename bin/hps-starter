@@ -18,7 +18,7 @@ sub usage {
 Usage:
   hps-starter sync <os> [--release VERSION] [--only starter|repository] [--proxy http://HOST:PORT]
                         [--packages FILE] [--store-paths FILE] [--resources DIR]
-                        [--hydra URL] [--releases URL] [--cache URL]
+                        [--hydra URL] [--releases URL] [--cache URL] [--alpine URL]
   hps-starter list [--json] [--resources DIR]
   hps-starter verify [<os> [--release VERSION]] [--resources DIR]
   hps-starter add-local <os> --from DIR STORE-PATH... [--release VERSION] [--resources DIR]
@@ -28,16 +28,24 @@ repository) from upstream, through the proxy: --proxy, else the cluster key
 egress_proxy, else direct. Files already present with the recorded size and
 sha256 are kept; everything else is fetched to a temporary name, checked and
 renamed. An upstream that refuses is reported with its host name and exit 1.
-  --release       the OS release (default: nixos 26.05)
+  --release       the OS release (default: nixos 26.05, alpine 3.24)
   --only          fill the starter or the repository alone (the repository follows
                   the release of the synced starter)
   --hydra, --releases, --cache
                   the upstream roots (default https://hydra.nixos.org,
                   https://releases.nixos.org, https://cache.nixos.org): a mirror,
                   or file:///dir for a directory laid out the same way
+  --alpine        the Alpine upstream root (default https://dl-cdn.alpinelinux.org/alpine):
+                  v<release>/main, v<release>/community and v<release>/releases/x86_64/netboot
+                  are read below it; a mirror, or file:///dir laid out the same way
   --packages      the package list (default: lib/starter/<os>.packages)
   --store-paths   the release's store path list, plain text or .xz, instead of
                   fetching store-paths.xz (needed when xz is not installed)
+sync alpine takes the indexes of main and community once, resolves the package list in that
+one snapshot (the kernel, its modules and ZFS from the same one), and makes the starter's
+kernel and initramfs match the repository's kernel (docs/STARTER.md "Alpine"). A list line
+NAME local names a package added with add-local alpine; sync reports the ones still missing.
+add-local alpine --from DIR FILE.apk... copies built .apk files into <resources>/local/alpine/<version>/.
 add-local puts a store path built elsewhere, with its closure, from DIR (a binary cache
 laid out as the repository: <hash>.narinfo, nar/<file>; the builder's, for example)
 into <resources>/local/<os>/<version>/. The next sync takes it into the repository
@@ -48,7 +56,7 @@ list shows what is synced; verify reads every recorded file back against the
 manifest (size and sha256).
 Last line: SYNCED <os> <version> release=<id> ... | VERIFY ok|failed ...
 Exit: 0 ok, 1 failed (upstream, or a file that does not verify), 2 usage,
-3 refused (alpine: not yet implemented), 4 nothing synced.
+3 refused, 4 nothing synced.
 USAGE
     return 2;
 }
@@ -61,10 +69,10 @@ sub human {
 sub main {
     my @argv = @_;
     my $cmd = shift @argv // return usage('command required');
-    my ($release, $proxy, $packages, $store_paths, $resources, $json, $help, $only, $hydra, $releases, $cache, $from);
+    my ($release, $proxy, $packages, $store_paths, $resources, $json, $help, $only, $hydra, $releases, $cache, $from, $alpine);
     GetOptionsFromArray(\@argv, 'release=s' => \$release, 'proxy=s' => \$proxy, 'packages=s' => \$packages,
         'store-paths=s' => \$store_paths, 'resources=s' => \$resources, 'json' => \$json, 'help|h' => \$help,
-        'only=s' => \$only, 'from=s' => \$from, 'hydra=s' => \$hydra, 'releases=s' => \$releases, 'cache=s' => \$cache)
+        'only=s' => \$only, 'from=s' => \$from, 'hydra=s' => \$hydra, 'releases=s' => \$releases, 'cache=s' => \$cache, 'alpine=s' => \$alpine)
         or return usage();
     if ($help || $cmd eq 'help') { usage(); return 0 }
     my $rc = eval {
@@ -83,11 +91,15 @@ sub main {
             my $s = HPS::Starter->new(resources => $resources, proxy => $proxy, store_paths => $store_paths,
                 packages => $packages // "$RealBin/../lib/starter/$os.packages",
                 (defined $hydra ? (hydra => $hydra) : ()), (defined $releases ? (releases => $releases) : ()),
-                (defined $cache ? (cache => $cache) : ()));
+                (defined $cache ? (cache => $cache) : ()), (defined $alpine ? (alpine => $alpine) : ()));
             my $r = $s->sync($os, $release, only => $only);
             my $line = sprintf 'SYNCED %s %s release=%s', $r->{os}, $r->{version}, $r->{release};
             $line .= sprintf ' starter(files=%d fetched=%d reused=%d bytes=%d)', @{ $r->{starter} }{qw(files fetched reused bytes)} if $r->{starter};
             $line .= sprintf ' repository(paths=%d files=%d fetched=%d reused=%d bytes=%d)', @{ $r->{repo} }{qw(paths files fetched reused bytes)} if $r->{repo};
+            if ($r->{repo} && @{ $r->{repo}{missing_local} // [] }) {
+                $line .= ' missing_local=' . join(',', @{ $r->{repo}{missing_local} });
+                print STDERR "hps-starter: local packages not added yet: " . join(', ', @{ $r->{repo}{missing_local} }) . " (hps-starter add-local alpine; a role that names them is refused)\n";
+            }
             print "$line\n";
             return 0;
         }

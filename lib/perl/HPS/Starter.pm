@@ -38,6 +38,8 @@ use File::Path ();
 use File::Basename ();
 use File::Copy ();
 use POSIX qw(strftime);
+use HPS::Apk ();
+use HPS::Starter::Alpine ();
 
 package HPS::Starter::Error {
     # kind: usage (2), refused (3), notfound (4), failed (1)
@@ -55,13 +57,14 @@ my $PROXY_RE = qr{\Ahttp://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}\z};
 # Per OS: the release synced when none is named, and whether it exists yet.
 my %OS = (
     nixos  => { release => '26.05', implemented => 1 },
-    alpine => { release => '3.22',  implemented => 0, step => 4 },
+    alpine => { release => '3.24',  implemented => 1, step => 4 },
 );
 
 my %UPSTREAM = (
     hydra    => 'https://hydra.nixos.org',
     releases => 'https://releases.nixos.org',
     cache    => 'https://cache.nixos.org',
+    alpine   => 'https://dl-cdn.alpinelinux.org/alpine',
 );
 
 sub new ($class, %opt) {
@@ -72,6 +75,7 @@ sub new ($class, %opt) {
         hydra      => $opt{hydra}    // $UPSTREAM{hydra},
         releases   => $opt{releases} // $UPSTREAM{releases},
         cache      => $opt{cache}    // $UPSTREAM{cache},
+        alpine     => $opt{alpine}   // $UPSTREAM{alpine},
         packages   => $opt{packages},      # package list file
         store_paths => $opt{store_paths},  # store path list (plain or .xz), instead of the release's
         curl       => $opt{curl} // 'curl',
@@ -80,7 +84,7 @@ sub new ($class, %opt) {
         ni         => {},                  # hash => parsed narinfo
         name       => {},                  # hash => store path name
     };
-    s{/+\z}{} for grep { defined } @{$self}{qw(hydra releases cache)};
+    s{/+\z}{} for grep { defined } @{$self}{qw(hydra releases cache alpine)};
     bless $self, $class;
     _fail('usage', "--proxy '$self->{proxy}' must be http://<host>:<port>")
         if defined $self->{proxy} && length $self->{proxy} && $self->{proxy} !~ $PROXY_RE;
@@ -251,6 +255,10 @@ sub sync ($self, $os, $ver = undef, %o) {
     _fail('refused', "$os: not yet implemented (plan step $OS{$os}{step})") unless $OS{$os}{implemented};
     my $only = $o{only};
     _fail('usage', "--only '$only' must be starter or repository") if defined $only && $only !~ /\A(?:starter|repository)\z/;
+    if ($os eq 'alpine') {
+        my $r = HPS::Starter::Alpine::sync($self, $ver, only => $only);
+        return { os => $os, version => $ver, release => $r->{release}, starter => $r->{starter}, repo => $r->{repo} };
+    }
     my $st = defined $only && $only eq 'repository' ? $self->_starter_state($ver) : $self->_sync_nixos_starter($ver);
     my $rp = defined $only && $only eq 'starter' ? undef : $self->_sync_nixos_repo($ver, $st);
     return { os => $os, version => $ver, release => $st->{release}, starter => defined $only && $only eq 'repository' ? undef : $st, repo => $rp };
@@ -532,8 +540,9 @@ sub _candidates ($self, $file, $pk) {
 # repository beside the upstream ones, and a package list line naming the path
 # (NAME /nix/store/<path>) makes it a root. Returns {added => N, held => N}.
 sub add_local ($self, $os, $ver, $from, $paths) {
-    _fail('usage', "local packages are for nixos only") unless $os eq 'nixos';
-    $self->_check_os_version($os, $ver);
+    _fail('usage', "local packages are for nixos and alpine only") unless $os eq 'nixos' || $os eq 'alpine';
+    $ver = $self->_check_os_version($os, $ver);
+    return $self->_add_local_alpine($ver, $from, $paths) if $os eq 'alpine';
     $from =~ s{/+\z}{};
     my $repo = $self->repo_dir($os, $ver);
     my $ldir = "$self->{resources}/local/$os/$ver";
@@ -557,6 +566,32 @@ sub add_local ($self, $os, $ver, $from, $paths) {
         File::Copy::copy($src, "$ldir/$h.narinfo") or _fail('failed', "cannot copy $src: $!");
         $added++;
         push @todo, keys %{ $ni->{refs} };
+    }
+    return { added => $added, held => $held, dir => $ldir };
+}
+
+# _add_local_alpine($ver, $from, \@files): each .apk (a path, or a name under $from) is read
+# (its .PKGINFO must name it), copied to <resources>/local/alpine/<ver>/<name>-<version>.apk,
+# and an older file of the same package is removed. The next sync puts them in the
+# repository's local/ directory with an unsigned index; a node installs them with
+# --allow-untrusted, knowing they carry no Alpine signature.
+sub _add_local_alpine ($self, $ver, $from, $paths) {
+    my $ldir = "$self->{resources}/local/alpine/$ver";
+    my ($added, $held) = (0, 0);
+    for my $p (@$paths) {
+        my $src = $p =~ m{\A/} ? $p : "$from/$p";
+        -f $src or _fail('notfound', "no package file $src");
+        my $c = eval { HPS::Apk::control($src) } // _fail('failed', "$src is not an apk: $@");
+        my ($name, $v) = map { $c->{pkginfo}{$_}[0] // '' } qw(pkgname pkgver);
+        _fail('failed', "$src: .PKGINFO has no pkgname or pkgver") unless length $name && length $v;
+        _fail('failed', "$src: package name '$name' is not usable") unless $name =~ /\A[A-Za-z0-9][A-Za-z0-9._+-]*\z/ && $v =~ /\A[0-9A-Za-z._+-]+\z/;
+        my $dest = "$ldir/$name-$v.apk";
+        if (-f $dest && (-s $dest) == (-s $src) && ((_sha_file($dest))[0] // '') eq ((_sha_file($src))[0] // 'x')) { $held++; next }
+        File::Path::make_path($ldir);
+        unlink $_ for grep { $_ ne $dest } glob("$ldir/$name-[0-9]*.apk");
+        File::Copy::copy($src, "$dest.new") or _fail('failed', "cannot copy $src: $!");
+        rename "$dest.new", $dest or _fail('failed', "cannot rename into $dest: $!");
+        $added++;
     }
     return { added => $added, held => $held, dir => $ldir };
 }

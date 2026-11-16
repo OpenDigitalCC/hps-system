@@ -209,9 +209,9 @@ is($r7->{release}, $REL, 'only repository: release of the starter');
 }
 
 # --- refusals ----------------------------------------------------------------
-$e = err_of(sub { $w->{new}->()->sync('alpine') });
-is($e && $e->kind, 'refused', 'alpine is refused');
-like($e && $e->message, qr/alpine: not yet implemented \(plan step 4\)/, 'alpine: the message names the plan step');
+$e = err_of(sub { $w->{new}->(alpine => 'file:///nonexistent-mirror')->sync('alpine') });
+is($e && $e->kind, 'failed', 'alpine: an upstream that cannot be reached is a failure (it is implemented since plan step 4; t/282-starter-alpine.t)');
+like($e && $e->message, qr/upstream refused or unreachable.*host local file.*APKINDEX\.tar\.gz/, 'alpine: the message names the host and the index');
 $e = err_of(sub { $w->{new}->()->sync('plan9') });
 is($e && $e->kind, 'usage', 'an unknown OS is a usage error');
 $e = err_of(sub { $w->{new}->(proxy => 'socks5://x:1') });
@@ -329,9 +329,9 @@ like($e && $e->message, qr/package 'libvirt': several x86_64 candidates/, 'two x
     is($? >> 8, 1, 'hps-starter verify: exit 1 on the damaged copy');
     like($out, qr/^FAIL starter nixos 26\.05: bzImage/m, 'verify: failure line');
     like($out, qr/^VERIFY failed sets=2 bad=2$/m, 'verify: last line');
-    $out = `$^X $BIN sync alpine --resources $res 2>&1`;
-    is($? >> 8, 3, 'hps-starter sync alpine: exit 3');
-    like($out, qr/not yet implemented \(plan step 4\)/, 'sync alpine says so');
+    $out = `$^X $BIN sync alpine --resources $res --alpine file:///nonexistent-mirror 2>&1`;
+    is($? >> 8, 1, 'hps-starter sync alpine: exit 1 when the upstream cannot be read');
+    like($out, qr/upstream refused or unreachable/, 'sync alpine says so');
     $out = `$^X $BIN verify --resources $w->{root}/none 2>&1`;
     is($? >> 8, 4, 'verify with nothing synced: exit 4');
     $out = `$^X $BIN sync nixos --resources $res --packages $w->{root}/pk --proxy nonsense 2>&1`;

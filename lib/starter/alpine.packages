@@ -1,0 +1,80 @@
+# Alpine package list for hps-starter sync alpine (docs/STARTER.md "Alpine").
+# One name per line: an upstream package of the release's main or community
+# repository, resolved with its dependencies in ONE snapshot. NAME local is a
+# package that is not in Alpine's repository (the ctrl-exec agent, om3 and the
+# like): built elsewhere and added with hps-starter add-local alpine; until it
+# is added, sync reports it as missing and a role that names it is refused.
+# The roles say which node gets which (alpine.roles).
+
+# what the stock initramfs installs at boot (the apkovl's world file): the base,
+# a shell and fetcher for the bundle, ssh, sudo, and shadow (useradd, usermod)
+alpine-base
+ssl_client
+bash
+curl
+openssh
+sudo
+shadow
+
+# the kernel, its modules and ZFS from the same snapshot: the repository's own
+# linux-lts is the running kernel (the starter is matched to it), and zfs-lts is
+# built for exactly that version. linux-firmware-none satisfies the kernel's
+# linux-firmware-any, so that no firmware (a gigabyte) is held or sent;
+# mkinitfs satisfies initramfs-generator (installed without its scripts).
+linux-lts
+linux-firmware-none
+mkinitfs
+zfs
+zfs-lts
+
+# the ctrl-exec agent: its Perl and TLS libraries, and the local package that
+# carries the agent and its executor
+perl
+perl-json
+perl-io-socket-ssl
+openssl
+setpriv
+ctrl-exec-agent local
+
+# the tools the node scripts call, GNU where busybox's differ
+coreutils
+gawk
+grep
+sed
+findutils
+iproute2
+iproute2-ss
+iproute2-tc
+bridge-utils
+lsblk
+blkid
+wipefs
+findmnt
+sfdisk
+e2fsprogs
+util-linux-misc
+dmidecode
+jq
+xxd
+
+# storage
+targetcli
+py3-rtslib
+mdadm
+smartmontools
+dbus
+
+# compute
+libvirt-daemon
+libvirt-client
+qemu-system-x86_64
+qemu-img
+open-iscsi
+tcpdump
+ovmf
+
+# monitoring and cluster membership
+monitoring-plugins
+nagios-check local
+hps-nagios-plugins local
+om3 local
