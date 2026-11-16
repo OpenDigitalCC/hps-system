@@ -12,6 +12,34 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## The node bundle: a stock starter becomes a paired node (2026-11-16)
+
+Step 2 of `plans/PLAN.md` (`docs/BUNDLE.md`). The pinned images are unchanged.
+
+- **New** the node bundle: one archive the IPS builds from the tree's node
+  scripts on each request (`cmd=node_bundle`) and a bootstrap script
+  (`cmd=node_bootstrap`). A node keeps them in RAM under `/run/hps`; a script
+  changed on the IPS is live after the allowlisted `bundle-refresh` action.
+- **New** the hook: the kernel line of a `STARTER` host makes the unmodified
+  starter run the bootstrap script as root at boot (systemd's `systemd.run=`,
+  with `systemd.wants=`; no `&&`, `||` or `;`, which iPXE would read as its own
+  operators).
+- **New** at boot the bundle creates the `sysadmin` user with the installation's
+  SSH key (`<config>/sysadmin_authorized_keys`, served as
+  `cmd=node_sysadmin_keys`) and sudo, makes sshd refuse root, adds the role's
+  packages from the IPS repository (`lib/starter/nixos.roles`,
+  `cmd=node_packages`), installs the ctrl-exec agent with its preset allowlist
+  (`node-manager/bundle/allowlist`) and pairs with the existing flow.
+- **New** the NixOS adapter (`node-manager/bundle/adapter/nixos.sh`): how to add
+  a package and how to start a service; the place for Alpine is marked.
+- **Changed** a boot of a `STARTER` host opens the pairing window, as a pinned
+  boot does.
+- **Changed** the package list takes `NAME /nix/store/<path>` lines (a root named
+  as it stands); `JSON` and `openssl` for the agent are named that way.
+- **Changed** `hps-pair` sets the kernel hostname with `hostname(1)` when
+  `hostnamectl --transient` changed nothing (the stock starter has a static
+  hostname).
+
 ## The IPS holds a stock starter and a package repository (2026-11-16)
 
 Step 1 of `plans/PLAN.md` (`docs/STARTER.md`).

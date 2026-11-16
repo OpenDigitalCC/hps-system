@@ -37,8 +37,9 @@ cache. `nix-cache-info`, one `<hash>.narinfo` per store path and the
 `nar/<hash>.nar.xz` files they name, exactly as `cache.nixos.org` publishes
 them, so the upstream signatures stay valid (a node trusts the stock key). It
 holds the closure of the packages in `lib/starter/nixos.packages` (libvirt,
-QEMU, open-iscsi, mdadm, targetcli-fb, perl and two Perl modules); ZFS is
-already in the starter. A node reads it with
+QEMU, open-iscsi, mdadm, targetcli-fb, perl, the Perl modules and openssl the
+agent needs); ZFS is already in the starter. Which node gets which package is
+`lib/starter/nixos.roles` (`docs/BUNDLE.md`). A node reads the repository with
 `--option substituters http://<ips>/packages/nixos/26.05`.
 
 ## Manifests
@@ -110,7 +111,10 @@ candidate whose closure holds the starter's own glibc. The closure is walked
 over HTTP through the `References:` lines of the narinfo files. Two x86_64
 candidates for one name (openssl, which the release holds in several versions)
 are refused, not guessed; a pure-Perl module cannot be told from its other
-systems this way and is left out of the list for now.
+systems this way. For those a line of the list can be `NAME /nix/store/<hash>-<name>`:
+the store path is the root as it stands, with no search (the list names the
+`JSON` module that the starter already holds, and the bin output of the
+starter's own openssl; `docs/BUNDLE.md`).
 
 ## Booting a host from the starter
 
@@ -121,9 +125,13 @@ hps-onboard assign <mac> --type TCH --profile STARTER --os x86_64:nixos:26.05
 ```
 
 Its iPXE script then loads `starter/nixos/26.05/bzImage` and `initrd` with the
-stock kernel arguments from the manifest and `console=ttyS0,115200`. There is
-no pin, no `hps.*` argument and no pairing window: nothing of HPS runs on the
-starter yet, and the node boots to the distribution's login. Every other
+stock kernel arguments from the manifest, `console=ttyS0,115200`, and (plan
+step 2) the arguments the node bundle needs: a hook that makes the unmodified
+starter fetch one script from the IPS, and `hps.ips`, `hps.mac`, `hps.os`,
+`hps.profile` and `hps.domain` (`docs/BUNDLE.md`). There is no pin and nothing
+of HPS in the image: the node boots to the distribution's login, and from the
+IPS it gets the sysadmin user, its packages, the ctrl-exec agent and its
+pairing. The boot opens the pairing window as a pinned boot does. Every other
 profile maps to a built image and a pin exactly as before. `hps-onboard repin`
 refuses a starter host. The starter must have been synced first; without it
 the host gets the iPXE error screen and the IPS log says to run `hps-starter
