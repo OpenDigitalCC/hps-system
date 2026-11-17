@@ -173,6 +173,9 @@ os_compat() {
   write_if_changed "$d/systemctl" 0755 << 'EOF'
 #!/bin/sh
 # systemctl for an OpenRC node (written by the HPS node bundle, adapter/alpine.sh).
+# start/stop/restart/reload/try-restart/cat/poweroff/reboot over rc-service; set-property and
+# show for machine.slice over cgroup v2 (the host reserve: host-reserve-apply, host-resources).
+CG="${HPS_CGROUP_ROOT:-/sys/fs/cgroup}/machine"
 verb=
 units=
 for a in "$@"; do
@@ -193,6 +196,43 @@ case "$verb" in
   daemon-reload) ;;
   poweroff) exec poweroff ;;
   reboot) exec reboot ;;
+  set-property)
+    set -- $units
+    [ "$1" = machine.slice ] || { echo "systemctl set-property $1: not available on this OS (OpenRC): only machine.slice" >&2; exit 1; }
+    shift
+    [ -r "${CG%/*}/cgroup.controllers" ] || { echo "systemctl set-property: cgroup v2 is not mounted at ${CG%/*}" >&2; exit 1; }
+    for c in cpuset cpu io memory; do echo "+$c" > "${CG%/*}/cgroup.subtree_control" 2> /dev/null; done
+    mkdir -p "$CG" || exit 1
+    for kv in "$@"; do
+      k="${kv%%=*}"; v="${kv#*=}"
+      case "$k" in
+        AllowedCPUs) f=cpuset.cpus ;;
+        CPUWeight) f=cpu.weight ;;
+        IOWeight) f=io.weight; v="default $v" ;;
+        MemoryMax)
+          f=memory.max
+          case "$v" in infinity) v=max ;; *M) v=$(( ${v%M} * 1048576 )) ;; *G) v=$(( ${v%G} * 1073741824 )) ;; esac ;;
+        *) echo "systemctl set-property: $k is not available on this OS (OpenRC)" >&2; exit 1 ;;
+      esac
+      echo "$v" > "$CG/$f" || { echo "systemctl set-property: cannot write $v to $CG/$f" >&2; exit 1; }
+    done ;;
+  show)
+    # systemctl show machine.slice -p AllowedCPUs -p CPUWeight -p IOWeight -p MemoryMax
+    [ -d "$CG" ] || { echo "systemctl show: no machine cgroup at $CG" >&2; exit 1; }
+    want=
+    prev=
+    for a in "$@"; do
+      [ "$prev" = -p ] && want="$want $a"
+      prev="$a"
+    done
+    for p in $want; do
+      case "$p" in
+        AllowedCPUs) echo "AllowedCPUs=$(cat "$CG/cpuset.cpus" 2> /dev/null)" ;;
+        CPUWeight) echo "CPUWeight=$(cat "$CG/cpu.weight" 2> /dev/null)" ;;
+        IOWeight) echo "IOWeight=$(sed 's/^default //' "$CG/io.weight" 2> /dev/null | head -n 1)" ;;
+        MemoryMax) echo "MemoryMax=$(cat "$CG/memory.max" 2> /dev/null)" ;;
+      esac
+    done ;;
   *) echo "systemctl $verb: not available on this OS (OpenRC)" >&2; exit 1 ;;
 esac
 EOF
@@ -205,6 +245,78 @@ case "$1" in
   *) echo "udevadm $1: not available on this OS (mdev)" >&2; exit 1 ;;
 esac
 EOF
+  # node-journal asks for the journal of this boot with -n, -u, -p; this node has syslog
+  write_if_changed "$d/journalctl" 0755 << 'EOF'
+#!/bin/sh
+# journalctl for a syslog node (written by the HPS node bundle, adapter/alpine.sh): what
+# node-journal passes: -b --no-pager -o <format> -n N [-u UNIT] [-p PRIORITY]. The lines are
+# busybox syslogd's (/var/log/messages), the newest N, for the unit's tag and the priorities
+# up to PRIORITY.
+n=200; unit=; prio=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n) n="$2"; shift ;;
+    -u) unit="${2%.service}"; shift ;;
+    -p) prio="$2"; shift ;;
+    -o) shift ;;
+  esac
+  shift
+done
+log="${HPS_SYSLOG_FILE:-/var/log/messages}"
+[ -r "$log" ] || { echo "journalctl: $log is not there (is syslog running?)" >&2; exit 1; }
+levels=
+if [ -n "$prio" ]; then
+  case "$prio" in emerg) prio=0 ;; alert) prio=1 ;; crit) prio=2 ;; err) prio=3 ;; warning) prio=4 ;; notice) prio=5 ;; info) prio=6 ;; debug) prio=7 ;; esac
+  i=0
+  for name in emerg alert crit err warning notice info debug; do
+    [ "$i" -le "$prio" ] && levels="$levels|$name"
+    i=$((i + 1))
+  done
+  levels="${levels#|}"
+fi
+cat "$log" | {
+  if [ -n "$unit" ]; then grep -E " $unit(\[[0-9]+\])?: "; else cat; fi
+} | {
+  if [ -n "$levels" ]; then grep -E " [a-z0-9]+\.($levels) "; else cat; fi
+} | tail -n "$n"
+EOF
+  write_if_changed "$d/udhcpc-hps" 0755 << 'EOF'
+#!/bin/sh
+# udhcpc's script for a node that is already on the network (written by the HPS node
+# bundle): udhcpc says "deconfig" when it starts, and the stock script would flush the
+# address the node is using. The lease is renewed, never torn down first.
+[ "$1" = deconfig ] && exit 0
+exec /usr/share/udhcpc/default.script "$@"
+EOF
+}
+
+# time_sync <ips>: the clock is kept in step with the IPS after boot, the source the NixOS
+# nodes use (timesyncd, NTP=<ips>): busybox ntpd, which weighs nothing. lib/hps-time
+# has stepped the clock once, from the IPS's HTTP date, before this.
+time_sync() {
+  mkdir -p "${HPS_ROOT}/etc/conf.d"
+  printf 'NTPD_OPTS="-N -p %s"\n' "$1" | write_if_changed "${HPS_ROOT}/etc/conf.d/ntpd" 0644
+  "${HPS_RC_SERVICE:-rc-service}" ntpd status > /dev/null 2>&1 && run "${HPS_RC_SERVICE:-rc-service}" ntpd restart || run "${HPS_RC_SERVICE:-rc-service}" ntpd start
+}
+
+# net_keep_lease: the stock initramfs got the address from DHCP and nothing renews it
+# (the IPS's lease is an hour). udhcpc runs in the background on the interface that
+# reaches the IPS, with a script that does not tear the address down when it starts.
+net_keep_lease() {
+  local dev pidf
+  dev="$(ip route get "$ADAPTER_IPS" 2> /dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)" || dev=""
+  [[ -n "$dev" ]] || { log "net_keep_lease: no interface reaches $ADAPTER_IPS; no lease to keep"; return 0; }
+  pidf="/run/hps-udhcpc.$dev.pid"
+  if [[ -f "$pidf" ]] && kill -0 "$(cat "$pidf")" 2> /dev/null; then return 0; fi
+  run "${HPS_UDHCPC:-udhcpc}" -b -i "$dev" -p "$pidf" -s "$HPS_RUN_DIR/bin/udhcpc-hps" -t 5 || log "warning: udhcpc did not start on $dev: the lease will not be renewed"
+}
+
+# host_cgroups: cgroup v2 is mounted where the host reserve writes (systemd does it on NixOS)
+host_cgroups() {
+  [[ -r "${HPS_CGROUP_ROOT:-/sys/fs/cgroup}/cgroup.controllers" ]] && return 0
+  svc_ensure cgroups
+  [[ -r "${HPS_CGROUP_ROOT:-/sys/fs/cgroup}/cgroup.controllers" ]] || log "warning: cgroup v2 is not mounted: the host reserve cannot be applied (rc_cgroup_mode=unified is the OpenRC setting)"
+  return 0
 }
 
 #-------------------------------------------------------------------------------
@@ -415,6 +527,7 @@ zfs_hostid_set() {
 # paths in. Alpine's own libvirt is built without the AppArmor driver (no virt-aa-helper):
 # the compute role needs the local package libvirt-apparmor, the AppArmor build, and says
 # so when it is not what is installed. There is no fall back.
+# shellcheck disable=SC2034  # read by role_aa_fill
 aa_roots() { AA_PARSER="$PKG_PREFIX"; AA_LIBVIRT="$PKG_PREFIX"; AA_QEMU="$PKG_PREFIX"; }
 aa_parser_path() { readlink -f "$(role_bin apparmor_parser)"; }
 aa_libvirtd_path() { readlink -f "$(role_bin libvirtd)"; }

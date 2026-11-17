@@ -116,6 +116,7 @@ role_user() {
 # The clock: from the IPS, before anything needs TLS (hps-time, as on the pinned images).
 role_clock() {
   role_lib hps-time HPS_TIMESYNCD_DIR="${HPS_ROOT}/run/systemd/timesyncd.conf.d"
+  time_sync "$IPS"
 }
 
 # Logs: the journal's lines to the IPS (TCP 514), as the pinned images' rsyslog does:
@@ -128,6 +129,7 @@ role_logs() {
 # The host's reserve (CPU, memory, ZFS ARC), as hps-host-reserve does on the
 # pinned images: the allowlisted script itself, before pairing and any guest.
 role_reserve() {
+  host_cgroups
   run env HPS_CMDLINE="$HPS_CMDLINE" HPS_RUN_DIR="$HPS_RUN_DIR" bash "$HERE/actions/host-reserve-apply" \
     || log "host-reserve-apply exited $? (continuing)"
 }

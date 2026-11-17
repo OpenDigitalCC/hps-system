@@ -383,6 +383,7 @@ step_sysadmin
 step_packages
 step_agent
 step_legacy
+net_keep_lease
 role_pre
 step_pair
 persist_hostname

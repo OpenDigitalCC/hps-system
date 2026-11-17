@@ -539,10 +539,21 @@ Differences a person should know, all in the adapter or the packages:
 - **`systemctl` and `udevadm`** are two small scripts in `/run/hps/bin` (`os_compat`): `start`, `stop`,
   `restart`, `try-restart`, `cat` over `rc-service`; `set-property` and `show` say they are not available.
   `udevadm settle` is an `mdev -s` and a second. The node scripts are not forked.
-- **Not carried:** the cgroup reserve of CPU, memory and IO for the host (`host-reserve-apply` sets the
-  ZFS ARC cap and the memory floor but its `systemctl set-property` is refused), `node-journal` (no
-  journal), the continuing NTP sync (the clock is stepped once from the IPS), and renewal of the DHCP
-  lease (the IPS reserves the address by MAC; a client for the node is an open question).
+- **Time:** after `lib/hps-time` has stepped the clock from the IPS's HTTP date, busybox `ntpd` follows the
+  IPS (`/etc/conf.d/ntpd`: `-N -p <ips>`), the source timesyncd has on NixOS (`time_sync`).
+- **The lease:** `net_keep_lease` runs `udhcpc -b` on the interface that reaches the IPS, with a script
+  (`/run/hps/bin/udhcpc-hps`) that does not flush the address when udhcpc starts, so that the IPS's
+  one-hour lease is renewed.
+- **The host reserve:** `host-reserve-apply` is the NixOS script, with the same figures from the same
+  cluster keys. Its `systemctl set-property machine.slice` goes to the `systemctl` of `os_compat`, which
+  writes cgroup v2 directly: `AllowedCPUs` to `cpuset.cpus`, `CPUWeight` to `cpu.weight`, `IOWeight`
+  to `io.weight`, `MemoryMax` to `memory.max`, in `/sys/fs/cgroup/machine` (the partition libvirt uses
+  without systemd); `systemctl show machine.slice` reads them back for `host-resources`.
+  `host_cgroups` starts OpenRC's `cgroups` when v2 is not mounted. Whether libvirt puts each guest below
+  that group is a check of the trial.
+- **node-journal:** the same script and allowlist line; the `journalctl` of `os_compat` reads
+  `/var/log/messages` (busybox syslogd) with the same arguments: `-n`, `-u` (the syslog tag),
+  `-p` (the priorities up to it).
 - **Logs:** busybox `syslogd -R <ips>:514`, the lines the IPS's rsyslog already takes.
 - **ZFS hostid:** `hps.zfs_hostid=` on the kernel line, written with `zgenhostid` before the module loads.
 - **dbus** is started and **configfs** mounted before targetcli and libvirt.

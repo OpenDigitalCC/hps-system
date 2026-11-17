@@ -15,6 +15,7 @@ setup() {
   export HPS_RUN_DIR="$TEST_DIR/run" HPS_ROOT="$TEST_DIR/root" HPS_CMDLINE="$TEST_DIR/cmdline"
   export HPS_PKG_PREFIX="$TEST_DIR/usr" HPS_PKG_ETC="$TEST_DIR/root/etc"
   export HPS_OPENRC_DIR="$TEST_DIR/initd" HPS_LIB_MODULES="$TEST_DIR/lib/modules"
+  export HPS_UDHCPC="$TEST_DIR/bin/udhcpc"
   export HPS_APK="$TEST_DIR/bin/apk" HPS_RC_SERVICE="$TEST_DIR/bin/rc-service"
   export HPS_PATH_EXTRA="$TEST_DIR/bin:$TEST_DIR/usr/bin" HPS_CPUINFO="$TEST_DIR/cpuinfo" HPS_FETCH_RETRY=0
   mkdir -p "$TEST_DIR/bin" "$TEST_DIR/serve" "$TEST_DIR/home/sysadmin" "$HPS_ROOT/etc/ssh" "$HPS_ROOT/etc/iscsi" \
@@ -105,6 +106,8 @@ case "$2" in
   *) exit 0 ;;
 esac
 EOF
+  printf '#!/bin/bash\nexit 0\n' > "$b/ip"
+  printf '#!/bin/bash\necho "udhcpc $*" >> "$CALLS"\n' > "$b/udhcpc"
   for s in usermod chown chgrp passwd sshd modprobe depmod zgenhostid mountpoint mount setsid; do
     printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n[[ "%s" == mountpoint ]] && exit 1\n[[ "%s" == modprobe && -n "${FAIL_MODPROBE:-}" && "$1" == "$FAIL_MODPROBE" ]] && exit 1\nexit 0\n' "$s" "$s" "$s" > "$b/$s"
   done
@@ -353,7 +356,7 @@ with_driver() {
   PATH="$TEST_DIR/bin:$PATH" run "$s" cat hps-zfs-mount.service
   [ "$status" -eq 1 ]
   # a cgroup setting is not there, and says so
-  PATH="$TEST_DIR/bin:$PATH" run "$s" set-property --runtime machine.slice CPUWeight=100
+  PATH="$TEST_DIR/bin:$PATH" run "$s" set-property --runtime foo.slice CPUWeight=100
   [ "$status" -eq 1 ]
   [[ "$output" == *"not available on this OS (OpenRC)"* ]]
   PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/udevadm" settle --timeout=10
@@ -382,4 +385,90 @@ with_driver() {
   [[ "$output" == *"+ nsenter --target 1 --mount sh $HPS_RUN_DIR/bundle/bootstrap.sh refresh"* ]]
   [[ "$output" == *"bootstrap ran with: refresh"* ]]
   grep -q '^nsenter --target 1 --mount sh ' "$CALLS"
+}
+
+# --- the four gaps: time, lease, host reserve, node-journal --------------------------
+
+@test "init, Alpine: the clock is kept in step with the IPS by busybox ntpd, the source the NixOS nodes use" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [ "$(cat "$HPS_ROOT/etc/conf.d/ntpd")" = 'NTPD_OPTS="-N -p 10.9.9.9"' ]
+  grep -qx 'rc-service ntpd start' "$CALLS"
+  # once stepped by hps-time, then followed
+  [ "$(grep -n '^hps-time' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^rc-service ntpd start' "$CALLS" | head -1 | cut -d: -f1)" ]
+}
+
+@test "init, Alpine: a DHCP client keeps the lease: udhcpc in the background on the interface that reaches the IPS, with the script that does not flush the address" {
+  printf '#!/bin/bash\n[[ "$1 $2 $3" == "route get 10.9.9.9" ]] && echo "10.9.9.9 dev eth7 src 10.9.9.50 uid 0"\n' > "$TEST_DIR/bin/ip"
+  printf '#!/bin/bash\necho "udhcpc $*" >> "$CALLS"\n' > "$TEST_DIR/bin/udhcpc"
+  chmod +x "$TEST_DIR/bin/ip" "$TEST_DIR/bin/udhcpc"
+  export HPS_UDHCPC="$TEST_DIR/bin/udhcpc"
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  grep -q "^udhcpc -b -i eth7 -p /run/hps-udhcpc.eth7.pid -s $HPS_RUN_DIR/bin/udhcpc-hps -t 5\$" "$CALLS"
+  # the script: deconfig is left alone, anything else is the stock script's
+  mkdir -p "$TEST_DIR/fake/usr/share/udhcpc"
+  run sh "$HPS_RUN_DIR/bin/udhcpc-hps" deconfig
+  [ "$status" -eq 0 ]
+  grep -q 'exec /usr/share/udhcpc/default.script' "$HPS_RUN_DIR/bin/udhcpc-hps"
+}
+
+cgfake() {
+  export HPS_CGROUP_ROOT="$TEST_DIR/cg"
+  mkdir -p "$HPS_CGROUP_ROOT"
+  : > "$HPS_CGROUP_ROOT/cgroup.controllers"
+  : > "$HPS_CGROUP_ROOT/cgroup.subtree_control"
+}
+
+@test "the host reserve on Alpine: systemctl set-property machine.slice writes cgroup v2 (cpuset, cpu.weight, io.weight, memory.max) with the figures host-reserve-apply passes; show reads them back" {
+  run bash "$TEST_DIR/bundle/init" boot
+  cgfake
+  s="$HPS_RUN_DIR/bin/systemctl"
+  PATH="$TEST_DIR/bin:$PATH" run "$s" set-property --runtime machine.slice AllowedCPUs=2-7 CPUWeight=900 IOWeight=900 MemoryMax=2048M
+  ok0
+  [ "$(cat "$HPS_CGROUP_ROOT/machine/cpuset.cpus")" = 2-7 ]
+  [ "$(cat "$HPS_CGROUP_ROOT/machine/cpu.weight")" = 900 ]
+  [ "$(cat "$HPS_CGROUP_ROOT/machine/io.weight")" = "default 900" ]
+  [ "$(cat "$HPS_CGROUP_ROOT/machine/memory.max")" = 2147483648 ]
+  grep -q '+memory' "$HPS_CGROUP_ROOT/cgroup.subtree_control"
+  PATH="$TEST_DIR/bin:$PATH" run "$s" show machine.slice -p AllowedCPUs -p CPUWeight -p IOWeight -p MemoryMax
+  [ "$output" = "$(printf 'AllowedCPUs=2-7\nCPUWeight=900\nIOWeight=900\nMemoryMax=2147483648')" ]
+  # another unit, or a property it does not know, is refused and says so
+  PATH="$TEST_DIR/bin:$PATH" run "$s" set-property foo.slice CPUWeight=1
+  [ "$status" -eq 1 ]
+  PATH="$TEST_DIR/bin:$PATH" run "$s" set-property machine.slice Nice=1
+  [ "$status" -eq 1 ]
+}
+
+@test "the host reserve on Alpine: the role mounts cgroup v2 (rc-service cgroups) when it is not there" {
+  export HPS_CGROUP_ROOT="$TEST_DIR/cg-none"
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  grep -qx 'rc-service cgroups start' "$CALLS"
+  [[ "$output" == *"cgroup v2 is not mounted"* ]]
+}
+
+@test "node-journal on Alpine: the bundle's journalctl reads syslog, with the arguments node-journal passes, for a unit and a priority" {
+  run bash "$TEST_DIR/bundle/init" boot
+  export HPS_SYSLOG_FILE="$TEST_DIR/messages"
+  cat > "$HPS_SYSLOG_FILE" <<'LOG'
+Nov 16 21:00:00 sch-002 daemon.info libvirtd[212]: started
+Nov 16 21:00:01 sch-002 daemon.err libvirtd[212]: failed thing
+Nov 16 21:00:02 sch-002 kern.warning kernel: usb 1-1 reset
+Nov 16 21:00:03 sch-002 daemon.debug iscsid: noise
+Nov 16 21:00:04 sch-002 daemon.crit libvirtd[212]: very bad
+LOG
+  export PATH="$HPS_RUN_DIR/bin:$PATH"
+  run bash "$ROOT/node-manager/nixos-26/scripts/node-journal" libvirtd --lines 10 --prio err
+  ok0
+  [[ "$output" == *"+ journalctl -b --no-pager -o short-monotonic -n 10 -u libvirtd.service -p err"* ]]
+  [[ "$output" == *"failed thing"* && "$output" == *"very bad"* ]]
+  [[ "$output" != *"started"* && "$output" != *"usb 1-1"* && "$output" != *"noise"* ]]
+  run bash "$ROOT/node-manager/nixos-26/scripts/node-journal" --lines 2
+  ok0
+  [[ "$output" == *"noise"* && "$output" == *"very bad"* && "$output" != *"failed thing"* ]]
+  rm "$HPS_SYSLOG_FILE"
+  run bash "$ROOT/node-manager/nixos-26/scripts/node-journal"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"is not there (is syslog running?)"* ]]
 }

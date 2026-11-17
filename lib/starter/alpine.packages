@@ -36,6 +36,10 @@ openssl
 setpriv
 ctrl-exec-agent local
 
+# the OpenRC scripts of busybox (syslog, ntpd) and cgroups
+busybox-openrc
+openrc
+
 # the tools the node scripts call, GNU where busybox's differ
 coreutils
 gawk

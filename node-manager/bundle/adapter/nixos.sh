@@ -19,7 +19,8 @@
 #
 # and the small differences init and role ask the adapter about (adapter/alpine.sh has
 # the same names): pkg_kind, pkg_agent_dir, pkg_nagios_check, pkg_nagios_plugins,
-# pkg_stamp (what a package line is, and where it is), user_unlock, sudo_grant,
+# pkg_stamp (what a package line is, and where it is), time_sync, net_keep_lease, host_cgroups,
+# user_unlock, sudo_grant,
 # hostname_apply, os_compat, log_forward, md_monitor, zfs_hostid_set, svc_ensure,
 # iscsid_conf_source.
 #
@@ -273,6 +274,11 @@ hostname_apply() {
 
 # os_compat: the programs the OS lacks, for the scripts: none (systemd is here)
 os_compat() { return 0; }
+
+# time_sync, net_keep_lease, host_cgroups: systemd's timesyncd, networkd and slices do these
+time_sync() { return 0; }
+net_keep_lease() { return 0; }
+host_cgroups() { return 0; }
 
 # log_forward: the journal's lines to the IPS (lib/hps-log-journal, jq and the shell)
 log_forward() {

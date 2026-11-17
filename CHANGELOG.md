@@ -85,6 +85,7 @@ starter nodes behave as before; the only changes to files they use are small que
   `node-manager/apkovl-alpine/`), `node_role_packages` for Alpine (names, local ones marked),
 - **New** `node-manager/bundle/adapter/alpine.sh`: apk, OpenRC services, a systemctl and a udevadm
   for the node scripts, setpriv for the agent, syslog forwarding, the ZFS hostid, sudo.
+- **New** the four Alpine gaps closed in the adapter: time kept in step with the IPS (busybox ntpd), the DHCP lease renewed (udhcpc), the host reserve of CPU, memory and IO against guests (cgroup v2 under `machine`, the figures of `host-reserve-apply`), and `node-journal` over syslog (`journalctl` of `os_compat`).
 - **Changed** `init` and `role` ask the adapter (`pkg_kind`, `user_unlock`, `log_forward`, ...) where
   they named NixOS paths or units; the NixOS adapter has the same functions and its tests are unchanged
   but three that said "Alpine has no code". `bundle-refresh` uses `nsenter` where there is no `systemd-run`.
