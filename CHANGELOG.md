@@ -94,6 +94,12 @@ capabilities and removals are called out explicitly.
   `<project>-<purpose>-<YYYYMMDD>` marks "destroy me after this task", and a VM that may live
   beyond one task is named without the date from the start. In the skill and in
   `docs/WORKLOADS.md` "Names and lifetime"; `test_ips42_07_name_rule.bats`.
+- **Changed** the skill's render step puts the owner's public key in by default, so an owner
+  can log in to a VM on their own hardware: the file named by `HPS_OWNER_KEY`, else
+  `~/.config/hps-workloads/owner.pub`; `--owner-key` replaces it, `--no-owner-key` leaves it
+  out, a missing setting is said in the render output, a private key is refused. No owner key
+  path was recorded anywhere in the tooling, so the owner sets one once.
+  `docs/WORKLOADS.md` "The owner's key"; `test_ips42_08_owner_key.bats` runs the skill's test.
 
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 

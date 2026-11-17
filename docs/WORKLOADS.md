@@ -339,6 +339,18 @@ that holds the name. A new name is a new workload (`destroy --forget` the old on
 `define` and `create` the new), which does not carry the address over; decide the
 name before the first create.
 
+### The owner's key
+
+`hps-flavour render` puts the owner's public key into the definition and the
+seed by default, beside the project's, so the owner can log in to a VM on their
+own hardware without asking the session: the key file named by `HPS_OWNER_KEY`,
+else `~/.config/hps-workloads/owner.pub` (one public key line, never a private
+key: the renderer refuses a file that looks like one). `--owner-key FILE`
+(repeatable) names other keys instead, `--no-owner-key` leaves the owner out. When
+neither file exists the render goes on without and prints `owner-key: owner key:
+none ...` with the two ways to set one. No key path was recorded anywhere in the
+tooling before this: the owner sets it once.
+
 ## Operations
 
 `hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`,
