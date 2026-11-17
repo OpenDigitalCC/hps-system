@@ -262,7 +262,7 @@ signature is never installed unchecked. Delivery from the IPS is plain
 (`STRATEGY.md`).
 
 The agent: the lab's Nix cache holds the build the pinned images use
-(`ctrl-exec-agent-0.14.7`, with `bin/ctrl-exec-executor`; no compiler is
+(`ctrl-exec-agent-<version>`, with `bin/ctrl-exec-executor`; no compiler is
 needed to use it). To change version: `add-local` the new path, change the
 list line, `sync`; the nodes take it at their next refresh.
 

@@ -12,39 +12,13 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
-## Alpine libvirt with AppArmor: the builder's Alpine chroot (2026-11-17)
+## ctrl-exec 0.14.8 and plugins 0.3.13 ready for the next build (2026-11-17)
 
-- **Added** the preset builder action `builder-apk-build <source-sha256> <recipe>` (node script, builder
-  image only) and its job `hps-apk-build` / `hps-apk-inner`: an Alpine chroot on the builder's disk (minirootfs
-  pinned by sha256, `alpine-sdk` and the makedepends from Alpine's signed repositories through the egress
-  proxy, `abuild` as an unprivileged user with a throwaway key). The recipe is data in the source tree,
-  `alpine/recipes/libvirt-apparmor/` (`PINS`, `recipe.conf`, `APKBUILD.patch`): Alpine's own `APKBUILD` at a
-  pinned aports commit with `-Dapparmor=enabled -Dsecdriver_apparmor=enabled`, upstream's profile texts off,
-  release 100. A `RECORD-ME` pin makes the job observe and report the values instead of building.
-  The built set is verified (helper present, driver compiled in, no profile texts, closed dependencies) and
-  published as `out/pkgs/libvirt-apparmor/` for `pkg-fetch.sh` and `hps-starter add-local alpine`.
-  Not built yet: it needs the owner's approval of the new action, a new builder image and the first run
-  (`docs/BUILDER.md` "Local packages: the Alpine chroot", with the statement of what the builder gains).
-- **Changed** `hps-starter sync alpine`: every local apk is a candidate that replaces the snapshot's
-  package of the same name, so a local set (`libvirt-apparmor` and the rebuilt subpackages) is served from
-  `local/` and no stock `libvirt-*` package is held; the local index carries `install_if`, provider
-  priority and origin (`HPS::Apk::index_record`).
-- **Changed** the Alpine node side to the paths of that build: the helper is `/usr/lib/libvirt/virt-aa-helper`
-  (Alpine's `--libexec=/usr/lib/libvirt`), the template and per-guest profiles are in `/etc/apparmor.d/libvirt/`
-  (the directory libvirt compiles in), through adapter answers (`aa_helper_path`, `aa_profile_dir`) and sed
-  expressions on the profile texts; NixOS writes the same files in the same places as before.
-
-## Local packages from the builder (2026-11-17)
-
-- **Added** `nix/build.sh` package mode (`--profiles "pkg-<attr> out-<attr>"`, through the
-  existing `builder-build`): a flake package is built by name, staged under `out/pkgs/<attr>/`
-  (cache or files, `pkg.json`, `SHA256SUMS`), no pin, `latest` untouched. Flake attributes
-  `ctrl-exec-agent`, `om3-static`, `ctrl-exec-executor-static` (static, musl),
-  `qemu-host-cpu-only`, `qemu-headless` (closure 551.6 MiB against 1,486.6 MiB).
-- **Added** the Alpine apks `ctrl-exec-agent`, `om3`, `nagios-check`, `hps-nagios-plugins`
-  (packed with `HPS::Apk`; recipes in the lab's `lab/builder/`). Not done: the AppArmor build
-  of libvirt, which needs a root chroot the builder does not allow yet. `docs/BUILDER.md`
-  "Local packages".
+- **Changed** docs only: `docs/BUILDER.md` says how the `lab/builder` ctrl-exec source copies
+  are exported (release tag, `git archive`) and switched; `docs/BUNDLE.md` no longer names a
+  version. ctrl-exec 0.14.8 adds only `addr` to the dispatcher's run results; the agent and
+  executor are unchanged from 0.14.7, so no node needs the update before the next build.
+  The minimum ctrl-exec version HPS requires stays 0.14.7.
 
 ## Workload VM management, from a multi-day project VM (IPS-42, 2026-11-17)
 
@@ -105,6 +79,42 @@ capabilities and removals are called out explicitly.
   out, a missing setting is said in the render output, a private key is refused. No owner key
   path was recorded anywhere in the tooling, so the owner sets one once.
   `docs/WORKLOADS.md` "The owner's key"; `test_ips42_08_owner_key.bats` runs the skill's test.
+
+## Alpine libvirt with AppArmor: the builder's Alpine chroot (2026-11-17)
+
+- **Added** the preset builder action `builder-apk-build <source-sha256> <recipe>` (node script, builder
+  image only) and its job `hps-apk-build` / `hps-apk-inner`: an Alpine chroot on the builder's disk (minirootfs
+  pinned by sha256, `alpine-sdk` and the makedepends from Alpine's signed repositories through the egress
+  proxy, `abuild` as an unprivileged user with a throwaway key). The recipe is data in the source tree,
+  `alpine/recipes/libvirt-apparmor/` (`PINS`, `recipe.conf`, `APKBUILD.patch`): Alpine's own `APKBUILD` at a
+  pinned aports commit with `-Dapparmor=enabled -Dsecdriver_apparmor=enabled`, upstream's profile texts off,
+  release 100. A `RECORD-ME` pin makes the job observe and report the values instead of building.
+  The built set is verified (helper present, driver compiled in, no profile texts, closed dependencies) and
+  published as `out/pkgs/libvirt-apparmor/` for `pkg-fetch.sh` and `hps-starter add-local alpine`.
+  Built on the builder on 2026-11-17 (first full build 3 min 16 s of job time): eight apks, 12.3.0-r100, helper
+  in `libvirt`, driver in `libvirt-libs` (`docs/BUILDER.md` "Local packages: the Alpine chroot", with the statement
+  of what the builder gains). Not added to the lab IPS yet.
+- **Changed** `hps-starter sync alpine`: every local apk is a candidate that replaces the snapshot's
+  package of the same name, so a local set (`libvirt-apparmor` and the rebuilt subpackages) is served from
+  `local/` and no stock `libvirt-*` package is held; the local index carries `install_if`, provider
+  priority and origin (`HPS::Apk::index_record`).
+- **Changed** the Alpine node side to the paths of that build: the helper is `/usr/lib/libvirt/virt-aa-helper`
+  (Alpine's `--libexec=/usr/lib/libvirt`), the template and per-guest profiles are in `/etc/apparmor.d/libvirt/`
+  (the directory libvirt compiles in), through adapter answers (`aa_helper_path`, `aa_profile_dir`) and sed
+  expressions on the profile texts; NixOS writes the same files in the same places as before.
+
+
+## Local packages from the builder (2026-11-17)
+
+- **Added** `nix/build.sh` package mode (`--profiles "pkg-<attr> out-<attr>"`, through the
+  existing `builder-build`): a flake package is built by name, staged under `out/pkgs/<attr>/`
+  (cache or files, `pkg.json`, `SHA256SUMS`), no pin, `latest` untouched. Flake attributes
+  `ctrl-exec-agent`, `om3-static`, `ctrl-exec-executor-static` (static, musl),
+  `qemu-host-cpu-only`, `qemu-headless` (closure 551.6 MiB against 1,486.6 MiB).
+- **Added** the Alpine apks `ctrl-exec-agent`, `om3`, `nagios-check`, `hps-nagios-plugins`
+  (packed with `HPS::Apk`; recipes in the lab's `lab/builder/`). Not done: the AppArmor build
+  of libvirt, which needs a root chroot the builder does not allow yet. `docs/BUILDER.md`
+  "Local packages".
 
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 

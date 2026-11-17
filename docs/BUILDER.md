@@ -166,7 +166,20 @@ bash lab/builder/ips-add-local.sh alpine <apk-dir>   # add-local, sync alpine, v
 
 **NixOS.** `ctrl-exec-agent` and `om3` built by name give the store paths the package
 list already names (`s9s4irf4...-ctrl-exec-agent-0.14.7`, `icpkmfz7...-om3-3.0.0-rc62`),
-so no list line changes.
+so no list line changes, for the same inputs. A new `lab/builder/ctrl-exec-src` is a new
+input hash, so the agent's store path changes: the build prints it, and the one
+`ctrl-exec-agent` line of `lib/starter/nixos.packages` takes it.
+
+**The ctrl-exec source copies.** `lab/builder/ctrl-exec-src` and
+`lab/builder/ctrl-exec-plugins-src` are plain exports of a release tag of the two
+upstream checkouts (`git -C <checkout> archive --format=tar <tag> | tar -x -C <dir>`),
+with no `.git`; `check.sh`, `pkg-build.sh`, `repo-build.sh`, `dl360-build.sh` and
+`alpine-apks.sh` read them where they stand and never fetch. To move to a release:
+export the tag into `<dir>.next` while nothing builds, then rename
+(`ctrl-exec-src` to `ctrl-exec-src.<old version>`, `.next` to `ctrl-exec-src`) between
+builds; the next build then takes the new version without another step. The agent and
+executor patches (`$VERSION`, the `use lib` lines in `nix/package.nix`) read `VERSION`
+and the `bin/` files, so a release that leaves those unchanged needs no edit here.
 
 **Alpine.** The executor and `om` are static (musl, no libc). The apks (`root:root`,
 unsigned, no install script): `ctrl-exec-agent` (`/usr/bin/ctrl-exec-agent`, `cea`,
