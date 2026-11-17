@@ -95,6 +95,27 @@ says so (`seed: changed since create`). To apply it: `hps-workload destroy
 <name>`, `hps-workload define <name> --replace` (or edit the file), then
 `create` and `start`; the disk is written fresh.
 
+### The proxy reaches services as well as login shells
+
+The lab segment has no route out but the egress proxy (`lab/egress-proxy.pl`).
+A flavour's seed, rendered with `--proxy URL` by the hps-workloads skill, hands
+that proxy to everything that can need it, not only to a login shell:
+
+| Where | What the seed writes | Reached by |
+| --- | --- | --- |
+| `/etc/environment`, `/etc/profile.d/hps-proxy.sh` | `http_proxy`, `https_proxy`, `no_proxy` and the upper-case names | ssh sessions (login or not) and login shells |
+| `/etc/systemd/system.conf.d/hps-proxy.conf` | `[Manager] DefaultEnvironment=` with the same six variables | every system service and the jobs it starts (a ctrl-exec agent, a build) |
+| `/etc/systemd/user.conf.d/hps-proxy.conf` | the same, for the user manager | rootless services of a user (rootless podman) |
+| `/etc/gitconfig` | `[http] proxy = URL` (the file `git config --system http.proxy` writes; written directly, so it holds whether git is installed now or later) | `git fetch` and `git clone` over https from any process |
+| `podman.service.d/hps-proxy.conf`, `docker.service.d/hps-proxy.conf` under `/etc/systemd/system/` | `[Service] Environment=` with the same variables; only in the container host flavours (`podman-host`, `odoo-test`) | podman's own service and a Docker daemon the project installs later (a drop-in for a unit that does not exist yet applies when it appears) |
+
+The seed also runs `systemctl daemon-reexec` before it installs anything, so
+the manager's `DefaultEnvironment` is in force for the first service that
+starts. Without `--proxy` each of these files holds one comment line and the
+guest stays offline. `video-edit` is not a container host and gets no podman or
+Docker drop-in. A VM made from an older seed is changed by hand (or
+re-created); a seed applies once, at the first boot.
+
 ### Writing and reading a definition
 
 ```

@@ -46,6 +46,15 @@ capabilities and removals are called out explicitly.
   of libvirt, which needs a root chroot the builder does not allow yet. `docs/BUILDER.md`
   "Local packages".
 
+## Workload VM management, from a multi-day project VM (IPS-42, 2026-11-17)
+
+- **Changed** the flavour seeds of the hps-workloads skill: the lab proxy reaches
+  services as well as login shells (systemd `DefaultEnvironment` for the system and
+  user managers, `/etc/gitconfig`, and the podman and docker service drop-ins for the
+  container host flavours). `docs/WORKLOADS.md` "The proxy reaches services as well
+  as login shells" lists each file; the skill and its test live outside this
+  repository, and `test_ips42_01_seed_proxy.bats` runs the skill's test.
+
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 
 - **Changed** the guest abstraction `node-manager/apparmor/libvirt-qemu` allows read of
