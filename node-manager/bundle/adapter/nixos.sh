@@ -257,6 +257,9 @@ aa_parser_path() { printf '%s\n' "$AA_PARSER/bin/apparmor_parser"; }
 aa_libvirtd_path() { printf '%s\n' "$AA_LIBVIRT/sbin/.libvirtd-wrapped"; }
 aa_sed_args() { return 0; }
 aa_libvirt_check() { return 0; }
+# where libvirt looks for TEMPLATE.qemu and writes the per-guest profiles (its compiled-in
+# APPARMOR_DIR on NixOS)
+aa_profile_dir() { printf '%s\n' /var/lib/apparmor.d/libvirt; }
 
 # user_unlock, sudo_grant: nothing to do here (the wheel group has sudo; sshd takes the
 # account as useradd made it)

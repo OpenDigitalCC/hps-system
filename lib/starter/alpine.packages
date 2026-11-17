@@ -69,9 +69,11 @@ mdadm
 smartmontools
 dbus
 
-# compute: libvirt is the AppArmor build, a local package (plan step 5). Alpine's own
-# libvirt-daemon has no AppArmor driver and is not held, so that a compute role cannot be
-# installed from it by accident; the compute role refuses without the driver.
+# compute: libvirt is the AppArmor build, a local package (plan step 5). libvirt-apparmor is
+# the meta package of a set (alpine/recipes/libvirt-apparmor); the rest of the set is added
+# with it (hps-starter add-local alpine) and served from local/ in the place of Alpine's own
+# packages of the same names, which have no AppArmor driver and are not held, so that a compute
+# role cannot be installed from them by accident; the compute role refuses without the driver.
 apparmor
 apparmor-profiles
 libvirt-apparmor local

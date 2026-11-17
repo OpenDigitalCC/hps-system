@@ -599,21 +599,36 @@ zfs_hostid_set() {
 }
 
 # AppArmor (role_apparmor). The profile texts are written for the nix layout
-# (libvirtd as sbin/.libvirtd-wrapped, the parser in bin/); here everything is under
-# /usr, so the markers all stand for $PKG_PREFIX and two sed expressions put the real
+# (libvirtd as sbin/.libvirtd-wrapped, the parser in bin/, libvirt's helpers in
+# libexec/, the per-guest profiles in /var/lib/apparmor.d/libvirt); here everything is
+# under /usr, so the markers all stand for $PKG_PREFIX and sed expressions put the real
 # paths in. Alpine's own libvirt is built without the AppArmor driver (no virt-aa-helper):
 # the compute role needs the local package libvirt-apparmor, the AppArmor build, and says
 # so when it is not what is installed. There is no fall back.
+# That build keeps Alpine's own paths (docs/BUILDER.md "Local packages"): the helpers are in
+# $PKG_PREFIX/lib/libvirt (--libexec=/usr/lib/libvirt, so the compiled-in helper is
+# /usr/lib/libvirt/virt-aa-helper) and the profile directory is compiled in as
+# <sysconfdir>/apparmor.d/libvirt, which is /etc/apparmor.d/libvirt here.
 # shellcheck disable=SC2034  # read by role_aa_fill
 aa_roots() { AA_PARSER="$PKG_PREFIX"; AA_LIBVIRT="$PKG_PREFIX"; AA_QEMU="$PKG_PREFIX"; }
 aa_parser_path() { readlink -f "$(role_bin apparmor_parser)"; }
 aa_libvirtd_path() { readlink -f "$(role_bin libvirtd)"; }
+aa_libexec_dir() { printf '%s\n' "$PKG_PREFIX/lib/libvirt"; }
+aa_helper_path() { printf '%s\n' "$(aa_libexec_dir)/virt-aa-helper"; }
+aa_profile_dir() { printf '%s\n' /etc/apparmor.d/libvirt; }
+# After the markers are filled, $AA_LIBVIRT/libexec/<libvirt's helper> is the nix place of
+# a helper (the QEMU package's own libexec/qemu-bridge-helper stays where Alpine puts it).
 aa_sed_args() {
+  local h
   printf '%s\n' -e "s|$AA_PARSER/bin/apparmor_parser|$(aa_parser_path)|g" -e "s|$AA_LIBVIRT/sbin/\\.libvirtd-wrapped|$(aa_libvirtd_path)|g"
+  for h in virt-aa-helper libvirt_parthelper libvirt_iohelper; do
+    printf '%s\n' -e "s|$AA_LIBVIRT/libexec/$h|$(aa_libexec_dir)/$h|g"
+  done
+  printf '%s\n' -e "s|^\\([[:space:]]*\\)$AA_LIBVIRT/libexec/\\* PUxr,|\\1$(aa_libexec_dir)/* PUxr,|" -e "s|/var/lib/apparmor\\.d/libvirt|$(aa_profile_dir)|g"
 }
 aa_libvirt_check() {
-  if [[ ! -x "$PKG_PREFIX/libexec/virt-aa-helper" ]]; then
-    log "ERROR: this node's libvirt has no AppArmor driver (no $PKG_PREFIX/libexec/virt-aa-helper): Alpine's own libvirt is built without it."
+  if [[ ! -x "$(aa_helper_path)" ]]; then
+    log "ERROR: this node's libvirt has no AppArmor driver (no $(aa_helper_path)): Alpine's own libvirt is built without it."
     log "ERROR: the compute role needs the local package libvirt-apparmor (the AppArmor build of libvirt, plan step 5; hps-starter add-local alpine)."
     log "ERROR: libvirtd is NOT started: guests would run unconfined, and no node of HPS does."
     return 1

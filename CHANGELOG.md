@@ -12,6 +12,28 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Alpine libvirt with AppArmor: the builder's Alpine chroot (2026-11-17)
+
+- **Added** the preset builder action `builder-apk-build <source-sha256> <recipe>` (node script, builder
+  image only) and its job `hps-apk-build` / `hps-apk-inner`: an Alpine chroot on the builder's disk (minirootfs
+  pinned by sha256, `alpine-sdk` and the makedepends from Alpine's signed repositories through the egress
+  proxy, `abuild` as an unprivileged user with a throwaway key). The recipe is data in the source tree,
+  `alpine/recipes/libvirt-apparmor/` (`PINS`, `recipe.conf`, `APKBUILD.patch`): Alpine's own `APKBUILD` at a
+  pinned aports commit with `-Dapparmor=enabled -Dsecdriver_apparmor=enabled`, upstream's profile texts off,
+  release 100. A `RECORD-ME` pin makes the job observe and report the values instead of building.
+  The built set is verified (helper present, driver compiled in, no profile texts, closed dependencies) and
+  published as `out/pkgs/libvirt-apparmor/` for `pkg-fetch.sh` and `hps-starter add-local alpine`.
+  Not built yet: it needs the owner's approval of the new action, a new builder image and the first run
+  (`docs/BUILDER.md` "Local packages: the Alpine chroot", with the statement of what the builder gains).
+- **Changed** `hps-starter sync alpine`: every local apk is a candidate that replaces the snapshot's
+  package of the same name, so a local set (`libvirt-apparmor` and the rebuilt subpackages) is served from
+  `local/` and no stock `libvirt-*` package is held; the local index carries `install_if`, provider
+  priority and origin (`HPS::Apk::index_record`).
+- **Changed** the Alpine node side to the paths of that build: the helper is `/usr/lib/libvirt/virt-aa-helper`
+  (Alpine's `--libexec=/usr/lib/libvirt`), the template and per-guest profiles are in `/etc/apparmor.d/libvirt/`
+  (the directory libvirt compiles in), through adapter answers (`aa_helper_path`, `aa_profile_dir`) and sed
+  expressions on the profile texts; NixOS writes the same files in the same places as before.
+
 ## Local packages from the builder (2026-11-17)
 
 - **Added** `nix/build.sh` package mode (`--profiles "pkg-<attr> out-<attr>"`, through the

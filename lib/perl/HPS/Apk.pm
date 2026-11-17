@@ -168,7 +168,7 @@ sub _gzip ($bytes) {
 }
 
 # pack_apk(%a): name, version (with -rN), arch (default noarch), description,
-# url, license, depends => [..], provides => [..], files => [{name, data, mode, type?, link?}]
+# url, license, depends => [..], provides => [..], install_if (one line), provider_priority, origin, files => [{name, data, mode, type?, link?}]
 # Returns the apk bytes (control stream, data stream; no signature).
 sub pack_apk (%a) {
     my $files = $a{files} // [];
@@ -188,6 +188,9 @@ sub pack_apk (%a) {
         'url = ' . ($a{url} // 'https://hps.invalid/'), 'builddate = ' . ($a{builddate} // 0), 'packager = hps-starter',
         "size = $installed", "arch = " . ($a{arch} // 'noarch'), 'license = ' . ($a{license} // 'custom'),
         (map { "provides = $_" } @{ $a{provides} // [] }), (map { "depend = $_" } @{ $a{depends} // [] }),
+        (defined $a{install_if} ? "install_if = $a{install_if}" : ()),
+        (defined $a{provider_priority} ? "provider_priority = $a{provider_priority}" : ()),
+        (defined $a{origin} ? "origin = $a{origin}" : ()),
         'datahash = ' . Digest::SHA::sha256_hex($data),
     );
     my $control = _gzip(tar_bytes([ { name => '.PKGINFO', data => join("\n", @l) . "\n" } ], 0));
@@ -210,6 +213,12 @@ sub index_record ($file, $arch = 'x86_64') {
         "S:$c->{size}", 'I:' . $one->('size'), 'T:' . $one->('pkgdesc'), 'U:' . $one->('url'), 'L:' . $one->('license'));
     push @l, 'D:' . join(' ', @{ $pi->{depend} }) if $pi->{depend};
     push @l, 'p:' . join(' ', @{ $pi->{provides} }) if $pi->{provides};
+    # what abuild writes and a package of Alpine's own split carries (the -openrc and
+    # -qemu subpackages of libvirt): the condition that installs it with another package,
+    # the provider priority and the origin
+    push @l, 'i:' . join(' ', @{ $pi->{install_if} }) if $pi->{install_if};
+    push @l, 'k:' . $pi->{provider_priority}[0] if $pi->{provider_priority};
+    push @l, 'o:' . $pi->{origin}[0] if $pi->{origin};
     return join("\n", @l) . "\n\n";
 }
 

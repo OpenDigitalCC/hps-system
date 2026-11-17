@@ -32,6 +32,9 @@
 #    never served) and the public key repo/repo.pub, served read-only on port
 #    8091 by hps-repo-http; the pins are out/ on 8090. Builds substitute from
 #    it and write back to it (repo build, repo update, repo seed)
+#  - the Alpine package build: a root-owned chroot of Alpine's minirootfs on the disk,
+#    apk and abuild inside it (builder-apk-build, hps-apk-build); the one preset action
+#    that takes a recipe name and nothing else
 #  - the builder node scripts, allowlisted here and so ONLY on this image
 #
 # Nothing here holds a secret, an image name, a disk, an interface or an address.
@@ -65,6 +68,18 @@ in
   # which the executor's profile does not give a node script).
   environment.etc."hps/hps-builder-run" = {
     source = bootDir + "/hps-builder-run.sh";
+    mode = "0755";
+  };
+
+  # The Alpine package build (docs/BUILDER.md "Local packages: the Alpine chroot"):
+  # the runner builder-apk-build starts through the same transient unit, and the part
+  # of it that runs inside the chroot (copied there, never read from a source tree).
+  environment.etc."hps/hps-apk-build" = {
+    source = bootDir + "/hps-apk-build.sh";
+    mode = "0755";
+  };
+  environment.etc."hps/hps-apk-inner" = {
+    source = bootDir + "/hps-apk-inner.sh";
     mode = "0755";
   };
 
@@ -151,6 +166,8 @@ in
       builder-disk-prepare.options.profile = "node";
       builder-build.source = mkScript "builder-build" (scriptsDir + "/builder-build");
       builder-build.options.profile = "node";
+      builder-apk-build.source = mkScript "builder-apk-build" (scriptsDir + "/builder-apk-build");
+      builder-apk-build.options.profile = "node";
       builder-status.source = mkScript "builder-status" (scriptsDir + "/builder-status");
       builder-status.options.profile = "node";
       repo-seed.source = mkScript "repo-seed" (scriptsDir + "/repo-seed");

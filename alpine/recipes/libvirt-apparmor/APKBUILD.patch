@@ -1,0 +1,40 @@
+--- a/APKBUILD
++++ b/APKBUILD
+@@ -3,7 +3,9 @@
+ pkgname=libvirt
+ pkgver=12.3.0
+ _ver="${pkgver/_rc/-rc}"
+-pkgrel=0
++# HPS: rebuilt with the AppArmor security driver (alpine/recipes/libvirt-apparmor in hps-system).
++# pkgrel 100 so that apk prefers this build to Alpine's own at the same version.
++pkgrel=100
+ pkgdesc="Virtualization API for several hypervisor and container systems"
+ url="https://libvirt.org/"
+ arch="all"
+@@ -42,6 +44,7 @@
+ 	fuse3-dev
+ 	gnutls-dev
+ 	json-c-dev
++	libapparmor-dev
+ 	libcap-ng-dev
+ 	libnl3-dev
+ 	libpcap-dev
+@@ -77,7 +80,7 @@
+ 	$pkgname-lxc
+ 	$pkgname-vbox
+ 	"
+-source="https://libvirt.org/sources/libvirt-$pkgver.tar.xz
++source="https://download.libvirt.org/libvirt-$pkgver.tar.xz
+ 	libvirt.confd
+ 	libvirt.initd
+ 	libvirt-guests.confd
+@@ -148,6 +151,9 @@
+ 	abuild-meson \
+ 		-Db_lto=true \
+ 		--libexec=/usr/lib/$pkgname \
++		-Dapparmor=enabled \
++		-Dapparmor_profiles=disabled \
++		-Dsecdriver_apparmor=enabled \
+ 		-Dinit_script=openrc \
+ 		-Ddriver_esx=enabled \
+ 		-Ddriver_interface=enabled \

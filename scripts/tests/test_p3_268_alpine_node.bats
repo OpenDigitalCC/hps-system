@@ -279,9 +279,10 @@ EOS
 }
 
 with_driver() {
-  mkdir -p "$TEST_DIR/usr/libexec"
-  printf '#!/bin/bash\n' > "$TEST_DIR/usr/libexec/virt-aa-helper"
-  chmod +x "$TEST_DIR/usr/libexec/virt-aa-helper"
+  # where the AppArmor build of libvirt installs it: Alpine's --libexec=/usr/lib/libvirt
+  mkdir -p "$TEST_DIR/usr/lib/libvirt"
+  printf '#!/bin/bash\n' > "$TEST_DIR/usr/lib/libvirt/virt-aa-helper"
+  chmod +x "$TEST_DIR/usr/lib/libvirt/virt-aa-helper"
 }
 
 @test "init, Alpine, TCH: a libvirt without the AppArmor driver is refused, loudly, naming the local package: libvirtd is NOT started" {
@@ -290,6 +291,7 @@ with_driver() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"ERROR: this node's libvirt has no AppArmor driver"* ]]
   [[ "$output" == *"the local package libvirt-apparmor"* ]]
+  [[ "$output" == *"no $TEST_DIR/usr/lib/libvirt/virt-aa-helper"* ]]
   [[ "$output" == *"libvirtd is NOT started"* ]]
   [[ "$output" == *"a role step failed: compute services"* ]]
   [ ! -e "$HPS_OPENRC_DIR/libvirtd" ]
@@ -333,6 +335,34 @@ with_driver() {
   [ "$(grep -c 'replacement_timeout = 15' "$HPS_ROOT/etc/iscsi/iscsid.conf")" -eq 1 ]
   run bash "$TEST_DIR/bundle/init" refresh
   [ "$(grep -c 'replacement_timeout = 15' "$HPS_ROOT/etc/iscsi/iscsid.conf")" -eq 1 ]
+}
+
+@test "init, Alpine, TCH: the profile texts and the template are where THIS libvirt looks: helper in /usr/lib/libvirt, profiles in /etc/apparmor.d/libvirt, nothing under /var/lib/apparmor.d" {
+  tch_node
+  with_driver
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  local aa="$HPS_ROOT/etc/apparmor.d" h="$TEST_DIR/usr/lib/libvirt"
+  # the template is compiled in at <sysconfdir>/apparmor.d/libvirt/TEMPLATE.qemu
+  [ -s "$aa/libvirt/TEMPLATE.qemu" ]
+  [ ! -e "$HPS_ROOT/var/lib/apparmor.d" ]
+  # the helper's own profile is named by the path libvirt executes
+  grep -q "^$h/virt-aa-helper {" "$aa/hps/virt-aa-helper"
+  grep -qx "$h/virt-aa-helper (enforce)" "$HPS_AA_PROFILES"
+  grep -q "^  $h/virt-aa-helper mr,$" "$aa/hps/virt-aa-helper"
+  # libvirtd may run its helpers there; QEMU's bridge helper stays in QEMU's libexec
+  grep -q "^  $h/virt-aa-helper PUx,$" "$aa/hps/libvirtd"
+  grep -q "^  $h/libvirt_parthelper ix,$" "$aa/hps/libvirtd"
+  grep -q "^  $h/\* PUxr,$" "$aa/hps/libvirtd"
+  grep -q "$TEST_DIR/usr/libexec/qemu-bridge-helper" "$aa/hps/libvirtd"
+  ! grep -q "$TEST_DIR/usr/libexec/virt-aa-helper\|$TEST_DIR/usr/libexec/libvirt_" "$aa/hps/libvirtd" "$aa/hps/virt-aa-helper"
+  # the per-guest profiles are written in the directory libvirt uses
+  grep -q '^  /etc/apparmor.d/libvirt/libvirt-@{UUID}\* rw,$' "$aa/hps/virt-aa-helper"
+  grep -q '^  audit deny /etc/apparmor.d/libvirt/\*\* wxl,$' "$aa/hps/libvirtd"
+  ! grep -rq '/var/lib/apparmor.d' "$aa" "$HPS_ROOT/etc/apparmor"
+  # one parser include for /etc/apparmor.d from the package's path, none for a second directory
+  [ "$(grep -c '^Include ' "$HPS_ROOT/etc/apparmor/parser.conf")" -eq 2 ]
+  ! grep -q '@@' "$aa/hps/libvirtd" "$aa/hps/virt-aa-helper" "$aa/libvirt/TEMPLATE.qemu" "$aa/abstractions/libvirt-qemu"
 }
 
 @test "no cluster key makes an unconfined guest acceptable: the key is gone" {

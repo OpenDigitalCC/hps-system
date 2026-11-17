@@ -399,10 +399,11 @@ images do (`docs/CONFINEMENT.md` "AppArmor layer"). Four parts:
 `role_apparmor` in order: the kernel's `/sys/module/apparmor/parameters/enabled` must be
 `Y` and `/sys/kernel/security/apparmor/profiles` readable; it writes the abstraction
 to `/etc/apparmor.d/abstractions/libvirt-qemu`, `TEMPLATE.qemu` to
-`/var/lib/apparmor.d/libvirt/` (libvirt's compiled-in `APPARMOR_DIR`), the two
+`/var/lib/apparmor.d/libvirt/` (libvirt's compiled-in `APPARMOR_DIR`; the adapter answers where, `aa_profile_dir`: on Alpine
+`/etc/apparmor.d/libvirt/`, where that libvirt's `sysconfdir` puts it), the two
 policies to `/etc/apparmor.d/hps/`, and `/etc/apparmor/parser.conf` with the Include
 lines (`/etc/apparmor.d`, the profile's `etc/apparmor.d` that the `apparmor-profiles`
-package fills, and `/var/lib/apparmor.d` for the per-guest `libvirt/<uuid>.files`);
+package fills, and the directory above the per-guest `libvirt/<uuid>.files` when it is not `/etc/apparmor.d`);
 it links `/sbin/apparmor_parser`; it loads `libvirtd` and `virt-aa-helper` with
 `apparmor_parser -r -K`; and it checks that the daemon's own profile
 (`<libvirt>/sbin/.libvirtd-wrapped (enforce)`) is in the kernel's list, because
@@ -570,9 +571,12 @@ in `missing_local` until it is added; Alpine's own `libvirt-daemon` is not in th
 compute role cannot be installed from it by accident). `role_apparmor` is the NixOS one: the profile
 texts of `node-manager/apparmor/` with the markers filled from the node's packages (the adapter's
 `aa_roots`, `aa_sed_args`: all under `/usr`, the daemon's profile for `/usr/sbin/libvirtd` and not the
-nix wrapper's name), the parser from the `apparmor` package, the profiles loaded before `libvirtd`
+nix wrapper's name; libvirt's helpers where the Alpine build keeps them, `--libexec=/usr/lib/libvirt`, so the helper is
+`/usr/lib/libvirt/virt-aa-helper` (`aa_helper_path`) and its profile is named by that path; the per-guest profiles and
+`TEMPLATE.qemu` in `/etc/apparmor.d/libvirt/`, the directory that libvirt build compiles in (`aa_profile_dir`); QEMU's own
+`libexec/qemu-bridge-helper` stays where Alpine's QEMU puts it), the parser from the `apparmor` package, the profiles loaded before `libvirtd`
 starts, `security_driver = "apparmor"` in `qemu.conf`. It refuses, with no fall back, when the libvirt
-has no `libexec/virt-aa-helper` (the message names `libvirt-apparmor`) or when the kernel's AppArmor
+has no `lib/libvirt/virt-aa-helper` (the message names `libvirt-apparmor`) or when the kernel's AppArmor
 is not active: `libvirtd` is not started, the step "compute services" fails and `init` ends 1. There
 is no setting that accepts an unconfined guest.
 
@@ -584,7 +588,14 @@ no libc dependency) and put in apks that carry the files where the adapter looks
 `/usr/bin/ctrl-exec-executor`, `/usr/bin/om`, `/usr/bin/nagios-check`, `/usr/lib/hps-nagios-plugins/`. An
 Alpine node with the four in `local/` is expected to pair (proof on a node is the Alpine trial's).
 
-`libvirt-apparmor` (the AppArmor build of libvirt) is not built yet: it needs a root chroot on the builder (`docs/BUILDER.md` "Local packages").
+`libvirt-apparmor` (the AppArmor build of libvirt) is built by the recipe `alpine/recipes/libvirt-apparmor` through the
+builder's Alpine chroot (`builder-apk-build`, `docs/BUILDER.md` "Local packages: the Alpine chroot"): Alpine's own `APKBUILD` of
+12.3.0 at a pinned aports commit, patched for `-Dapparmor=enabled -Dsecdriver_apparmor=enabled` (upstream's profile texts
+off, so `node-manager/apparmor/` stays the one source), release `-r100`. Its apks keep Alpine's names; `libvirt-apparmor` is the
+meta package that depends on exactly the rebuilt set, which `hps-starter sync alpine` serves from the local repository in the
+place of the stock packages of the same names (`docs/STARTER.md` "Alpine"). **Unverified until a real build:** the set's
+contents, that `abuild` runs as described in the chroot, and the first node that installs it; the pins are not recorded yet
+(`alpine/recipes/libvirt-apparmor/PINS`).
 
 ## Not in this step
 

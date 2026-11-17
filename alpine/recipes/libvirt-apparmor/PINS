@@ -1,0 +1,54 @@
+# PINS of the libvirt-apparmor recipe: everything its build takes from outside this
+# tree, and nothing else. Read by hps-apk-build (node-manager/nixos-26/boot) with a
+# strict parser, never executed. One file by design: the one place to review and
+# change when Alpine moves.
+#
+#   key=value    one of the keys below
+#   file NAME SHA256   a file of the pinned aports directory, with its sha256
+#
+# A value that is RECORD-ME has not been recorded yet. A run with any RECORD-ME fetches
+# what the pins name, prints every value it saw (PIN-OBSERVED lines in the build log:
+# builder-status --log N), uses none of it and fails. Compare the values with Alpine's
+# own sources (the aports commit on gitlab.alpinelinux.org, the minirootfs listing on
+# dl-cdn.alpinelinux.org), replace RECORD-ME here, commit, publish a new source and run
+# again. The first run of a new aports commit is the one that needs a person.
+#
+# What each pin protects:
+#   minirootfs_*   the root of the chroot (apk then verifies Alpine's own signatures for
+#                  everything it installs: the keys are the minirootfs's)
+#   aports_commit  the commit whose libvirt directory is the base of the build; the files
+#                  are fetched by commit id (immutable), not by branch
+#   file lines     each file of that directory (the APKBUILD, the init scripts, the
+#                  post-install); the libvirt source tarball's sha512 is the one in the
+#                  APKBUILD, which abuild checks
+#
+# Egress this recipe needs (the cluster's proxy allows them for the builder):
+# dl-cdn.alpinelinux.org (minirootfs, apk), gitlab.alpinelinux.org (aports files and, in
+# record mode only, the commit lookup), download.libvirt.org (the libvirt tarball).
+
+alpine_mirror=https://dl-cdn.alpinelinux.org/alpine
+alpine_release=3.24
+# the minirootfs of that release (record mode reads the name and sha256 from the mirror's
+# latest-releases.yaml and from the file itself)
+minirootfs_file=RECORD-ME
+minirootfs_sha256=RECORD-ME
+
+aports_raw=https://gitlab.alpinelinux.org/alpine/aports/-/raw
+aports_api=https://gitlab.alpinelinux.org/api/v4/projects/alpine%2Faports/repository/commits
+# the branch record mode resolves to a commit; never used to fetch the files of a real build
+aports_ref=3.24-stable
+aports_commit=RECORD-ME
+aports_dir=community/libvirt
+
+# The APKBUILD below is the copy the step 5 fetch read from 3.24-stable on 2026-11-17 (libvirt
+# 12.3.0-r0), the one APKBUILD.patch was written against. Its sha256 is computed from that
+# copy; the first run confirms it at the commit that gets pinned. The other files are the
+# source= and install= files of that APKBUILD; their sha256 is not known yet.
+file APKBUILD 5331a9465afd6f39850cef453a882fe818b56c41c6406c5672bd84117564ce56
+file libvirt.confd RECORD-ME
+file libvirt.initd RECORD-ME
+file libvirt-guests.confd RECORD-ME
+file libvirt-guests.initd RECORD-ME
+file virtlogd.initd RECORD-ME
+file virtlockd.initd RECORD-ME
+file libvirt.post-install RECORD-ME

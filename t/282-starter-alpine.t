@@ -244,6 +244,41 @@ like(msg(err_of(sub { (world())[0]->sync('alpine', '3.24', only => 'starter') })
     is_deeply([ map { scalar @{ $_->{bad} } } @{ $s->verify('alpine') } ], [ 0, 0 ], 'verify covers the local files too');
 }
 
+# --- a local set that replaces stock packages (the AppArmor build of libvirt) ---------------------
+{
+    my $up = mirror();
+    # the stock split of libvirt, at its own version, in the snapshot
+    apk($up, 'community', name => 'libvirt-daemon', version => '12.3.0-r0', depends => ['jq']);
+    apk($up, 'community', name => 'libvirt-daemon-openrc', version => '12.3.0-r0');
+    apk($up, 'community', name => 'libvirt-qemu', version => '12.3.0-r0');
+    write_index($up, 'community', { 'openrc-extra-0.6-r0.apk' => "i:openrc\n", 'libvirt-daemon-openrc-12.3.0-r0.apk' => "i:libvirt-daemon=12.3.0-r0 openrc\n" });
+    my ($s, $res) = world(up => $up, list => "alpine-base\nlinux-lts\nlinux-firmware-none\nmkinitfs\nzfs-lts\nlibvirt-apparmor local\n");
+    my $dir = tempdir(CLEANUP => 1);
+    my %set = (
+        'meta.apk'   => { name => 'libvirt-apparmor', version => '12.3.0-r100', depends => [ 'libvirt-daemon=12.3.0-r100', 'libvirt-daemon-openrc=12.3.0-r100' ] },
+        'daemon.apk' => { name => 'libvirt-daemon', version => '12.3.0-r100', depends => ['jq'], provides => ['cmd:libvirtd=12.3.0-r100'],
+                          files => [ { name => 'usr/lib/libvirt/virt-aa-helper', data => "x", mode => 0755 } ] },
+        'openrc.apk' => { name => 'libvirt-daemon-openrc', version => '12.3.0-r100', install_if => 'libvirt-daemon=12.3.0-r100 openrc', provider_priority => 10, origin => 'libvirt' },
+        'spare.apk'  => { name => 'libvirt-spare', version => '12.3.0-r100', depends => ['libvirt-daemon=12.3.0-r100'] },
+    );
+    spit("$dir/$_", HPS::Apk::pack_apk(arch => 'x86_64', %{ $set{$_} })) for keys %set;
+    is($s->add_local('alpine', '3.24', $dir, [ sort keys %set ])->{added}, 4, 'add-local alpine takes the whole set');
+    my $r = $s->sync('alpine');
+    is_deeply($r->{repo}{missing_local}, [], 'the one name the list marks local is found');
+    my $rd = "$res/res/packages/alpine/3.24";
+    my $rm = decode_json(slurp("$rd/manifest.json"));
+    is_deeply([ sort keys %{ $rm->{local} } ], [qw(libvirt-apparmor libvirt-daemon libvirt-daemon-openrc)],
+        'the packages it depends on join the local repository, whether the list names them or not; one nothing needs does not');
+    is_deeply([ grep { /^libvirt/ } sort keys %{ $rm->{roots} } ], ['libvirt-apparmor'], 'only the name the list gives is a root');
+    ok(!glob("$rd/community/x86_64/libvirt-*"), 'the stock packages of the same names are neither fetched nor held: no node can install the stock daemon');
+    ok(-f "$rd/community/x86_64/jq-1.8-r0.apk", 'a stock dependency of the local daemon is in the closure');
+    ok(-f "$rd/local/x86_64/libvirt-daemon-12.3.0-r100.apk" && !-e "$rd/local/x86_64/libvirt-spare-12.3.0-r100.apk", 'the local repository holds the set and nothing else');
+    my $idx = HPS::Apk::index_text("$rd/local/x86_64/APKINDEX.tar.gz");
+    like($idx, qr/^P:libvirt-daemon-openrc\n.*^i:libvirt-daemon=12\.3\.0-r100 openrc$/ms, 'the local index carries install_if');
+    like($idx, qr/^P:libvirt-daemon-openrc\n.*^k:10\n^o:libvirt$/ms, 'and the provider priority and the origin');
+    is_deeply([ map { scalar @{ $_->{bad} } } @{ $s->verify('alpine') } ], [ 0, 0 ], 'verify covers every file');
+}
+
 # --- the tool ---------------------------------------------------------------------------------------
 {
     my ($s, $res, $up, $list) = world();

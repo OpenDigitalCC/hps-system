@@ -13,8 +13,8 @@ SD="$ROOT/node-manager/nixos-26/scripts"
 BD="$ROOT/node-manager/nixos-26/boot"
 BLD="$ROOT/nix/modules/profiles/builder.nix"
 CTRL="$ROOT/nix/modules/hps-ctrl-exec.nix"
-SCRIPTS="builder-disk-prepare builder-build builder-status repo-seed repo-update repo-status"
-BOOT="hps-builder-mount.sh hps-builder-run.sh"
+SCRIPTS="builder-disk-prepare builder-build builder-apk-build builder-status repo-seed repo-update repo-status"
+BOOT="hps-builder-mount.sh hps-builder-run.sh hps-apk-build.sh hps-apk-inner.sh"
 
 nix_code() {
   grep -v '^[[:space:]]*#' "$1"
@@ -34,7 +34,7 @@ nix_code() {
     run ! grep -q "$s" "$CTRL"
     run ! grep -q "$s" "$ROOT/nix/modules/profiles/container-host.nix"
   done
-  [ "$(grep -cE '^      [a-z-]+\.source = ' "$BLD")" -eq 6 ]
+  [ "$(grep -cE '^      [a-z-]+\.source = ' "$BLD")" -eq 7 ]
 }
 
 @test "the boot units: hps-builder-mount before the server; the server reads out/ only, when the disk is mounted, on the opened port" {
@@ -151,7 +151,7 @@ boot_setup() {
       *) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E 'mkfs'" ;;
     esac
     case "$s" in
-      builder-build | repo-update | repo-seed) nix_code "$SD/$s" | grep -E '(^|[ (])curl ' | grep -q -- "--noproxy '\*'" ;;
+      builder-build | builder-apk-build | repo-update | repo-seed) nix_code "$SD/$s" | grep -E '(^|[ (])curl ' | grep -q -- "--noproxy '\*'" ;;
       *) run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])curl '" ;;
     esac
     run ! bash -c "grep -v '^[[:space:]]*#' '$SD/$s' | grep -E '(^|[ (])(zpool|zfs|mdadm|wipefs|dd|sgdisk|parted)[ ]'"

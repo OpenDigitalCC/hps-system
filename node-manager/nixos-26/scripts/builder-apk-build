@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+#
+# builder-apk-build - start the build of one Alpine package set on the builder
+# (docs/BUILDER.md "Local packages: the Alpine chroot").
+#
+# ctrl-exec allowlisted node script (builder image only: profiles/builder.nix).
+#
+# Usage: builder-apk-build <source-sha256> <recipe>
+#
+#   <source-sha256>  the sha256 of an hps-system tarball the IPS serves as
+#                    http://<hps.ips>/packages/cnh/hps-system-<first 16>.tar.gz
+#                    (hps-cnh-publish --source-only writes it); the one builder-build takes
+#   <recipe>         one recipe name: [a-z][a-z0-9-]{0,39}, and the name of a directory
+#                    alpine/recipes/<recipe> of that source. Nothing else is taken: no
+#                    free-form argument, no URL, no option.
+#
+# The source is fetched straight from the IPS (never through a proxy), checked against
+# its sha256 and unpacked under /var/lib/hps-builder/src, as builder-build does. The
+# recipe must be one of the directories the unpacked source holds under alpine/recipes
+# (listed here and compared by name; a link is refused). Then the build is started as
+# the transient unit hps-builder-build (systemd-run, full root), which runs
+# /etc/hps/hps-apk-build and returns at once. Follow it with builder-status. One job at
+# a time, shared with builder-build and the repository jobs.
+#
+# What the job may fetch is in the recipe's PINS file (pinned by hash), through the
+# egress proxy of the kernel command line only; see docs/BUILDER.md.
+#
+# Last line: BUILDER-APK-BUILD started id=<id> source=<sha16> recipe=<recipe> unit=hps-builder-build log=<file>
+# Exit: 0 started, 2 usage, 3 refused (no disk, busy, no IPS address, a sum that does
+# not match, a recipe the source does not have), 1 a command failed.
+#
+# Overrides for tests: HPS_BUILDER_ROOT (prefix of /var/lib/hps-builder), HPS_CMDLINE
+# (file read instead of /proc/cmdline), HPS_APK_RUN (the runner path).
+
+set -euo pipefail
+
+: "${HPS_BUILDER_ROOT:=}"
+: "${HPS_CMDLINE:=/proc/cmdline}"
+: "${HPS_APK_RUN:=/etc/hps/hps-apk-build}"
+
+MNT="$HPS_BUILDER_ROOT/var/lib/hps-builder"
+UNIT=hps-builder-build
+SOURCE=""
+RECIPE=""
+IPS=""
+
+log() {
+  printf '[builder-apk-build] %s\n' "$*" >&2
+}
+
+refuse() {
+  log "refused: $*"
+  exit 3
+}
+
+# run <command...>: log then execute.
+run() {
+  printf '+ %s\n' "$*" >&2
+  "$@"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: builder-apk-build <source-sha256> <recipe>
+Exit: 0 started, 2 usage, 3 refused, 1 failed.
+USAGE
+}
+
+cmdline_value() {
+  local key="$1" word
+  # shellcheck disable=SC2013  # words of a one-line file
+  for word in $(cat "$HPS_CMDLINE"); do
+    if [[ "$word" == "$key="* ]]; then
+      printf '%s\n' "${word#"$key"=}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+check_args() {
+  [[ "$SOURCE" =~ ^[0-9a-f]{64}$ ]] || refuse "source sha256 is not 64 lowercase hex digits"
+  [[ "$RECIPE" =~ ^[a-z][a-z0-9-]{0,39}$ ]] || refuse "recipe '$RECIPE' is not a plain recipe name"
+  IPS=$(cmdline_value hps.ips || true)
+  [[ "$IPS" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || refuse "no hps.ips=<address> on the kernel command line: the IPS address is unknown"
+  [[ -n "$(run findmnt -n -o SOURCE --mountpoint "$MNT" || true)" ]] || refuse "$MNT is not mounted: run builder-disk-prepare <device> first"
+}
+
+check_idle() {
+  local state
+  state=$(run systemctl show -p ActiveState --value "$UNIT.service" || true)
+  case "$state" in
+    active | activating | deactivating | reloading) refuse "a job is running ($UNIT is $state): see builder-status" ;;
+  esac
+}
+
+# fetch_tree <url> <sha256> <dir>: <dir> holds the unpacked tarball (as builder-build).
+fetch_tree() {
+  local url="$1" sum="$2" dir="$3" part got
+  if [[ -f "$dir/.sha256" && "$(cat "$dir/.sha256")" == "$sum" ]]; then
+    log "$dir is unpacked from $sum already"
+    return 0
+  fi
+  part="$dir.part.tar.gz"
+  run rm -rf -- "$dir" "$dir.unpack" "$part"
+  if ! run curl --fail --silent --show-error --noproxy '*' --proto =http --max-redirs 0 --output "$part" "$url"; then
+    run rm -f -- "$part"
+    log "fetch of $url failed"
+    exit 1
+  fi
+  got=$(run sha256sum -- "$part" | cut -d' ' -f1)
+  if [[ "$got" != "$sum" ]]; then
+    run rm -f -- "$part"
+    refuse "$url has sha256 $got, not $sum"
+  fi
+  run mkdir -p -- "$dir.unpack"
+  run tar -xzf "$part" -C "$dir.unpack" --no-same-owner
+  printf '%s\n' "$sum" > "$dir.unpack/.sha256"
+  run mv -- "$dir.unpack" "$dir"
+  run rm -f -- "$part"
+}
+
+# has_recipe <src> <name>: the name is one of the directories alpine/recipes holds,
+# a real directory with the files of a recipe.
+has_recipe() {
+  local d
+  for d in "$1"/alpine/recipes/*/; do
+    d=${d%/}
+    [[ -d "$d" && ! -L "$d" && "${d##*/}" == "$2" ]] || continue
+    [[ -f "$d/PINS" && ! -L "$d/PINS" && -f "$d/recipe.conf" && ! -L "$d/recipe.conf" ]] && return 0
+  done
+  return 1
+}
+
+main() {
+  local id src log_file
+  if [[ $# -ne 2 || "$1" == -* || "$2" == -* ]]; then
+    usage
+    exit 2
+  fi
+  SOURCE=$1
+  RECIPE=$2
+  check_args
+  check_idle
+  id=$(date -u +%Y%m%dT%H%M%SZ)
+  src="$MNT/src/${SOURCE:0:16}"
+  run mkdir -p -- "$MNT/src" "$MNT/state"
+  fetch_tree "http://$IPS/packages/cnh/hps-system-${SOURCE:0:16}.tar.gz" "$SOURCE" "$src"
+  has_recipe "$src" "$RECIPE" || refuse "the source $SOURCE has no recipe alpine/recipes/$RECIPE (with PINS and recipe.conf)"
+  log_file="$MNT/state/build-$id.log"
+  # PATH: the transient unit would get systemd's default, which on NixOS holds
+  # none of the tools; the agent's script path (the system profile) does.
+  run systemd-run --quiet --collect --unit "$UNIT" --description "HPS Alpine package build $id" \
+    --setenv "PATH=$PATH" -- "$HPS_APK_RUN" --id "$id" --src "$src" --recipe "$RECIPE"
+  printf 'BUILDER-APK-BUILD started id=%s source=%s recipe=%s unit=%s log=%s\n' "$id" "${SOURCE:0:16}" "$RECIPE" "$UNIT" "$log_file"
+}
+
+main "$@"

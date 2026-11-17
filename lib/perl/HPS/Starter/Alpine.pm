@@ -6,7 +6,9 @@ package HPS::Starter::Alpine;
 #       Alpine publishes it (its signed index, its signed packages), so apk on the
 #       node verifies everything with the stock keys;
 #   <resources>/packages/alpine/<ver>/local/x86_64/{APKINDEX.tar.gz,*.apk}
-#       the local packages (hps-starter add-local), with an unsigned index;
+#       the local packages (hps-starter add-local), with an unsigned index: the ones the
+#       package list marks local and every other local package they need, in the place of
+#       the snapshot's package of the same name (the AppArmor build of libvirt is a set);
 #   <resources>/starter/alpine/<ver>/{vmlinuz-lts,initramfs-lts,manifest.json}
 #       the kernel and initramfs, the kernel-matched set.
 #
@@ -161,31 +163,56 @@ sub _sync ($S, $ver, $rdir, $sdir, $work, $pk, $pk_sha, $old, $only) {
             $repo_of{$n} = $repo;
         }
     }
-    # 2. local packages named in the list: their own depends join the resolution
+    # 2. local packages (hps-starter add-local). Every .apk in the local directory is a
+    # candidate and takes the place of the snapshot's package of the same name in the
+    # resolution (the stock one is then not fetched or held). The names the list marks
+    # local are roots; the others, the rest of a set (libvirt-daemon and the like, which
+    # the AppArmor build of libvirt is made of), join only when something in the set
+    # depends on them. A name marked local with no file is reported missing.
     my $ldir = "$S->{resources}/local/alpine/$ver";
-    my (%localfile, %localdeps, @missing_local, @roots);
+    my (%lfile, %lpkg, %lsel, @missing_local, @roots);
+    for my $f (sort glob("$ldir/*.apk")) {
+        my $c  = HPS::Apk::control($f);
+        my $pi = $c->{pkginfo};
+        my ($n, $v) = map { $pi->{$_}[0] // '' } qw(pkgname pkgver);
+        next unless length $n && length $v;    # add-local refuses such a file
+        $lfile{$n} = $f;
+        my %e = (P => $n, V => $v, S => $c->{size}, C => $c->{sum}, _local => 1);
+        $e{D} = join ' ', @{ $pi->{depend} }           if $pi->{depend};
+        $e{p} = join ' ', @{ $pi->{provides} }         if $pi->{provides};
+        $e{i} = join ' ', @{ $pi->{install_if} }       if $pi->{install_if};
+        $e{k} = $pi->{provider_priority}[0]            if $pi->{provider_priority};
+        $lpkg{$n} = \%e;
+    }
+    for my $n (keys %lpkg) {
+        $pkg{$n}     = $lpkg{$n};
+        $repo_of{$n} = 'local';
+    }
     for my $p (@$pk) {
         my ($name, $local) = @$p;
         if (!$local) {
             push @roots, $name;
-            next;
         }
-        my ($f) = sort glob("$ldir/$name-[0-9]*.apk");
-        if (!defined $f) { push @missing_local, $name; next }
-        my $c = HPS::Apk::control($f);
-        $localfile{$name} = $f;
-        $localdeps{$name} = [ @{ $c->{pkginfo}{depend} // [] } ];
-        $S->_log("repository: local package $name from $f");
+        elsif ($lpkg{$name}) {
+            push @roots, $name;
+        }
+        else { push @missing_local, $name }
     }
-    my $sel = resolve(\%pkg, \@roots, \%localdeps);
+    my $sel = resolve(\%pkg, \@roots);
     _one_snapshot(\%pkg, $sel);
     my @names = sort keys %$sel;
-    $S->_log('repository: closure of ' . scalar(@names) . ' packages');
+    for my $n (@names) {
+        next unless $pkg{$n}{_local};
+        $lsel{$n} = $lfile{$n};
+        $S->_log("repository: local package $n $pkg{$n}{V} from $lfile{$n}");
+    }
+    $S->_log('repository: closure of ' . scalar(@names) . ' packages, ' . scalar(keys %lsel) . ' of them local');
     # 3. the packages: reuse what the last manifest vouches for, fetch and prove the rest
     my (%files, $fetched, $reused, $bytes, @need);
     $fetched = $reused = $bytes = 0;
     for my $n (@names) {
         my $r = $pkg{$n};
+        if ($r->{_local}) { $bytes += $r->{S}; next }
         my $rel = "$repo_of{$n}/$ARCH/$n-$r->{V}.apk";
         $bytes += $r->{S};
         my $e = $old ? $old->{files}{$rel} : undef;
@@ -224,13 +251,13 @@ sub _sync ($S, $ver, $rdir, $sdir, $work, $pk, $pk_sha, $old, $only) {
         $files{$rel} = { size => -s "$rdir/$rel", sha256 => $idxsum{$repo} };
     }
     # 5. the local repository: the packages and an unsigned index
-    my @localnames = sort keys %localfile;
+    my @localnames = sort keys %lsel;
     if (@localnames) {
         File::Path::make_path("$rdir/local/$ARCH");
         my @apks;
         for my $n (@localnames) {
-            my $rel = "local/$ARCH/" . File::Basename::basename($localfile{$n});
-            File::Copy::copy($localfile{$n}, "$rdir/$rel.new") or _fail('failed', "cannot copy $localfile{$n}: $!");
+            my $rel = "local/$ARCH/" . File::Basename::basename($lsel{$n});
+            File::Copy::copy($lsel{$n}, "$rdir/$rel.new") or _fail('failed', "cannot copy $lsel{$n}: $!");
             rename "$rdir/$rel.new", "$rdir/$rel" or _fail('failed', "cannot rename into $rdir/$rel: $!");
             my ($hex) = HPS::Starter::_sha_file("$rdir/$rel");
             $files{$rel} = { size => -s "$rdir/$rel", sha256 => $hex };
@@ -247,7 +274,7 @@ sub _sync ($S, $ver, $rdir, $sdir, $work, $pk, $pk_sha, $old, $only) {
     my $krel = kernel_release($lts->{V});
     my $st = _sync_starter($S, $ver, $sdir, $work, "$rdir/$repo_of{'linux-lts'}/$ARCH/linux-lts-$lts->{V}.apk", $krel, "linux-lts-$lts->{V}");
     # 7. the manifest closes the sync
-    my %roots = map { $_->[0] => ($_->[1] ? "local/$_->[0]" : ($pkg{ $_->[0] } ? $_->[0] . '-' . $pkg{ $_->[0] }{V} : $_->[0])) } grep { $_->[1] ? $localfile{ $_->[0] } : 1 } @$pk;
+    my %roots = map { $_->[0] => ($_->[1] ? "local/$_->[0]" : ($pkg{ $_->[0] } ? $_->[0] . '-' . $pkg{ $_->[0] }{V} : $_->[0])) } grep { $_->[1] ? $lsel{ $_->[0] } : 1 } @$pk;
     my %m = (
         schema => 'hps-repo/1', os => 'alpine', version => $ver, kind => 'apk-repository', arch => $ARCH,
         release => $st->{release}, kernel => $krel, upstream => $S->{alpine},

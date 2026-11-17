@@ -316,7 +316,7 @@ role_aa_fill() {
 role_apparmor() {
   local enabled="${HPS_AA_ENABLED:-/sys/module/apparmor/parameters/enabled}"
   local profiles="${HPS_AA_PROFILES:-/sys/kernel/security/apparmor/profiles}"
-  local f
+  local f aa_pdir aa_base
   role_need apparmor_parser || return 1
   # a libvirt without the AppArmor driver (the adapter says) is no libvirt for this node
   aa_libvirt_check || return 1
@@ -329,20 +329,21 @@ role_apparmor() {
   aa_roots
   [[ -d "$PKG_ETC/apparmor.d/abstractions" ]] || { log "$PKG_ETC/apparmor.d/abstractions is not there (the package apparmor-profiles)"; return 1; }
 
+  # the directory libvirt looks in for TEMPLATE.qemu and writes libvirt/<uuid>.files to
+  # (its APPARMOR_DIR is compiled in; the adapter says where this OS's libvirt has it)
+  aa_pdir="$(aa_profile_dir)"
+  aa_base="${aa_pdir%/libvirt}"
   run install -d -m 0755 "${HPS_ROOT}/etc/apparmor.d/abstractions" "${HPS_ROOT}/etc/apparmor.d/hps" \
-    "${HPS_ROOT}/etc/apparmor" "${HPS_ROOT}/var/lib/apparmor.d/libvirt" "${HPS_ROOT}/sbin"
+    "${HPS_ROOT}/etc/apparmor" "${HPS_ROOT}$aa_pdir" "${HPS_ROOT}/sbin"
   # the parser's include path: the abstractions of the package, the one this file
-  # adds, and /var/lib/apparmor.d (libvirt writes libvirt/<uuid>.files there; its
-  # APPARMOR_DIR is compiled in)
-  write_if_changed "${HPS_ROOT}/etc/apparmor/parser.conf" 0644 << EOF
-# written by the HPS node bundle (docs/BUNDLE.md "AppArmor")
-skip-cache
-Include /etc/apparmor.d
-Include $PKG_ETC/apparmor.d
-Include /var/lib/apparmor.d
-EOF
+  # adds, and the directory above the per-guest ones (when it is not /etc/apparmor.d)
+  {
+    printf '%s\n' '# written by the HPS node bundle (docs/BUNDLE.md "AppArmor")' skip-cache \
+      'Include /etc/apparmor.d' "Include $PKG_ETC/apparmor.d"
+    [[ "$aa_base" == /etc/apparmor.d ]] || printf '%s\n' "Include $aa_base"
+  } | write_if_changed "${HPS_ROOT}/etc/apparmor/parser.conf" 0644
   role_aa_fill libvirt-qemu | write_if_changed "${HPS_ROOT}/etc/apparmor.d/abstractions/libvirt-qemu" 0644
-  role_aa_fill TEMPLATE.qemu | write_if_changed "${HPS_ROOT}/var/lib/apparmor.d/libvirt/TEMPLATE.qemu" 0644
+  role_aa_fill TEMPLATE.qemu | write_if_changed "${HPS_ROOT}$aa_pdir/TEMPLATE.qemu" 0644
   role_aa_fill libvirtd | write_if_changed "${HPS_ROOT}/etc/apparmor.d/hps/libvirtd" 0644
   role_aa_fill virt-aa-helper | write_if_changed "${HPS_ROOT}/etc/apparmor.d/hps/virt-aa-helper" 0644
   # virt-aa-helper runs the parser by this absolute path (libvirt's compiled-in name)

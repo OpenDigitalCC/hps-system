@@ -168,6 +168,19 @@ on the builder and packed on the IPS side (`docs/BUILDER.md` "Local packages"): 
 and the static `om`, then `HPS::Apk::pack_apk`; `add-local alpine` then `sync alpine` and `verify`
 are the same two steps for any further local package.
 
+**A local set that replaces stock packages.** `libvirt-apparmor local` is one line for a set: the
+AppArmor build of libvirt is the meta package `libvirt-apparmor` and the rebuilt subpackages it
+depends on, which keep Alpine's names (`libvirt-daemon`, `libvirt-qemu`, `libvirt-libs`, ...) at release
+`-r100` (`docs/BUILDER.md` "Local packages: the Alpine chroot"). `add-local alpine` takes all of the
+apks; `sync` treats every apk in `local/alpine/<release>/` as a candidate that stands in the place of the
+snapshot's package of the same name for the resolution. The names the list marks `local` are the roots;
+the others are served only when something in the closure depends on them. So the local repository
+holds the whole rebuilt set, the stock `libvirt-*` packages are not fetched or held (a node cannot
+install the stock daemon from this repository), and `manifest.json` lists each served local package under
+`local` (the roots under `roots`, as `local/<name>`). A name in the list without `local` that a local apk
+also has resolves to the local one; that is the rule, not a conflict. The local index carries `install_if`,
+the provider priority and the origin of an abuild-made apk.
+
 `verify` and `list` cover Alpine as they do NixOS. `--only starter` is refused (the starter is made
 from the repository); `--only repository` is the same as no `--only`.
 
