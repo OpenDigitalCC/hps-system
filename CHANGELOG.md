@@ -64,6 +64,13 @@ capabilities and removals are called out explicitly.
   `production.cloudfront.docker.com` leaves the proxy's default list and is allowed
   for `podman-host` and `odoo-test` workloads that way. `docs/WORKLOADS.md` "Egress
   hosts"; tests `t/284-workload-egress.t` and `test_ips42_02_egress_allow.bats`.
+- **New** `hps-vm run <project> <vm> <script> [--as <user>]` and `hps-vm load-image
+  <project> <vm> <image:tag>` in the hps-workloads skill (outside this repository, beside
+  `hps-ssh`, which it calls): a local script on a VM, optionally as another user, and a
+  container image streamed from ai-dev into the VM's docker or podman, with every argument
+  checked by a strict pattern. `hps-ssh` is unchanged. `docs/WORKLOADS.md` "Running a
+  script and copying an image"; `test_ips42_03_hps_vm.bats` runs the skill's `test-vm.sh`.
+
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 
 - **Changed** the guest abstraction `node-manager/apparmor/libvirt-qemu` allows read of

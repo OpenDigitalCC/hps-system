@@ -228,6 +228,25 @@ connection, so an allowance follows a workload without a restart of the proxy:
 run `lab/egress-allow --out FILE` after a create, a destroy or a change of
 address. `--allow-for IP=hosts` on the command line still works and is added.
 
+### Running a script and copying an image: `hps-vm`
+
+The hps-workloads skill's `bin/hps-vm` (on ai-dev, beside `hps-ssh`, which it
+calls for the ssh) takes two steps a project otherwise writes for itself, so
+that one permission rule on one binary covers every project:
+
+```
+hps-vm run <project> <vm> <script> [--as <user>]
+hps-vm load-image <project> <vm> <image:tag>
+```
+
+`run` feeds the local file to `bash -s` on the VM (`sudo -u <user> -H bash -s`
+with `--as`). `load-image` streams `docker save` (else `podman save`) of the
+image on ai-dev into the VM's `docker load` (root, through sudo) when the VM has
+docker, else its `podman load` (rootless). Project, VM, user and image are
+checked against strict patterns before anything runs, and the remote commands are
+fixed text: nothing a caller passes reaches a shell. It adds verbs only; `hps-ssh`
+is as it was.
+
 ## Operations
 
 `hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`,
