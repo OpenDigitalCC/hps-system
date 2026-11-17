@@ -184,7 +184,11 @@ NAGIOS_PLUGINS_PKG=""
 step_packages() {
   local list p
   local -a paths=() rest=()
-  list="$(fetch_text node_packages)" || die "the IPS gave no package list for this node (is the repository synced: hps-starter sync ${OS_NAME}?)"
+  list="$(fetch_text node_packages)" || {
+    # the IPS says why in the body of its refusal (a role names a package the repository lacks)
+    list="$(curl -sS --max-time 30 "$(ips_url node_packages)" 2>&1 | head -n 3 | tr '\n' ' ')" || true
+    die "the IPS gave no package list for this node (${list:-no answer}; is the repository synced: hps-starter sync ${OS_NAME}?)"
+  }
   mapfile -t paths < <(printf '%s\n' "$list" | grep -E "$PKG_LINE_RE" || true)
   ((${#paths[@]} > 0)) || die "the IPS's package list for this node is empty"
   for p in "${paths[@]}"; do

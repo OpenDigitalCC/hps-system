@@ -480,8 +480,10 @@ if [[ "$cmd" == "node_bundle" ]]; then
 fi
 
 if [[ "$cmd" == "node_packages" ]]; then
-  if ! packages_out="$(node_role_packages "$(host_registry "$mac" get os_id 2>/dev/null || true)" "$(host_registry "$mac" get TYPE 2>/dev/null || true)")"; then
-    cgi_auto_fail "$cmd: no package list for this node (see the IPS log)" 404 "Not Found"
+  packages_err="$(mktemp /tmp/node-packages.XXXXXX)"
+  trap 'rm -f "$packages_err"' EXIT
+  if ! packages_out="$(node_role_packages "$(host_registry "$mac" get os_id 2>/dev/null || true)" "$(host_registry "$mac" get TYPE 2>/dev/null || true)" 2> "$packages_err")"; then
+    cgi_auto_fail "$cmd: no package list for this node: $(head -c 300 "$packages_err" | tr '\n' ' ')(see the IPS log)" 404 "Not Found"
     exit 1
   fi
   hps_log info "[$mac] node packages served: $(printf '%s\n' "$packages_out" | wc -l) store paths"

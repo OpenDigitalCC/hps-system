@@ -301,4 +301,13 @@ like(msg(err_of(sub { (world())[0]->sync('alpine', '3.24', only => 'starter') })
     is($e[$i + 1]{name}, 'usr/bin/x', 'the header comes right before its file');
 }
 
+# --- the local index: what apk-tools 3 fetches ------------------------------------------------
+{
+    my $d = tempdir(CLEANUP => 1);
+    spit("$d/n.apk", HPS::Apk::pack_apk(name => 'n', version => '1-r0'));
+    spit("$d/e.apk", HPS::Apk::pack_apk(name => 'e', version => '1-r0', arch => 'x86_64', files => [ { name => 'usr/bin/e', data => 'x', mode => 0755 } ]));
+    like(HPS::Apk::index_record("$d/n.apk"), qr/^A:x86_64$/m, 'a noarch package is listed with the repository architecture (apk 3 fetched it from noarch/ and got a 404: nagios-check, lab 2026-11-17)');
+    like(HPS::Apk::index_record("$d/e.apk"), qr/^A:x86_64$/m, 'an x86_64 one is as it was');
+}
+
 done_testing;

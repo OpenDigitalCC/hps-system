@@ -142,6 +142,8 @@ node_role_packages() {
   done <<< "$names"
   if [[ -n "$missing" ]]; then
     hps_log error "node_role_packages: the ${os} ${ver} repository does not hold: ${missing} (hps-starter sync ${os}; the package list lib/starter/${os}.packages)"
+    # the same words to stderr: the CGI gives them to the node, which prints them
+    printf 'the %s %s repository does not hold: %s\n' "$os" "$ver" "$missing" >&2
     return 1
   fi
   return 0

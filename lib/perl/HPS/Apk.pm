@@ -194,12 +194,19 @@ sub pack_apk (%a) {
     return $control . $data;
 }
 
-# index_record($file): the APKINDEX text of one package file.
-sub index_record ($file) {
+# _index_arch($package_arch, $repo_arch): what the index says. apk-tools 3 fetches a package
+# whose index line says noarch from <repo>/noarch/, where nothing is; Alpine's own indexes
+# say the architecture of the repository for those (abuild's --rewrite-arch), and so does this.
+sub _index_arch ($pkg, $repo) {
+    return !length($pkg // '') || $pkg eq 'noarch' ? $repo : $pkg;
+}
+
+# index_record($file, $arch): the APKINDEX text of one package file, for a repository of $arch.
+sub index_record ($file, $arch = 'x86_64') {
     my $c = control($file);
     my $pi = $c->{pkginfo};
     my $one = sub ($k) { $pi->{$k} ? $pi->{$k}[0] : '' };
-    my @l = ("C:$c->{sum}", 'P:' . $one->('pkgname'), 'V:' . $one->('pkgver'), 'A:' . ($one->('arch') || 'noarch'),
+    my @l = ("C:$c->{sum}", 'P:' . $one->('pkgname'), 'V:' . $one->('pkgver'), 'A:' . _index_arch($one->('arch'), $arch),
         "S:$c->{size}", 'I:' . $one->('size'), 'T:' . $one->('pkgdesc'), 'U:' . $one->('url'), 'L:' . $one->('license'));
     push @l, 'D:' . join(' ', @{ $pi->{depend} }) if $pi->{depend};
     push @l, 'p:' . join(' ', @{ $pi->{provides} }) if $pi->{provides};

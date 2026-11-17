@@ -474,3 +474,11 @@ LOG
   [ "$status" -eq 1 ]
   [[ "$output" == *"is not there (is syslog running?)"* ]]
 }
+
+@test "init, Alpine: when the IPS gives no package list the node says so, and what the IPS answered" {
+  rm "$TEST_DIR/serve/packages"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"the IPS gave no package list for this node ("* ]]
+  grep -q 'curl -sS --max-time 30 .*cmd=node_packages' "$CALLS"
+}

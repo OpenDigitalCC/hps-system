@@ -156,6 +156,7 @@ roles_fixture() {
   run node_role_packages x86_64:alpine:3.24 TCH "$TEST_DIR/tree" "$TEST_DIR/res"
   [ "$status" -eq 1 ]
   grep -q 'repository does not hold: libvirt-daemon' "$TEST_DIR/hps.log"
+  [[ "$output" == *"repository does not hold: libvirt-daemon"* ]]
 }
 
 @test "the shipped Alpine package list and role list agree: every role name is a package of the list" {
@@ -172,4 +173,9 @@ roles_fixture() {
   [ "$output" = "a lsm=yama,integrity,apparmor b apparmor=1" ]
   run alpine_starter_lsm_args "a lsm=yama,apparmor"
   [ "$output" = "a lsm=yama,apparmor apparmor=1" ]
+}
+
+@test "the CGI gives the node the reason its package list was refused (the IPS's words, not only 'see the log')" {
+  grep -q 'node_role_packages .* 2> "$packages_err"' "$ROOT/http/cgi-bin/boot_manager.sh"
+  grep -q 'no package list for this node: \$(head -c 300 "\$packages_err"' "$ROOT/http/cgi-bin/boot_manager.sh"
 }
