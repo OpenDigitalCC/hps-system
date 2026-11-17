@@ -49,7 +49,7 @@ my $hosts = $f->{reg}->cluster_dir('lab') . '/services/workload_hosts';
 sub published { open(my $fh, '<', $hosts) or return ''; local $/; my $t = <$fh>; close $fh; return $t }
 $wl->run('create', 't0');
 $wl->run('start', 't0');
-$wl->run('status', 't0');
+HPS::Workload::Net::reserve($wl, 't0');
 like(published(), qr/^host 52:54:00:00:00:01 10\.0\.0\.11 t0-app dns$/m, 'the host row');
 like(published(), qr/^wild t0-app 10\.0\.0\.11$/m, 'the wildcard row, for the VM name and its NIC 0 address');
 is(scalar(() = published() =~ /^wild /mg), 1, 'one wildcard row');
@@ -57,10 +57,10 @@ is(scalar(() = published() =~ /^wild /mg), 1, 'one wildcard row');
 # the definition changes (a definition is replaced only while no workload exists, so
 # edit the file as an operator would for a test): no dns, no wildcard on the next status
 StorageFixture::write_def($f, def());
-$wl->run('status', 't0');
+HPS::Workload::Net::reserve($wl, 't0');
 unlike(published(), qr/^wild /m, 'a definition without dns: no wildcard row');
 StorageFixture::write_def($f, def(dns => ['*']));
-$wl->run('status', 't0');
+HPS::Workload::Net::reserve($wl, 't0');
 like(published(), qr/^wild t0-app 10\.0\.0\.11$/m, 'and back');
 
 # a plain destroy: the name stops resolving, the wildcard goes, the reservation stays

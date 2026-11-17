@@ -306,4 +306,52 @@ sub note_for ($code) {
     return @n;
 }
 
+#=== changing the declared network fields of an existing workload ======================
+#
+# define --replace refuses while the workload exists, so a workload made before
+# egress and dns existed could never gain them. set_net changes exactly three
+# declarative fields of the stored definition: flavour (the label the owner's
+# egress approval is looked up by), egress and dns. They are checked as at define
+# time (the whole new definition goes through the one validator), nothing else of
+# the definition or the record changes, and no VM is touched. A value of "none"
+# removes the field. Returns {name, changes => [{field, was, now}], dry_run, notes}.
+sub set_net ($wl, $name, %a) {
+    my %want;
+    for my $k (qw(flavour egress dns)) { $want{$k} = $a{$k} if exists $a{$k} }
+    die HPS::Keysafe::Error->new('usage', 'set needs at least one of --flavour, --egress, --dns') unless %want;
+    my $path = $wl->definition_path($name);
+    my (undef, $old) = $wl->_read_definition($name);
+    my $raw = eval { JSON::PP->new->utf8->decode($old) };
+    die HPS::Keysafe::Error->new('refused', "$path is not a JSON object; put the definition right first (hps-workload define $name --replace)") unless ref $raw eq 'HASH';
+    my @changes;
+    for my $k (qw(flavour egress dns)) {
+        next unless exists $want{$k};
+        my $v = $want{$k};
+        my $was = $raw->{$k};
+        if (!defined $v) { delete $raw->{$k} }    # "none"
+        else { $raw->{$k} = $v }
+        my $j = JSON::PP->new->canonical;
+        my ($x, $y) = (defined $was ? $j->encode($was) : 'null', defined $v ? $j->encode($v) : 'null');
+        push @changes, { field => $k, was => $was, now => $v } if $x ne $y;
+    }
+    my $text = JSON::PP->new->utf8->canonical->pretty->encode($raw);
+    $wl->_checked($name, $text, "$path with the new network fields");    # dies, naming the field
+    my $out = { name => $name, changes => \@changes, dry_run => $a{dry_run} ? 1 : 0, notes => [] };
+    return $out if $a{dry_run} || !@changes;
+    $wl->_write_definition($name, $path, $text, 1);
+    $wl->_event('notice', $name, 'done', "set $name: " . join(', ', map { $_->{field} } @changes) . " by $wl->{by}");
+    push @{ $out->{notes} }, note_for(sub { refresh($wl) }) if $wl->record($name);
+    return $out;
+}
+
+sub render_set ($r) {
+    my $out = ($r->{dry_run} ? "Dry run: set $r->{name}; nothing is changed.\n" : "set $r->{name}:\n");
+    my $j = JSON::PP->new->canonical->allow_nonref;
+    $out .= sprintf("  %s: %s -> %s\n", $_->{field}, defined $_->{was} ? $j->encode($_->{was}) : 'none', defined $_->{now} ? $j->encode($_->{now}) : 'none') for @{ $r->{changes} };
+    $out .= "  nothing to change\n" unless @{ $r->{changes} };
+    $out .= "  note: $_\n" for @{ $r->{notes} };
+    $out .= "  (the definition only; a running guest is not touched. egress needs the proxy allowance made by lab/egress-allow)\n" if @{ $r->{changes} } && !$r->{dry_run};
+    return $out;
+}
+
 1;

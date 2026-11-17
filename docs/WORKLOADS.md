@@ -190,12 +190,17 @@ hps-workload reserve <name> [--dry-run] [--json]
 ```
 
 The NIC's current lease is reserved for its MAC when it is first recorded: an
-existing workload keeps the address it has now. That happens at the first
-`status` of a workload whose NIC holds a lease, or by `reserve` (it touches no
-VM and needs none to be running). The reservation is recorded with the
-workload, in the cluster key `workloadnet_<name>`, by VM and NIC index
-(`{nic, net, mac, ip, since}`), and `status` shows it: `address 10.100.1.162
-(prov, 52:54:00:..., dhcp-lease, reserved)`; `status --json` and `list --json`
+existing workload keeps the address it has now. `status` and `list` only read
+(IPS-33). The reservation is recorded by the verbs that change state: `create`,
+`start`, `stop`, `suspend`, `resume` and `resume-paused` record that of a NIC that
+holds a lease at that moment (a `start` often returns before the first lease: the
+next such verb records it), and `reserve <name>` is the explicit verb, the one to
+run for a workload that already exists (it touches no VM and needs none to be
+running). The reservation is recorded with the workload, in the cluster key
+`workloadnet_<name>`, by VM and NIC index (`{nic, net, mac, ip, since}`), and
+`status` shows it: `address 10.100.1.162 (prov, 52:54:00:..., dhcp-lease,
+reserved)`; a lease with no reservation reads `(..., dhcp-lease, not reserved:
+hps-workload reserve <name>)`. `status --json` and `list --json`
 mark the address `"reserved": true`, give `"reserved_ip"` instead when the NIC
 still holds a different lease (the reservation takes effect at renewal), and
 show `"source": "reservation"` for a NIC with a reservation and no lease now
@@ -298,6 +303,16 @@ that are approved are still written. A definition that declares a host the
 owner has not approved for its flavour therefore gets nothing, and a
 definition cannot add a line to the list. A workload with no address yet is
 noted and skipped; run the tool again once it has one.
+
+A workload that exists cannot be redefined (`define --replace` refuses), so its
+declarations are changed with `hps-workload set <name> [--flavour F|none]
+[--egress h1,h2|none] [--dns wildcard|none] [--dry-run] [--json]`. It changes
+exactly those three fields of the stored definition (`flavour` is the label the
+approved list is looked up by), checks the whole new definition as `define` does,
+and changes nothing else: not the record, not a VM, no other field. `none`
+removes a field; `wildcard` is `"*"` (the operator token filter has no `*`). A
+changed `dns` takes effect at once (the DNS files are regenerated); `egress` is
+for `lab/egress-allow`, which the hps project runs afterwards.
 
 The proxy takes the file as `--allow-for-file FILE` and reads it at every
 connection, so an allowance follows a workload without a restart of the proxy:

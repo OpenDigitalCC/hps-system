@@ -71,7 +71,8 @@ capabilities and removals are called out explicitly.
   checked by a strict pattern. `hps-ssh` is unchanged. `docs/WORKLOADS.md` "Running a
   script and copying an image"; `test_ips42_03_hps_vm.bats` runs the skill's `test-vm.sh`.
 - **New** a DHCP reservation per workload NIC, by MAC, made from the current lease when
-  first recorded (the first `status`, or `hps-workload reserve <name>`), so an existing
+  first recorded (by `create`, `start`, `stop`, `suspend`, `resume` or
+  `hps-workload reserve <name>`; `status` and `list` only read), so an existing
   workload keeps its address. Recorded with the workload (cluster key
   `workloadnet_<name>`), shown by `status` and `status --json` (`reserved`,
   `reserved_ip`, source `reservation` for a NIC with no lease now) and `list --json`,
@@ -80,6 +81,10 @@ capabilities and removals are called out explicitly.
   published `services/workload_hosts`; same duplicate checks) and dnsmasq is told by the
   `hps-forget-hook.sh dns-dhcp` hook. `docs/WORKLOADS.md` "DHCP reservation per NIC";
   `t/285-workload-reservation.t`, `test_ips42_05_workload_hosts.bats`.
+- **New** `hps-workload set <name> [--flavour F|none] [--egress h1,h2|none] [--dns wildcard|none]
+  [--dry-run]`: exactly those three declared fields of an existing workload's stored definition,
+  which `define --replace` cannot change while the workload exists, validated as at define time;
+  nothing else of the definition or the record changes and no VM is touched. `t/287-workload-set-net.t`.
 - **New** `"dns": ["*"]` in a workload definition (one pattern exists; the table takes more):
   the IPS's dnsmasq answers `<vm>.<cluster domain>` and `*.<vm>.<cluster domain>` with the
   VM's reserved address. Published as `wild` rows beside the reservation rows and written

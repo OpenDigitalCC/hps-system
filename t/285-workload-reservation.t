@@ -16,7 +16,8 @@ use HPS::Workload::List;
 
 my $dir = tempdir(CLEANUP => 1);
 sub leases { open(my $lf, '>', "$dir/leases") or die; print {$lf} $_[0]; close $lf }
-leases("2000000000 52:54:00:00:00:01 10.0.0.11 t0-app *\n2000000000 52:54:00:00:00:03 10.0.0.13 t0-db *\n");
+my $LEASES = "2000000000 52:54:00:00:00:01 10.0.0.11 t0-app *\n2000000000 52:54:00:00:00:03 10.0.0.13 t0-db *\n";
+leases('');    # none yet when the VMs are created and started
 local $ENV{HPS_DNSMASQ_LEASES} = "$dir/leases";
 local $ENV{HPS_WORKLOAD_DNS_CMD};
 $StorageFixture::NOW = 1_800_000_000;
@@ -27,9 +28,10 @@ my $wl = $f->{wl}->(metrics => bless({}, 'NoMetrics'));
 my $hosts = $f->{reg}->cluster_dir('lab') . '/services/workload_hosts';
 $wl->run('create', 't0');
 $wl->run('start', 't0');
+leases($LEASES);
 
 # before anything: no reservation, create did not make one, no file
-ok(!$f->{reg}->cluster_exists('lab', 'workloadnet_t0'), 'no reservation before the first status');
+ok(!$f->{reg}->cluster_exists('lab', 'workloadnet_t0'), 'create and a start with no lease yet reserved nothing');
 ok(!-e $hosts, 'no published file either');
 
 # a dry run changes nothing
@@ -39,11 +41,17 @@ is_deeply([ map { "$_->{vm}/$_->{nic}/$_->{mac}/$_->{ip}/$_->{action}" } @{ $r->
 ok(!$f->{reg}->cluster_exists('lab', 'workloadnet_t0') && !-e $hosts, 'dry run wrote nothing');
 like(join("\n", @{ $r->{notes} }), qr/t0-db NIC 0 \(52:54:00:00:00:09\): no lease yet/, 'a NIC without a lease is noted, not reserved');
 
-# status records the reservations (first time) and shows them
+# status only reads: it shows the lease, writes nothing, and says what to run
 my $s = $wl->run('status', 't0');
 my %v = map { $_->{vm} => $_ } @{ $s->{vms} };
+is_deeply($v{'t0-app'}{addresses}, [ { net => 'mgmt', mac => '52:54:00:00:00:01', ip => '10.0.0.11', source => 'dhcp-lease' } ],
+    'status: the leased address, not marked reserved');
+ok(!$f->{reg}->cluster_exists('lab', 'workloadnet_t0') && !-e $hosts, 'status wrote no reservation and no file');
+HPS::Workload::Net::reserve($wl, 't0');
+$s = $wl->run('status', 't0');
+%v = map { $_->{vm} => $_ } @{ $s->{vms} };
 is_deeply($v{'t0-app'}{addresses}, [ { net => 'mgmt', mac => '52:54:00:00:00:01', ip => '10.0.0.11', source => 'dhcp-lease', reserved => JSON::PP::true } ],
-    'status: the leased address is marked reserved');
+    'after reserve: the leased address is marked reserved');
 my $got = $f->{reg}->cluster_get_json('lab', 'workloadnet_t0');
 is_deeply([ map { "$_->{nic}:$_->{mac}:$_->{ip}:$_->{net}" } @{ $got->{'t0-app'} } ], ['0:52:54:00:00:00:01:10.0.0.11:mgmt'], 'recorded by VM and NIC index');
 is_deeply([ map { "$_->{nic}:$_->{mac}:$_->{ip}:$_->{net}" } @{ $got->{'t0-db'} } ], ['1:52:54:00:00:00:03:10.0.0.13:db'], 'NIC 1 of t0-db, NIC 0 had no lease');
@@ -112,9 +120,8 @@ unlike($pub, qr/^host /m, 'and the published rows');
 
 # destroy --forget releases
 leases("2000000000 52:54:00:00:00:77 10.0.0.11 t0-app *\n");
-HPS::Workload::Net::reserve($wl, 't0');
-ok($f->{reg}->cluster_exists('lab', 'workloadnet_t0'), 'reserved again');
 $wl->run('stop', 't0');
+ok($f->{reg}->cluster_exists('lab', 'workloadnet_t0'), 'a state-changing verb (stop) reserves a NIC that holds a lease');
 $wl->run('destroy', 't0');
 ok($f->{reg}->cluster_exists('lab', 'workloadnet_t0'), 'a plain destroy keeps the reservation (the address survives a re-create)');
 open($fh, '<', $hosts) or die; $pub = do { local $/; <$fh> }; close $fh;

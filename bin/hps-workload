@@ -47,6 +47,7 @@ Usage:
   hps-workload list   [--project <P>] [--json]
   hps-workload set-class <name> <1-4> [--dry-run] [--json]
   hps-workload reserve <name> [--dry-run] [--json]
+  hps-workload set <name> [--flavour <F|none>] [--egress <h1,h2|none>] [--dns <wildcard|none>] [--dry-run] [--json]
   hps-workload drain   <host> [--include-nodes] [--dry-run] [--json]
   hps-workload undrain <host> [--dry-run] [--json]
   hps-workload images [--json]
@@ -105,9 +106,16 @@ hps-resources/images/*.qcow2 with size, sha256 and date; define refuses an image
 in it.
 reserve records the DHCP reservation of each NIC of the workload's VMs that holds a lease and has none
 (by MAC, the address it has now), moves a reservation to the new MAC of a re-created VM, and
-regenerates the IPS's DHCP and DNS files; status does the same for the first time and shows it
-(address ... reserved). It touches no VM. destroy keeps the reservations (a create from the same
+regenerates the IPS's DHCP and DNS files. create, start, stop, suspend and resume do the same for a
+NIC that holds a lease; status and list only read, and show a reservation (address ... reserved) or,
+for a lease without one, say to run reserve. It touches no VM. destroy keeps the reservations (a create from the same
 definition keeps the address); destroy --forget releases them (docs/WORKLOADS.md "DHCP reservation").
+set changes exactly three declarative fields of an existing workload's stored definition, which
+define --replace cannot (it refuses while the workload exists): flavour, egress (comma list of host
+names) and dns (wildcard). none removes a field. The whole new definition is checked as define
+checks it; nothing else of the definition or the record changes and no VM is touched. dns takes
+effect at once (the IPS's DNS files are regenerated); egress is for lab/egress-allow (the owner's
+approved list decides).
 egress lists the workloads whose definition declares "egress" hosts, with each one's flavour, state and
 addresses (leases); it grants nothing: lab/egress-allow turns it into the egress proxy's per-address allowances,
 and only for the hosts lab/egress-approved lists for that flavour (docs/WORKLOADS.md "Egress hosts").
@@ -161,7 +169,8 @@ sub render_status {
         $out .= "    seed: $v->{seed}\n" if defined $v->{seed};
         $out .= "    $v->{netboot_note}\n" if defined $v->{netboot_note};
         $out .= "    address $_->{ip} ($_->{net}, $_->{mac}, $_->{source}"
-            . ($_->{reserved} ? ', reserved' : defined $_->{reserved_ip} ? ", reserved $_->{reserved_ip}" : '') . ")\n"
+            . ($_->{reserved} ? ', reserved' : defined $_->{reserved_ip} ? ", reserved $_->{reserved_ip}"
+                : $_->{source} eq 'dhcp-lease' ? ", not reserved: hps-workload reserve $r->{name}" : '') . ")\n"
             for @{ $v->{addresses} // [] };
     }
     $out .= "  note: $_\n" for @{ $r->{notes} // [] };
@@ -278,6 +287,27 @@ sub class_verb {
     return defined $rc ? $rc : fail_exit($@);
 }
 
+# set <name> --flavour/--egress/--dns: the declared network fields of an existing workload.
+sub set_verb {
+    my ($name, $rest, %o) = @_;
+    return usage('set takes only --flavour, --egress, --dns, --dry-run and --json') if @$rest || $o{other};
+    my %w;
+    $w{flavour} = $o{flavour} eq 'none' ? undef : $o{flavour} if defined $o{flavour};
+    $w{egress} = $o{egress} eq 'none' ? undef : [ split /,/, $o{egress}, -1 ] if defined $o{egress};
+    if (defined $o{dns}) {
+        $w{dns} = $o{dns} eq 'none' ? undef : [ map { $_ eq 'wildcard' ? '*' : $_ } split /,/, $o{dns}, -1 ];
+    }
+    return usage('set needs at least one of --flavour, --egress, --dns') unless %w;
+    my $rc = eval {
+        my $wl = HPS::Workload->new;
+        my $r = HPS::Workload::Net::set_net($wl, $name, %w, dry_run => $o{dry_run});
+        if ($o{json}) { print JSON::PP->new->canonical->pretty->encode($r) }
+        else { print HPS::Workload::Net::render_set($r) }
+        return 0;
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
 # reserve <name>: the DHCP reservations of a workload's NICs (HPS::Workload::Net).
 sub reserve_verb {
     my ($name, $rest, %o) = @_;
@@ -315,13 +345,14 @@ sub drain_verb {
 
 sub main {
     my @argv = @_;
+    my ($flavour, $egress, $dns);
     my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw, $nodes, $nobw, $anyr);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget, 'image-written' => \$imgw,
         'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
         'include-nodes' => \$nodes,
-        'no-boot-wait' => \$nobw, 'any-reason' => \$anyr,
+        'no-boot-wait' => \$nobw, 'any-reason' => \$anyr, 'flavour=s' => \$flavour, 'egress=s' => \$egress, 'dns=s' => \$dns,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
     return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images' || $op eq 'egress';
@@ -331,6 +362,10 @@ sub main {
         if $op eq 'drain' || $op eq 'undrain';
     return usage('--include-nodes is only for drain') if $nodes;
     return class_verb($name, \@argv, json => $json, dry_run => $dry, other => $other) if $op eq 'set-class';
+    return set_verb($name, \@argv, json => $json, dry_run => $dry, flavour => $flavour, egress => $egress, dns => $dns,
+        other => ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw || $anyr))
+        if $op eq 'set';
+    return usage('--flavour, --egress and --dns are only for set') if defined $flavour || defined $egress || defined $dns;
     return reserve_verb($name, \@argv, json => $json, dry_run => $dry, other => $other) if $op eq 'reserve';
     return definition_verb($op, $name, \@argv, json => $json, dry_run => $dry, replace => $replace,
         other => ($resume || $any || defined $vm || $forget))

@@ -36,16 +36,21 @@ my $f = StorageFixture::setup_workload(ce => { out => {
     'vm-status' => "NIC t0-app 0 tap0 br-mgmt 52:54:00:00:00:01 virtio\nNIC t0-db 0 tap1 br-mgmt 52:54:00:00:00:09 virtio\nNIC t0-db 1 tap2 br-db 52:54:00:00:00:03 virtio\nVM x running\n", 'mirror-status' => "MIRROR x clean\n" } });
 my $wl = $f->{wl}->(metrics => bless({}, 'NoMetrics'));
 { package NoMetrics; sub latest { die "none\n" } }
+# the leases appear after start, as they do in life (a start that finds a lease reserves it, IPS-42)
+rename("$dir/leases", "$dir/leases.later") or die;
+open(my $empty, '>', "$dir/leases") or die;
+close $empty;
 $wl->run('create', 't0');
 $wl->run('start', 't0');
+rename("$dir/leases.later", "$dir/leases") or die;
 my $r = $wl->run('status', 't0');
+ok(!$f->{reg}->cluster_exists('lab', 'workloadnet_t0'), 'status is a read: it recorded no reservation');
 my %v = map { $_->{vm} => $_ } @{ $r->{vms} };
-is_deeply($v{'t0-app'}{addresses}, [ { net => 'mgmt', mac => '52:54:00:00:00:01', ip => '10.0.0.11', source => 'dhcp-lease', reserved => JSON::PP::true } ], 'app: its lease (the first status reserves it, IPS-42)');
-is_deeply($v{'t0-db'}{addresses}, [ { net => 'db', mac => '52:54:00:00:00:03', ip => '10.0.0.13', source => 'dhcp-lease', reserved => JSON::PP::true } ],
+is_deeply($v{'t0-app'}{addresses}, [ { net => 'mgmt', mac => '52:54:00:00:00:01', ip => '10.0.0.11', source => 'dhcp-lease' } ], 'app: its lease');
+is_deeply($v{'t0-db'}{addresses}, [ { net => 'db', mac => '52:54:00:00:00:03', ip => '10.0.0.13', source => 'dhcp-lease' } ],
     'db: only the NIC with a lease, net from the NIC index');
 open($lf, '>', "$dir/leases") or die; close $lf;
 $r = $wl->run('status', 't0');
-is_deeply([ map { [ map { $_->{source} } @{ $_->{addresses} } ] } @{ $r->{vms} } ], [ ['reservation'], ['reservation'] ],
-    'no leases: only the reservations made at the first status remain, source reservation (IPS-42 row 5)');
+is_deeply([ map { $_->{addresses} } @{ $r->{vms} } ], [ [], [] ], 'no leases: empty lists');
 
 done_testing;

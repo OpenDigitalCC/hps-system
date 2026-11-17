@@ -1609,6 +1609,12 @@ sub _post ($self, $op, $def, $out, %a) {
     elsif ($op eq 'status') {
         $self->_post_status($def, $out);
     }
+    elsif ($op eq 'start' || $op eq 'stop' || $op eq 'resume' || $op eq 'suspend' || $op eq 'resume-paused') {
+        # A state-changing verb records the reservation of a NIC that now holds a
+        # lease and has none (IPS-42 row 5); one with no lease yet is left for the
+        # next such verb or `hps-workload reserve`.
+        push @{ $out->{notes} }, HPS::Workload::Net::note_for(sub { HPS::Workload::Net::reserve($self, $name) });
+    }
     elsif ($op eq 'console') {
         $self->_post_console($def, $out);
     }
@@ -1713,10 +1719,8 @@ sub _post_status ($self, $def, $out) {
     $out->{class} = class_of($rec);
     $out->{vms} = [ map { $vms{ $_->{name} } }
  grep { $vms{ $_->{name} } } @{ $def->{vms} } ];
-    # The first status of a workload whose NICs hold leases records the reservation
-    # of each (IPS-42 row 5): an existing workload keeps the address it has now.
-    my @rn = HPS::Workload::Net::note_for(sub { HPS::Workload::Net::reserve($self, $def->{name}) });
-    $out->{notes} = \@rn if @rn;
+    # status only reads: it shows a reservation that exists (HPS::Workload::Net::reserve
+    # makes them, from the state-changing verbs and `reserve`; IPS-33).
     HPS::Workload::List::annotate_status($self, $rec, $out->{vms}, $def->{name});
     return;
 }

@@ -267,9 +267,15 @@ Virtual-machine workloads. `<name>` is the workload, stored as
 
 `hps-workload reserve <name> [--dry-run] [--json]`
 : Records the DHCP reservation of each NIC of the workload's VMs that holds a
-  lease and has none, by MAC (`status` does it the first time too), moves a
+  lease and has none, by MAC (`create`, `start`, `stop`, `suspend` and `resume` do it for a
+  NIC that holds a lease; `status` and `list` only read), moves a
   reservation to the new MAC of a re-created VM, and regenerates the IPS's DHCP
   and DNS files. No VM is touched. `destroy --forget` releases it.
+
+`hps-workload set <name> [--flavour <F|none>] [--egress <h1,h2|none>] [--dns <wildcard|none>] [--dry-run] [--json]`
+: Changes exactly the declared `flavour`, `egress` and `dns` of an existing
+  workload's stored definition (`define --replace` refuses while it exists),
+  checked as `define` checks them. Nothing else changes; no VM is touched.
 
 `hps-workload egress [--project <P>] [--json]`
 : Lists the workloads whose definition declares `egress` hosts, with flavour,
