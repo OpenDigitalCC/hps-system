@@ -4,9 +4,9 @@
 # builder: `bash lab/builder/check.sh pkg om3` prints "got: sha256-..." when it
 # is stale. Bump the tag in flake.nix, set vendorHash to lib.fakeHash, build,
 # and paste the printed hash.
-{ lib, buildGoModule, src, version }:
+{ lib, buildGoModule, src, version, static ? false }:
 
-buildGoModule {
+buildGoModule ({
   pname = "om3";
   inherit version src;
 
@@ -30,4 +30,10 @@ buildGoModule {
     homepage = "https://github.com/opensvc/om3";
     mainProgram = "om";
   };
-}
+} // lib.optionalAttrs static {
+  # A static om for an OS without glibc (the Alpine package om3, docs/BUILDER.md
+  # "Local packages"): no cgo, so no libc is linked at all. The Go modules are
+  # the same fixed-output fetch as the dynamic build (same vendorHash).
+  env.CGO_ENABLED = "0";
+  ldflags = [ "-s" "-w" ];
+})

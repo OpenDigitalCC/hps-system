@@ -577,11 +577,15 @@ has no `libexec/virt-aa-helper` (the message names `libvirt-apparmor`) or when t
 is not active: `libvirtd` is not started, the step "compute services" fails and `init` ends 1. There
 is no setting that accepts an unconfined guest.
 
-**Local packages not yet built.** The Alpine builds of `ctrl-exec-agent` (the Perl tree and the C
-executor), `om3`, `nagios-check`, `hps-nagios-plugins` and `libvirt-apparmor` come from the builder
-(plan step 5). The NixOS builds in the lab's cache are glibc binaries with `/nix/store` interpreters and
-do not run on Alpine; `om` and the executor must be built for musl (or statically). Until they are
-added (`hps-starter add-local alpine`) an Alpine node cannot pair.
+**Local packages (built).** The Alpine builds of `ctrl-exec-agent` (the Perl tree and the C
+executor), `om3`, `nagios-check` and `hps-nagios-plugins` come from the builder as static binaries and
+apks (`docs/BUILDER.md` "Local packages"). The NixOS builds in the lab's cache are glibc binaries with
+`/nix/store` interpreters and do not run on Alpine, so the executor and `om` are built static (musl,
+no libc dependency) and put in apks that carry the files where the adapter looks: `/usr/bin/ctrl-exec-agent`,
+`/usr/bin/ctrl-exec-executor`, `/usr/bin/om`, `/usr/bin/nagios-check`, `/usr/lib/hps-nagios-plugins/`. An
+Alpine node with the four in `local/` is expected to pair (proof on a node is the Alpine trial's).
+
+`libvirt-apparmor` (the AppArmor build of libvirt) is not built yet: it needs a root chroot on the builder (`docs/BUILDER.md` "Local packages").
 
 ## Not in this step
 

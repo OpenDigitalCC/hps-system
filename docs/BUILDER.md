@@ -127,3 +127,70 @@ hps-run.sh <builder> builder-disk-prepare /dev/disk/by-id/virtio-<vm>-d1
 The disk is formatted only by the explicit `builder-disk-prepare` call and
 only when it is blank; after a reboot the same disk and store are used again.
 Outputs are not pruned yet: `builder-status` shows disk use.
+
+## Local packages
+
+The builder also makes the **local packages** (`docs/BUNDLE.md` "Local packages",
+`docs/STARTER.md`): packages the distributions do not have. `nix/build.sh` has a
+package mode: `builder-build <source> --profiles "pkg-om3 out-om3-static" [--upstream]`
+(the one preset action; the names fit its profile check). A name starting `pkg-` or
+`out-` is a package attribute of the flake (`packages.x86_64-linux.<attr>`), built
+by name from the same source and lock the images use; nothing else is a pin, and
+`latest` is not touched. A mixture with netboot profiles is refused.
+
+| name | result in `out/pkgs/<attr>/` | for |
+| --- | --- | --- |
+| `pkg-<attr>` | `cache/` (the closure as a Nix binary cache, xz), `pkg.json`, `SHA256SUMS`; the closure is also signed into the site repository | a NixOS node (`hps-starter add-local nixos --from`) |
+| `out-<attr>` | `files/` (the output, links resolved), `pkg.json`, `SHA256SUMS` | the Alpine packages |
+
+`--upstream` is needed when the site repository lacks something (the static
+toolchain, qemu): the build then substitutes from the NixOS cache through the egress
+proxy. A static Go build needs nothing new: its modules are the fixed-output fetch
+the dynamic om3 already has (same `vendorHash`).
+
+Flake attributes: `ctrl-exec-agent`, `om3`, `om3-static` (`om3.nix` with `static = true`:
+`CGO_ENABLED=0`), `ctrl-exec-executor-static` (`nix/pkgs/ctrl-exec-executor-static.nix`:
+`pkgsStatic`, musl, static libcap, `-static`), `qemu-host-cpu-only` and `qemu-headless`.
+
+Lab recipes (`lab/builder/`, plain files; they refuse quiet hours and take the
+`tmp/dl360-build.lock`):
+
+```
+HPS_SRC=<tree> bash lab/builder/pkg-build.sh [--upstream] pkg-om3 pkg-ctrl-exec-agent   # NixOS, by name
+bash lab/builder/pkg-fetch.sh <attr> <dir>        # builder :8090/pkgs/<attr> -> <dir>/<attr>, every file hashed
+bash lab/builder/ips-add-local.sh nixos <dir> om3 ctrl-exec-agent
+HPS_SRC=<tree> bash lab/builder/pkg-build.sh --upstream out-ctrl-exec-executor-static out-om3-static
+bash lab/builder/alpine-apks.sh <dir> <apk-dir>   # HPS::Apk::pack_apk (alpine-apks.pl), `file` must say static
+bash lab/builder/ips-add-local.sh alpine <apk-dir>   # add-local, sync alpine, verify
+```
+
+**NixOS.** `ctrl-exec-agent` and `om3` built by name give the store paths the package
+list already names (`s9s4irf4...-ctrl-exec-agent-0.14.7`, `icpkmfz7...-om3-3.0.0-rc62`),
+so no list line changes.
+
+**Alpine.** The executor and `om` are static (musl, no libc). The apks (`root:root`,
+unsigned, no install script): `ctrl-exec-agent` (`/usr/bin/ctrl-exec-agent`, `cea`,
+`/usr/bin/ctrl-exec-executor`, `/usr/lib/ctrl-exec`, the patches `nix/package.nix`
+makes; depends perl, perl-json, perl-io-socket-ssl, perl-net-ssleay, openssl), `om3`
+(`/usr/bin/om`), `nagios-check` (`/usr/bin/nagios-check`; perl) and `hps-nagios-plugins`
+(`/usr/lib/hps-nagios-plugins`: `check_mem` and REAL COPIES of `check_disk`, `check_load`,
+`check_procs` from Alpine's `monitoring-plugins`, which it depends on, because
+`nagios-check` refuses a plugin that resolves outside its directory). The executor
+runs as root from its own service on both systems; the NixOS package sets no file
+capability either, so the apk carries none.
+
+**Headless QEMU.** `qemu-headless` is `qemu-host-cpu-only` with GTK, SDL, OpenGL,
+audio, SPICE, USB redirection, smartcard, curses and the manual off (VNC, iSCSI,
+io_uring and the guest agent stay). Closure on the builder 2026-11-17: `qemu-host-cpu-only`
+1,558,838,312 bytes (1,486.6 MiB), `qemu-headless` 578,369,480 bytes (551.6 MiB). The
+package list is not switched to it; the owner decides after a node measurement.
+
+**Not possible with the present builder: Alpine libvirt with the AppArmor driver.** It
+needs an Alpine chroot with `abuild`, i.e. root (`chroot`, mounts, `apk add`) and a
+node script to start it; the builder's allowlist has none and its image would change.
+Verified from libvirt 12.3.0 and Alpine's 3.24-stable `APKBUILD`: the meson options
+are `-Dapparmor=enabled -Dsecdriver_apparmor=enabled` (`apparmor_profiles` optional);
+the helper is `LIBEXECDIR/virt-aa-helper` (Alpine sets `--libexec=/usr/lib/libvirt`,
+the adapter looks in `/usr/libexec`), and the profile directory is compiled as
+`sysconfdir/apparmor.d/libvirt` (`/etc/apparmor.d/libvirt/TEMPLATE.qemu`, `<uuid>`,
+`<uuid>.files`), where the role step writes to `/var/lib/apparmor.d/libvirt`.

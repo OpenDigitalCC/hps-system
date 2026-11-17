@@ -12,6 +12,18 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Local packages from the builder (2026-11-17)
+
+- **Added** `nix/build.sh` package mode (`--profiles "pkg-<attr> out-<attr>"`, through the
+  existing `builder-build`): a flake package is built by name, staged under `out/pkgs/<attr>/`
+  (cache or files, `pkg.json`, `SHA256SUMS`), no pin, `latest` untouched. Flake attributes
+  `ctrl-exec-agent`, `om3-static`, `ctrl-exec-executor-static` (static, musl),
+  `qemu-host-cpu-only`, `qemu-headless` (closure 551.6 MiB against 1,486.6 MiB).
+- **Added** the Alpine apks `ctrl-exec-agent`, `om3`, `nagios-check`, `hps-nagios-plugins`
+  (packed with `HPS::Apk`; recipes in the lab's `lab/builder/`). Not done: the AppArmor build
+  of libvirt, which needs a root chroot the builder does not allow yet. `docs/BUILDER.md`
+  "Local packages".
+
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 
 - **Changed** the guest abstraction `node-manager/apparmor/libvirt-qemu` allows read of

@@ -44,6 +44,21 @@
 # --no-cache proves the rebuild route: no substituters, and --rebuild on the
 # artefact derivation. A full from-source proof also needs a fresh /nix store
 # (lab/builder/README.md).
+#
+# Package mode (local packages, docs/BUILDER.md "Local packages"): when every
+# name of --profiles starts with pkg- or out-, nothing is a netboot profile and
+# no pin is made, `latest` is untouched. The rest of the name is a package
+# attribute of the flake (path:<src>#<attr>), so a package is built BY NAME from
+# the same source and lock the images use:
+#   pkg-<attr>   a Nix store path for a NixOS node: its closure goes to
+#                <out>/pkgs/<attr>/cache (a binary cache, xz, what
+#                hps-starter add-local nixos --from takes) and, signed, into
+#                the site repository's cache
+#   out-<attr>   a file tree for another system (the static binaries the Alpine
+#                packages are made of): the output copied, links resolved, to
+#                <out>/pkgs/<attr>/files
+# Each <out>/pkgs/<attr>/ also holds pkg.json (store path, NAR and closure
+# size, built_at) and SHA256SUMS over its files, and is replaced whole.
 
 set -euo pipefail
 
@@ -439,6 +454,79 @@ content_suffix() {
   done | sha256sum | cut -c1-7
 }
 
+# package_mode: true when --profiles names packages only (every name pkg-* or
+# out-*); false for netboot profiles; a mixture is an error.
+package_mode() {
+  local p npkg=0 nprof=0
+  for p in $PROFILES; do
+    case "$p" in
+      pkg-?* | out-?*) npkg=$((npkg + 1)) ;;
+      *) nprof=$((nprof + 1)) ;;
+    esac
+  done
+  if [[ $npkg -gt 0 && $nprof -gt 0 ]]; then
+    echo "build.sh: --profiles mixes packages (pkg-/out-) and netboot profiles: $PROFILES" >&2
+    exit 2
+  fi
+  [[ $npkg -gt 0 ]]
+}
+
+# build_package <pkg-attr|out-attr>: one package by name into <out>/pkgs/<attr>.
+build_package() {
+  local name="$1" kind attr link real dest narsize closure
+  local -a extra=()
+  kind="${name%%-*}"
+  attr="${name#*-}"
+  [[ "$attr" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "build.sh: '$name' is not a package name" >&2; return 1; }
+  link="$WORK/result-$name"
+  dest="$OUT/pkgs/$attr"
+  if [[ $NO_CACHE -eq 1 ]]; then
+    extra+=(--option substituters "" --rebuild)
+  fi
+  run nix "${NIX_FLAGS[@]}" build "${FLAKE_FLAGS[@]}" "path:$SRC#$attr" --out-link "$link" "${extra[@]}"
+  real=$(readlink -f "$link")
+  [[ "$real" == "${NIX_STORE_DIR:-/nix/store}"/* ]] || { echo "build.sh: $attr built to '$real', not a store path" >&2; return 1; }
+  run nix-store --verify-path "$real"
+  run rm -rf -- "$dest.tmp"
+  run mkdir -p "$dest.tmp"
+  case "$kind" in
+    pkg)
+      run nix "${NIX_FLAGS[@]}" copy --to "file://$dest.tmp/cache?compression=xz" "$real"
+      run mkdir -p "$CACHE"
+      run nix "${NIX_FLAGS[@]}" copy --to "$(cache_url)" "$real"
+      ;;
+    out)
+      run mkdir -p "$dest.tmp/files"
+      if [[ -d "$real" ]]; then
+        run cp -rL --no-preserve=ownership "$real/." "$dest.tmp/files/"
+      else
+        run cp -L --no-preserve=ownership "$real" "$dest.tmp/files/${real##*/}"
+      fi
+      ;;
+  esac
+  narsize=$(nix "${NIX_FLAGS[@]}" path-info -s "$real" | awk '{print $2}')
+  closure=$(nix "${NIX_FLAGS[@]}" path-info -S "$real" | awk '{print $2}')
+  jq -n --arg attr "$attr" --arg kind "$kind" --arg path "$real" --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson nar "${narsize:-0}" --argjson closure "${closure:-0}" \
+    '{attr: $attr, kind: $kind, store_path: $path, nar_size: $nar, closure_size: $closure, built_at: $built_at}' \
+    > "$dest.tmp/pkg.json"
+  (cd "$dest.tmp" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS)
+  run rm -rf -- "$dest.old"
+  [[ ! -d "$dest" ]] || run mv -T "$dest" "$dest.old"
+  run mv -T "$dest.tmp" "$dest"
+  run rm -rf -- "$dest.old"
+  log "package $attr: $real (nar $narsize, closure $closure bytes)"
+}
+
+main_packages() {
+  local name
+  run mkdir -p "$OUT/pkgs" "$CACHE"
+  for name in $PROFILES; do
+    build_package "$name"
+  done
+  log "done: $OUT/pkgs ($PROFILES); no pin, latest untouched"
+}
+
 main() {
   local rev version pin profile link
   parse_args "$@"
@@ -446,6 +534,10 @@ main() {
   WORK="$OUT/.build-$$"
   run mkdir -p "$WORK"
   trap cleanup EXIT
+  if package_mode; then
+    main_packages
+    return 0
+  fi
 
   rev=$(nixpkgs_short_rev)
   for profile in $PROFILES; do

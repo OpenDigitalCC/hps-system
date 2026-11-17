@@ -163,8 +163,10 @@ FILE.apk...` copies built `.apk` files to `local/alpine/3.24/`; `sync` puts them
 `local/` directory with an index it writes itself (`HPS::Apk`, plain Perl). They carry no Alpine
 signature and a node installs them knowing so (`--allow-untrusted`, from the local repository only).
 Until a package is added, `sync` ends with `missing_local=...` and says so; a role that names it is
-refused by the package list (`node_role_packages`), never silently left out. The Alpine builds of
-these four are plan step 5 (the builder); none exists yet.
+refused by the package list (`node_role_packages`), never silently left out. The four are built
+on the builder and packed on the IPS side (`docs/BUILDER.md` "Local packages"): the static executor
+and the static `om`, then `HPS::Apk::pack_apk`; `add-local alpine` then `sync alpine` and `verify`
+are the same two steps for any further local package.
 
 `verify` and `list` cover Alpine as they do NixOS. `--only starter` is refused (the starter is made
 from the repository); `--only repository` is the same as no `--only`.

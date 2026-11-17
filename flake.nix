@@ -154,6 +154,39 @@
           default = self.packages.${system}.node-base;
           ipxe = ipxeArtefacts;
           om3 = (pkgs.extend om3Overlay).om3;
+          # Local packages built by name on the builder (nix/build.sh package
+          # mode, docs/BUILDER.md "Local packages"): the ctrl-exec agent as the
+          # images carry it, and the static builds for Alpine (no libc, no
+          # Nix store at run time).
+          ctrl-exec-agent = ctrl-exec.packages.${system}.ctrl-exec-agent;
+          om3-static = ((pkgs.extend om3Overlay).om3.override { static = true; });
+          ctrl-exec-executor-static = pkgs.pkgsStatic.callPackage ./nix/pkgs/ctrl-exec-executor-static.nix { src = ctrl-exec; };
+          # QEMU for the compute role without what a node never uses: the
+          # reference is what lib/starter/nixos.packages names today
+          # (qemu-host-cpu-only); the headless build switches off the GUI
+          # front ends (GTK, SDL, OpenGL/virgl), audio (ALSA, PulseAudio,
+          # PipeWire, JACK), SPICE with USB redirection and smartcards, and the
+          # curses UI, and builds no manual. VNC, iSCSI, io_uring and the guest
+          # agent stay (libvirt guests use them). Owner decides after a node
+          # measurement (docs/BUILDER.md "Headless QEMU").
+          qemu-host-cpu-only = pkgs.qemu.override { hostCpuOnly = true; };
+          qemu-headless = (pkgs.qemu.override {
+            hostCpuOnly = true;
+            gtkSupport = false;
+            sdlSupport = false;
+            openGLSupport = false;
+            virglSupport = false;
+            rutabagaSupport = false;
+            alsaSupport = false;
+            pulseSupport = false;
+            pipewireSupport = false;
+            jackSupport = false;
+            spiceSupport = false;
+            usbredirSupport = false;
+            smartcardSupport = false;
+            ncursesSupport = false;
+            enableDocs = false;
+          }).overrideAttrs (old: { pname = old.pname + "-headless"; });
           # The audit image's firmware layer on its own (size checks:
           # nix path-info -S .#firmware-layer).
           firmware-layer = self.nixosConfigurations.audit.config.system.build.hpsFirmwareLayer;
