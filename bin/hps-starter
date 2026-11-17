@@ -88,7 +88,9 @@ sub main {
                 };
                 $proxy = undef if defined $proxy && !length $proxy;
             }
-            my $s = HPS::Starter->new(resources => $resources, proxy => $proxy, store_paths => $store_paths,
+            # the OS registry entry of the release (hps-onboard assign needs it): on an IPS only
+            my $registry = eval { require HPS::Registry; my $rg = HPS::Registry->new; -d $rg->config_base ? $rg : undef };
+            my $s = HPS::Starter->new(resources => $resources, proxy => $proxy, store_paths => $store_paths, registry => $registry,
                 packages => $packages // "$RealBin/../lib/starter/$os.packages",
                 (defined $hydra ? (hydra => $hydra) : ()), (defined $releases ? (releases => $releases) : ()),
                 (defined $cache ? (cache => $cache) : ()), (defined $alpine ? (alpine => $alpine) : ()));

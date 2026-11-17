@@ -256,4 +256,29 @@ like(msg(err_of(sub { (world())[0]->sync('alpine', '3.24', only => 'starter') })
     like($out, qr/starter\s+alpine\s+3\.24\s+3\.24\.4.*\nrepository\s+alpine\s+3\.24/, 'list covers alpine');
 }
 
+# --- the OS registry entry --------------------------------------------------------------------
+{
+    require HPS::Registry;
+    my $cfg = tempdir(CLEANUP => 1);
+    my $reg = HPS::Registry->new(config_base => $cfg, system_registry => "$cfg/system.db");
+    my ($s, $res, $up, $list) = world();
+    $s->{registry} = $reg;
+    my $id = 'x86_64:alpine:3.24';
+    # a hand-made entry (what the lab had) is replaced by what the sync writes
+    $reg->os_set($id, 'name', 'alpine');
+    $reg->os_set($id, 'hps_types', 'SCH');
+    $reg->os_set($id, 'status', 'test');
+    $s->sync('alpine');
+    ok($reg->os_exists($id), 'sync alpine creates the OS registry entry hps-onboard assign needs');
+    is_deeply([ map { $reg->os_get_json($id, $_) } qw(name version arch status boot hps_types) ],
+        [ 'alpine', '3.24', 'x86_64', 'prod', 'starter', 'SCH,TCH,DRH' ], 'in the shape the NixOS entry has, and over a hand-made one');
+    my @k = sort $reg->os_keys($id);
+    $s->sync('alpine');
+    is_deeply([ sort $reg->os_keys($id) ], \@k, 'a second sync leaves the same keys: idempotent');
+    # no registry (a host that is not an IPS): the sync still works and writes none
+    my ($s2) = world();
+    ok(eval { $s2->sync('alpine'); 1 }, 'without a registry the sync does not need one');
+    is($s2->ensure_os_entry('alpine', '3.24'), 0, 'ensure_os_entry says it wrote nothing');
+}
+
 done_testing;

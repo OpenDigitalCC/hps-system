@@ -93,6 +93,12 @@ On the IPS: `docker exec hps-lab-ips /srv/hps-system/bin/hps-starter sync nixos`
   `VERIFY ok sets=2 bad=0`; exit 1 when a file is missing or differs, 4 when
   nothing is synced.
 
+`sync` also keeps the OS registry entry `x86_64:<os>:<release>` that `hps-onboard assign --os`
+needs ("OS ... is not in the OS registry" otherwise). It writes name, version, arch, status
+`prod`, `hps_types` and `boot` (`manifest` for NixOS, as `os_seed_nixos` makes it, `starter` for
+Alpine) every time, over whatever is there, so a hand-made entry becomes the one the sync writes and a
+second sync changes nothing. On a host with no IPS configuration (`/srv/hps-config`) it writes none.
+
 ### What `sync nixos` needs from the host
 
 - `curl`, and for the repository `xz` (the package `xz-utils`) to read the

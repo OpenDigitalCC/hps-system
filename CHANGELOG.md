@@ -62,6 +62,11 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **New** `hps-starter sync` writes the OS registry entry of the release it synced
+  (`x86_64:nixos:26.05`, `x86_64:alpine:3.24`) in the shape `os_seed_nixos` gives the NixOS one, over
+  any hand-made entry, so `hps-onboard assign --os x86_64:alpine:3.24` works after a sync (found in
+  the reduced lab trial: the entry had to be made by hand).
+
 Step 4 of `plans/PLAN.md` (`docs/STARTER.md` "Alpine", `docs/BUNDLE.md` "Alpine"). The NixOS
 starter nodes behave as before; the only changes to files they use are small questions that
 `init` and `role` now ask the adapter instead of naming the OS.

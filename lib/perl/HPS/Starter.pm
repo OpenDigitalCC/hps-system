@@ -79,6 +79,7 @@ sub new ($class, %opt) {
         packages   => $opt{packages},      # package list file
         store_paths => $opt{store_paths},  # store path list (plain or .xz), instead of the release's
         curl       => $opt{curl} // 'curl',
+        registry   => $opt{registry},      # HPS::Registry: the OS entry is kept for the synced release
         logger     => $opt{logger} // sub ($msg) { print STDERR "hps-starter: $msg\n" },
         now        => $opt{now} // sub { time },
         ni         => {},                  # hash => parsed narinfo
@@ -96,6 +97,26 @@ sub _fail ($kind, $msg) { die HPS::Starter::Error->new($kind, $msg) }
 sub _log ($self, $msg) { $self->{logger}->($msg); return }
 
 sub default_release ($class, $os) { return $OS{$os} ? $OS{$os}{release} : undef }
+
+# The OS registry entry x86_64:<os>:<release> that hps-onboard assign needs, as
+# os_seed_nixos (lib/functions.d/os-functions.sh) makes the NixOS one. Written by every
+# sync, whatever was there: a hand-made entry becomes this one. boot=manifest is NixOS's
+# (kernel and initrd from a builder manifest), boot=starter is a starter's files.
+my %OSENTRY = (
+    nixos  => { hps_types => 'SCH,TCH,DRH,CNH,BLD', boot => 'manifest' },
+    alpine => { hps_types => 'SCH,TCH,DRH',         boot => 'starter' },
+);
+
+sub ensure_os_entry ($self, $os, $ver) {
+    my $r = $self->{registry} or return 0;
+    my $id = "x86_64:$os:$ver";
+    my %v = (%{ $OSENTRY{$os} }, arch => 'x86_64', name => $os, version => $ver, status => 'prod');
+    for my $k (sort keys %v) {
+        eval { $r->os_set($id, $k, $v{$k}); 1 } or _fail('failed', "cannot write $k of the OS registry entry $id: $@");
+    }
+    $self->_log("OS registry entry $id written");
+    return 1;
+}
 
 sub starter_dir ($self, $os, $ver) { return "$self->{resources}/starter/$os/$ver" }
 sub repo_dir ($self, $os, $ver)    { return "$self->{resources}/packages/$os/$ver" }
@@ -257,10 +278,12 @@ sub sync ($self, $os, $ver = undef, %o) {
     _fail('usage', "--only '$only' must be starter or repository") if defined $only && $only !~ /\A(?:starter|repository)\z/;
     if ($os eq 'alpine') {
         my $r = HPS::Starter::Alpine::sync($self, $ver, only => $only);
+        $self->ensure_os_entry($os, $ver);
         return { os => $os, version => $ver, release => $r->{release}, starter => $r->{starter}, repo => $r->{repo} };
     }
     my $st = defined $only && $only eq 'repository' ? $self->_starter_state($ver) : $self->_sync_nixos_starter($ver);
     my $rp = defined $only && $only eq 'starter' ? undef : $self->_sync_nixos_repo($ver, $st);
+    $self->ensure_os_entry($os, $ver);
     return { os => $os, version => $ver, release => $st->{release}, starter => defined $only && $only eq 'repository' ? undef : $st, repo => $rp };
 }
 

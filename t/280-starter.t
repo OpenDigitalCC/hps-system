@@ -338,4 +338,17 @@ like($e && $e->message, qr/package 'libvirt': several x86_64 candidates/, 'two x
     is($? >> 8, 2, 'a bad proxy is a usage error: exit 2');
 }
 
+# --- the OS registry entry (as os_seed_nixos makes it) ---------------------------------------
+{
+    require HPS::Registry;
+    my $cfg = File::Temp::tempdir(CLEANUP => 1);
+    my $reg = HPS::Registry->new(config_base => $cfg, system_registry => "$cfg/system.db");
+    my $id = 'x86_64:nixos:26.05';
+    $reg->os_set($id, 'hps_types', 'SCH,TCH,DRH');    # a hand-made entry, as the lab's was
+    my $wr = world();
+    $wr->{new}->(registry => $reg)->sync('nixos');
+    is_deeply([ map { $reg->os_get_json($id, $_) } qw(name version arch status boot hps_types) ],
+        [ 'nixos', '26.05', 'x86_64', 'prod', 'manifest', 'SCH,TCH,DRH,CNH,BLD' ], 'sync nixos writes the OS registry entry as os_seed_nixos does, over a hand-made one');
+}
+
 done_testing;
