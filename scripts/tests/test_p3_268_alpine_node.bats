@@ -252,7 +252,7 @@ svc() { cat "$HPS_OPENRC_DIR/$1"; }
   [ "$(cat "$HPS_ROOT/etc/conf.d/syslog")" = 'SYSLOGD_OPTS="-t -R 10.9.9.9:514 -L"' ]
   grep -qx 'rc-service syslog restart' "$CALLS"
   run svc mdmonitor
-  [[ "$output" == *"--monitor --scan --foreground"* ]]
+  [[ "$output" == *"--monitor --scan"* ]]
   [[ "$output" == *"supervisor=supervise-daemon"* ]]
   grep -q 'PROGRAM ' "$HPS_ROOT/etc/mdadm.conf"
 }
@@ -639,4 +639,22 @@ LOG
   [ "$(ls "$D/disk/by-path" | wc -l)" -eq 1 ]
   HPS_SYSFS="$S" HPS_DEVDIR="$D" ACTION=remove MDEV=sda sh "$hook"
   [ "$(ls "$D/disk/by-path" | wc -l)" -eq 0 ]
+}
+
+@test "init, Alpine: syslog is restarted once pairing set the host name (busybox syslogd takes it at start: the lab's HPS-ISSUE lines said 'localhost'), and acpid runs for the power button" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [ "$(grep -c '^rc-service syslog restart' "$CALLS")" -eq 2 ]
+  [ "$(grep -n '^hps-pair' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^rc-service syslog restart' "$CALLS" | tail -1 | cut -d: -f1)" ]
+  grep -qx 'rc-service acpid start' "$CALLS"
+  grep -qx 'acpid' "$ROOT/lib/starter/alpine.packages"
+  grep -q '^\*: .* acpid ' "$ROOT/lib/starter/alpine.roles"
+}
+
+@test "init, Alpine: the mirror monitor is mdadm's own foreground one (mdadm has no --foreground: the lab's mdmonitor respawned on it and no leg event reached the IPS)" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  run svc mdmonitor
+  [[ "$output" == *'command_args="--monitor --scan"'* ]]
+  [[ "$output" != *"--foreground"* ]]
 }

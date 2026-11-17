@@ -61,6 +61,9 @@ dmidecode
 jq
 xxd
 
+# the ACPI power button (a graceful poweroff: the storage quiesce runs; the hypervisor presses it)
+acpid
+
 # storage
 targetcli
 py3-rtslib

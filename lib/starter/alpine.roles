@@ -1,6 +1,6 @@
 # Which role gets which Alpine packages (names in alpine.packages). A role is a word of
 # the host's registry TYPE (SCH,TCH gets both lines); * is every node. See nixos.roles.
 # linux-lts comes first: the kernel and its modules arrive before anything that loads one.
-*:   linux-lts linux-firmware-none mkinitfs ctrl-exec-agent setpriv coreutils gawk grep sed findutils iproute2 iproute2-ss iproute2-tc lsblk blkid findmnt util-linux-misc jq
+*:   linux-lts acpid linux-firmware-none mkinitfs ctrl-exec-agent setpriv coreutils gawk grep sed findutils iproute2 iproute2-ss iproute2-tc lsblk blkid findmnt util-linux-misc jq
 SCH: zfs zfs-lts zfs-udev targetcli py3-rtslib mdadm smartmontools xxd wipefs e2fsprogs dbus om3 monitoring-plugins nagios-check hps-nagios-plugins
 TCH: libvirt-apparmor apparmor apparmor-profiles qemu-system-x86_64 qemu-img open-iscsi partx mount umount losetup e2fsprogs wipefs mdadm tcpdump bridge-utils dmidecode qemu-edk2-i386-vars dbus om3 monitoring-plugins nagios-check hps-nagios-plugins

@@ -48,7 +48,7 @@ adapter_init() {
   # where the scripts the node bundle runs find their systemctl and udevadm
   ADAPTER_PATH_EXTRA="$HPS_RUN_DIR/bin"
   # dbus: targetcli and libvirt expect it; configfs: targetcli (LIO) needs it mounted
-  ENSURE_SERVICES="dbus"
+  ENSURE_SERVICES="dbus acpid"
   MOUNT_CONFIGFS=1
   return 0
 }
@@ -159,8 +159,12 @@ sudo_grant() {
 }
 
 # hostname_apply: the name is /etc/hostname (init wrote it) and the kernel's: Alpine's
-# hostname service reads the file and nothing resets it, so there is nothing more to do
-hostname_apply() { return 0; }
+# hostname service reads the file and nothing resets it. busybox syslogd takes the host name when it
+# starts, before pairing set it: its lines (the HPS-ISSUE ones the IPS reads) said "localhost". Restarted.
+hostname_apply() {
+  [[ -n "${1:-}" ]] || return 0
+  _rc syslog restart
+}
 
 # os_compat: the two systemd programs the bundle's scripts call, as scripts on the PATH
 # (init puts $HPS_RUN_DIR/bin first; the agent's script_path names it too).
@@ -635,7 +639,7 @@ log_forward() {
 # md_monitor: nothing starts mdadm's monitor by itself here (NixOS's udev does): the
 # monitor is a service that reads /etc/mdadm.conf (PROGRAM, AUTO -all)
 md_monitor() {
-  svc_start --opt Restart=always mdmonitor "PATH=$(role_path)" "$(role_bin mdadm)" --monitor --scan --foreground
+  svc_start --opt Restart=always mdmonitor "PATH=$(role_path)" "$(role_bin mdadm)" --monitor --scan
 }
 
 # zfs_hostid_set: the node's own ZFS hostid, from the kernel line (hps.zfs_hostid), as
