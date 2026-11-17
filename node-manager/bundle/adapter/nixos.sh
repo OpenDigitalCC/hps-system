@@ -282,6 +282,12 @@ os_compat() { return 0; }
 refresh_watch() { return 0; }
 zvol_links() { return 0; }
 
+# iscsi_links: udev makes the by-path names of iSCSI disks
+iscsi_links() { return 0; }
+
+# libvirt_prepare: nothing (libvirt here has no default network)
+libvirt_prepare() { return 0; }
+
 # sshd_prepare: sshd's host keys exist already
 sshd_prepare() { return 0; }
 

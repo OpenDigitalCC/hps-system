@@ -319,6 +319,9 @@ with_driver() {
   # the profile of the daemon is for the real binary, not the nix wrapper's name
   grep -qx "$TEST_DIR/usr/bin/libvirtd (enforce)" "$HPS_AA_PROFILES"
   grep -q "^$TEST_DIR/usr/bin/libvirtd flags=" "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
+  # the programs the daemon starts are allowed as the nix text allows the store's (qemu's capability probe was denied)
+  grep -qxF '  /usr/bin/* PUx,' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
+  grep -qxF '  /usr/sbin/* PUx,' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
   ! grep -q 'libvirtd-wrapped' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd" "$HPS_ROOT/etc/apparmor.d/abstractions/libvirt-qemu"
   grep -q "$TEST_DIR/usr/sbin/apparmor_parser Ux" "$HPS_ROOT/etc/apparmor.d/hps/virt-aa-helper"
   # loaded before libvirtd starts
@@ -404,7 +407,7 @@ with_driver() {
   names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
   # the interface init and role call: every one is in both
   for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
-    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare libvirt_prepare iscsi_links refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
   done
@@ -582,4 +585,51 @@ LOG
   # (hps-pair, run by init, restarts the agent through the systemctl of os_compat: one of those calls)
   grep -qx 'rc-service ctrl-exec-agent restart' "$CALLS"
   ! grep -E '^rc-fd9-open .* (start|restart|reload)$' "$CALLS"
+}
+
+# --- the full Alpine trial's findings ------------------------------------------------
+
+@test "init, Alpine, TCH: no ZFS on a compute node means no dataset mount service and no failed step (the lab: 'zfs mounts' failed on tch-001)" {
+  tch_node
+  with_driver
+  rm -f "$TEST_DIR/usr/bin/zfs" "$TEST_DIR/usr/bin/zpool"
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [[ "$output" == *"no zfs on this node: no dataset mount service"* ]]
+  [ ! -e "$HPS_OPENRC_DIR/hps-zfs-mount" ]
+}
+
+@test "init, Alpine, TCH: libvirt's own default network is not started (dnsmasq and xtables are denied by the libvirtd profile)" {
+  tch_node
+  with_driver
+  mkdir -p "$HPS_ROOT/etc/libvirt/qemu/networks/autostart"
+  : > "$HPS_ROOT/etc/libvirt/qemu/networks/autostart/default.xml"
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  [ ! -e "$HPS_ROOT/etc/libvirt/qemu/networks/autostart/default.xml" ]
+}
+
+@test "init, Alpine, TCH: the by-path names of iSCSI disks are made by an mdev hook from sysfs (the lab: leg-resolve 'did not appear within 30s'), and only for iSCSI disks" {
+  tch_node
+  with_driver
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  head -n 1 "$HPS_ROOT/etc/mdev.conf" | grep -q "^-sd\[a-z\]+.root:disk 0660 \*$HPS_RUN_DIR/bin/iscsi-path-mdev\$"
+  [ "$(grep -c iscsi-path-mdev "$HPS_ROOT/etc/mdev.conf")" -eq 1 ]
+  hook="$HPS_RUN_DIR/bin/iscsi-path-mdev"
+  # a fake sysfs and /dev: sda is on session1 of target iqn.x:a, portal 10.1.1.1:3260, lun 0; sdb is a local disk
+  S="$TEST_DIR/sys"; D="$TEST_DIR/dev"
+  mkdir -p "$S/devices/platform/host0/session1/target0:0:0/0:0:0:0" "$S/devices/pci/virtio0/block" "$S/block/sda" "$S/block/sdb" \
+    "$S/class/iscsi_session/session1" "$S/class/iscsi_connection/connection1:0" "$D"
+  ln -s "$S/devices/platform/host0/session1/target0:0:0/0:0:0:0" "$S/block/sda/device"
+  ln -s "$S/devices/pci/virtio0" "$S/block/sdb/device"
+  echo iqn.2026-11.x:a > "$S/class/iscsi_session/session1/targetname"
+  echo 10.1.1.1 > "$S/class/iscsi_connection/connection1:0/persistent_address"
+  echo 3260 > "$S/class/iscsi_connection/connection1:0/persistent_port"
+  HPS_SYSFS="$S" HPS_DEVDIR="$D" ACTION=add MDEV=sda sh "$hook"
+  [ "$(readlink "$D/disk/by-path/ip-10.1.1.1:3260-iscsi-iqn.2026-11.x:a-lun-0")" = "../../sda" ]
+  HPS_SYSFS="$S" HPS_DEVDIR="$D" ACTION=add MDEV=sdb sh "$hook"
+  [ "$(ls "$D/disk/by-path" | wc -l)" -eq 1 ]
+  HPS_SYSFS="$S" HPS_DEVDIR="$D" ACTION=remove MDEV=sda sh "$hook"
+  [ "$(ls "$D/disk/by-path" | wc -l)" -eq 0 ]
 }

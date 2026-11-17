@@ -310,6 +310,30 @@ while :; do
   sleep 1
 done
 EOF
+  # mdev hook for the by-path names of iSCSI disks (leg-resolve waits for /dev/disk/by-path/ip-<ip>:<port>-iscsi-<iqn>-lun-<n>,
+  # which udev's path_id makes and mdev does not): the session, its target name and portal are in sysfs
+  write_if_changed "$d/iscsi-path-mdev" 0755 << 'EOF'
+#!/bin/sh
+# mdev hook for iSCSI disks (written by the HPS node bundle, adapter/alpine.sh)
+S="${HPS_SYSFS:-/sys}"
+D="${HPS_DEVDIR:-/dev}"
+case "$MDEV" in sd[a-z] | sd[a-z][a-z]) ;; *) exit 0 ;; esac
+case "$ACTION" in
+  add)
+    real="$(readlink -f "$S/block/$MDEV/device" 2> /dev/null)" || exit 0
+    case "$real" in */session[0-9]*/target*) ;; *) exit 0 ;; esac
+    sess="${real%%/target*}"; sess="${sess##*/}"
+    lun="${real##*:}"
+    n="${sess#session}"
+    iqn="$(cat "$S/class/iscsi_session/$sess/targetname" 2> /dev/null)" || exit 0
+    ip="$(cat "$S/class/iscsi_connection/connection$n:0/persistent_address" 2> /dev/null)" || exit 0
+    port="$(cat "$S/class/iscsi_connection/connection$n:0/persistent_port" 2> /dev/null)" || exit 0
+    mkdir -p "$D/disk/by-path"
+    ln -sf "../../$MDEV" "$D/disk/by-path/ip-$ip:$port-iscsi-$iqn-lun-$lun" ;;
+  remove)
+    find "$D/disk/by-path" -type l -lname "../../$MDEV" -delete 2> /dev/null ;;
+esac
+EOF
   # mdev's rule and hook for zvols: the /dev/zvol/<pool>/<dataset> links that udev's 60-zvol.rules make
   write_if_changed "$d/zvol-mdev" 0755 << 'EOF'
 #!/bin/sh
@@ -334,6 +358,13 @@ exec /usr/share/udhcpc/default.script "$@"
 EOF
 }
 
+# libvirt_prepare: the package autostarts libvirt's own NAT network (virbr0, dnsmasq, iptables); HPS makes
+# its bridges itself (net-bridge-ensure), and the libvirtd profile does not allow dnsmasq or xtables
+# (the first lab compute node: apparmor="DENIED" operation="exec" ... name="/usr/sbin/dnsmasq"). Not started.
+libvirt_prepare() {
+  rm -f "${HPS_ROOT}${LIBVIRT_CONF_DIR}/qemu/networks/autostart/default.xml"
+}
+
 # sshd_prepare: the host keys. The package makes none; its OpenRC script does at start, but
 # init checks the configuration (sshd -t, which needs a key) before it starts the service.
 sshd_prepare() {
@@ -352,6 +383,17 @@ zvol_links() {
   [[ -x "${HPS_ZVOL_ID:-/usr/lib/udev/zvol_id}" ]] || { log "zvol_id (the package zfs-udev) is not installed: no /dev/zvol links"; return 1; }
   grep -q 'zvol-mdev' "$conf" 2> /dev/null || {
     { printf 'zd[0-9]+(p[0-9]+)?\troot:disk 0660 @%s/bin/zvol-mdev\n' "$HPS_RUN_DIR"; cat "$conf" 2> /dev/null || true; } > "$conf.new"
+    run mv -f "$conf.new" "$conf"
+  }
+  command -v mdev > /dev/null 2>&1 && run mdev -s
+  return 0
+}
+
+# iscsi_links: the mdev rule for the iSCSI by-path hook (a "-" rule: the stock rules for sd devices still apply)
+iscsi_links() {
+  local conf="${HPS_ROOT}/etc/mdev.conf"
+  grep -q 'iscsi-path-mdev' "$conf" 2> /dev/null || {
+    { printf -- '-sd[a-z]+\troot:disk 0660 *%s/bin/iscsi-path-mdev\n' "$HPS_RUN_DIR"; cat "$conf" 2> /dev/null || true; } > "$conf.new"
     run mv -f "$conf.new" "$conf"
   }
   command -v mdev > /dev/null 2>&1 && run mdev -s
@@ -625,6 +667,10 @@ aa_sed_args() {
     printf '%s\n' -e "s|$AA_LIBVIRT/libexec/$h|$(aa_libexec_dir)/$h|g"
   done
   printf '%s\n' -e "s|^\\([[:space:]]*\\)$AA_LIBVIRT/libexec/\\* PUxr,|\\1$(aa_libexec_dir)/* PUxr,|" -e "s|/var/lib/apparmor\\.d/libvirt|$(aa_profile_dir)|g"
+  # the programs the daemon starts (qemu to probe its capabilities, qemu-img, ip, ...): the nix text allows
+  # the store's bin and sbin and the system path with PUx; here they are /usr/bin, /usr/sbin and /usr/local/bin
+  # (the first lab compute node: apparmor="DENIED" operation="exec" ... name="/usr/bin/qemu-system-x86_64")
+  printf '%s\n' -e 's#^\([[:space:]]*\)/nix/store/\*/bin/\* PUx,#\1/usr/bin/* PUx,#' -e 's#^\([[:space:]]*\)/nix/store/\*/sbin/\* PUx,#\1/usr/sbin/* PUx,#' -e 's#^\([[:space:]]*\)/run/current-system/sw/bin/\* PUx,#\1/usr/local/bin/* PUx,#'
 }
 aa_libvirt_check() {
   if [[ ! -x "$(aa_helper_path)" ]]; then

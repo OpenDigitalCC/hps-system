@@ -265,6 +265,8 @@ EOF
 # /lab/enc/images/... does not exist"). The unit mounts from PID 1, where the mount stays
 # and reaches the actions' namespaces; those three scripts start it when it exists.
 role_zfs() {
+  # a compute node on Alpine has no ZFS (the module and tools are the storage role's packages)
+  role_bin zfs > /dev/null 2>&1 || { log "no zfs on this node: no dataset mount service"; return 0; }
   svc_start --opt Type=oneshot --opt Restart=no \
     hps-zfs-mount "PATH=$(role_path)" "$(role_bin zfs)" mount -a
 }
@@ -414,6 +416,7 @@ EOF
 
   # libvirtd does not start virtlogd itself (lab trial: vm-start failed on
   # /run/libvirt/virtlogd-sock); the guests' console logs go through it
+  libvirt_prepare
   svc_start --opt KillMode=process --opt Restart=on-failure \
     virtlogd "PATH=$(role_path)" "$(role_bin virtlogd)"
   svc_start --opt KillMode=process --opt Restart=on-failure --opt LimitMEMLOCK=infinity \
@@ -439,6 +442,7 @@ role_iscsi() {
     printf 'node.conn[0].timeo.noop_out_timeout = 5\nnode.conn[0].timeo.login_timeout = 15\n'
   } | write_if_changed "${HPS_ROOT}/etc/iscsi/iscsid.conf" 0644
   ln -sf "$HPS_RUN_DIR/initiatorname.iscsi" "${HPS_ROOT}/etc/iscsi/initiatorname.iscsi"
+  iscsi_links
   svc_start --opt KillMode=process --opt Restart=on-failure \
     iscsid "PATH=$(role_path)" "$iscsid" -f --config="${HPS_ROOT}/etc/iscsi/iscsid.conf"
 }
