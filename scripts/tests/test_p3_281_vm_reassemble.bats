@@ -51,7 +51,11 @@ echo "$n $*" >> "$SHIM_LOG"
 [[ -e "$STATE/$n-fails" ]] && exit 1
 if [[ "$n" == leg-resolve ]]; then
   grep -qxF "$1" "$STATE/leg-missing" 2> /dev/null && exit 3
-  echo "/dev/fake"
+  if grep -qxF "$1" "$STATE/leg-offline" 2> /dev/null; then
+    echo "$HPS_DEV/sdx"
+  else
+    echo "/dev/fake"
+  fi
 fi
 [[ "$n" == vm-start ]] && echo "VM $1 running"
 exit 0
@@ -195,6 +199,25 @@ nothing_changed() {
   [ "$status" -eq 3 ]
   [[ "$output" == *"$P3_LOC_SPEC (mirror vm1-disk0), $P3_REM_SPEC (mirror vm1-disk0)"* ]]
   nothing_changed
+}
+
+@test "a leg whose device is still there but transport-offline is refused (3), the leg and state named, the guest untouched" {
+  echo "$P3_REM_SPEC" > "$STATE/leg-offline"
+  mkdir -p "$HPS_SYS/block/sdx/device"
+  echo transport-offline > "$HPS_SYS/block/sdx/device/state"
+  run bash "$S/vm-reassemble" vm1
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"REFUSED legs leg(s) present but not readable: $P3_REM_SPEC (mirror vm1-disk0, device transport-offline); vm1 is untouched"* ]]
+  nothing_changed
+}
+
+@test "a leg whose device the kernel holds running passes the legs check" {
+  echo "$P3_REM_SPEC" > "$STATE/leg-offline"
+  mkdir -p "$HPS_SYS/block/sdx/device"
+  echo running > "$HPS_SYS/block/sdx/device/state"
+  run bash "$S/vm-reassemble" vm1
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "VM vm1 running" ]
 }
 
 @test "no sidecar means the legs are not known: refused (3), nothing changed" {

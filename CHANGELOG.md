@@ -212,6 +212,7 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** `vm-reassemble` powering a guest off before it knew a leg could not be read: a leg whose iSCSI session is still listed after its far end went keeps its device name (`transport-offline`), so the legs check now also reads the disk's kernel state and refuses (`REFUSED legs leg(s) present but not readable`), the guest untouched.
 - **Fixed** the ACPI power button on Alpine: the `button` and `evdev` modules are loaded before `acpid` starts, so a graceful stop runs the power-off storage quiesce; `host-resources` no longer dies of SIGPIPE under pipefail (virsh dominfo piped into an awk that exits) and reads `/machine` when there is no `machine.slice`.
 - **Fixed** the Alpine host reserve skips a cgroup property the kernel does not offer (`io.weight` without bfq or iocost) instead of failing before `memory.max`. libvirt puts the guests under `/machine`, the group the reserve writes.
 - **Fixed** on the full Alpine trial: the mirror monitor ran `mdadm --monitor --scan --foreground`, an option mdadm does not have (no leg event reached the IPS); syslog is restarted when pairing set the host name (lines said "localhost"); `acpid` runs so a graceful stop (the ACPI power button) shuts a node down.

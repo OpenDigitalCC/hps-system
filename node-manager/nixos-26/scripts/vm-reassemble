@@ -33,7 +33,10 @@
 #                              ($HPS_MIRROR_DIR/<name>.json, from mirror-assemble)
 #                              and both of its legs resolve (leg-resolve: the zvol
 #                              exists, or the iSCSI session is logged in and the
-#                              LUN is there); the message names each leg missing
+#                              LUN is there) to a disk the kernel holds "running"
+#                              (a session still listed after its far end went keeps
+#                              the device name, transport-offline, and it cannot be
+#                              read); the message names each leg missing or offline
 # Then, in this order, each step logged and a failure of one is exit 1:
 #   1. vm-stop <vm> --force            (the guest process, and so its hold on the device, ends)
 #   2. mdadm --stop /dev/md/<name>     (directly, not mirror-stop: that would log the legs out)
@@ -152,19 +155,37 @@ find_broken() {
 # check_legs: every broken mirror has its sidecar and both legs resolve. Names every
 # leg that does not.
 check_legs() {
-  local name side spec i missing=""
+  local name side spec i dev st missing="" offline=""
   for name in "${BROKEN[@]}"; do
     side="$HPS_MIRROR_DIR/$name.json"
     [[ -r "$side" ]] || refuse legs "mirror $name has no sidecar $side, so its legs are not known: assemble it by hand (mirror-assemble)"
     for i in 0 1; do
       spec=$(jq -r ".legs[$i].spec // empty" "$side")
       [[ -n "$spec" ]] || refuse legs "the sidecar of $name does not record two legs"
-      if ! run_q "$HPS_LEG_RESOLVE" "$spec" > /dev/null; then
+      if ! dev=$(run_q "$HPS_LEG_RESOLVE" "$spec"); then
         missing+="${missing:+, }$spec (mirror $name)"
+      elif ! st=$(leg_online "$dev"); then
+        offline+="${offline:+, }$spec (mirror $name, device $st)"
       fi
     done
   done
   [[ -z "$missing" ]] || refuse legs "leg(s) not present or not logged in: $missing; $VM is untouched"
+  [[ -z "$offline" ]] || refuse legs "leg(s) present but not readable: $offline; $VM is untouched"
+}
+
+# leg_online <device>: a leg whose iSCSI session is still listed keeps its device
+# name after the far end has gone; the kernel then holds the disk in a state other
+# than "running" (transport-offline) and every read of it fails. Prints that state
+# and returns 1 for such a disk. A device with no SCSI state (a zvol) is online.
+leg_online() {
+  local real state_file state
+  real=$(readlink -f "$1" 2> /dev/null || true)
+  state_file="$HPS_SYS/block/${real##*/}/device/state"
+  [[ -n "$real" && -r "$state_file" ]] || return 0
+  state=$(< "$state_file")
+  [[ "$state" == running ]] && return 0
+  printf '%s\n' "${state:-unknown}"
+  return 1
 }
 
 # stop_order: "<priority> <provides storage>" the guest had, as vm-start recorded.
