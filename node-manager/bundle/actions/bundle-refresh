@@ -49,7 +49,7 @@ if ! command -v "$HPS_SYSTEMD_RUN" > /dev/null 2>&1; then
   req="$HPS_RUN_DIR/refresh.request"
   rm -f "$HPS_RUN_DIR/refresh.rc" "$HPS_RUN_DIR/refresh.out"
   : > "$req"
-  printf '+ refresh requested of hps-refresh-watch (%s)\n' "$req" >&2
+  printf '+ refresh requested of hps-refresh-watch (%s); waiting for its answer\n' "$req" >&2
   waited=0
   while [[ ! -e "$HPS_RUN_DIR/refresh.rc" ]]; do
     if ((waited >= ${HPS_REFRESH_TIMEOUT:-600})); then
