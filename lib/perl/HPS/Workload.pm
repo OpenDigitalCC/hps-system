@@ -42,7 +42,7 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 my $MAX_DISKS = 8;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console suspend resume resume-paused);
-my %TOP = map { $_ => 1 } qw(name project access vms class flavour egress);
+my %TOP = map { $_ => 1 } qw(name project access vms class flavour egress dns);
 # The workload's class (docs/WORKLOADS.md "Classes"): what
 # happens to it when its host must go down (hps-workload drain). Not the
 # per-VM priority, which is the start and stop order inside one workload.

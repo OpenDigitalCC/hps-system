@@ -80,6 +80,15 @@ capabilities and removals are called out explicitly.
   published `services/workload_hosts`; same duplicate checks) and dnsmasq is told by the
   `hps-forget-hook.sh dns-dhcp` hook. `docs/WORKLOADS.md` "DHCP reservation per NIC";
   `t/285-workload-reservation.t`, `test_ips42_05_workload_hosts.bats`.
+- **New** `"dns": ["*"]` in a workload definition (one pattern exists; the table takes more):
+  the IPS's dnsmasq answers `<vm>.<cluster domain>` and `*.<vm>.<cluster domain>` with the
+  VM's reserved address. Published as `wild` rows beside the reservation rows and written
+  by `dns_regenerate` as `address=` lines in `services/dns_wildcards`, which `dnsmasq.conf`
+  includes; dnsmasq reads those only at start, so a changed wildcard file rewrites
+  `dnsmasq.conf` and restarts dnsmasq (new `supervisor_restart_service`), and any other
+  regeneration stays a reload. Removed by `destroy`, with the reservation by `--forget`.
+  `docs/WORKLOADS.md` "DNS for a workload's names"; `t/286-workload-dns.t`,
+  `test_ips42_06_dns_wildcard.bats`.
 
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 

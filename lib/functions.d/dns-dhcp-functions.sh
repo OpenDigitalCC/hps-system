@@ -61,6 +61,17 @@ dns_regenerate() {
     hps_log error "Failed to build DNS hosts file"
     dns_result=1
   fi
+
+  # The names answered for a whole workload (IPS-42). dnsmasq reads address= lines
+  # only at start, so a change restarts it (below) after its configuration file is
+  # written again with the include.
+  local wild_changed=0
+  build_dns_wildcards_file "$cluster" || wild_changed=$?
+  case "$wild_changed" in
+    0) wild_changed=0 ;;
+    10) wild_changed=1 ;;
+    *) hps_log error "Failed to build DNS wildcards file"; dns_result=1; wild_changed=0 ;;
+  esac
   
   if [[ $dhcp_result -ne 0 ]] || [[ $dns_result -ne 0 ]]; then
     hps_log error "DNS/DHCP regeneration completed with errors"
@@ -73,7 +84,12 @@ dns_regenerate() {
   if [[ "$cluster" == "$active_cluster" ]]; then
     _ips_resolv_conf_update "$cluster" || hps_log warn "resolv.conf not updated"
     if [[ "$reload_services" == "true" ]]; then
-      supervisor_reload_services dnsmasq || hps_log warn "dnsmasq reload failed; the files are written and are read at the next dnsmasq start"
+      if [[ "$wild_changed" == 1 ]]; then
+        create_config_dnsmasq || hps_log warn "dnsmasq.conf not rewritten; the wildcard file is included from the next start"
+        supervisor_restart_service dnsmasq || hps_log warn "dnsmasq restart failed; the files are written and are read at the next dnsmasq start"
+      else
+        supervisor_reload_services dnsmasq || hps_log warn "dnsmasq reload failed; the files are written and are read at the next dnsmasq start"
+      fi
     fi
   fi
 
@@ -291,6 +307,97 @@ build_dhcp_addresses_file() {
   fi
   
   hps_log info "DHCP addresses file created with $entry_count entries"
+  return 0
+}
+
+#===============================================================================
+# build_dns_wildcards_file
+# ------------------------
+# Write the dnsmasq conf-file that answers a whole workload by name (IPS-42 row 6).
+#
+# Usage:
+#   build_dns_wildcards_file [cluster_name]
+#
+# Behaviour:
+#   - one line per "wild <label> <ip>" row of <services_dir>/workload_hosts (the
+#     workloads whose definition says "dns": ["*"]):
+#       address=/<label>.<network_dns_domain>/<ip>
+#     dnsmasq's address= answers the name itself and every name below it, so
+#     <vm>.<domain> and *.<vm>.<domain> both give the VM's address
+#   - a row whose label is a registered host's name, that repeats an earlier row,
+#     or whose label or address does not check, is skipped (logged)
+#   - the file is written atomically; a missing workload_hosts gives an empty file
+#
+# Output File:
+#   /srv/hps-config/clusters/<cluster>/services/dns_wildcards
+#
+# Returns:
+#   0 written, unchanged; 10 written, content changed (dnsmasq must be restarted);
+#   1 on failure
+#===============================================================================
+build_dns_wildcards_file() {
+  local cluster="${1:-}"
+  if [[ -z "$cluster" ]]; then
+    cluster=$(hps_get_config active_cluster) || {
+      hps_log error "No cluster specified and no active cluster configured"
+      return 1
+    }
+  fi
+  local config_base
+  config_base=$(hps_get_config config_base) || return 1
+  local services_dir="${config_base}/clusters/${cluster}/services"
+  local out="${services_dir}/dns_wildcards"
+  local tmp="${out}.tmp"
+  mkdir -p "$services_dir" || return 1
+
+  local dns_domain
+  dns_domain=$(cluster_registry "$cluster" get network_dns_domain 2> /dev/null) || dns_domain=""
+  dns_domain=$(strip_quotes "$dns_domain")
+  dns_domain="${dns_domain,,}"
+  if [[ -z "$dns_domain" ]]; then
+    hps_log error "Failed to get network_dns_domain from cluster $cluster"
+    return 1
+  fi
+
+  # The names the registered hosts hold: a workload never takes one over.
+  declare -A host_names=()
+  local hmac hname
+  for hmac in $(list_cluster_hosts "$cluster" 2> /dev/null); do
+    hname=$(host_registry "$hmac" get HOSTNAME 2> /dev/null) || continue
+    [[ -n "$hname" ]] || continue
+    hname="${hname,,}"
+    host_names["${hname%%.*}"]=1
+  done
+
+  declare -A seen=()
+  local kind label ip extra
+  : > "$tmp" || return 1
+  if [[ -r "${services_dir}/workload_hosts" ]]; then
+    while read -r kind label ip extra; do
+      [[ "$kind" == wild && -z "${extra:-}" ]] || continue
+      [[ "$label" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || continue
+      validate_ip_address "$ip" || continue
+      if [[ -n "${host_names[$label]:-}" || -n "${seen[$label]:-}" ]]; then
+        hps_log warn "dns_wildcards: skipping $label: the name is a registered host's or repeats an earlier row"
+        continue
+      fi
+      seen["$label"]=1
+      echo "address=/${label}.${dns_domain}/${ip}" >> "$tmp"
+    done < "${services_dir}/workload_hosts"
+  fi
+
+  local changed=0
+  if [[ ! -f "$out" ]] || ! cmp -s "$tmp" "$out"; then
+    # a first empty file is not a change dnsmasq must hear about
+    if [[ -f "$out" || -s "$tmp" ]]; then changed=1; fi
+  fi
+  if ! mv "$tmp" "$out"; then
+    hps_log error "Failed to write DNS wildcards file: $out"
+    rm -f "$tmp"
+    return 1
+  fi
+  hps_log info "DNS wildcards file written with $(wc -l < "$out") names"
+  [[ "$changed" == 1 ]] && return 10
   return 0
 }
 

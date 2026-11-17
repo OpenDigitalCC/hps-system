@@ -35,6 +35,7 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `project` | non-empty string |
 | `class` (workload, top level) | optional, a whole number 1-4, default 3: the workload's class (1 core, 2 customer-facing, 3 ordinary, 4 batch and test), which decides what `drain` does with it. See "Workload classes" |
 | `flavour`, `egress` (top level) | optional: the kind of workload and the egress hosts it declares; see "Egress hosts". A declaration grants nothing |
+| `dns` (top level) | optional, a list of at most 4 patterns; `"*"` is the one supported: the IPS's DNS answers `<vm>.<domain>` and `*.<vm>.<domain>` with the VM's reserved address. See "DNS for a workload's names" |
 | `access` | optional; `ssh_keys` a list of public key lines, `console` a JSON boolean |
 | `memory_mib` | 256-262144 |
 | `vcpus` | 1-64 |
@@ -216,6 +217,42 @@ another workload holds is never reserved; `reserve` says so.
   for none) whenever the published file changed, so dnsmasq re-reads its files
   at once. NIC 0 is known by the VM's name, the others as `<vm>-nic<i>`. A
   destroyed workload's name stops resolving; its reservation stays.
+
+### DNS for a workload's names
+
+A project tests flows that depend on names (an instance or an alias whose name
+must resolve to the VM) without a public zone. The definition asks for it:
+
+```json
+{"name": "demo-pods", "project": "demo", "dns": ["*"], "vms": [...]}
+```
+
+`dns` is a list of patterns, and `"*"` is the one that exists (any other value
+is refused, naming the supported ones; the check is one table in
+`HPS::Workload::Net` so a further pattern is one entry, one case in the
+publisher and one row type in the generator). With `"*"` the IPS's dnsmasq
+answers `<vm>.<cluster domain>` **and every name below it**,
+`*.<vm>.<cluster domain>`, with the address reserved for NIC 0 of each VM of the
+workload ("DHCP reservation per NIC": the answer is the reserved address, so it
+needs one; `status` or `reserve` makes it). On the lab, whose cluster domain is
+`lab.hps`, `odoo-clustertest` answers `odoo-clustertest.lab.hps` and
+`anything.odoo-clustertest.lab.hps`. The names are those of the IPS's resolver;
+`10.100.1.1` is the DNS server the guests are given, and ai-dev's own resolver
+is separate (`hps-workloads` skill, "The network").
+
+The pieces: `hps-workload` publishes a `wild <label> <ip>` row for each VM of a
+workload that exists, beside the `host` rows of the reservation in
+`services/workload_hosts`; `dns_regenerate` writes each as
+`address=/<label>.<domain>/<ip>` to `services/dns_wildcards`, which
+`dnsmasq.conf` includes (`conf-file=`). dnsmasq reads `address=` lines only at
+start, so when that file changed `dns_regenerate` writes `dnsmasq.conf` again and
+restarts dnsmasq (`supervisor_restart_service`: a moment without DHCP and DNS,
+then the leases file as it was), where every other regeneration is a reload.
+The rows follow the workload: a plain `destroy` removes the wildcard (the
+reservation stays), `create` brings it back, `destroy --forget` removes it with
+the reservation. A name a registered host holds is never taken over, a label
+that repeats is skipped, and every label and address is checked as a name and an
+address before it is written.
 
 ### Egress hosts: allowed per workload, never by the definition
 

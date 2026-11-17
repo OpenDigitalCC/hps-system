@@ -37,6 +37,7 @@ create_config_dnsmasq() {
   local dnsmasq_conf="${services_dir}/dnsmasq.conf"
   local dns_hosts="${services_dir}/dns_hosts"
   local dhcp_addresses="${services_dir}/dhcp_addresses"
+  local dns_wildcards="${services_dir}/dns_wildcards"
   
   # Get TFTP directory (populated at pre-start from the system tftp/ tree)
   local tftp_dir
@@ -120,6 +121,9 @@ domain=${dns_domain}
 dhcp-option=option:domain-search,"${dns_domain}"
 # Additional host names
 addn-hosts=${dns_hosts}
+# Names answered for a whole workload, <vm>.<domain> and *.<vm>.<domain> (address=
+# lines written by dns_regenerate; dnsmasq reads them at start, so a change restarts it)
+conf-file=${dns_wildcards}
 # Do not use /etc/hosts or /etc/resolv.conf
 no-hosts
 no-resolv
@@ -161,6 +165,11 @@ EOF
   
   touch "${dns_hosts}" || {
     hps_log error "Failed to create ${dns_hosts}"
+    return 1
+  }
+
+  touch "${dns_wildcards}" || {
+    hps_log error "Failed to create ${dns_wildcards}"
     return 1
   }
   

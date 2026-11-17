@@ -217,4 +217,39 @@ supervisor_reload_services() {
   fi
 }
 
+#:name: supervisor_restart_service
+#:group: supervisor
+#:synopsis: Restart one supervisor-managed service (a HUP does not make dnsmasq re-read its configuration).
+#:usage: supervisor_restart_service service_name
+#:description:
+#  Runs `supervisorctl restart <service>`. Used where the service's configuration
+#  file changed and a HUP would not be enough: dnsmasq reads its address= lines
+#  (the workload wildcards, IPS-42) only at start.
+#:returns:
+#  0 on success
+#  1 if no service name was given, SUPERVISORD_CONF is not set or the file doesn't exist
+#  2 if supervisorctl fails
+supervisor_restart_service() {
+  local SUPERVISORD_CONF service_name="${1:-}"
+  SUPERVISORD_CONF="$(hps_get_config supervisord_conf)"
+  if [[ -z "${service_name}" ]]; then
+    hps_log error "supervisor_restart_service: no service name"
+    return 1
+  fi
+  if [[ -z "${SUPERVISORD_CONF}" || ! -f "${SUPERVISORD_CONF}" ]]; then
+    hps_log error "Supervisor configuration file not found: ${SUPERVISORD_CONF:-unset}"
+    return 1
+  fi
+  local result exit_code
+  result=$(supervisorctl -c "${SUPERVISORD_CONF}" restart "${service_name}" 2>&1)
+  exit_code=$?
+  result=$(printf '%s' "$result" | tr '\n' ' ' | sed 's/  */ /g' | sed 's/ $//')
+  if [[ ${exit_code} -eq 0 ]]; then
+    hps_log info "Restarted supervisor service ${service_name}: ${result}"
+    return 0
+  fi
+  hps_log error "Failed to restart ${service_name} (exit code: ${exit_code}): ${result}"
+  return 2
+}
+
 
