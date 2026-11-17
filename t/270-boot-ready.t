@@ -144,6 +144,10 @@ sub by_name { my ($r) = @_; return { map { $_->{name} => $_ } @{ $r->{checks} } 
     $r = HPS::BootReady::wait_ready(registry => $f->{reg}, proc_dir => $f->{proc}, proc_net_udp => $f->{udp}, tftp_dir => $f->{tftp},
         http_get => $http_ok, wait => 0, now => sub { $t }, sleep => sub { push @sleeps, $_[0] });
     is_deeply(\@sleeps, [], 'wait 0: one check, no sleep');
+    # a slow check (a loaded host crossing a second boundary) is not waiting: wait 0 reports 0 s
+    { my $ticks = 1000; $r = HPS::BootReady::wait_ready(registry => $f->{reg}, proc_dir => $f->{proc}, proc_net_udp => $f->{udp}, tftp_dir => $f->{tftp},
+        http_get => $http_ok, wait => 0, now => sub { $ticks++ }, sleep => sub { die "no sleep" });
+      is($r->{waited}, 0, "wait 0 reports waited 0 even when the clock moved during the check"); }
     # becomes ready during the wait
     my $calls = 0;
     my $get = sub { return $calls++ < 2 ? (503, 'x') : (200, 'ok') };

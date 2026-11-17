@@ -12,6 +12,12 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Boot-readiness refusal reports 0 s when it did not wait (2026-11-17)
+
+- **Fixed** `hps-bmc on` reading "do not answer after 1 s" with `boot_ready_wait_seconds` 0 on a busy
+  host (a flaky `t/274` test 39): `HPS::BootReady::wait_ready` reported the clock difference, which a
+  slow check can push over a second. `waited` is now the time slept between checks.
+
 ## Per-guest metrics are stored whole (2026-11-17)
 
 - **Fixed** `vms` results cut at 1024 bytes in `metrics.log` (a host with 13 guests lost the

@@ -199,22 +199,27 @@ sub verdict ($checks) {
 
 # wait_ready(%opt, wait => S, interval => 2, now => sub, sleep => sub): check
 # until the verdict is ready or S seconds passed. Not ready and unknown are both
-# waited out; the last result is returned with waited (seconds) added.
+# waited out; the last result is returned with waited (seconds) added. waited is the
+# time slept between the checks, not the clock difference: the time a check itself takes
+# (a loaded host can cross a second boundary inside one) is not waiting, and wait 0 is 0.
 sub wait_ready (%opt) {
     my $wait = $opt{wait} // DEFAULT_WAIT;
     my $every = $opt{interval} // 2;
     my $now = $opt{now} // sub { time };
     my $sleep = $opt{sleep} // sub { sleep $_[0] };
     my $t0 = $now->();
+    my $slept = 0;
     my $r;
     while (1) {
         $r = check(%opt);
         last if $r->{verdict} eq 'ready';
         my $left = $wait - ($now->() - $t0);
         last if $left <= 0;
-        $sleep->($left < $every ? $left : $every);
+        my $nap = $left < $every ? $left : $every;
+        $sleep->($nap);
+        $slept += $nap;
     }
-    $r->{waited} = $now->() - $t0;
+    $r->{waited} = $slept;
     return $r;
 }
 
