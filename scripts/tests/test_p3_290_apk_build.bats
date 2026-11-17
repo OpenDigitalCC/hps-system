@@ -104,8 +104,12 @@ case "$cmd" in
     [[ "$sc" == *" nopart "* ]] || fake_apk "$P/libvirt-qemu-$V.apk" libvirt-qemu "$V" "libvirt-daemon=$V libvirt-common-drivers=$V"
     fake_apk "$P/libvirt-dev-$V.apk" libvirt-dev "$V" "libvirt=$V" "usr/include/libvirt/libvirt.h=x"
     fake_apk "$P/libvirt-doc-$V.apk" libvirt-doc "$V" ""
-    mkdir -p "$ch/home/builder/.abuild"
-    echo key > "$ch/home/builder/.abuild/builder-1.rsa"
+    ;;
+  *"hps-apk-inner prepare"*)
+    mkdir -p "$ch/home/builder/.abuild" "$ch/etc/apk/keys"
+    echo key > "$ch/home/builder/.abuild/builder@hps.invalid-1.rsa"
+    echo pub > "$ch/home/builder/.abuild/builder@hps.invalid-1.rsa.pub"
+    cp "$ch/home/builder/.abuild/builder@hps.invalid-1.rsa.pub" "$ch/etc/apk/keys/"
     ;;
   *"hps-apk-inner meta "*)
     args=${cmd#*hps-apk-inner meta }
@@ -232,6 +236,8 @@ pins() { echo "$TEST_DIR/srctree/alpine/recipes/libvirt-apparmor/PINS"; }
   job
   [ "$status" -eq 0 ]
   [ ! -e "$CH/home/builder/.abuild" ]
+  [ -z "$(ls "$CH"/etc/apk/keys/builder@hps.invalid-* 2> /dev/null)" ]
+  grep -q 'hps-apk-inner prepare' "$SHIM_LOG"
   [ -z "$(find "$OUTP" -name '*.rsa*' -o -name '.abuild')" ]
   run ! grep -rl 'key' "$OUTP/files"
   # a failed build leaves none either
@@ -239,6 +245,7 @@ pins() { echo "$TEST_DIR/srctree/alpine/recipes/libvirt-apparmor/PINS"; }
   FAKE_FAIL=build job
   [ "$status" -ne 0 ]
   [ ! -e "$CH/home/builder/.abuild" ]
+  [ -z "$(ls "$CH"/etc/apk/keys/builder@hps.invalid-* 2> /dev/null)" ]
 }
 
 @test "run: the chroot is kept, not made again" {
@@ -605,7 +612,7 @@ echo "$n $*" >> "$SHIM_LOG"
 case "$n" in
   id) exit 1 ;;
   apk) [[ "$1" == --print-arch ]] && echo x86_64 ;;
-  abuild-keygen) mkdir -p "$HPS_INNER_ROOT/home/builder/.abuild"; echo k > "$HPS_INNER_ROOT/home/builder/.abuild/k.rsa" ;;
+  abuild-keygen) mkdir -p "$HPS_INNER_ROOT/home/builder/.abuild"; echo k > "$HPS_INNER_ROOT/home/builder/.abuild/builder@hps.invalid-1.rsa"; echo p > "$HPS_INNER_ROOT/home/builder/.abuild/builder@hps.invalid-1.rsa.pub" ;;
   abuild) [[ -d "$HPS_INNER_ROOT/home/builder/.abuild" ]] || exit 9; [[ -z "${FAKE_ABUILD_FAIL:-}" ]] || exit 1 ;;
 esac
 exit 0
@@ -656,6 +663,11 @@ SHIM
   grep -qxF 'apk add --no-progress --virtual .makedepends-libvirt bridge-utils iproute2-tc meson libapparmor-dev ceph-dev qemu>=5.2.0' "$SHIM_LOG"
   grep -qx 'pkgrel=100' "$HPS_INNER_ROOT/home/builder/aports/community/libvirt/APKBUILD"
   [ ! -e "$HPS_INNER_ROOT/home/builder/aports/community/libvirt/APKBUILD.patch" ]
+  # the job's key: made by the build user, its public half trusted by apk (abuild's index step needs that)
+  grep -q '^su .*abuild-keygen -a -n' "$SHIM_LOG"
+  [ -f "$HPS_INNER_ROOT/home/builder/.abuild/builder@hps.invalid-1.rsa" ]
+  [ -f "$HPS_INNER_ROOT/etc/apk/keys/builder@hps.invalid-1.rsa.pub" ]
+  [ "$(grep -n 'abuild-keygen' "$SHIM_LOG" | head -1 | cut -d: -f1)" -gt "$(grep -n '^apk add' "$SHIM_LOG" | head -1 | cut -d: -f1)" ]
   run ! grep -q 'libvirt=1-r0' "$SHIM_LOG"
 }
 
@@ -670,7 +682,7 @@ SHIM
   [ "$status" -eq 1 ]
 }
 
-@test "inner build: a key is made before abuild runs with dependency checking off, and the key is removed after" {
+@test "inner build: abuild runs with dependency checking off, with the key prepare made (and keeps it for the meta phase)" {
   inner_setup
   cd "$HPS_INNER_ROOT/home/builder"
   bash "$INNER" prepare > /dev/null 2>&1
@@ -690,10 +702,9 @@ SHIM
   run bash "$INNER" build
   [ "$status" -eq 0 ]
   run ! grep -q '^curl ' "$SHIM_LOG"
-  grep -qx 'abuild-keygen -a -n' "$SHIM_LOG"
   grep -qx 'abuild -d' "$SHIM_LOG"
-  [ "$(grep -n '^abuild-keygen' "$SHIM_LOG" | cut -d: -f1)" -lt "$(grep -n '^abuild -d' "$SHIM_LOG" | cut -d: -f1)" ]
-  [ ! -e .abuild ]
+  run ! grep -q '^abuild-keygen' "$SHIM_LOG"
+  [ -d .abuild ]
 }
 
 @test "inner prepare: a patch that does not fit stops the job before any package is installed, key or abuild" {
@@ -704,18 +715,26 @@ SHIM
   run ! grep -q '^apk add\|^abuild' "$SHIM_LOG"
 }
 
-@test "inner build: a failing abuild still removes the key" {
+@test "inner build and meta: without the key prepare makes they refuse and run no abuild; a failing abuild fails the phase" {
   inner_setup
   cd "$HPS_INNER_ROOT/home/builder"
+  mkdir -p aports/community/libvirt
+  cp "$HPS_INNER_ROOT"/opt/hps/in/APKBUILD aports/community/libvirt/
+  run bash "$INNER" build
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no abuild key"* ]]
+  run bash "$INNER" meta libvirt-apparmor 12.3.0 100 libvirt=12.3.0-r100
+  [ "$status" -eq 1 ]
+  run ! grep -q '^abuild -d' "$SHIM_LOG"
   bash "$INNER" prepare > /dev/null 2>&1
   FAKE_ABUILD_FAIL=1 run bash "$INNER" build
   [ "$status" -ne 0 ]
-  [ ! -e .abuild ]
 }
 
 @test "inner meta: an APKBUILD whose depends are exactly the arguments; anything that is not name=version-release is refused" {
   inner_setup
   cd "$HPS_INNER_ROOT/home/builder"
+  bash "$INNER" prepare > /dev/null 2>&1
   run bash "$INNER" meta libvirt-apparmor 12.3.0 100 libvirt=12.3.0-r100 libvirt-daemon=12.3.0-r100
   [ "$status" -eq 0 ]
   grep -qx 'depends="libvirt=12.3.0-r100 libvirt-daemon=12.3.0-r100"' meta/APKBUILD
@@ -724,7 +743,6 @@ SHIM
   grep -q '^license=' meta/APKBUILD
   grep -qx 'pkgrel=100' meta/APKBUILD
   grep -qx 'abuild -d' "$SHIM_LOG"
-  [ ! -e .abuild ]
   : > "$SHIM_LOG"
   run bash "$INNER" meta libvirt-apparmor 12.3.0 100 'libvirt;reboot=1-r1'
   [ "$status" -eq 1 ]

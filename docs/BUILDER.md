@@ -254,11 +254,14 @@ runs is `hps-apk-build` and `hps-apk-inner`, both files of the builder image
    `APKBUILD` fails the job), and the `makedepends` of the PATCHED `APKBUILD` (read by `builder`)
    installed with apk as root, so
    that the network is reached with the proxy variables and not through abuild's sudo helper. A
-   dependency on the package's own name (libvirt's `depends_dev`) is left out.
-5. As `builder`: `hps-apk-inner build` fetches the sources (above), makes a throwaway abuild key (`abuild-keygen -a -n`; removed
-   when the phase ends, success or failure; it never leaves the chroot and HPS adds no signing layer:
-   nodes install local packages with `--allow-untrusted` from the IPS's local repository), and runs
-   `abuild -d` (fetch, sha512 check, unpack, build, package).
+   dependency on the package's own name (libvirt's `depends_dev`) is left out. Last, `prepare` makes the
+   job's throwaway abuild key as `builder` (`abuild-keygen -a -n`) and puts its public half in the chroot's
+   `/etc/apk/keys`, because abuild reads the packages back to make the index and refuses ones it does not
+   trust. The runner removes both halves when the job ends, success or failure (and the next `prepare`
+   does, should a job have been killed); the key never leaves the chroot, and HPS adds no signing layer:
+   nodes install local packages with `--allow-untrusted` from the IPS's local repository.
+5. As `builder`: `hps-apk-inner build` fetches the sources (above) and runs `abuild -d` (sha512 check,
+   unpack, build, package, index).
 6. Select the recipe's `parts` from what was built (the split is Alpine's: `libvirt`, `-client`,
    `-daemon`, `-daemon-openrc`, `-libs`, `-qemu`, `-common-drivers`), build the meta package
    `libvirt-apparmor` whose `depends` are those packages at the version-release read from the built

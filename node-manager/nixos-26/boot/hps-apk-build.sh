@@ -509,6 +509,12 @@ inner() {
   ( set -e; inner_job )
 }
 
+# drop_key: the job's abuild key, both halves (hps-apk-inner prepare made them), however the job ended.
+drop_key() {
+  rm -rf -- "$CH/home/builder/.abuild"
+  rm -f -- "$CH"/etc/apk/keys/builder@hps.invalid-*.rsa.pub
+}
+
 inner_job() {
   local i
   local -a deps=()
@@ -516,8 +522,7 @@ inner_job() {
   set_egress
   CH="$APK_DIR/chroot/${PIN[alpine_release]}-${PIN[minirootfs_sha256]:0:12}"
   WORK="$MNT/tmp/$ID"
-  # shellcheck disable=SC2064  # the path is fixed now
-  trap "rm -rf -- '$CH/home/builder/.abuild'" EXIT
+  trap drop_key EXIT
   mount_chroot
   stage_chroot
   in_chroot /sbin/apk add --no-progress --update-cache bash curl alpine-sdk

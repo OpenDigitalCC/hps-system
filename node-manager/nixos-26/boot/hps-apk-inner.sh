@@ -21,13 +21,17 @@
 #           the environment and not through abuild's sudo helper. A dependency on the
 #           package's own name (libvirt's depends_dev is one) is left out: it is what is
 #           being built.
-# build     fetches the https sources with curl (prefetch_sources), makes a throwaway
-#           abuild key (abuild-keygen -a -n; removed when the phase ends, success or
-#           not; it never leaves the chroot), and runs abuild with dependency checking
-#           off (prepare did it): check the source's sha512 from the APKBUILD, unpack,
-#           build, package.
+# build     fetches the https sources with curl (prefetch_sources) and runs abuild with
+#           dependency checking off (prepare did it) and the key prepare made: check the
+#           source's sha512 from the APKBUILD, unpack, build, package, index.
 # meta      builds the meta package NAME, version VER-rREL, whose depends are exactly
-#           the DEP arguments (name=version-release), with the same kind of key.
+#           the DEP arguments (name=version-release), with the same key.
+#
+# The key: prepare makes a throwaway abuild key (abuild-keygen -a -n) for the job and
+# installs its public half in /etc/apk/keys, because abuild reads the packages back to
+# make the index and refuses ones it does not trust. It never leaves the chroot, and the
+# runner removes both halves when the job ends. HPS adds no signing layer: nodes install
+# local packages with --allow-untrusted.
 #
 # Overrides for tests: HPS_INNER_ROOT (prefix of every path here).
 
@@ -82,6 +86,7 @@ phase_prepare() {
   id builder > /dev/null 2>&1 || run adduser -D -u 1000 -s /bin/bash builder
   run addgroup builder abuild 2> /dev/null || true
   run rm -rf -- "$R$BHOME/aports" "$R$BHOME/packages" "$R$BHOME/meta" "$R$BHOME/.abuild"
+  run rm -f -- "$R"/etc/apk/keys/builder@hps.invalid-*.rsa.pub
   run install -d -o builder -g builder -m 0755 "$R$BHOME" "$R$BHOME/aports/$APORTS_DIR" "$R$BHOME/packages" "$R/var/cache/distfiles"
   run chown builder:abuild "$R/var/cache/distfiles"
   for f in "$IN"/*; do
@@ -101,6 +106,16 @@ phase_prepare() {
   [[ ${#deps[@]} -gt 0 ]] || die "the APKBUILD has no makedepends: it is not the one this recipe was written for"
   log "makedepends: ${deps[*]}"
   run apk add --no-progress --virtual ".makedepends-$PKGNAME" "${deps[@]}"
+  # The job's throwaway key, made by the build user, its public half trusted by apk in the chroot:
+  # abuild's index step reads the packages back and refuses ones it does not trust ("UNTRUSTED
+  # signature"). The private half stays in builder's .abuild. The runner removes both when the job
+  # ends, however it ends (and the next prepare does, should the job have been killed).
+  run su -s /bin/bash -c "export HOME=$BHOME PACKAGER='HPS builder <builder@hps.invalid>'; abuild-keygen -a -n" builder
+  run install -d -m 0755 "$R/etc/apk/keys"
+  for f in "$R$BHOME"/.abuild/*.rsa.pub; do
+    [[ -f "$f" ]] || die "abuild-keygen made no public key"
+    run install -m 0644 "$f" "$R/etc/apk/keys/"
+  done
 }
 
 phase_build() {
@@ -110,10 +125,8 @@ phase_build() {
   [[ -f "$dir/APKBUILD" ]] || die "no APKBUILD in $dir"
   cd "$dir"
   prefetch_sources
-  make_key
-  # shellcheck disable=SC2064  # the path is fixed now
-  trap "rm -rf -- '$R$BHOME/.abuild'" EXIT
-  export SRCDEST=/var/cache/distfiles REPODEST="$BHOME/packages"
+  need_key
+  export HOME="$BHOME" SRCDEST=/var/cache/distfiles REPODEST="$BHOME/packages"
   run abuild -d
 }
 
@@ -150,12 +163,9 @@ prefetch_sources() {
   done < <(export CARCH; CARCH=$(apk --print-arch); . ./APKBUILD > /dev/null; printf '%s\n' $source)
 }
 
-# make_key: a throwaway key for this phase, as abuild's own tool makes it.
-make_key() {
-  export PACKAGER="HPS builder <builder@hps.invalid>"
-  export HOME="$BHOME"
-  run rm -rf -- "$R$BHOME/.abuild"
-  run abuild-keygen -a -n
+# need_key: prepare made the job's key.
+need_key() {
+  [[ -d "$R$BHOME/.abuild" ]] || die "no abuild key: prepare makes it"
 }
 
 phase_meta() {
@@ -184,10 +194,8 @@ package() {
 EOF
   } > "$dir/APKBUILD"
   cd "$dir"
-  make_key
-  # shellcheck disable=SC2064  # the path is fixed now
-  trap "rm -rf -- '$R$BHOME/.abuild'" EXIT
-  export SRCDEST=/var/cache/distfiles REPODEST="$BHOME/packages"
+  need_key
+  export HOME="$BHOME" SRCDEST=/var/cache/distfiles REPODEST="$BHOME/packages"
   run abuild -d
 }
 
