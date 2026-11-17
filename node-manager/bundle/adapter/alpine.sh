@@ -290,6 +290,12 @@ exec /usr/share/udhcpc/default.script "$@"
 EOF
 }
 
+# sshd_prepare: the host keys. The package makes none; its OpenRC script does at start, but
+# init checks the configuration (sshd -t, which needs a key) before it starts the service.
+sshd_prepare() {
+  run ssh-keygen -A
+}
+
 # time_sync <ips>: the clock is kept in step with the IPS after boot, the source the NixOS
 # nodes use (timesyncd, NTP=<ips>): busybox ntpd, which weighs nothing. lib/hps-time
 # has stepped the clock once, from the IPS's HTTP date, before this.

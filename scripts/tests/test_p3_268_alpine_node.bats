@@ -108,7 +108,7 @@ esac
 EOF
   printf '#!/bin/bash\nexit 0\n' > "$b/ip"
   printf '#!/bin/bash\necho "udhcpc $*" >> "$CALLS"\n' > "$b/udhcpc"
-  for s in usermod chown chgrp passwd sshd modprobe depmod zgenhostid mountpoint mount setsid; do
+  for s in usermod chown chgrp passwd sshd ssh-keygen modprobe depmod zgenhostid mountpoint mount setsid; do
     printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n[[ "%s" == mountpoint ]] && exit 1\n[[ "%s" == modprobe && -n "${FAIL_MODPROBE:-}" && "$1" == "$FAIL_MODPROBE" ]] && exit 1\nexit 0\n' "$s" "$s" "$s" > "$b/$s"
   done
   chmod +x "$b"/*
@@ -152,6 +152,8 @@ svc() { cat "$HPS_OPENRC_DIR/$1"; }
   grep -q 'ssh-ed25519 AAAAC3' "$TEST_DIR/home/sysadmin/.ssh/authorized_keys"
   head -n 3 "$HPS_ROOT/etc/ssh/sshd_config" | grep -qx 'PermitRootLogin no'
   grep -qx 'passwd -l root' "$CALLS"
+  # the host keys exist before the configuration is checked (the first lab boot: "sshd: no hostkeys available")
+  [ "$(grep -n '^ssh-keygen -A' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^sshd -t' "$CALLS" | head -1 | cut -d: -f1)" ]
   # sshd is installed by the package and started by the first run
   grep -qx 'rc-service sshd start' "$CALLS"
 }
@@ -369,7 +371,7 @@ with_driver() {
   names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
   # the interface init and role call: every one is in both
   for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
-    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
   done

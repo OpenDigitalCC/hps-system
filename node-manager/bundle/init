@@ -157,6 +157,7 @@ step_sysadmin() {
     printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitEmptyPasswords no\nAllowUsers sysadmin\n\n'
     cat "$SSHD_CONFIG.hps-orig"
   } > "$SSHD_CONFIG.new"
+  sshd_prepare
   run sshd -t -f "$SSHD_CONFIG.new"
   run mv -f "$SSHD_CONFIG.new" "$SSHD_CONFIG"
   run passwd -l root

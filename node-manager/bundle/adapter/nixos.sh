@@ -275,6 +275,9 @@ hostname_apply() {
 # os_compat: the programs the OS lacks, for the scripts: none (systemd is here)
 os_compat() { return 0; }
 
+# sshd_prepare: sshd's host keys exist already
+sshd_prepare() { return 0; }
+
 # time_sync, net_keep_lease, host_cgroups: systemd's timesyncd, networkd and slices do these
 time_sync() { return 0; }
 net_keep_lease() { return 0; }
