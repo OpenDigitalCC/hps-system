@@ -50,6 +50,7 @@ reading the key afresh each tick; a run that overruns its interval skips the tic
 covered and logs one line saying so. interval prints the effective interval.
 Environment: HPS_MONITOR_RUN (default scripts/hps-run.sh), HPS_MONITOR_AGENTS (command
 printing the paired agent names; default: ctrl-exec-dispatcher list-agents --json),
+HPS_MONITOR_LINE_MAX (longest record in bytes, default 32000; a longer one is cut and marked hps_truncated=<bytes dropped>),
 HPS_MONITOR_LOGGER (command called as <cmd> <priority> <line>; default logger -t hps
 -p local0.<priority>), HPS_MONITOR_DF (df command; default df), HPS_RESOURCES and
 HPS_LOG (the two IPS paths; default /srv/hps-resources, /srv/hps-log).
@@ -60,13 +61,42 @@ USAGE
 
 my $QUIET = 0;    # loop: supervisor would log stdout a second time
 
+# One result is one syslog record. logger cuts a message at 1024 bytes unless it is given
+# --size, and the IPS's rsyslog at its maxMessageSize (set to 64k by the generated config,
+# create-config-rsyslog.sh); a `vms` line of a host with many guests is longer than 1024.
+# The line is sent whole up to LINE_MAX bytes (HPS_MONITOR_LINE_MAX, default 32000, which
+# holds well over 128 guests). A longer line is cut at a token boundary and ends in the
+# token hps_truncated=<bytes dropped>, which hps-metrics reports, and the monitor logs
+# the cut in its own log: a record is never cut without a mark.
+sub line_max { my $m = $ENV{HPS_MONITOR_LINE_MAX}; return defined $m && $m =~ /\A[0-9]{3,6}\z/ ? $m + 0 : 32000 }
+
+sub fit_line {
+    my ($line) = @_;
+    my $max = line_max();
+    my $bytes = do { use bytes; length $line };
+    return ($line, 0) if $bytes <= $max;
+    my $keep = $max - 40;    # room for the marker
+    my $cut = do { use bytes; substr($line, 0, $keep) };
+    $cut =~ s/\s+\S*\z//;    # back to a token boundary
+    my $dropped = $bytes - do { use bytes; length $cut };
+    return ("$cut hps_truncated=$dropped", $dropped);
+}
+
 sub emit {
     my ($prio, $line) = @_;
+    my ($sent, $dropped) = fit_line($line);
     print "$line\n" unless $QUIET;
     my $cmd = $ENV{HPS_MONITOR_LOGGER};
-    my @argv = defined $cmd && length $cmd ? ($cmd, $prio, $line) : ('logger', '-t', 'hps', '-p', "local0.$prio", '--', $line);
+    my @argv = defined $cmd && length $cmd ? ($cmd, $prio, $sent) : ('logger', '-t', 'hps', '--size', line_max() + 512, '-p', "local0.$prio", '--', $sent);
     local $SIG{__WARN__} = sub { };
     system { $argv[0] } @argv;
+    if ($dropped) {
+        my ($who) = $line =~ /\Ahps-monitor: host=(\S+)/;
+        my $note = sprintf('hps-monitor: record for %s cut at %d bytes (%d dropped, marked hps_truncated; HPS_MONITOR_LINE_MAX)', $who // 'a host', line_max(), $dropped);
+        print STDERR "$note\n" unless $QUIET;
+        my @n = defined $cmd && length $cmd ? ($cmd, 'warning', $note) : ('logger', '-t', 'hps', '-p', 'local0.warning', '--', $note);
+        system { $n[0] } @n;
+    }
     return;
 }
 

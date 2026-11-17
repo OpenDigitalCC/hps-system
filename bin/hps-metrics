@@ -63,7 +63,10 @@ sub render_last {
         $out .= join('', map { defined $h->{util}{$_} ? ' ' . label($_) . " $h->{util}{$_}%" : '' } @HPS::Metrics::RESOURCES) . "\n";
         $out .= "  unreachable $h->{unreachable_at}: $h->{unreachable}\n" if $h->{unreachable};
         $out .= "  stopped $h->{stopped_at}: $h->{stopped}\n" if $h->{stopped};
-        $out .= sprintf("  %-15s %-8s %s\n", $_->{check}, $_->{state}, $_->{text}) for @{ $h->{checks} };
+        for my $c (@{ $h->{checks} }) {
+            $out .= sprintf("  %-15s %-8s %s\n", $c->{check}, $c->{state}, $c->{text});
+            $out .= "  # TRUNCATED: the record of $c->{check} was cut by hps-monitor, $c->{truncated} bytes of perfdata are not stored\n" if $c->{truncated};
+        }
     }
     $out .= "# * not in the compound\n" if grep { my $x = $_; grep { label($_) =~ /\*\z/ } keys %{ $x->{util} } } @{ $r->{hosts} };
     $out .= "# stopped early: the scan limit was reached\n" if $r->{truncated};

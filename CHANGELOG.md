@@ -12,6 +12,16 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Per-guest metrics are stored whole (2026-11-17)
+
+- **Fixed** `vms` results cut at 1024 bytes in `metrics.log` (a host with 13 guests lost the
+  perfdata of about half of them): util-linux `logger` cuts a message at 1024 bytes unless
+  given `--size`. `hps-monitor` now passes `--size` and the generated rsyslog.conf sets
+  `maxMessageSize="64k"` (the daemon's own default is 8 KB). A line over
+  `HPS_MONITOR_LINE_MAX` (32000) is cut at a token boundary, ends in `hps_truncated=<bytes>`,
+  is logged by the monitor, and `hps-metrics last` reports it. The IPS rsyslog must be
+  regenerated and restarted for the new limit to apply. `docs/MONITORING.md`.
+
 ## om3 heartbeat counts delivered peers only (2026-11-17)
 
 - **Fixed** `osvc_hb` reading CRITICAL on lab trial nodes: the node list given to om3

@@ -168,9 +168,10 @@ cat > "${RSYSLOG_CONF}" <<EOF
 #===============================================================================
 # rsyslog.conf - Basic configuration for HPS centralized logging
 #===============================================================================
-# Global directives
+# Global directives (maxMessageSize: hps-monitor sends one record per result; a vms line of a big host is over the 8k default)
 global(
   workDirectory="${RSYSLOG_LOG_DIR}"
+  maxMessageSize="64k"
 )
 
 # Set default file permissions (a+r)

@@ -319,6 +319,16 @@ name, bucketed like the host's labels (the max within a bucket; empty buckets
 `null`). A guest that disappears simply stops: its buckets after the last
 sample are `null`.
 
+One result is one syslog record, whole. A `vms` line of a host with many guests is
+about 190 bytes a guest (12 KB for 64), so `hps-monitor` calls `logger` with `--size`
+and the IPS's rsyslog is configured with `maxMessageSize="64k"`; neither stock default
+(1024 bytes for `logger`, 8 KB for rsyslog) holds it. A record longer than
+`HPS_MONITOR_LINE_MAX` (default 32000 bytes, over 128 guests) is cut at a token
+boundary and ends in `hps_truncated=<bytes dropped>`; the monitor logs the cut as a
+warning (`record for <host> cut at <n> bytes`), and `hps-metrics last` prints
+`# TRUNCATED: the record of vms was cut ...` under that check (`truncated` in
+`--json`). A record is never cut without that mark.
+
 - `series <host> --json` lists the guests that have samples in the window as
   `guests: [name, ...]` (names only; the values are not in this answer, so it
   stays the size it was).

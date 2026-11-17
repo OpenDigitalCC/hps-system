@@ -362,7 +362,8 @@ sub latest ($self, $name) {
         elsif ($m->{kind} eq 'check') {
             if ($s->{run} == 1 && !$s->{seen}{ $m->{check} }++) {
                 unshift @{ $s->{checks} }, { check => $m->{check}, state => $m->{state}, text => $m->{text},
-                                             epoch => $e, perf => { map { $_ => $m->{perf}{$_}{value} } keys %{ $m->{perf} } } , _r => $m };
+                                             epoch => $e, perf => { map { $_ => $m->{perf}{$_}{value} } grep { $_ ne q(hps_truncated) } keys %{ $m->{perf} } },
+                                             ($m->{perf}{hps_truncated} ? (truncated => $m->{perf}{hps_truncated}{value}) : ()), _r => $m };
             }
         }
         elsif ($m->{kind} eq 'unreachable' || $m->{kind} eq 'pair_failed') {
