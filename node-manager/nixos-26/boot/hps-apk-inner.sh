@@ -9,21 +9,23 @@
 #
 # Usage (as the runner calls it):
 #   hps-apk-inner prepare                    as root: the build user, its tree, the makedepends
-#   hps-apk-inner build                      as the build user: patch, key, abuild
+#   hps-apk-inner build                      as the build user: sources, key, abuild
 #   hps-apk-inner meta NAME VER REL DEP...   as the build user: the meta package
 #
 # prepare   makes the unprivileged user `builder` (uid 1000, group abuild), clears its
-#           build tree, puts the staged files in ~/aports/<aports_dir>, then reads the
-#           makedepends from the APKBUILD (as the build user) and installs them with apk
+#           build tree, puts the staged files in ~/aports/<aports_dir>, applies the
+#           recipe's patch with no fuzz (a patch that does not fit the pinned APKBUILD
+#           fails the job), then reads the makedepends from the PATCHED APKBUILD (as
+#           the build user) and installs them with apk
 #           as root, so that the network is used with the proxy the runner passed in
 #           the environment and not through abuild's sudo helper. A dependency on the
 #           package's own name (libvirt's depends_dev is one) is left out: it is what is
 #           being built.
-# build     applies the recipe's patch with no fuzz (a patch that does not fit the
-#           pinned APKBUILD fails the build), makes a throwaway abuild key (abuild-keygen
-#           -a -n; removed when the phase ends, success or not; it never leaves the
-#           chroot), and runs abuild with dependency checking off (prepare did it):
-#           fetch, check the source's sha512 from the APKBUILD, unpack, build, package.
+# build     fetches the https sources with curl (prefetch_sources), makes a throwaway
+#           abuild key (abuild-keygen -a -n; removed when the phase ends, success or
+#           not; it never leaves the chroot), and runs abuild with dependency checking
+#           off (prepare did it): check the source's sha512 from the APKBUILD, unpack,
+#           build, package.
 # meta      builds the meta package NAME, version VER-rREL, whose depends are exactly
 #           the DEP arguments (name=version-release), with the same kind of key.
 #
@@ -86,6 +88,9 @@ phase_prepare() {
     [[ -f "$f" && ! -L "$f" ]] || die "$f is not a plain file"
     run install -o builder -g builder -m 0644 "$f" "$R$BHOME/aports/$APORTS_DIR/"
   done
+  # the recipe's patch first, with no fuzz (one that does not fit the pinned APKBUILD fails the job):
+  # the makedepends below are those of the PATCHED file (libapparmor-dev is the patch's)
+  run su -s /bin/bash -c "cd $R$BHOME/aports/$APORTS_DIR && patch -p1 -F0 --no-backup-if-mismatch -i $PATCH_FILE && rm -f $PATCH_FILE" builder
   # the makedepends of the APKBUILD, read by the build user (the file is sourced, as abuild does)
   cmd="cd $R$BHOME/aports/$APORTS_DIR && export CARCH=\$(apk --print-arch) && . ./APKBUILD && printf '%s\\n' \$makedepends"
   while read -r dep; do
@@ -104,12 +109,45 @@ phase_build() {
   dir="$R$BHOME/aports/$APORTS_DIR"
   [[ -f "$dir/APKBUILD" ]] || die "no APKBUILD in $dir"
   cd "$dir"
-  run patch -p1 -F0 --no-backup-if-mismatch -i "$PATCH_FILE"
+  prefetch_sources
   make_key
   # shellcheck disable=SC2064  # the path is fixed now
   trap "rm -rf -- '$R$BHOME/.abuild'" EXIT
   export SRCDEST=/var/cache/distfiles REPODEST="$BHOME/packages"
   run abuild -d
+}
+
+# prefetch_sources: abuild fetches with busybox wget, which cannot use an HTTPS proxy (it sends
+# GET and the proxy answers "405 Only CONNECT"). So the https sources the APKBUILD names are
+# fetched here with curl, which does CONNECT, into the distfiles directory abuild looks in;
+# abuild still checks each file against the sha512 the APKBUILD carries. Only plain https URLs;
+# the other words of `source` are files of the aports directory.
+prefetch_sources() {
+  local w name url dist="$R/var/cache/distfiles"
+  # shellcheck disable=SC2154  # `source` is the APKBUILD's variable, set by the sourcing below
+  while read -r w; do
+    case "$w" in
+      "" | *[!A-Za-z0-9._+:/%~-]*) [[ -z "$w" ]] || die "source '$w' has characters a source name and URL do not"; continue ;;
+      *://*) ;;
+      *) continue ;;
+    esac
+    if [[ "$w" == *::* ]]; then
+      name=${w%%::*}
+      url=${w#*::}
+    else
+      url=$w
+      name=${url##*/}
+    fi
+    [[ "$url" =~ ^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[A-Za-z0-9._%+~-]+)+$ && "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] ||
+      die "source '$w' is not a plain https URL"
+    if [[ -s "$dist/$name" ]]; then
+      log "$name is in the distfiles already"
+      continue
+    fi
+    run curl --fail --silent --show-error --location --proto =https --proto-redir =https --max-redirs 5 \
+      --max-time 1800 --output "$dist/$name.part" "$url"
+    run mv -f -- "$dist/$name.part" "$dist/$name"
+  done < <(export CARCH; CARCH=$(apk --print-arch); . ./APKBUILD > /dev/null; printf '%s\n' $source)
 }
 
 # make_key: a throwaway key for this phase, as abuild's own tool makes it.
@@ -135,7 +173,7 @@ phase_meta() {
     printf '%s\n' '# generated by hps-apk-inner: the libvirt set built with the AppArmor driver'
     printf 'pkgname=%s\npkgver=%s\npkgrel=%s\n' "$name" "$ver" "$rel"
     printf '%s\n' 'pkgdesc="libvirt with the AppArmor security driver (HPS build)"' \
-      'arch="noarch"' 'license="LGPL-2.1-or-later"' 'options="!check"' 'source=""' 'builddir="$srcdir"'
+      'url="https://hps.invalid/"' 'arch="noarch"' 'license="LGPL-2.1-or-later"' 'options="!check"' 'source=""' 'builddir="$srcdir"'
     printf 'depends="%s"\n' "$*"
     cat << 'EOF'
 

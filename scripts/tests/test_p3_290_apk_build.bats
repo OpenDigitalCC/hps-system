@@ -183,7 +183,7 @@ pins() { echo "$TEST_DIR/srctree/alpine/recipes/libvirt-apparmor/PINS"; }
   [ -f "$CH/opt/hps/in/APKBUILD" ] && [ -f "$CH/opt/hps/in/libvirt.post-install" ] && cmp "$CH/opt/hps/in/APKBUILD.patch" "$RECIPE_DIR/APKBUILD.patch"
   # order: the sdk from Alpine's signed repository, prepare (root), build and meta (builder)
   n() { grep -n "$1" "$SHIM_LOG" | head -1 | cut -d: -f1; }
-  [ "$(n 'chroot .* /sbin/apk add --no-progress --update-cache bash alpine-sdk')" -lt "$(n 'hps-apk-inner prepare')" ]
+  [ "$(n 'chroot .* /sbin/apk add --no-progress --update-cache bash curl alpine-sdk')" -lt "$(n 'hps-apk-inner prepare')" ]
   [ "$(n 'hps-apk-inner prepare')" -lt "$(n 'hps-apk-inner build')" ]
   [ "$(n 'hps-apk-inner build')" -lt "$(n 'hps-apk-inner meta ')" ]
   # the builder phases run as the user `builder`; apk is never given a way to skip signatures
@@ -577,6 +577,10 @@ makedepends="
 case "$CARCH" in
 x86_64) makedepends="$makedepends ceph-dev qemu>=5.2.0" ;;
 esac
+source="https://dist.test/libvirt/libvirt-1.tar.xz
+	libvirt.initd
+	patched-name::https://dist.test/other/thing.tar.gz
+	"
 EOF
   cat > "$IN/in/APKBUILD.patch" <<'EOF'
 --- a/APKBUILD
@@ -586,6 +590,10 @@ EOF
 -pkgrel=0
 +pkgrel=100
  _daemon_deps="
+@@ -12,2 +12,3 @@
+ 	meson
++	libapparmor-dev
+ 	"
 EOF
   echo "libvirt other" > "$IN/in/libvirt.initd"
   local c
@@ -622,7 +630,18 @@ while [[ $# -gt 0 ]]; do
 done
 exec bash -c "$cmd"
 SHIM
-  chmod +x "$TEST_DIR/bin/install" "$TEST_DIR/bin/su"
+  cat > "$TEST_DIR/bin/curl" <<'SHIM'
+#!/usr/bin/env bash
+echo "curl $*" >> "$SHIM_LOG"
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in --output) out=$2; shift ;; esac
+  shift
+done
+echo "source data" > "$out"
+SHIM
+  chmod +x "$TEST_DIR/bin/install" "$TEST_DIR/bin/su" "$TEST_DIR/bin/curl"
+  mkdir -p "$HPS_INNER_ROOT/var/cache/distfiles"
   INNER="$B/hps-apk-inner.sh"
 }
 
@@ -633,7 +652,10 @@ SHIM
   grep -q '^adduser -D -u 1000 -s /bin/bash builder' "$SHIM_LOG"
   grep -q '^addgroup builder abuild' "$SHIM_LOG"
   [ -f "$HPS_INNER_ROOT/home/builder/aports/community/libvirt/APKBUILD" ] && [ -f "$HPS_INNER_ROOT/home/builder/aports/community/libvirt/libvirt.initd" ]
-  grep -qxF 'apk add --no-progress --virtual .makedepends-libvirt bridge-utils iproute2-tc meson ceph-dev qemu>=5.2.0' "$SHIM_LOG"
+  # the patch is applied first and the makedepends are those of the patched file (libapparmor-dev is the patch's)
+  grep -qxF 'apk add --no-progress --virtual .makedepends-libvirt bridge-utils iproute2-tc meson libapparmor-dev ceph-dev qemu>=5.2.0' "$SHIM_LOG"
+  grep -qx 'pkgrel=100' "$HPS_INNER_ROOT/home/builder/aports/community/libvirt/APKBUILD"
+  [ ! -e "$HPS_INNER_ROOT/home/builder/aports/community/libvirt/APKBUILD.patch" ]
   run ! grep -q 'libvirt=1-r0' "$SHIM_LOG"
 }
 
@@ -648,30 +670,44 @@ SHIM
   [ "$status" -eq 1 ]
 }
 
-@test "inner build: the patch applies with no fuzz, a key is made before abuild runs with dependency checking off, and the key is removed after" {
+@test "inner build: a key is made before abuild runs with dependency checking off, and the key is removed after" {
   inner_setup
   cd "$HPS_INNER_ROOT/home/builder"
-  mkdir -p aports/community/libvirt
-  cp "$HPS_INNER_ROOT"/opt/hps/in/* aports/community/libvirt/
+  bash "$INNER" prepare > /dev/null 2>&1
+  : > "$SHIM_LOG"
   run bash "$INNER" build
   [ "$status" -eq 0 ] || { echo "$output" >&3; false; }
   grep -qx 'pkgrel=100' aports/community/libvirt/APKBUILD
+  # abuild's busybox wget cannot CONNECT through the proxy: the https sources are fetched with curl
+  # into the distfiles directory first (under their own name, or the name before ::), files of the
+  # aports directory are not fetched, and the patch file is not left for abuild to warn about
+  [ -s "$HPS_INNER_ROOT/var/cache/distfiles/libvirt-1.tar.xz" ] && [ -s "$HPS_INNER_ROOT/var/cache/distfiles/patched-name" ]
+  grep -q -- '^curl --fail .*--proto =https --proto-redir =https .*--output .*/libvirt-1.tar.xz.part https://dist.test/libvirt/libvirt-1.tar.xz$' "$SHIM_LOG"
+  [ "$(grep -c '^curl ' "$SHIM_LOG")" -eq 2 ]
+  [ "$(grep -n '^curl' "$SHIM_LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n '^abuild -d' "$SHIM_LOG" | cut -d: -f1)" ]
+  # a source already in the distfiles is not fetched again
+  : > "$SHIM_LOG"
+  run bash "$INNER" build
+  [ "$status" -eq 0 ]
+  run ! grep -q '^curl ' "$SHIM_LOG"
   grep -qx 'abuild-keygen -a -n' "$SHIM_LOG"
   grep -qx 'abuild -d' "$SHIM_LOG"
   [ "$(grep -n '^abuild-keygen' "$SHIM_LOG" | cut -d: -f1)" -lt "$(grep -n '^abuild -d' "$SHIM_LOG" | cut -d: -f1)" ]
   [ ! -e .abuild ]
 }
 
-@test "inner build: a patch that does not fit stops the build before any key or abuild; a failing abuild still removes the key" {
+@test "inner prepare: a patch that does not fit stops the job before any package is installed, key or abuild" {
+  inner_setup
+  sed -i 's/^pkgrel=0/pkgrel=3/' "$HPS_INNER_ROOT/opt/hps/in/APKBUILD"
+  run bash "$INNER" prepare
+  [ "$status" -ne 0 ]
+  run ! grep -q '^apk add\|^abuild' "$SHIM_LOG"
+}
+
+@test "inner build: a failing abuild still removes the key" {
   inner_setup
   cd "$HPS_INNER_ROOT/home/builder"
-  mkdir -p aports/community/libvirt
-  cp "$HPS_INNER_ROOT"/opt/hps/in/* aports/community/libvirt/
-  sed -i 's/^pkgrel=0/pkgrel=3/' aports/community/libvirt/APKBUILD
-  run bash "$INNER" build
-  [ "$status" -ne 0 ]
-  run ! grep -q '^abuild' "$SHIM_LOG"
-  sed -i 's/^pkgrel=3/pkgrel=0/' aports/community/libvirt/APKBUILD
+  bash "$INNER" prepare > /dev/null 2>&1
   FAKE_ABUILD_FAIL=1 run bash "$INNER" build
   [ "$status" -ne 0 ]
   [ ! -e .abuild ]
@@ -684,6 +720,8 @@ SHIM
   [ "$status" -eq 0 ]
   grep -qx 'depends="libvirt=12.3.0-r100 libvirt-daemon=12.3.0-r100"' meta/APKBUILD
   grep -qx 'pkgname=libvirt-apparmor' meta/APKBUILD
+  grep -q '^url="https://' meta/APKBUILD
+  grep -q '^license=' meta/APKBUILD
   grep -qx 'pkgrel=100' meta/APKBUILD
   grep -qx 'abuild -d' "$SHIM_LOG"
   [ ! -e .abuild ]

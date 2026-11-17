@@ -31,7 +31,7 @@
 #      mount, PID, IPC and UTS namespace (unshare), with a tmpfs /dev of six device
 #      nodes (the host's /dev is not visible), /proc of that PID namespace, the
 #      host's resolv.conf and the proxy in the environment.
-#   4. in the chroot as root: apk add alpine-sdk and bash (signed packages), then
+#   4. in the chroot as root: apk add bash, curl and alpine-sdk (signed packages), then
 #      hps-apk-inner prepare (the user `builder`, the makedepends); as `builder`:
 #      hps-apk-inner build (patch, a throwaway abuild key, abuild); the key is
 #      removed afterwards and never leaves the chroot.
@@ -520,7 +520,7 @@ inner_job() {
   trap "rm -rf -- '$CH/home/builder/.abuild'" EXIT
   mount_chroot
   stage_chroot
-  in_chroot /sbin/apk add --no-progress --update-cache bash alpine-sdk
+  in_chroot /sbin/apk add --no-progress --update-cache bash curl alpine-sdk
   in_chroot /usr/local/bin/hps-apk-inner prepare
   as_builder build
   select_set

@@ -237,22 +237,25 @@ runs is `hps-apk-build` and `hps-apk-inner`, both files of the builder image
 2. Fetch, through the egress proxy only (`hps.proxy=`; no proxy on the kernel line is a refusal)
    and over https only: the Alpine minirootfs of the pinned release (sha256 pinned), and each file
    of the pinned aports commit's directory by commit id (`raw/<commit>/community/libvirt/<file>`,
-   each sha256 pinned). The libvirt tarball is fetched by `abuild` inside the chroot from the URL in
-   the (patched) `APKBUILD` and checked against the sha512 that `APKBUILD` carries.
+   each sha256 pinned). The libvirt tarball is fetched inside the chroot, with `curl`, from the URL in the
+   (patched) `APKBUILD` (https only; abuild's own fetcher, busybox wget, cannot use an https proxy: the proxy
+   answers "405 Only CONNECT") into abuild's distfiles directory, and `abuild` checks it against the sha512
+   that `APKBUILD` carries.
 3. The chroot lives on the builder disk, `apk/chroot/<release>-<sha12>`, made once from the
    verified minirootfs and kept (the packages it installs and the source cache are kept with it). Every
    run enters it through `unshare --mount --pid --fork --ipc --uts`: a tmpfs `/dev` with six device
    nodes (the host's `/dev` is never mounted in), the PID namespace's own `/proc`, the host's
    `resolv.conf`, the Alpine repositories of the pinned release, and an environment of nothing but
    `PATH`, `HOME` and the proxy variables.
-4. As root in the chroot: `apk add bash alpine-sdk` (Alpine's signed packages; apk verifies them with
+4. As root in the chroot: `apk add bash curl alpine-sdk` (Alpine's signed packages; apk verifies them with
    the keys of the minirootfs, `--allow-untrusted` is never used), then `hps-apk-inner prepare`: the
    unprivileged user `builder` (uid 1000, group `abuild`), a clean build tree, the staged aports
-   files, and the `makedepends` of the `APKBUILD` (read by `builder`) installed with apk as root, so
+   files, the recipe's patch applied by `builder` with no fuzz (a patch that does not fit the pinned
+   `APKBUILD` fails the job), and the `makedepends` of the PATCHED `APKBUILD` (read by `builder`)
+   installed with apk as root, so
    that the network is reached with the proxy variables and not through abuild's sudo helper. A
    dependency on the package's own name (libvirt's `depends_dev`) is left out.
-5. As `builder`: `hps-apk-inner build` applies the recipe's patch with no fuzz (a patch that does not
-   fit the pinned `APKBUILD` fails the job), makes a throwaway abuild key (`abuild-keygen -a -n`; removed
+5. As `builder`: `hps-apk-inner build` fetches the sources (above), makes a throwaway abuild key (`abuild-keygen -a -n`; removed
    when the phase ends, success or failure; it never leaves the chroot and HPS adds no signing layer:
    nodes install local packages with `--allow-untrusted` from the IPS's local repository), and runs
    `abuild -d` (fetch, sha512 check, unpack, build, package).
