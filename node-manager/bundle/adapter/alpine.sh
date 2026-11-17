@@ -372,6 +372,13 @@ md_dev_dir() {
   run install -d -m 0755 "${HPS_ROOT}/dev/md"
 }
 
+# acpi_button: the ACPI power button reaches acpid only through an input device, which the kernel's button
+# driver makes; Alpine loads no module for it (the lab: acpid started, "vm-stop did not shut off within 60 s").
+# Loaded before acpid starts (role_stock_services), so a graceful stop runs hps-shutdown-storage.
+acpi_button() {
+  role_modules button evdev
+}
+
 # libvirt_prepare: the package autostarts libvirt's own NAT network (virbr0, dnsmasq, iptables); HPS makes
 # its bridges itself (net-bridge-ensure), and the libvirtd profile does not allow dnsmasq or xtables
 # (the first lab compute node: apparmor="DENIED" operation="exec" ... name="/usr/sbin/dnsmasq"). Not started.

@@ -60,6 +60,8 @@ slice() {
 
 cgroup() {
   local d="$HPS_CGROUP_ROOT/machine.slice" cur
+  # libvirt without systemd keeps its guests under /machine, where the reserve writes them
+  [[ -d "$d" ]] || ! [[ -d "$HPS_CGROUP_ROOT/machine" ]] || d="$HPS_CGROUP_ROOT/machine"
   cur=$(file_or_dash "$d/memory.current")
   [[ "$cur" =~ ^[0-9]+$ ]] && cur=$((cur / 1048576))
   printf 'CGROUP machine.slice cpus=%s memory_max=%s memory_current_mib=%s\n' \
@@ -86,7 +88,7 @@ guests() {
   list=$(run virsh -c qemu:///system list --name)
   while read -r g; do
     [[ -n "$g" ]] || continue
-    kib=$(run virsh -c qemu:///system dominfo "$g" | awk '/^Max memory:/ { print $3; exit }')
+    kib=$(run virsh -c qemu:///system dominfo "$g" | awk '/^Max memory:/ { v = $3 } END { print v }')
     n=$((n + 1))
     [[ "$kib" =~ ^[0-9]+$ ]] && sum=$((sum + kib / 1024))
   done <<< "$list"

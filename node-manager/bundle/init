@@ -390,6 +390,7 @@ step_agent
 step_legacy
 net_keep_lease
 refresh_watch
+acpi_button
 role_pre
 step_pair
 persist_hostname

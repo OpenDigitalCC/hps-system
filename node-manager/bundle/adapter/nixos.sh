@@ -288,6 +288,9 @@ iscsi_links() { return 0; }
 # md_dev_dir: udev's /dev/md is made 0755
 md_dev_dir() { return 0; }
 
+# acpi_button: systemd-logind handles the power button
+acpi_button() { return 0; }
+
 # libvirt_prepare: nothing (libvirt here has no default network)
 libvirt_prepare() { return 0; }
 

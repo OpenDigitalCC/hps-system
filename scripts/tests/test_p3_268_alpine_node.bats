@@ -414,7 +414,7 @@ with_driver() {
   names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
   # the interface init and role call: every one is in both
   for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
-    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare md_dev_dir libvirt_prepare iscsi_links refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare acpi_button md_dev_dir libvirt_prepare iscsi_links refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
   done
@@ -673,4 +673,12 @@ LOG
   [ "$(cat "$HPS_CGROUP_ROOT/machine/memory.max")" = 4063232000 ]
   [ "$(cat "$HPS_CGROUP_ROOT/machine/cpuset.cpus")" = 1 ]
   [ ! -e "$HPS_CGROUP_ROOT/machine/io.weight" ]
+}
+
+@test "init, Alpine: the button and evdev modules are loaded before acpid starts (without them the ACPI power button never reaches acpid: the lab's graceful stop timed out after 60 s)" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  grep -qx 'modprobe button' "$CALLS"
+  grep -qx 'modprobe evdev' "$CALLS"
+  [ "$(grep -n '^modprobe button' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^rc-service acpid start' "$CALLS" | head -1 | cut -d: -f1)" ]
 }

@@ -303,3 +303,12 @@ SHIM
   awk '/systemd.services.hps-host-reserve/,/^  };/' "$nix" | grep -qF 'before = [ "hps-node-init.service" ];'
   awk '/systemd.services.hps-host-reserve/,/^  };/' "$nix" | grep -qF '"network-online.target"'
 }
+
+@test "host-resources: without systemd libvirt's guests are under /machine, and that group is what it shows" {
+  mkdir -p "$HPS_CGROUP_ROOT/machine"
+  echo "1" > "$HPS_CGROUP_ROOT/machine/cpuset.cpus.effective"
+  echo "4063232000" > "$HPS_CGROUP_ROOT/machine/memory.max"
+  echo "536870912" > "$HPS_CGROUP_ROOT/machine/memory.current"
+  run bash "$ROOT/node-manager/nixos-26/scripts/host-resources"
+  [[ "$output" == *"CGROUP machine.slice cpus=1 memory_max=4063232000 memory_current_mib=512"* ]]
+}
