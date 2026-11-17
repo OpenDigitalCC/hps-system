@@ -117,7 +117,7 @@ seed_pairable() {
   list_cluster_hosts() { printf '%s\n' aabbccddee01; }
   host_registry() {
     case "$1:$3" in
-      aabbccddee01:ctrl_exec_paired_at) echo 1794321826 ;;
+      aabbccddee01:ctrl_exec_paired_at | aabbccddee01:osvc_delivered_at) echo 1794321826 ;;
       aabbccddee01:HOSTNAME) echo tch-001 ;;
       aabbccddee01:IP) echo 192.0.2.12 ;;
       *) return 1 ;;

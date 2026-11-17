@@ -105,6 +105,30 @@ is($rc, 2, 'a host with shell characters is refused');
     like($out, qr/warning: delivered to node01, but osvc_delivered_at was not recorded/, 'member: with a warning');
 }
 
+# The node's daemon restarts during the deliver and reads its node list from the IPS,
+# which lists delivered hosts only: the host is recorded BEFORE the runner is called,
+# and a failed deliver restores what was there (nothing, or the earlier epoch).
+{
+    my $mac = '525400000032';
+    $reg->host_set($mac, 'HOSTNAME', 'tch-032');
+    my $probe = "$base/probe-run.sh";
+    open(my $fh, '>', $probe) or die $!;
+    print $fh "#!/bin/sh\nif [ \"\$1\" = --input ]; then\ncat > /dev/null\nls '$base/clusters/lab/hosts/$mac.db/osvc_delivered_at.json' > '$base/seen-at-run' 2>&1\nexit \${FAKE_RC:-0}\nfi\necho '1700000000 W0RFRkFVTFRdCg=='\n";
+    close $fh;
+    chmod 0755, $probe;
+    local $ENV{HPS_OSVC_RUN} = $probe;
+    ($rc, $out) = hps_osvc('deliver', 'tch-032');
+    is($rc, 0, 'order: deliver succeeds');
+    like(slurp("$base/seen-at-run"), qr/osvc_delivered_at\.json/, 'order: the host was already recorded when the runner ran');
+    $reg->host_set($mac, 'osvc_delivered_at', '1700000001');
+    {
+        local $ENV{FAKE_RC} = 1;
+        ($rc, $out) = hps_osvc('deliver', 'tch-032');
+        is($rc, 1, 'order: a failed re-deliver fails');
+        is($reg->host_get($mac, 'osvc_delivered_at'), '1700000001', 'order: and the earlier epoch is restored');
+    }
+}
+
 is(length($ks->cluster_secret('lenprobe', 16)), 16,'keysafe: a 16-byte secret is created at 16 bytes');
 is($ks->cluster_secret('lenprobe', 16), $ks->cluster_secret('lenprobe', 16), 'keysafe: and read back the same');
 ok(!eval { $ks->cluster_secret('lenprobe', 32); 1 }, 'keysafe: a file of another length is refused, not truncated');

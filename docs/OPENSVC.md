@@ -162,6 +162,20 @@ host stays an operator step, and nothing here can fail a pairing. The other
 nodes keep the rebooted node in their node list; deliver to them again only
 when a node is new.
 
+The node list the IPS gives every node (`cmd=cluster_nodes`) holds the paired
+hosts that were delivered an om3 configuration, that is the hosts with
+`osvc_delivered_at`, and no others. A paired host that was never delivered one
+(on the lab: sch-001, bld-001, cnh-004) is not in any node's list, so om3 does not
+expect it and the `osvc_hb` check does not count it as a peer that never beats.
+`hps-osvc deliver` records the host before it sends, because the node's daemon
+restarts during the deliver and must find itself in the list; a deliver that fails
+puts the record back as it was. A delivered peer that stops beating stays in the
+list and is stale, and `osvc_hb` is CRITICAL when too few nodes beat. A node takes
+the list again at its next daemon restart (a deliver, or a reboot and pairing), so
+after the first deliver to a new host deliver to the other members again; a member
+delivered before `osvc_delivered_at` existed has no record and is left out of the list
+until it is delivered once more.
+
 ### The cluster CA
 
 om3 nodes authenticate each other with certificates from the cluster CA

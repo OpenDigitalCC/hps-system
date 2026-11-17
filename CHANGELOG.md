@@ -12,6 +12,16 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## om3 heartbeat counts delivered peers only (2026-11-17)
+
+- **Fixed** `osvc_hb` reading CRITICAL on lab trial nodes: the node list given to om3
+  (`cmd=cluster_nodes`, `osvc_cluster_node_list`) held every paired host, including hosts that
+  were never delivered an om3 configuration (sch-001, bld-001, cnh-004), which never beat. It now
+  lists the hosts with `osvc_delivered_at` only. A delivered peer that stops beating is still
+  stale and CRITICAL below quorum. `hps-osvc deliver` records the host before it sends (a
+  failed deliver restores the record), because the node's daemon must find itself in the list
+  when it restarts. A member takes the new list at its next daemon restart. `docs/OPENSVC.md`.
+
 ## Sysadmin key verb (2026-11-17)
 
 - **Added** `hps-cluster-config sysadmin-key list|add|remove`: the operator's way to keep

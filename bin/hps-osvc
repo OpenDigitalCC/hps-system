@@ -78,33 +78,63 @@ sub deliver {
         die "the stored cluster CA 'opensvc-ca' is not '<epoch> <base64>'; run hps-osvc ca-forget\n"
             unless $ca =~ /^[0-9]{1,12} [A-Za-z0-9+\/]+=*\z/;
     }
-    open(my $fh, '|-', @cmd) or die "cannot run $cmd[0]: $!\n";
+    # The node's daemon restarts during the deliver and takes its node list from the
+    # IPS, which lists delivered hosts only (osvc_cluster_node_list): the host is
+    # recorded first and the record is undone when the deliver fails.
+    my $prior = record_member($host);
+    my $opened = open(my $fh, '|-', @cmd);
+    if (!$opened) { undo_member($prior); die "cannot run $cmd[0]: $!\n" }
     print {$fh} "$hex\n";
     print {$fh} "$ca\n" if defined $ca;
     close $fh;    # sets $? to the runner's wait status
     my $rc = $? == 0 ? 0 : ($? >> 8) || 1;
-    return $rc if $rc;
-    record_member($host);
+    if ($rc) { undo_member($prior); return $rc }
+    warn_member($prior);
     return 0 if defined $ca;
     return capture_ca($ks, $host, @export);
 }
 
 # record_member($host): host key osvc_delivered_at = now, so the pairing hook
-# re-delivers after the host's next boot. A host the registry does not know is
-# a warning; the delivery itself succeeded.
+# re-delivers after the host's next boot and the IPS lists the host as an om3 node.
+# Returns { host, reg, mac, had (the earlier value or undef) }, or { host, error }
+# for a host the registry does not know (a warning once the deliver succeeded).
 sub record_member {
     my ($host) = @_;
+    my %m = (host => $host);
     my $ok = eval {
         my $reg = HPS::Registry->new;
         my $mac = HPS::Log->new(registry => $reg)->find_host($host);
+        $m{reg} = $reg;
+        $m{mac} = $mac;
+        $m{had} = $reg->host_exists($mac, 'osvc_delivered_at') ? $reg->host_get($mac, 'osvc_delivered_at') : undef;
         $reg->host_set($mac, 'osvc_delivered_at', time);
         1;
     };
-    return 1 if $ok;
-    my $err = ref $@ ? $@->message : $@;
-    $err =~ s/\s+\z//;
-    print STDERR "hps-osvc: warning: delivered to $host, but osvc_delivered_at was not recorded ($err): its om3 is not re-delivered after a reboot\n";
-    return 0;
+    if (!$ok) {
+        my $err = ref $@ ? $@->message : $@;
+        $err =~ s/\s+\z//;
+        $m{error} = $err;
+        delete @m{qw(reg mac)};
+    }
+    return \%m;
+}
+
+# A deliver that failed leaves the record as it was.
+sub undo_member {
+    my ($m) = @_;
+    return unless $m->{reg};
+    eval {
+        defined $m->{had} ? $m->{reg}->host_set($m->{mac}, 'osvc_delivered_at', $m->{had})
+                          : $m->{reg}->host_unset($m->{mac}, 'osvc_delivered_at');
+    };
+    return;
+}
+
+sub warn_member {
+    my ($m) = @_;
+    return unless $m->{error};
+    print STDERR "hps-osvc: warning: delivered to $m->{host}, but osvc_delivered_at was not recorded ($m->{error}): its om3 is not re-delivered after a reboot\n";
+    return;
 }
 
 # The keysafe has no CA yet: read the one the node daemon created and keep it.

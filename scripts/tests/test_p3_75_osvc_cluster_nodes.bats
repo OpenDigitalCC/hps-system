@@ -19,6 +19,7 @@ setup() {
     [[ "$op" == get ]] || return 1
     case "$mac:$key" in
       aabbccddee01:ctrl_exec_paired | aabbccddee02:ctrl_exec_paired | aabbccddee04:ctrl_exec_paired | aabbccddee05:ctrl_exec_paired) echo 1700000000 ;;
+      aabbccddee01:osvc_delivered_at | aabbccddee02:osvc_delivered_at | aabbccddee04:osvc_delivered_at | aabbccddee05:osvc_delivered_at) echo 1700000100 ;;
       aabbccddee01:HOSTNAME) echo tch-001 ;;
       aabbccddee02:HOSTNAME) echo SCH-001.old.example ;;
       aabbccddee03:HOSTNAME) echo tch-002 ;;

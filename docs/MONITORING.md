@@ -218,7 +218,9 @@ guest"). A guest that is resumed leaves `paused` at the next run.
   beats (or there is none); WARNING when a peer is stale; CRITICAL when the
   beating nodes (beating peers and this node) are fewer than a quorum of
   (peers + 1) / 2 + 1; UNKNOWN when `om` is not installed or the daemon does not
-  answer (8 s). Perfdata `peers`, `beating`, `stale`. Example: `OSVC_HB WARNING
+  answer (8 s). The peers are the nodes of the node list the IPS gave om3, which
+  holds only hosts that were delivered an om3 configuration (docs/OPENSVC.md), so
+  a paired host never delivered to is not a stale peer. Perfdata `peers`, `beating`, `stale`. Example: `OSVC_HB WARNING
   - 3 of 4 peers beating; stale: tch-004`. The issue register opens `om3-hb`
   issues from om3's own send error lines (docs/ISSUES.md).
 
