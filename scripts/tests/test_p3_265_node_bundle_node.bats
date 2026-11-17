@@ -532,7 +532,7 @@ extract_bundle() {
 # firewall port a service needs, fw_open)
 @test "adapter: the per-OS things are all it defines (plus its variables, and the few small questions init and role ask it); Alpine has its own (test_p3_268)" {
   grep -qE '^(pkg_add|svc_start|svc_reload|adapter_init)\(\)' "$ROOT/node-manager/bundle/adapter/nixos.sh"
-  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned aa_libvirt_check aa_libvirtd_path aa_parser_path aa_roots aa_sed_args adapter_init fw_open host_cgroups hostname_apply iscsid_conf_source log_forward md_monitor net_keep_lease os_compat pkg_add pkg_agent_dir pkg_kind pkg_nagios_check pkg_nagios_plugins pkg_realise pkg_stamp refresh_watch sshd_prepare sudo_grant svc_ensure svc_env svc_mask svc_reload svc_restart_later svc_start time_sync user_unlock zfs_hostid_set zvol_links " ]
+  [ "$(grep -oE '^[a-z_]+\(\) \{' "$ROOT/node-manager/bundle/adapter/nixos.sh" | tr -d '(){ ' | LC_ALL=C sort | tr '\n' ' ')" = "_nix_opts _unsigned aa_libvirt_check aa_libvirtd_path aa_parser_path aa_profile_dir aa_roots aa_sed_args adapter_init fw_open host_cgroups hostname_apply iscsid_conf_source log_forward md_monitor net_keep_lease os_compat pkg_add pkg_agent_dir pkg_kind pkg_nagios_check pkg_nagios_plugins pkg_realise pkg_stamp refresh_watch sshd_prepare sudo_grant svc_ensure svc_env svc_mask svc_reload svc_restart_later svc_start time_sync user_unlock zfs_hostid_set zvol_links " ]
   [ -e "$ROOT/node-manager/bundle/adapter/alpine.sh" ]
 }
 
