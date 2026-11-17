@@ -193,6 +193,21 @@ To prove on a node (written without one; the lab evidence is the hand recovery o
 
 `check_vms`, `vm-resume`, `vm-status` (the `PAUSED` line), `vm-stop` (the refusal) and the allowlist in `nix/modules/hps-ctrl-exec.nix` are node-side: they take effect at a node's next boot of the new image. Until then the node prints no `paused` figure, so no issue opens; an issue filed by hand (`hps-issues open --kind guest-paused ...`) finds no reason line from `vm-status` and goes to needs-human rather than being resumed. The IPS side (`hps-issue-watch`, `hps-workload resume-paused`) works at once; `resume-paused` on a node without `vm-resume` fails (exit 1) with the node's refusal.
 
+# A guest that will not start: where to look
+
+`hps-workload report <name> [--vm <vm>]` answers, on one screen and read-only, the three questions an operator has about a guest that will not start, in this order.
+
+Where its storage is
+:   Per disk the mirror name, size, and per leg the storage host (name and address), pool, zvol and iSCSI target, and the compute host. They are printed from the IPS's records (the workload record, the definition and the host registry), so they are complete with the compute node and both storage nodes powered off. The mirror sidecar `/run/hps/mirrors/<name>.json` lives on the compute node's tmpfs and is gone with that node; the report does not need it. When the nodes answer, the live facts stand beside the recorded ones: zvol exists, target exported, session logged in, device state, mirror `array_state`. A node that does not answer reads `not reachable`.
+
+Why it will not start
+:   The last failed or refused operation with its line verbatim (`REFUSED legs ...` of `vm-reassemble`, `DIVERGED ...` of `mirror-assemble`, `FAILED ...`), where it was recorded, and the open HPS-ISSUEs naming the guest.
+
+What the last errors were
+:   The newest error lines with time and source: the events view, failed job records, issue trails, the IPS log and the compute host's syslog.
+
+To assemble a mirror by hand, the report prints the commands with this guest's names: `hps-storage <host> up` for each storage host, then `mirror-assemble <mirror> --leg <spec> --leg <spec>` on the compute host, the same legs `hps-workload start` uses. The legs are the recorded ones, so storage is never lost with the sidecar. `mirror-assemble` refuses diverged legs (`DIVERGED`) and there is no override; read its refusal before anything else is tried. `--json` carries the same facts for the HPS browser (`docs/WORKLOADS.md`, `report`).
+
 # Out of scope
 
 - Raising `replacement_timeout` or any `iscsiadm` timer from 15 s without the measurements above.

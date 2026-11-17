@@ -131,6 +131,8 @@ sub fresh {
     is($j->finish($job2, exit => 3, stdout => '', stderr => "no key\n"), 'failed', 'a non-zero exit goes to failed/');
     is($j->result($id2)->{stderr}, "no key\n", 'failed result keeps stderr');
     ok(!-e $j->sub_dir('done') . "/$id2.result.json", 'not in done/');
+    is_deeply($j->result($id2)->{args}, ['525400000001'], 'the result records the arguments (which workload or host it was about)');
+    is_deeply($r->{args}, [], 'a job without arguments records an empty list');
 }
 
 # --- result capping

@@ -77,6 +77,29 @@ p3_degraded() {
   [ "$output" = "no mirrors" ]
 }
 
+@test "status: ARRAY and LEGSTATE lines (array_state, session, device state), before the MIRROR line" {
+  mkdir -p "$HPS_DEV/md" "$HPS_SYS/block/md127/md"
+  ln -s ../md127 "$HPS_DEV/md/vm1-disk0"
+  touch "$HPS_DEV/md127"
+  echo broken > "$HPS_SYS/block/md127/md/array_state"
+  mkdir -p "$HPS_SYS/block/$P3_REM_NAME/device"
+  echo transport-offline > "$HPS_SYS/block/$P3_REM_NAME/device/state"
+  run --separate-stderr bash "$S/mirror-status" vm1-disk0
+  [ "$status" -eq 0 ]
+  [ "${lines[-1]}" = "MIRROR vm1-disk0 clean" ]
+  [[ "$output" == *"ARRAY vm1-disk0 array_state=broken"* ]]
+  [[ "$output" == *"LEGSTATE $P3_LOC_SPEC session=n/a device=n/a"* ]]
+  [[ "$output" == *"LEGSTATE $P3_REM_SPEC session=logged-in device=transport-offline"* ]]
+  : > "$STATE/sessions"
+  run --separate-stderr bash "$S/mirror-status" vm1-disk0
+  [[ "$output" == *"LEGSTATE $P3_REM_SPEC session=not-logged-in"* ]]
+}
+
+@test "status: no md device reads array_state=absent" {
+  run --separate-stderr bash "$S/mirror-status" vm1-disk0
+  [[ "$output" == *"ARRAY vm1-disk0 array_state=absent"* ]]
+}
+
 @test "status changes nothing" {
   bash "$S/mirror-status" vm1-disk0 > /dev/null 2>&1
   p3_no_state_change

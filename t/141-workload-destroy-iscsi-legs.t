@@ -15,8 +15,9 @@ $wl->run('create', 't0');
 
 my $d = WorkloadLegs::rec($f)->{vms}{'t0-vm'}{disks}{root};
 is_deeply($d->{remote}, [
-    { host => 'sch-002', iqn => $WorkloadLegs::IQN{a}, dataset => $WorkloadLegs::ZVOL{a} },
-    { host => 'sch-003', iqn => $WorkloadLegs::IQN{b}, dataset => $WorkloadLegs::ZVOL{b} } ], 'create records each leg: host, iqn and the zvol the host exports for it');
+    { host => 'sch-002', iqn => $WorkloadLegs::IQN{a}, dataset => $WorkloadLegs::ZVOL{a}, portal => '192.0.2.52', pool => 'lab', mirror => 't0-vm-root', size => '20G' },
+    { host => 'sch-003', iqn => $WorkloadLegs::IQN{b}, dataset => $WorkloadLegs::ZVOL{b}, portal => '192.0.2.53', pool => 'lab', mirror => 't0-vm-root', size => '20G' } ],
+    'create records each leg: host, iqn, the zvol the host exports for it, and (for hps-workload report) portal, pool, mirror name and size');
 
 my $r = $wl->run('destroy', 't0', dry_run => 1);
 my @plan = map { [ $_->{host}, $_->{script}, @{ $_->{args} } ] } @{ $r->{plan} };

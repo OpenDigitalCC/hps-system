@@ -12,6 +12,24 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## A VM that will not start: where its storage is, why, the last errors (2026-11-17)
+
+- **Added** `hps-workload report <name> [--vm <vm>] [--no-probe] [--json]`: per VM, on one screen,
+  its storage first (per disk the mirror, size, and per leg the storage host with address, pool,
+  zvol, iSCSI target, from the IPS's records alone, complete with every node off), the live facts
+  beside them for the nodes that answer (`not reachable` for those that do not), the last failed
+  or refused operation with its line verbatim, the open HPS-ISSUEs, the newest error lines with
+  time and source, and the commands that assemble the mirror by hand. Read-only; `--json` carries
+  all of it. `docs/WORKLOADS.md` "report", `docs/STORAGE-FAULTS.md` "A guest that will not start:
+  where to look".
+- **Added** `ARRAY` (kernel `array_state`) and `LEGSTATE` (session, device state) lines in the node
+  script `mirror-status`, before its last `MIRROR` line; a node on an older image prints neither
+  and the report says so. **Changed** the `hps-workload` failure event carries the node script's last
+  stderr line; the `jobs/` result carries the job's `args`; `create` records a remote leg's portal,
+  pool, mirror name and size next to host, iqn and zvol. Workloads created before this lack those
+  extra leg fields (the report reads the leg specs and the storage host's `storage_exports`
+  instead); no migration is written.
+
 ## Boot-readiness refusal reports 0 s when it did not wait (2026-11-17)
 
 - **Fixed** `hps-bmc on` reading "do not answer after 1 s" with `boot_ready_wait_seconds` 0 on a busy

@@ -156,7 +156,7 @@ my $f = StorageFixture::setup_workload();
     is($e->kind, 'failed', 'node failure: failed');
     like($e->message, qr/step 5\/10 vm-start exited 1: boom from vm-start/, 'failure names step, script and node stderr');
     is(rec($f, 't0')->{state}, 'stopped', 'failed start leaves the state');
-    ok((grep { /\Awarning HPS-ALERT pri=warning kind=workload subject=t0 state=failed start t0: step 5\/10 vm-start exited 1\z/ } @{ $f->{log} }), 'a failed step is an alert event: warning, failed');
+    ok((grep { /\Awarning HPS-ALERT pri=warning kind=workload subject=t0 state=failed start t0: step 5\/10 vm-start exited 1: boom from vm-start\z/ } @{ $f->{log} }), 'a failed step is an alert event: warning, failed');
     is(scalar(() = $f->{ce}->calls), 3, 'nothing runs after the failing call');
     $f->{ce}{rc}{'vm-start'} = 3;
     $e = err_of(sub { $wl->run('start', 't0') });

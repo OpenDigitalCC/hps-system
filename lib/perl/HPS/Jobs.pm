@@ -322,6 +322,9 @@ sub finish ($self, $job, %r) {
         id => $job->{id}, kind => $job->{kind}, exit => $r{exit} + 0,
         stdout => $out, stderr => $err, finished_at => _now_iso($now),
     };
+    # The arguments (for a workload job, which workload): without them a failed result cannot
+    # be matched to what it was about once run/ is emptied (hps-workload report reads them).
+    $res->{args} = [ @{ $job->{args} } ] if ref $job->{args} eq 'ARRAY';
     $res->{stdout_truncated} = JSON::PP::true if $otr;
     $res->{stderr_truncated} = JSON::PP::true if $etr;
     $res->{duration} = $r{duration} + 0 if defined $r{duration};

@@ -1514,7 +1514,8 @@ sub run ($self, $op, $name, %a) {
             my $kind = $r->{rc} == 3 ? 'refused' : $r->{rc} == 4 ? 'notfound' : 'failed';
             $st->{undo}->() if $st->{undo};
             $self->_event($kind eq 'refused' ? 'notice' : 'warning', $name, $kind eq 'refused' ? 'refused' : 'failed',
-                "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}");
+                "$op $name: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}"
+                . (length $last ? ': ' . substr($last =~ s/[\r\n\t]+/ /gr, 0, 300) : ''));    # the line that says why, for hps-workload report
             _fail($kind, "$op: step $n/" . scalar(@steps) . " $st->{script} exited $r->{rc}" . (length $last ? ": $last" : ''));
         }
         if ($op eq 'create' && $st->{key} && $st->{early_done}) {
@@ -1552,9 +1553,20 @@ sub _new_record ($self, $def) {
         # remote: the iSCSI legs (host, iqn, and the zvol the storage host exports for the iqn,
         # when it does): the IPS does not create those zvols, so destroy removes what is recorded here.
         my %remote;
-        for my $d (@{ $vm->{disks} }) {
-            $remote{ $d->{name} } = [ map { +{ host => $_->{host}, iqn => $_->{iqn}, dataset => $self->_export_zvol($_->{host}, $_->{iqn}) } }
-                grep { defined $_->{iqn} } @{ $d->{legs} } ];
+        # Also the leg's pool, portal, mirror name and the disk size (hps-workload report prints them
+        # from the record alone, with every node off); pool is undef when the zvol is not known.
+        for my $di (0 .. $#{ $vm->{disks} }) {
+            my ($d, $id) = ($vm->{disks}[$di], $in->{disks}[$di]);
+            my @r;
+            for my $li (0 .. $#{ $d->{legs} }) {
+                my $l = $d->{legs}[$li];
+                next unless defined $l->{iqn};
+                my $ds = $self->_export_zvol($l->{host}, $l->{iqn});
+                my ($portal) = $id->{specs}[$li] =~ /\Aiscsi:([^:]+):/;
+                push @r, { host => $l->{host}, iqn => $l->{iqn}, dataset => $ds, portal => $portal,
+                    pool => (defined $ds ? (split m{/}, $ds)[0] : undef), mirror => $id->{mirror}, size => $d->{size} };
+            }
+            $remote{ $d->{name} } = \@r;
         }
         $vms{ $vm->{name} } = { host => $vm->{compute}, state => 'creating',
             disks => { map { $_->{name} => { md => $_->{device}, legs => $_->{specs}, (@{ $remote{ $_->{name} } } ? (remote => $remote{ $_->{name} }) : ()) } } @{ $in->{disks} } } };

@@ -370,6 +370,7 @@ tooling before this: the owner sets it once.
 
 `hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`,
 `hps-workload console <name> [--vm $VM] [--lines N] [--json]`,
+`hps-workload report <name> [--vm $VM] [--no-probe] [--json]`,
 `hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]`
 (and `define`, `show-definition` above, which make no node call).
 Each operation is an ordered list of node calls (`--dry-run` prints it, changes
@@ -506,6 +507,49 @@ nothing). A node call that exits non-zero ends the run at once.
     for has no log (4 from the node); 1 when any VM's log could not be read
     (the others are still printed). The scale test's board reads the probe
     lines this way, through the operator API (`docs/OPERATOR.md`).
+
+`report <name> [--vm $VM] [--no-probe] [--json]`
+:   Read-only: for a VM that will not start, everything on one screen, per VM, in this order.
+    Writes nothing (no registry key, reservation, job or state) and calls only read-only node
+    scripts (`storage-zvol-list`, `iscsi-status`, `mirror-status`).
+
+    1. STORAGE. Per disk: mirror name, size, and per leg the storage host (name and address),
+       pool, zvol path and iSCSI target name, plus the compute host. These come from the IPS's
+       records alone (the workload record `workload_<name>` in `cluster.db`, the definition
+       `workloads/<name>.json`, the host registry `IP` and `storage_exports`), so they print
+       complete with every node off. Beside them, only when a node answers: zvol exists, target
+       exported, session logged in, device state, mirror `array_state`. A node that does not
+       answer reads `not reachable`; it is never an error of the command.
+    2. WHY IT WILL NOT START. The newest failed or refused operation of the VM: verb, step,
+       time, the failure line verbatim (`REFUSED legs ...`, `FAILED ...`) and its source (the
+       events view, a failed `jobs/` record, an HPS-ISSUE trail); and the open HPS-ISSUEs naming
+       the VM, its workload or its mirror.
+    3. LAST ERRORS. The newest error lines, newest first (at most 15), each with time and
+       source: events view, failed jobs naming the workload, issue trails, the IPS's own log,
+       the compute host's syslog for the VM and its mirrors.
+    4. TO RECONSTRUCT BY HAND. The existing commands with this VM's names: `hps-storage <host>
+       up` per storage host, `mirror-status` and `mirror-assemble <mirror> --leg <spec> --leg
+       <spec>` on the compute host (the legs `start` itself uses), and `hps-workload start`.
+
+    A fact that is not on record reads `not recorded`; a fact not asked for (`--no-probe`, which
+    calls no node) reads `not probed`; a node on an older image that does not print a line reads
+    `not reported by this node image`. A key is never left out. Secrets never appear: a string
+    that looks like one (the log reader's test) is shown as `[redacted]`.
+
+    `--json` carries everything the text shows. Top-level keys, pinned by `t/288`: `schema` (1),
+    `workload`, `cluster`, `generated_at`, `state` (the record's), `probed` (boolean), `vms`,
+    `notes` (list of strings). Each element of `vms`: `vm`; `compute_host` `{name, address,
+    recorded_from}`; `recorded_state`; `last_owner`; `storage` (a list, one per disk);
+    `why_it_will_not_start` `{status, at, source, verb, step, line}`; `open_issues` (`{id, kind,
+    state, severity, summary, opened_at, last_seen_at, heal_attempts, heal_last_at,
+    heal_last_result}`); `last_errors` (`{time, source, line}`, newest first); `reconstruct`
+    (a list of strings, the commands). A `storage` element is `{disk, mirror, mirror_name, size,
+    mirrored, device, legs, live_mirror}`; `live_mirror` is `{host_reachable, mirror_state,
+    array_state}`. A leg is `{index, kind (local or iscsi), spec, host, address, pool, zvol,
+    target, portal, size, size_note, recorded_from, host_known, live}`, and `live` is
+    `{host_reachable, zvol_exists, target_exported, session, device_state}`: the recorded facts
+    and the live ones are separate keys. `size` of a leg is the disk's size (the leg zvol's own
+    size is not on record; `storage-zvol-list` shows it). Exit 0; 4 for an unknown workload or VM.
 
 `grow-disk <name> <vm> <disk> <new size>`
 :   Grows one disk of one VM while it runs. Two calls on the compute host:

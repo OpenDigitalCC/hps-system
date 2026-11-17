@@ -6,7 +6,9 @@
 # For each mirror (the named one, else every sidecar in /run/hps/mirrors/):
 # mdadm --detail, the bitmap line, one "LEG <spec> kind=<local|remote> ..." line
 # per leg from the sidecar, and a line "MIRROR <name> <state>" where state is
-# one of clean, degraded, resyncing, absent (not assembled), unknown. The last
+# one of clean, degraded, resyncing, absent (not assembled), unknown; before it, "ARRAY <name>
+# array_state=<kernel state|absent>" and per leg "LEGSTATE <spec> session=<logged-in|not-logged-in|n/a>
+# device=<SCSI state|absent|n/a>" (looks only, logs nothing in). The last
 # line printed is always a MIRROR line (or "no mirrors" when there are none).
 # Exit: 0, 2 usage, 3 a named mirror is not known here.
 
@@ -26,6 +28,8 @@ USAGE
 }
 
 : "${HPS_MIRROR_DIR:=/run/hps/mirrors}"
+: "${HPS_DEV:=/dev}"
+: "${HPS_SYS:=/sys}"
 
 # derive_state <detail-text>
 derive_state() {
@@ -55,7 +59,43 @@ report_one() {
   if [[ -r "$side" ]]; then
     jq -r '.legs[] | "LEG \(.spec) kind=\(.kind) dev=\(.dev) write_mostly=\(.write_mostly)"' "$side"
   fi
+  report_array "$name"
+  report_legs "$side"
   printf 'MIRROR %s %s\n' "$name" "$state"
+}
+
+# report_array <name>: "ARRAY <name> array_state=<kernel state | absent>". A mirror the
+# kernel calls broken fails every write until it is assembled again.
+report_array() {
+  local name=$1 dev as
+  dev=$(readlink -f "$HPS_DEV/md/$name" 2> /dev/null || true)
+  as="$HPS_SYS/block/${dev##*/}/md/array_state"
+  if [[ -n "$dev" && -r "$as" ]]; then
+    printf 'ARRAY %s array_state=%s\n' "$name" "$(< "$as")"
+  else
+    printf 'ARRAY %s array_state=absent\n' "$name"
+  fi
+}
+
+# report_legs <sidecar>: "LEGSTATE <spec> session=<logged-in|not-logged-in|n/a>
+# device=<kernel SCSI state|absent|n/a>" per recorded leg. Looks only; logs nothing in.
+report_legs() {
+  local side=$1 spec kind dev sessions="" session devstate real sf iqn
+  [[ -r "$side" ]] || return 0
+  sessions=$(iscsiadm -m session 2> /dev/null || true)
+  while IFS=$'\t' read -r spec kind dev; do
+    session=n/a
+    devstate=n/a
+    if [[ "$kind" == remote ]]; then
+      iqn=${spec#iscsi:*:}
+      if grep -qF -- "$iqn" <<< "$sessions"; then session=logged-in; else session=not-logged-in; fi
+      real=""
+      [[ -n "$dev" ]] && real=$(readlink -f "$dev" 2> /dev/null || true)
+      sf="$HPS_SYS/block/${real##*/}/device/state"
+      if [[ -n "$real" && -r "$sf" ]]; then devstate=$(< "$sf"); else devstate=absent; fi
+    fi
+    printf 'LEGSTATE %s session=%s device=%s\n' "$spec" "$session" "$devstate"
+  done < <(jq -r '.legs[] | [.spec, .kind, (.dev // "")] | @tsv' "$side")
 }
 
 main() {

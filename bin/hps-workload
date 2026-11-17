@@ -12,6 +12,8 @@ use HPS::Workload::Net;
 use HPS::Workload::Drain;
 use HPS::BootReady;
 use HPS::BootWatch;
+use HPS::Workload::Report;
+use HPS::Log;
 
 # The DHCP and DNS regeneration after a reservation changes (IPS-42 row 5): the
 # program hps-onboard forget uses, run as `<cmd> dns-dhcp`; the caller may
@@ -42,6 +44,7 @@ Usage:
   hps-workload status  <name> [--vm <vm>] [--dry-run] [--json]   (per VM: its latest utilisation from the hypervisor)
   hps-workload grow-disk <name> <vm> <disk> <new size> [--dry-run] [--json]
   hps-workload console <name> [--vm <vm>] [--lines N] [--dry-run] [--json]
+  hps-workload report  <name> [--vm <vm>] [--no-probe] [--json]   (a VM that will not start: storage, why, last errors; read-only)
   hps-workload define  <name> [--replace] [--dry-run] [--json]   (the JSON definition on stdin)
   hps-workload show-definition <name>
   hps-workload list   [--project <P>] [--json]
@@ -81,6 +84,14 @@ the stored JSON. A disk whose definition sets no mbps_max gets one derived from 
 measured write speed of its storage hosts (cluster key tenant_write_fraction); it
 is written into the stored definition with an mbps_max_derived text naming the
 source, and printed. An mbps_max in the definition always wins.
+report answers, per VM and on one screen, "where is its storage, why will it not start, what were the last errors":
+STORAGE first, per disk the mirror name, size and per leg the storage host (name and address), pool, zvol and iSCSI target
+name, from the IPS's records alone (so complete with every node off), then the compute host; beside each, only when the node
+answers, the live facts (zvol exists, target exported, session, device state, mirror array_state); a node that does not
+answer is "not reachable". Then the last failed or refused operation (verb, step, time, the failure line verbatim) and
+the open HPS-ISSUEs, the newest error lines with time and source, and the commands to assemble the mirror by hand.
+A fact not on record reads "not recorded". It writes nothing and calls only read-only node scripts; --no-probe calls
+no node at all. --json carries all of it (docs/WORKLOADS.md "report").
 console prints the tail of each VM's serial console log (vm-console-log on its
 compute host; read-only), --lines N of it (1-10000, default the node's 200);
 with --vm the log alone, else each under a "== <vm> on <host>" heading. Exit 4
@@ -343,24 +354,49 @@ sub drain_verb {
     return defined $rc ? $rc : fail_exit($@);
 }
 
+# report <name>: HPS::Workload::Report (read-only).
+sub report_verb {
+    my ($name, %o) = @_;
+    return usage('report takes only --vm, --no-probe and --json') if @{ $o{rest} } || $o{dry};
+    my $rc = eval {
+        my $wl = HPS::Workload->new;
+        my $reg = $wl->{registry};
+        $wl->definition_path($name);    # the name check
+        my $rep = HPS::Workload::Report->new(registry => $reg, probe => ($o{no_probe} ? 0 : 1),
+            runner => ($o{no_probe} ? undef : $wl->{runner}), log => HPS::Log->new(registry => $reg),
+            jobs_dir => $reg->cluster_dir($reg->active_cluster) . '/jobs');
+        my $r = $rep->report($name, vm => $o{vm});
+        print $o{json} ? JSON::PP->new->canonical->pretty->encode($r) : HPS::Workload::Report::render($r);
+        return 0;
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
 sub main {
     my @argv = @_;
     my ($flavour, $egress, $dns);
+    my $nopr;
     my ($json, $dry, $resume, $any, $vm, $forget, $replace, $lines, $force, $project, $imgw, $nodes, $nobw, $anyr);
     GetOptionsFromArray(
         \@argv, 'json' => \$json, 'dry-run' => \$dry, 'resume' => \$resume,
         'allow-any-pool-name' => \$any, 'vm=s' => \$vm, 'forget' => \$forget, 'image-written' => \$imgw,
         'replace' => \$replace, 'lines=s' => \$lines, 'force' => \$force, 'project=s' => \$project,
         'include-nodes' => \$nodes,
-        'no-boot-wait' => \$nobw, 'any-reason' => \$anyr, 'flavour=s' => \$flavour, 'egress=s' => \$egress, 'dns=s' => \$dns,
+        'no-boot-wait' => \$nobw, 'no-probe' => \$nopr, 'any-reason' => \$anyr, 'flavour=s' => \$flavour, 'egress=s' => \$egress, 'dns=s' => \$dns,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
+    if ($op eq 'report') {
+        return usage('workload name required') unless @argv;
+        my $rname = shift @argv;
+        return report_verb($rname, json => $json, vm => $vm, no_probe => $nopr, rest => [@argv], dry => $dry);
+    }
     return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images' || $op eq 'egress';
     my $name = shift @argv // return usage($op eq 'drain' || $op eq 'undrain' ? 'host required' : 'workload name required');
     my $other = ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw || $anyr);
     return drain_verb($op, $name, \@argv, json => $json, dry_run => $dry, include_nodes => $nodes, other => $other)
         if $op eq 'drain' || $op eq 'undrain';
     return usage('--include-nodes is only for drain') if $nodes;
+    return usage('--no-probe is only for report') if $nopr && $op ne 'report';
     return class_verb($name, \@argv, json => $json, dry_run => $dry, other => $other) if $op eq 'set-class';
     return set_verb($name, \@argv, json => $json, dry_run => $dry, flavour => $flavour, egress => $egress, dns => $dns,
         other => ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw || $anyr))
