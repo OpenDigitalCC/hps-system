@@ -333,6 +333,23 @@ host_config_delete() {
 #   0 on success (outputs IP to stdout)
 #   1 if the pool is invalid or exhausted
 #===============================================================================
+# _ip_leased_to_other <ip> <mac12> <lease rows>: succeeds when an unexpired lease
+# of <ip> belongs to a MAC other than <mac12> (12 hex digits, no colons).
+_ip_leased_to_other() {
+  local ip="$1" mac="${2,,}" rows="$3" now exp lmac lip rest
+  now=$(date +%s)
+  while read -r exp lmac lip rest; do
+    [[ "$lip" == "$ip" ]] || continue
+    [[ "$exp" =~ ^[0-9]+$ ]] || continue
+    # expiry 0 is an infinite lease in dnsmasq's file
+    (( exp == 0 || exp > now )) || continue
+    lmac="${lmac//:/}"
+    [[ "${lmac,,}" == "$mac" ]] && continue
+    return 0
+  done <<< "$rows"
+  return 1
+}
+
 _find_available_ip() {
   local mac="$1"
   local static_start="${2:-}"
@@ -361,6 +378,11 @@ _find_available_ip() {
   local current_host_ip
   current_host_ip=$(host_registry "$mac" get IP 2>/dev/null) || current_host_ip=""
 
+  # The IPS's dnsmasq leases (HPS_DNSMASQ_LEASES, as hps-workload reads them):
+  # "<expiry epoch> <mac> <ip> <name> <client id>" per line; unreadable is empty.
+  local lease_rows=""
+  lease_rows=$(cat "${HPS_DNSMASQ_LEASES:-/var/lib/misc/dnsmasq.leases}" 2>/dev/null) || lease_rows=""
+
   local n try_ip skip existing_ip r
   for ((n=start_int; n<=end_int; n++)); do
     try_ip=$(int_to_ip "$n" 2>/dev/null) || continue
@@ -382,6 +404,13 @@ _find_available_ip() {
       fi
     done <<< "$assigned_ips"
     [[ $skip -eq 1 ]] && continue
+
+    # Held by another MAC's unexpired DHCP lease: dnsmasq will not give a static
+    # address that another client still holds (it logs "not using configured
+    # address ... because it is leased to <mac>" and offers a pool address), so a
+    # host given this one could not pair (request source address != allocation)
+    # until that lease ran out. A forgotten host's lease is the usual holder.
+    [[ -n "$lease_rows" ]] && _ip_leased_to_other "$try_ip" "$mac" "$lease_rows" && continue
 
     echo "$try_ip"
     return 0

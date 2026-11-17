@@ -30,6 +30,15 @@ capabilities and removals are called out explicitly.
   extra leg fields (the report reads the leg specs and the storage host's `storage_exports`
   instead); no migration is written.
 
+## A new host is not given an address another MAC still leases (2026-11-17)
+
+- **Fixed** pairing refused ("request source address does not match the allocation") for a host that
+  got the address of a host forgotten less than an hour before: dnsmasq will not give a static address
+  another client still holds on a lease ("not using configured address ... because it is leased to
+  <mac>") and offered a pool address instead. `_find_available_ip` now skips an address an unexpired
+  lease of another MAC holds (`/var/lib/misc/dnsmasq.leases`, or `HPS_DNSMASQ_LEASES`); an unreadable
+  file changes nothing.
+
 ## Boot-readiness refusal reports 0 s when it did not wait (2026-11-17)
 
 - **Fixed** `hps-bmc on` reading "do not answer after 1 s" with `boot_ready_wait_seconds` 0 on a busy

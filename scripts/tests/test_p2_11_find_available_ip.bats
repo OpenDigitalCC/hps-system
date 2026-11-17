@@ -118,3 +118,27 @@ teardown() {
   [ "$status" -eq 1 ]
   [ ! -e "$TEST_DIR/sets" ]
 }
+
+# A static address another MAC still holds on a lease is not given out: dnsmasq
+# would offer the host a pool address instead and its pairing would be refused
+# (request source address does not match the allocation) until the lease ran out.
+# Found on the lab, 17 November 2026: a forgotten host's leases held .11, .14, .15.
+@test "skips an address an unexpired lease of another MAC holds" {
+  now=$(date +%s)
+  printf '%s 52:54:00:39:5a:b8 10.100.1.10 old *\n' $((now + 1800)) > "$TEST_DIR/leases"
+  HPS_DNSMASQ_LEASES="$TEST_DIR/leases" run _find_available_ip aabbccddeeff 10.100.1.10 10.100.1.99 "" 10.100.1.1
+  [ "$status" -eq 0 ]
+  [ "$output" = "10.100.1.11" ]
+}
+
+@test "an expired lease, and the host's own lease, do not hold an address" {
+  now=$(date +%s)
+  printf '%s 52:54:00:39:5a:b8 10.100.1.10 old *\n%s aa:bb:cc:dd:ee:ff 10.100.1.11 me *\n' $((now - 60)) $((now + 1800)) > "$TEST_DIR/leases"
+  HPS_DNSMASQ_LEASES="$TEST_DIR/leases" run _find_available_ip aabbccddeeff 10.100.1.10 10.100.1.99 "" 10.100.1.1
+  [ "$output" = "10.100.1.10" ]
+}
+
+@test "an unreadable leases file changes nothing" {
+  HPS_DNSMASQ_LEASES="$TEST_DIR/nonexistent" run _find_available_ip aabbccddeeff 10.100.1.10 10.100.1.99 "" 10.100.1.1
+  [ "$output" = "10.100.1.10" ]
+}
