@@ -74,6 +74,7 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** `HPS::Apk::pack_apk` (the packer the builder uses for the Alpine local packages): apk-tools 3 refused every file of a package ("failed to extract usr/lib/ctrl-exec/Exec/APIClient.pm: file format is obsolete (e.g. missing embedded checksum)", the first lab install). The data stream now carries apk's per-file `APK-TOOLS.checksum.SHA1` pax header, as abuild-tar does. Packages built before this must be built again. Tested by installing a packed file on an Alpine node.
 - **New** `hps-starter sync` writes the OS registry entry of the release it synced
   (`x86_64:nixos:26.05`, `x86_64:alpine:3.24`) in the shape `os_seed_nixos` gives the NixOS one, over
   any hand-made entry, so `hps-onboard assign --os x86_64:alpine:3.24` works after a sync (found in

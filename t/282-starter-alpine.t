@@ -281,4 +281,24 @@ like(msg(err_of(sub { (world())[0]->sync('alpine', '3.24', only => 'starter') })
     is($s2->ensure_os_entry('alpine', '3.24'), 0, 'ensure_os_entry says it wrote nothing');
 }
 
+# --- the packer: what apk-tools 3 demands of a data stream ------------------------------------
+{
+    my $apk = HPS::Apk::pack_apk(name => 'x', version => '1-r0', files => [
+        { name => 'usr/bin/x', data => "#!/bin/sh\n", mode => 0755 },
+        { name => 'usr/share/x/a', data => "hello\n" },
+        { name => 'usr/bin/xl', type => '2', link => 'x' } ]);
+    my $plain;
+    gunzip(\$apk => \$plain, MultiStream => 1) or die;
+    my @e = @{ HPS::Apk::tar_entries($plain) };
+    my @px = grep { $_->{type} eq 'x' } @e;
+    is(scalar(@px), 2, 'a pax header for each regular file and none for a directory or a link');
+    like($px[0]{data}, qr/\A\d+ APK-TOOLS\.checksum\.SHA1=[0-9a-f]{40}\n\z/, 'it is apk\'s per-file checksum record');
+    my ($len) = $px[0]{data} =~ /\A(\d+) /;
+    is($len, length $px[0]{data}, 'whose length field counts itself');
+    is($px[1]{data}, "68 APK-TOOLS.checksum.SHA1=" . Digest::SHA::sha1_hex("hello\n") . "\n", 'and is the SHA-1 of the file it precedes (first lab install: "file format is obsolete (e.g. missing embedded checksum)")');
+    my $i = 0;
+    $i++ while $e[$i]{type} ne 'x';
+    is($e[$i + 1]{name}, 'usr/bin/x', 'the header comes right before its file');
+}
+
 done_testing;

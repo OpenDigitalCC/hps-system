@@ -131,11 +131,29 @@ sub _tar_header ($name, $size, $mode, $type = '0', $link = '') {
 
 # tar_bytes(\@entries, $end): entries are {name, data, mode, type?, link?}; $end
 # false cuts the two end blocks, as abuild does for every stream but the last.
+# _pax($key, $value): one pax extended header record, "<length> key=value\n", where the
+# length counts its own digits.
+sub _pax ($k, $v) {
+    my $body = " $k=$v\n";
+    my $len = length($body) + 1;
+    $len = length($body) + length($len) while length($len) != length($len + 0) || length($body) + length($len) != $len;
+    return $len . $body;
+}
+
+# tar_bytes(\@entries, $end): ... {checksum => 1} on a regular file puts apk's per-file
+# SHA-1 in a pax header before it (APK-TOOLS.checksum.SHA1, what abuild-tar --hash does):
+# apk-tools 3 refuses a package whose files lack it ("file format is obsolete (e.g. missing
+# embedded checksum)", first lab install of the local packages, 2026-11-17).
 sub tar_bytes ($entries, $end = 1) {
     my $t = '';
     for my $e (@$entries) {
         my $type = $e->{type} // '0';
         my $data = $type eq '0' ? ($e->{data} // '') : '';
+        if ($e->{checksum} && $type eq '0') {
+            my $px = _pax('APK-TOOLS.checksum.SHA1', Digest::SHA::sha1_hex($data));
+            $t .= _tar_header('./PaxHeaders/' . ($e->{name} =~ s{.*/}{}r), length($px), 0644, 'x');
+            $t .= $px . ("\0" x ((512 - length($px) % 512) % 512));
+        }
         $t .= _tar_header($e->{name}, length($data), $e->{mode} // ($type eq '5' ? 0755 : 0644), $type, $e->{link} // '');
         $t .= $data . ("\0" x ((512 - length($data) % 512) % 512));
     }
@@ -162,7 +180,7 @@ sub pack_apk (%a) {
         my $d = '';
         for my $c (@p) { $d .= ($d ? '/' : '') . $c; push @dirs, { name => "$d/", type => '5', mode => 0755 } unless $seen{$d}++ }
     }
-    my $data = _gzip(tar_bytes([ @dirs, @$files ], 1));
+    my $data = _gzip(tar_bytes([ @dirs, map { { %$_, checksum => 1 } } @$files ], 1));
     my $installed = 0;
     $installed += length($_->{data} // '') for @$files;
     my @l = (
