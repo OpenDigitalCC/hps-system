@@ -81,6 +81,10 @@ qemu-system-x86_64
 qemu-img
 open-iscsi
 tcpdump
+partx
+mount
+umount
+losetup
 qemu-edk2-i386-vars
 
 # monitoring and cluster membership

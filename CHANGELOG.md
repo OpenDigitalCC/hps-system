@@ -212,6 +212,7 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** the Alpine compute role lacked `partx`, util-linux's `mount`/`umount`/`losetup`, `e2fsprogs` and `wipefs`: `vm-seed-write` said "has no partition 1 (partx found none)".
 - **Fixed** on the full Alpine trial's compute node: the by-path names of iSCSI disks (an mdev hook; `leg-resolve` waited for them), the programs the libvirtd profile lets the daemon start (/usr/bin, /usr/sbin, /usr/local/bin in place of the nix store), no `hps-zfs-mount` on a node without ZFS, libvirt's default network not autostarted.
 - **Fixed** a workload VM that is also a registered host (a nested node) no longer gets a DHCP reservation published for its MAC: the registry's address wins. A reservation recorded from the dynamic lease the VM held before it was assigned gave dnsmasq a second address for the MAC and the node was refused pairing ("request source address does not match the allocation": sch-003 on the full Alpine trial, 10.100.1.151 against 10.100.1.14).
 - **Fixed** init's lock (fd 9) was inherited by the services rc-service starts and held for as long as they live, so a refresh through `hps-refresh-watch` said "another init is running"; the adapter closes it for them.
