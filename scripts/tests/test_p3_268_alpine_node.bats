@@ -36,7 +36,7 @@ setup() {
   echo "SCH" > "$TEST_DIR/serve/type"
   mkdir -p "$TEST_DIR/bundle"
   tar -xzf "$TEST_DIR/serve/bundle.tgz" -C "$TEST_DIR/bundle"
-  printf '#!/bin/bash\necho "hps-pair $*" >> "$CALLS"\nhostname sch-001.lab.test\n' > "$TEST_DIR/bundle/lib/hps-pair"
+  printf '#!/bin/bash\necho "hps-pair $*" >> "$CALLS"\nhostname sch-001.lab.test\nsystemctl restart ctrl-exec-agent.service\n' > "$TEST_DIR/bundle/lib/hps-pair"
   for s in lib/hps-time actions/host-reserve-apply actions/net-bridge-ensure; do
     printf '#!/bin/bash\necho "%s $*" >> "$CALLS"\n' "${s##*/}" > "$TEST_DIR/bundle/$s"
   done
@@ -549,5 +549,7 @@ LOG
   # the lock was held while init ran (apk, which init does not close it for, saw it) ...
   grep -qx 'apk-fd9-open' "$CALLS"
   # ... and no rc-service call that starts something saw it
+  # (hps-pair, run by init, restarts the agent through the systemctl of os_compat: one of those calls)
+  grep -qx 'rc-service ctrl-exec-agent restart' "$CALLS"
   ! grep -E '^rc-fd9-open .* (start|restart|reload)$' "$CALLS"
 }

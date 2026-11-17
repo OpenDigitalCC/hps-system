@@ -173,6 +173,8 @@ os_compat() {
   write_if_changed "$d/systemctl" 0755 << 'EOF'
 #!/bin/sh
 # systemctl for an OpenRC node (written by the HPS node bundle, adapter/alpine.sh).
+# rc-service runs with fd 9 closed: init holds its lock there, and hps-pair restarts the agent from init
+# through this script; what it starts must not keep the lock (a refresh would say "another init is running").
 # start/stop/restart/reload/try-restart/cat/poweroff/reboot over rc-service; set-property and
 # show for machine.slice over cgroup v2 (the host reserve: host-reserve-apply, host-resources).
 CG="${HPS_CGROUP_ROOT:-/sys/fs/cgroup}/machine"
@@ -186,10 +188,10 @@ for a in "$@"; do
 done
 case "$verb" in
   start | stop | restart | reload)
-    for u in $units; do rc-service "$u" "$verb" || exit 1; done ;;
+    for u in $units; do rc-service "$u" "$verb" 9>&- || exit 1; done ;;
   try-restart)
     for u in $units; do
-      if rc-service "$u" status > /dev/null 2>&1; then rc-service "$u" restart || exit 1; fi
+      if rc-service "$u" status > /dev/null 2>&1; then rc-service "$u" restart 9>&- || exit 1; fi
     done ;;
   cat)
     for u in $units; do [ -x "/etc/init.d/$u" ] || exit 1; done ;;
