@@ -236,6 +236,17 @@ case "$verb" in
   *) echo "systemctl $verb: not available on this OS (OpenRC)" >&2; exit 1 ;;
 esac
 EOF
+  # node-facts asks timedatectl for the time synchronisation; ntpd is what keeps it here
+  write_if_changed "$d/timedatectl" 0755 << 'EOF'
+#!/bin/sh
+# timedatectl show for an ntpd node (written by the HPS node bundle, adapter/alpine.sh)
+if [ "$1" = show ]; then
+  sync=no; rc-service ntpd status > /dev/null 2>&1 && sync=yes
+  printf 'Timezone=UTC\nNTP=%s\nNTPSynchronized=%s\n' "$sync" "$sync"
+else
+  echo "timedatectl $1: not available on this OS (OpenRC)" >&2; exit 1
+fi
+EOF
   write_if_changed "$d/udevadm" 0755 << 'EOF'
 #!/bin/sh
 # udevadm for an mdev node (written by the HPS node bundle, adapter/alpine.sh):
@@ -407,7 +418,12 @@ svc_start() {
     [[ -z "${STAMP:-}" ]] || printf '# stamp: %s\n' "$STAMP"
     for o in "${ignored[@]}"; do printf '# not applied (systemd only): %s\n' "$o"; done
     printf 'description="HPS %s"\n' "$name"
-    for i in "${env[@]}"; do printf 'export %s=%q\n' "${i%%=*}" "${i#*=}"; done
+    for i in "${env[@]}"; do
+      # a PATH set for the service still holds OpenRC's helpers (ebegin, eend, mountinfo live in
+      # /usr/libexec/rc/bin; without them the script's own start() fails: "ebegin: not found")
+      if [[ "${i%%=*}" == PATH ]]; then printf 'export PATH=%q\n' "${i#*=}:/usr/libexec/rc/bin:/usr/libexec/rc/sbin"
+      else printf 'export %s=%q\n' "${i%%=*}" "${i#*=}"; fi
+    done
     [[ -z "$envfile" ]] || printf 'set -a; [ -f %q ] && . %q; set +a\n' "$envfile" "$envfile"
     printf 'depend() {\n  use net%s\n' "$use"
     [[ -z "$need" ]] || printf '  need%s\n' "$need"

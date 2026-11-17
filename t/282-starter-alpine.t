@@ -310,4 +310,36 @@ like(msg(err_of(sub { (world())[0]->sync('alpine', '3.24', only => 'starter') })
     like(HPS::Apk::index_record("$d/e.apk"), qr/^A:x86_64$/m, 'an x86_64 one is as it was');
 }
 
+# --- a second sync leaves the starter alone ------------------------------------------------------
+{
+    my ($s, $res, $up) = world();
+    $s->sync('alpine');
+    my $sd = "$res/res/starter/alpine/3.24";
+    my @before = map { [ (stat "$sd/$_")[1, 9], Digest::SHA::sha256_hex(slurp("$sd/$_")) ] } qw(vmlinuz-lts initramfs-lts manifest.json);
+    my $r = $s->sync('alpine');
+    is($r->{starter}{fetched}, 0, 'the second sync reports no starter file written');
+    is($r->{starter}{reused}, 2, 'both reused');
+    my @after = map { [ (stat "$sd/$_")[1, 9], Digest::SHA::sha256_hex(slurp("$sd/$_")) ] } qw(vmlinuz-lts initramfs-lts manifest.json);
+    is_deeply(\@after, \@before, 'the files and the manifest are the same inodes with the same times and bytes: nothing was replaced, so a node fetching them never saw a swap');
+    # a changed input is a rewrite, by rename: the file a reader has open is not touched
+    open(my $reader, '<:raw', "$sd/initramfs-lts") or die;
+    my $plain;
+    gunzip(\stock_initramfs('6.18.60-0-lts') => \$plain) or die;
+    $plain =~ s/echo stock init/echo stock inix/ or die;
+    my $z;
+    gzip(\$plain => \$z) or die;
+    spit("$up/v3.24/releases/x86_64/netboot/initramfs-lts", $z);
+    my $r2 = $s->sync('alpine');
+    is($r2->{starter}{fetched}, 1, 'a changed stock initramfs rewrites the initramfs');
+    my $old; read($reader, $old, 4);
+    is(length $old, 4, 'a reader that had the old file open still reads it (renamed over, not overwritten)');
+    close $reader;
+    # the same bytes assembled again are detected even when the manifest has no record of the inputs
+    my $m = decode_json(slurp("$sd/manifest.json"));
+    delete $m->{inputs};
+    spit("$sd/manifest.json", JSON::PP->new->canonical->encode($m));
+    my $r3 = $s->sync('alpine');
+    is($r3->{starter}{fetched}, 0, 'an assembled file identical to the one there is not written again, whatever the manifest recorded');
+}
+
 done_testing;

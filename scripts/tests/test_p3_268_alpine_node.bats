@@ -482,3 +482,21 @@ LOG
   [[ "$output" == *"the IPS gave no package list for this node ("* ]]
   grep -q 'curl -sS --max-time 30 .*cmd=node_packages' "$CALLS"
 }
+
+@test "a service script's PATH keeps OpenRC's own helpers: ebegin, eend and mountinfo are in /usr/libexec/rc/bin (the first lab boot: 'ebegin: not found', three role steps failed)" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  for s in hps-zfs-mount hps-shutdown-storage mdmonitor; do
+    grep -q "^export PATH=.*:/usr/libexec/rc/bin:/usr/libexec/rc/sbin\$" "$HPS_OPENRC_DIR/$s" || { echo "$s lacks the helpers' directory"; return 1; }
+  done
+}
+
+@test "the timedatectl of an ntpd node: show says whether ntpd runs (node-facts asks)" {
+  run bash "$TEST_DIR/bundle/init" boot
+  PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/timedatectl" show
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NTPSynchronized=yes"* && "$output" == *"Timezone=UTC"* ]]
+  rm -f "$TEST_DIR/svc/ntpd"
+  PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/timedatectl" show
+  [[ "$output" == *"NTPSynchronized=no"* ]]
+}

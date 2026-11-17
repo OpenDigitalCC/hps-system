@@ -317,18 +317,32 @@ sub _sync_starter ($S, $ver, $dir, $work, $lts_apk, $krel, $pkgname) {
     File::Path::make_path($dir);
     my %files;
     my $assembled = $stock_k ne $krel;
+    # The same inputs give the same starter, so a sync that finds them unchanged writes nothing:
+    # a node fetching the files during a sync never sees them replaced. The inputs are the
+    # sha256 of the repository's kernel package and of the two stock files, the kernel release
+    # and the arguments; the old manifest records them.
+    my %inputs = (kernel_apk => (HPS::Starter::_sha_file($lts_apk))[0], stock_vmlinuz => $stock{'vmlinuz-lts'}{sha256},
+        stock_initramfs => $stock{'initramfs-lts'}{sha256}, kernel => $krel, cmdline => $CMDLINE, release => $release);
+    my $old = $S->read_manifest($dir);
+    my $same = sub { my $o = $old->{inputs}; return 0 unless ref $o eq 'HASH'; return !grep { ($o->{$_} // '') ne $inputs{$_} } keys %inputs };
+    if ($old && $same->() && !@{ $S->check_files($dir, $old->{files}) }) {
+        $S->_log("starter: the inputs are those of the last sync and the files verify: nothing is written");
+        return { dir => $dir, release => $release, files => 2, fetched => 0, reused => 2,
+            bytes => $old->{files}{'vmlinuz-lts'}{size} + $old->{files}{'initramfs-lts'}{size}, kernel => $krel, assembled => $assembled };
+    }
+    my $changed = 0;
     if (!$assembled) {
         $S->_log("starter: the netboot kernel $stock_k is the repository's: the stock files are used as they are");
-        for my $f (qw(vmlinuz-lts initramfs-lts)) { _place("$work/stock-$f", "$dir/$f") }
+        for my $f (qw(vmlinuz-lts initramfs-lts)) { $changed += _place_if_changed("$work/stock-$f", "$dir/$f") }
     }
     else {
         $S->_log("starter: the netboot kernel is $stock_k, the repository's linux-lts is $krel: assembling the matched set from $pkgname");
         my $kdir = "$work/kernel";
         File::Path::make_path($kdir);
         _extract_kernel($lts_apk, $kdir, $krel, $stock_k, \$cpio);
-        _place("$kdir/boot/vmlinuz-lts", "$dir/vmlinuz-lts");
-        _rebuild_initramfs(\$cpio, "$dir/.initramfs-lts.tmp-$$", $stock_k, $krel, "$kdir/lib/modules/$krel");
-        rename "$dir/.initramfs-lts.tmp-$$", "$dir/initramfs-lts" or _fail('failed', "cannot rename into $dir/initramfs-lts: $!");
+        $changed += _place_if_changed("$kdir/boot/vmlinuz-lts", "$dir/vmlinuz-lts");
+        _rebuild_initramfs(\$cpio, "$work/initramfs-lts.new", $stock_k, $krel, "$kdir/lib/modules/$krel");
+        $changed += _place_if_changed("$work/initramfs-lts.new", "$dir/initramfs-lts");
     }
     for my $f (qw(vmlinuz-lts initramfs-lts)) {
         my ($hex) = HPS::Starter::_sha_file("$dir/$f");
@@ -337,12 +351,25 @@ sub _sync_starter ($S, $ver, $dir, $work, $lts_apk, $krel, $pkgname) {
     my %m = (
         schema => 'hps-starter/1', os => 'alpine', version => $ver, arch => $ARCH, release => $release,
         upstream => $S->{alpine}, cmdline => $CMDLINE, kernel => $krel, stock_kernel => $stock_k,
-        assembled => ($assembled ? JSON::PP::true() : JSON::PP::false()), from => $pkgname,
+        assembled => ($assembled ? JSON::PP::true() : JSON::PP::false()), from => $pkgname, inputs => \%inputs,
         stock => \%stock, files => \%files, synced_at => $S->_now_text,
     );
+    $m{synced_at} = $old->{synced_at} if !$changed && $old && $old->{synced_at};
     HPS::Starter::_spit("$dir/manifest.json", HPS::Starter::_json(\%m));
-    return { dir => $dir, release => $release, files => 2, fetched => 2, reused => 0,
+    return { dir => $dir, release => $release, files => 2, fetched => $changed, reused => 2 - $changed,
         bytes => $files{'vmlinuz-lts'}{size} + $files{'initramfs-lts'}{size}, kernel => $krel, assembled => $assembled };
+}
+
+# _place_if_changed($from, $to): 1 when $to was replaced, 0 when it already was this file. The
+# replacement is a copy under a temporary name in the same directory and a rename.
+sub _place_if_changed ($from, $to) {
+    if (-f $to && (-s $to) == (-s $from)) {
+        my ($a) = HPS::Starter::_sha_file($from);
+        my ($b) = HPS::Starter::_sha_file($to);
+        return 0 if defined $a && defined $b && $a eq $b;
+    }
+    _place($from, $to);
+    return 1;
 }
 
 sub _place ($from, $to) {
