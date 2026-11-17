@@ -8,6 +8,7 @@ use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::Keysafe;
 use HPS::Workload;
+use HPS::Workload::Net;
 use HPS::Workload::Drain;
 use HPS::BootReady;
 use HPS::BootWatch;
@@ -41,6 +42,7 @@ Usage:
   hps-workload drain   <host> [--include-nodes] [--dry-run] [--json]
   hps-workload undrain <host> [--dry-run] [--json]
   hps-workload images [--json]
+  hps-workload egress [--project <P>] [--json]
 start of a VM that boots from the network first waits (cluster key boot_ready_wait_seconds,
 default 60 s) for this IPS's DHCP, TFTP and HTTP boot services to answer, and refuses (exit 3)
 naming what does not; --no-boot-wait skips that. status shows "no netboot seen since start (N s)"
@@ -93,6 +95,9 @@ are DHCP leases of the IPS's dnsmasq matched by the VM's MAC (status --json carr
 VM as addresses: [{net, mac, ip, source}], empty when none). images lists the catalogue
 hps-resources/images/*.qcow2 with size, sha256 and date; define refuses an image that is not
 in it.
+egress lists the workloads whose definition declares "egress" hosts, with each one's flavour, state and
+addresses (leases); it grants nothing: lab/egress-allow turns it into the egress proxy's per-address allowances,
+and only for the hosts lab/egress-approved lists for that flavour (docs/WORKLOADS.md "Egress hosts").
 --dry-run prints the node calls (define: checks the definition) and changes nothing.
 Exit: 0 ok, 2 usage, 3 refused, 4 not found, 1 failed.
 USAGE
@@ -218,13 +223,17 @@ sub catalogue_verb {
     my ($op, $rest, %o) = @_;
     return usage("$op takes no arguments") if @$rest;
     return usage('--dry-run is not for ' . $op) if $o{dry_run};
-    return usage('--project is only for list') if defined $o{project} && $op ne 'list';
+    return usage('--project is only for list and egress') if defined $o{project} && $op ne 'list' && $op ne 'egress';
     my $js = JSON::PP->new->canonical->pretty;
     my $rc = eval {
         my $wl = HPS::Workload->new;
         if ($op eq 'list') {
             my $rows = HPS::Workload::List::list($wl, project => $o{project});
             print $o{json} ? $js->encode({ workloads => $rows }) : HPS::Workload::List::render_list($rows);
+        }
+        elsif ($op eq 'egress') {
+            my $rows = HPS::Workload::Net::egress_rows($wl, project => $o{project});
+            print $o{json} ? $js->encode({ egress => $rows }) : HPS::Workload::Net::render_egress($rows);
         }
         else {
             my $rows = HPS::Workload::List::images($wl->{images_dir});
@@ -284,7 +293,7 @@ sub main {
         'no-boot-wait' => \$nobw, 'any-reason' => \$anyr,
     ) or return usage();
     my $op   = shift @argv // return usage('operation required');
-    return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images';
+    return catalogue_verb($op, \@argv, json => $json, project => $project, dry_run => $dry) if $op eq 'list' || $op eq 'images' || $op eq 'egress';
     my $name = shift @argv // return usage($op eq 'drain' || $op eq 'undrain' ? 'host required' : 'workload name required');
     my $other = ($resume || $any || defined $vm || $forget || $replace || defined $lines || $force || defined $project || $imgw || $anyr);
     return drain_verb($op, $name, \@argv, json => $json, dry_run => $dry, include_nodes => $nodes, other => $other)

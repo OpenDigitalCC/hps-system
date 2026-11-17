@@ -34,6 +34,7 @@ Checked before any node call; a refusal exits 3 and names the field:
 | `name` (workload, VM, disk, net) | `^[a-z][a-z0-9-]{0,31}$`; the workload name equals the file name; VM names are unique |
 | `project` | non-empty string |
 | `class` (workload, top level) | optional, a whole number 1-4, default 3: the workload's class (1 core, 2 customer-facing, 3 ordinary, 4 batch and test), which decides what `drain` does with it. See "Workload classes" |
+| `flavour`, `egress` (top level) | optional: the kind of workload and the egress hosts it declares; see "Egress hosts". A declaration grants nothing |
 | `access` | optional; `ssh_keys` a list of public key lines, `console` a JSON boolean |
 | `memory_mib` | 256-262144 |
 | `vcpus` | 1-64 |
@@ -176,6 +177,56 @@ that dataset when absent); the mirror is
 `<vm>-<disk>` (`/dev/md/<vm>-<disk>`). The portal of a remote leg is its own
 `portal`, else the portal of the export recorded on that host (`storage_exports`),
 else that host's registry `IP`.
+
+### Egress hosts: allowed per workload, never by the definition
+
+The lab egress proxy (`lab/egress-proxy.pl`) lets everyone reach its default
+list and nothing else. A host that one kind of workload needs, and that is
+not to be open to every machine, is allowed for that workload's address only
+(owner 2026-11-13 and 2026-11-17: Docker Hub's blob CDN
+`production.cloudfront.docker.com` for the docker and podman flavours, per
+workload, not on the default list).
+
+A definition declares what it needs, and the declaration grants nothing:
+
+```json
+{"name": "demo-pods-20261117", "project": "demo", "flavour": "podman-host",
+ "egress": ["production.cloudfront.docker.com"], "access": {...}, "vms": [...]}
+```
+
+| Field | Rule |
+| --- | --- |
+| `flavour` | optional, `^[a-z][a-z0-9-]{0,31}$`: the kind of workload (the skill's renderer sets it to the flavour's name) |
+| `egress` | optional, a list of at most 16 lower-case host names of two labels or more (no wildcard, no port, no address, no upper case); a repeat is dropped |
+
+`hps-workload egress [--project <P>] [--json]` lists the recorded workloads
+whose definition declares `egress`: name, project, flavour, state, the hosts
+and the addresses (the DHCP leases of their NICs, see "Finding workloads,
+images and addresses"). It reads and changes nothing. `--json` is
+`{"egress": [{name, project, flavour, state, egress, addresses}]}`.
+
+The proxy is on the dev host, not on the IPS, so the allowance is made there,
+from that output, by `lab/egress-allow`:
+
+```
+lab/egress-allow --out /srv/projects/hps/lab/egress-allow.list
+```
+
+It runs `scripts/lab-op hps-workload egress --json` (or reads `--input FILE`)
+and writes one `IP=host,host` line per workload address. It accepts a host only
+when `lab/egress-approved`, the owner's plain list (`<flavour> <host>` per line;
+it starts with the one CDN host for `podman-host` and `odoo-test`), has a line
+for that flavour and that host. Anything else is refused: the message names the
+workload, the host, the flavour and that file, the exit is 3, and the allowances
+that are approved are still written. A definition that declares a host the
+owner has not approved for its flavour therefore gets nothing, and a
+definition cannot add a line to the list. A workload with no address yet is
+noted and skipped; run the tool again once it has one.
+
+The proxy takes the file as `--allow-for-file FILE` and reads it at every
+connection, so an allowance follows a workload without a restart of the proxy:
+run `lab/egress-allow --out FILE` after a create, a destroy or a change of
+address. `--allow-for IP=hosts` on the command line still works and is added.
 
 ## Operations
 

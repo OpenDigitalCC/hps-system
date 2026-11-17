@@ -27,6 +27,7 @@ use HPS::Vxlan ();
 use HPS::Storage;
 use HPS::Metrics ();
 use HPS::Workload::List ();
+use HPS::Workload::Net ();
 
 my $NAME_RE  = qr/^[a-z][a-z0-9-]{0,31}\z/;
 my $IMAGE_RE = qr/^[a-z0-9][a-z0-9._-]{0,63}\z/;
@@ -41,7 +42,7 @@ my $KEY_RE   = qr/^ssh-[a-z0-9-]+ [A-Za-z0-9+\/=]+(?: \S.*)?\z|^(?:ecdsa-sha2-\S
 my $MAX_DISKS = 8;
 
 my %OPS = map { $_ => 1 } qw(create start stop destroy status grow-disk console suspend resume resume-paused);
-my %TOP = map { $_ => 1 } qw(name project access vms class);
+my %TOP = map { $_ => 1 } qw(name project access vms class flavour egress);
 # The workload's class (docs/WORKLOADS.md "Classes"): what
 # happens to it when its host must go down (hps-workload drain). Not the
 # per-VM priority, which is the start and stop order inside one workload.
@@ -329,7 +330,8 @@ sub validate ($def, %o) {
         _bad('workload', "vm name '$nv->{name}' is used twice") if $seen{ $nv->{name} }++;
         push @vms, $nv;
     }
-    return { name => "$def->{name}", project => "$def->{project}", access => $access, class => $class, vms => \@vms };
+    my %net = HPS::Workload::Net::validate_fields($def);
+    return { name => "$def->{name}", project => "$def->{project}", access => $access, class => $class, vms => \@vms, %net };
 }
 
 # class_of(\%record): the class a workload record carries. A record

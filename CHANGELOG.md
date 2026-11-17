@@ -54,7 +54,16 @@ capabilities and removals are called out explicitly.
   container host flavours). `docs/WORKLOADS.md` "The proxy reaches services as well
   as login shells" lists each file; the skill and its test live outside this
   repository, and `test_ips42_01_seed_proxy.bats` runs the skill's test.
-
+- **New** `flavour` and `egress` in a workload definition (checked strictly, kept by
+  `validate`), and `hps-workload egress [--project P] [--json]`: the workloads that
+  declare egress hosts with their flavour, state and addresses. Per-workload
+  allowances for the lab egress proxy follow from it: `lab/egress-allow` writes
+  `IP=hosts` lines for only the hosts the owner lists per flavour in
+  `lab/egress-approved` (anything else is refused, naming that file), and
+  `lab/egress-proxy.pl --allow-for-file FILE` reads the file at every connection.
+  `production.cloudfront.docker.com` leaves the proxy's default list and is allowed
+  for `podman-host` and `odoo-test` workloads that way. `docs/WORKLOADS.md` "Egress
+  hosts"; tests `t/284-workload-egress.t` and `test_ips42_02_egress_allow.bats`.
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 
 - **Changed** the guest abstraction `node-manager/apparmor/libvirt-qemu` allows read of
