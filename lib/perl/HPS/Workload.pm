@@ -1571,6 +1571,10 @@ sub _post ($self, $op, $def, $out, %a) {
             delete $r->{done};
             delete $r->{attempting};
         });
+        # A re-created VM has new MACs: a reservation made for the workload earlier
+        # (IPS-42 row 5) moves to them, so the address stays. A problem is a note.
+        push @{ $out->{notes} }, HPS::Workload::Net::note_for(sub { HPS::Workload::Net::reserve($self, $name) });
+        push @{ $out->{notes} }, HPS::Workload::Net::note_for(sub { HPS::Workload::Net::refresh($self) });
     }
     elsif ($op eq 'destroy') {
         my $old = $self->record($name) // {};
@@ -1594,6 +1598,12 @@ sub _post ($self, $op, $def, $out, %a) {
         if ($forget) {
             unlink $self->definition_path($name);
             $out->{forgotten} = 1;
+            # The reservations of its NICs go with it (IPS-42 row 5); without --forget
+            # they stay, so a create from the same definition keeps the address.
+            push @{ $out->{notes} }, HPS::Workload::Net::note_for(sub { HPS::Workload::Net::release($self, $name) });
+        }
+        else {
+            push @{ $out->{notes} }, HPS::Workload::Net::note_for(sub { HPS::Workload::Net::refresh($self) });
         }
     }
     elsif ($op eq 'status') {
@@ -1703,7 +1713,11 @@ sub _post_status ($self, $def, $out) {
     $out->{class} = class_of($rec);
     $out->{vms} = [ map { $vms{ $_->{name} } }
  grep { $vms{ $_->{name} } } @{ $def->{vms} } ];
-    HPS::Workload::List::annotate_status($self, $rec, $out->{vms});
+    # The first status of a workload whose NICs hold leases records the reservation
+    # of each (IPS-42 row 5): an existing workload keeps the address it has now.
+    my @rn = HPS::Workload::Net::note_for(sub { HPS::Workload::Net::reserve($self, $def->{name}) });
+    $out->{notes} = \@rn if @rn;
+    HPS::Workload::List::annotate_status($self, $rec, $out->{vms}, $def->{name});
     return;
 }
 

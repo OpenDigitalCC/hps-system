@@ -13,6 +13,13 @@ use HPS::Workload::Drain;
 use HPS::BootReady;
 use HPS::BootWatch;
 
+# The DHCP and DNS regeneration after a reservation changes (IPS-42 row 5): the
+# program hps-onboard forget uses, run as `<cmd> dns-dhcp`; the caller may
+# override it (HPS_WORKLOAD_DNS_CMD set to a path, or to the empty string for none).
+my $dns_hook = "$RealBin/../scripts/hps-forget-hook.sh";
+$ENV{HPS_WORKLOAD_DNS_CMD} = $dns_hook
+    if !defined $ENV{HPS_WORKLOAD_DNS_CMD} && -x $dns_hook;
+
 # 0 ok, 1 failed, 2 usage, 3 refused (definition, policy, node refusal), 4 not found;
 # drain and undrain also: 5 guests left (HPS::Workload::Drain::EXIT)
 my %EXIT = (
@@ -39,6 +46,7 @@ Usage:
   hps-workload show-definition <name>
   hps-workload list   [--project <P>] [--json]
   hps-workload set-class <name> <1-4> [--dry-run] [--json]
+  hps-workload reserve <name> [--dry-run] [--json]
   hps-workload drain   <host> [--include-nodes] [--dry-run] [--json]
   hps-workload undrain <host> [--dry-run] [--json]
   hps-workload images [--json]
@@ -95,6 +103,11 @@ are DHCP leases of the IPS's dnsmasq matched by the VM's MAC (status --json carr
 VM as addresses: [{net, mac, ip, source}], empty when none). images lists the catalogue
 hps-resources/images/*.qcow2 with size, sha256 and date; define refuses an image that is not
 in it.
+reserve records the DHCP reservation of each NIC of the workload's VMs that holds a lease and has none
+(by MAC, the address it has now), moves a reservation to the new MAC of a re-created VM, and
+regenerates the IPS's DHCP and DNS files; status does the same for the first time and shows it
+(address ... reserved). It touches no VM. destroy keeps the reservations (a create from the same
+definition keeps the address); destroy --forget releases them (docs/WORKLOADS.md "DHCP reservation").
 egress lists the workloads whose definition declares "egress" hosts, with each one's flavour, state and
 addresses (leases); it grants nothing: lab/egress-allow turns it into the egress proxy's per-address allowances,
 and only for the hosts lab/egress-approved lists for that flavour (docs/WORKLOADS.md "Egress hosts").
@@ -147,8 +160,11 @@ sub render_status {
             if ($v->{recorded_state} // '') eq 'suspended';
         $out .= "    seed: $v->{seed}\n" if defined $v->{seed};
         $out .= "    $v->{netboot_note}\n" if defined $v->{netboot_note};
-        $out .= "    address $_->{ip} ($_->{net}, $_->{mac}, $_->{source})\n" for @{ $v->{addresses} // [] };
+        $out .= "    address $_->{ip} ($_->{net}, $_->{mac}, $_->{source}"
+            . ($_->{reserved} ? ', reserved' : defined $_->{reserved_ip} ? ", reserved $_->{reserved_ip}" : '') . ")\n"
+            for @{ $v->{addresses} // [] };
     }
+    $out .= "  note: $_\n" for @{ $r->{notes} // [] };
     return $out;
 }
 
@@ -262,6 +278,21 @@ sub class_verb {
     return defined $rc ? $rc : fail_exit($@);
 }
 
+# reserve <name>: the DHCP reservations of a workload's NICs (HPS::Workload::Net).
+sub reserve_verb {
+    my ($name, $rest, %o) = @_;
+    return usage('reserve takes only --dry-run and --json') if @$rest || $o{other};
+    my $rc = eval {
+        my $wl = HPS::Workload->new;
+        $wl->definition_path($name);    # the name check
+        my $r = HPS::Workload::Net::reserve($wl, $name, dry_run => $o{dry_run});
+        if ($o{json}) { print JSON::PP->new->canonical->pretty->encode($r) }
+        else { print HPS::Workload::Net::render_reserve($r) }
+        return 0;
+    };
+    return defined $rc ? $rc : fail_exit($@);
+}
+
 # drain <host> and undrain <host> (HPS::Workload::Drain). The exit status is the
 # outcome's; a refusal goes to stderr (and, with --json, the result to stdout).
 sub drain_verb {
@@ -300,6 +331,7 @@ sub main {
         if $op eq 'drain' || $op eq 'undrain';
     return usage('--include-nodes is only for drain') if $nodes;
     return class_verb($name, \@argv, json => $json, dry_run => $dry, other => $other) if $op eq 'set-class';
+    return reserve_verb($name, \@argv, json => $json, dry_run => $dry, other => $other) if $op eq 'reserve';
     return definition_verb($op, $name, \@argv, json => $json, dry_run => $dry, replace => $replace,
         other => ($resume || $any || defined $vm || $forget))
         if $op eq 'define' || $op eq 'show-definition';

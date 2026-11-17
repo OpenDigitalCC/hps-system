@@ -40,11 +40,12 @@ $wl->run('create', 't0');
 $wl->run('start', 't0');
 my $r = $wl->run('status', 't0');
 my %v = map { $_->{vm} => $_ } @{ $r->{vms} };
-is_deeply($v{'t0-app'}{addresses}, [ { net => 'mgmt', mac => '52:54:00:00:00:01', ip => '10.0.0.11', source => 'dhcp-lease' } ], 'app: its lease');
-is_deeply($v{'t0-db'}{addresses}, [ { net => 'db', mac => '52:54:00:00:00:03', ip => '10.0.0.13', source => 'dhcp-lease' } ],
+is_deeply($v{'t0-app'}{addresses}, [ { net => 'mgmt', mac => '52:54:00:00:00:01', ip => '10.0.0.11', source => 'dhcp-lease', reserved => JSON::PP::true } ], 'app: its lease (the first status reserves it, IPS-42)');
+is_deeply($v{'t0-db'}{addresses}, [ { net => 'db', mac => '52:54:00:00:00:03', ip => '10.0.0.13', source => 'dhcp-lease', reserved => JSON::PP::true } ],
     'db: only the NIC with a lease, net from the NIC index');
 open($lf, '>', "$dir/leases") or die; close $lf;
 $r = $wl->run('status', 't0');
-is_deeply([ map { $_->{addresses} } @{ $r->{vms} } ], [ [], [] ], 'no leases: empty lists');
+is_deeply([ map { [ map { $_->{source} } @{ $_->{addresses} } ] } @{ $r->{vms} } ], [ ['reservation'], ['reservation'] ],
+    'no leases: only the reservations made at the first status remain, source reservation (IPS-42 row 5)');
 
 done_testing;

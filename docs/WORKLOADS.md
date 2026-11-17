@@ -178,6 +178,45 @@ that dataset when absent); the mirror is
 `portal`, else the portal of the export recorded on that host (`storage_exports`),
 else that host's registry `IP`.
 
+### DHCP reservation per NIC
+
+A project registers a VM's address with other things (an agent's pairing, a
+helper script, its own notes), and a lease can change after a long stop or an
+IPS rebuild. So a workload NIC on a network the IPS serves keeps its address:
+
+```
+hps-workload reserve <name> [--dry-run] [--json]
+```
+
+The NIC's current lease is reserved for its MAC when it is first recorded: an
+existing workload keeps the address it has now. That happens at the first
+`status` of a workload whose NIC holds a lease, or by `reserve` (it touches no
+VM and needs none to be running). The reservation is recorded with the
+workload, in the cluster key `workloadnet_<name>`, by VM and NIC index
+(`{nic, net, mac, ip, since}`), and `status` shows it: `address 10.100.1.162
+(prov, 52:54:00:..., dhcp-lease, reserved)`; `status --json` and `list --json`
+mark the address `"reserved": true`, give `"reserved_ip"` instead when the NIC
+still holds a different lease (the reservation takes effect at renewal), and
+show `"source": "reservation"` for a NIC with a reservation and no lease now
+(stopped, lease expired). An address that a registered host, the IPS or
+another workload holds is never reserved; `reserve` says so.
+
+- **A re-created VM keeps the address.** `destroy` keeps the reservation (and
+  the definition, as it always has); the next `create` has new MACs and the
+  reservation moves to them, so the VM comes up on the same address.
+- **`destroy --forget` releases it.** The workload and its reservations are
+  gone.
+- **The path is the registered hosts' own.** The reservation is published as
+  `services/workload_hosts` (rows `host <mac> <ip> <label> <dns|->`), and
+  `dns_regenerate` (`build_dhcp_addresses_file`, `build_dns_hosts_file`) writes
+  them to `dhcp_addresses` and `dns_hosts` beside the registered hosts, with the
+  same duplicate checks: a MAC, address or name a registered host holds is not
+  given again. `hps-workload` runs `scripts/hps-forget-hook.sh dns-dhcp` (the
+  program `hps-onboard forget` uses; `HPS_WORKLOAD_DNS_CMD` overrides it, empty
+  for none) whenever the published file changed, so dnsmasq re-reads its files
+  at once. NIC 0 is known by the VM's name, the others as `<vm>-nic<i>`. A
+  destroyed workload's name stops resolving; its reservation stays.
+
 ### Egress hosts: allowed per workload, never by the definition
 
 The lab egress proxy (`lab/egress-proxy.pl`) lets everyone reach its default

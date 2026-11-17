@@ -49,18 +49,46 @@ sub nics ($rv, $layout) {
     return map { +{ net => $net_of{ $bridge[$_] // '' } // $bridge[$_], mac => lc $mac[$_] } } 0 .. $#mac;
 }
 
-# addresses($rv, $layout, $leases): [{net, mac, ip, source => 'dhcp-lease'}] for
-# the NICs of the VM that hold a lease; empty when none. Never a guess.
-sub addresses ($rv, $layout, $leases) {
-    return [ map { +{ net => $_->{net}, mac => $_->{mac}, ip => $leases->{ $_->{mac} }{ip}, source => 'dhcp-lease' } }
-        grep { $leases->{ $_->{mac} } } nics($rv, $layout) ];
+# reserved($wl, $name): the DHCP reservations recorded with a workload (IPS-42,
+# HPS::Workload::Net): {vm => [{nic, net, mac, ip, since}]}; empty when none.
+sub reserved ($wl, $name) {
+    my $reg = $wl->{registry};
+    my $c = $wl->_cluster;
+    my $v = eval { $reg->cluster_exists($c, "workloadnet_$name") ? $reg->cluster_get_json($c, "workloadnet_$name") : undef };
+    return ref $v eq 'HASH' ? $v : {};
 }
 
-# annotate_status($wl, $rec, $vms): each status VM gets addresses.
-sub annotate_status ($wl, $rec, $vms) {
+# reserved_macs($wl, $name): {mac => ip} over all the workload's reservations.
+sub reserved_macs ($wl, $name) {
+    my $r = reserved($wl, $name);
+    return { map { ($_->{mac} => $_->{ip}) } map { @{ $r->{$_} } } keys %$r };
+}
+
+# addresses($rv, $layout, $leases, $resv): [{net, mac, ip, source}] for the NICs of
+# the VM that hold a lease (source 'dhcp-lease') or a reservation (source
+# 'reservation', no lease now); empty when none. Never a guess. $resv is
+# {mac => ip}; a NIC whose reservation is the address it holds gets reserved =>
+# true, one whose lease differs from its reservation gets reserved_ip (the
+# reservation takes effect when the lease is renewed).
+sub addresses ($rv, $layout, $leases, $resv = {}) {
+    my @out;
+    for my $n (nics($rv, $layout)) {
+        my $l = $leases->{ $n->{mac} };
+        my $r = $resv->{ $n->{mac} };
+        next unless $l || $r;
+        my %e = (net => $n->{net}, mac => $n->{mac}, ip => ($l ? $l->{ip} : $r), source => $l ? 'dhcp-lease' : 'reservation');
+        if ($r) { if ($l && $l->{ip} ne $r) { $e{reserved_ip} = $r } else { $e{reserved} = JSON::PP::true } }
+        push @out, \%e;
+    }
+    return \@out;
+}
+
+# annotate_status($wl, $rec, $vms, $name): each status VM gets addresses.
+sub annotate_status ($wl, $rec, $vms, $name = undef) {
     my $leases = leases(leases_file(), $wl->{now}->());
     my $layout = $wl->layout;
-    $_->{addresses} = addresses($rec->{vms}{ $_->{vm} } // {}, $layout, $leases) for @$vms;
+    my $resv = defined $name ? reserved_macs($wl, $name) : {};
+    $_->{addresses} = addresses($rec->{vms}{ $_->{vm} } // {}, $layout, $leases, $resv) for @$vms;
     return;
 }
 
@@ -90,10 +118,11 @@ sub list ($wl, %a) {
         my $project = _project($wl, $name);
         next if defined $a{project} && (!defined $project || $project ne $a{project});
         my $vms = $rec->{vms} // {};
+        my $resv = reserved_macs($wl, $name);
         my %host = map { defined $_->{host} ? ($_->{host} => 1) : () } values %$vms;
         my @addr;
         for my $vm (sort keys %$vms) {
-            push @addr, map { +{ vm => $vm, %$_ } } @{ addresses($vms->{$vm}, $layout, $leases) };
+            push @addr, map { +{ vm => $vm, %$_ } } @{ addresses($vms->{$vm}, $layout, $leases, $resv) };
         }
         push @out, { name => $name, project => $project, state => $rec->{state}, class => HPS::Workload::class_of($rec), hosts => [ sort keys %host ],
             vms => scalar(keys %$vms), addresses => \@addr, created_at => $rec->{created_at} };

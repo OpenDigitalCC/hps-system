@@ -182,6 +182,7 @@ A name in angle brackets is a pattern: `<n>` stands for a number, `<name>` for a
 | `power_devices` | `json` | HPS::BMC (hps-bmc device set) | Object of power devices (PDU, smart plug) keyed by name: addr and options (cmd template). Hosts using the external driver refer to one as outlet=<name>:<n>. Credentials are in the keysafe, never here. |
 | `workload_<name>` | `json` | HPS::Workload (create, start, stop, suspend, resume, set-class; removed by destroy) | Instance record of a workload: state, class (1 to 4; absent in a record made before the key existed, read as 3), VMs (state, started_at, stopped_at, macs, boot_watch: the boot-stalled watch's tries, last_try_at, expect, gave_up, stalled), disks, macs, define (the vm-define arguments of create), seed_sha256 (a VM with a guest seed: the seed create wrote), created_at, by. |
 | `workload_<name>_destroyed` | `json` | HPS::Workload destroy (removed by the next create) | Audit record of a destroyed workload: at (when), by (who). The definition file workloads/<name>.json is kept. |
+| `workloadnet_<name>` | `json` | HPS::Workload::Net (hps-workload reserve, status, create, destroy --forget) | DHCP reservations of a workload's NICs (IPS-42): an object by VM name, each a list of {nic (index), net, mac, ip, since}. Made from the NIC's lease when first recorded, moved to the new MAC when the VM is re-created, kept by a plain destroy, removed by destroy --forget. Published as services/workload_hosts for the dnsmasq generators. |
 
 ## Free-form writers
 

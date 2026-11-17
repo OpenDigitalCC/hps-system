@@ -265,6 +265,17 @@ Virtual-machine workloads. `<name>` is the workload, stored as
 : Lists every recorded workload: name, project, state, class, hosts,
   VM count, first address, creation time.
 
+`hps-workload reserve <name> [--dry-run] [--json]`
+: Records the DHCP reservation of each NIC of the workload's VMs that holds a
+  lease and has none, by MAC (`status` does it the first time too), moves a
+  reservation to the new MAC of a re-created VM, and regenerates the IPS's DHCP
+  and DNS files. No VM is touched. `destroy --forget` releases it.
+
+`hps-workload egress [--project <P>] [--json]`
+: Lists the workloads whose definition declares `egress` hosts, with flavour,
+  state and addresses. It grants nothing; `lab/egress-allow` makes the proxy's
+  per-address allowances from it, for the hosts the owner approves per flavour.
+
 `hps-workload set-class <name> <1-4> [--dry-run] [--json]`
 : Sets the workload's class in its definition and its record: 1 core,
   2 customer-facing, 3 ordinary (the default), 4 batch and test. A definition

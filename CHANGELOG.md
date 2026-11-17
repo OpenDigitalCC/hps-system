@@ -70,6 +70,16 @@ capabilities and removals are called out explicitly.
   container image streamed from ai-dev into the VM's docker or podman, with every argument
   checked by a strict pattern. `hps-ssh` is unchanged. `docs/WORKLOADS.md` "Running a
   script and copying an image"; `test_ips42_03_hps_vm.bats` runs the skill's `test-vm.sh`.
+- **New** a DHCP reservation per workload NIC, by MAC, made from the current lease when
+  first recorded (the first `status`, or `hps-workload reserve <name>`), so an existing
+  workload keeps its address. Recorded with the workload (cluster key
+  `workloadnet_<name>`), shown by `status` and `status --json` (`reserved`,
+  `reserved_ip`, source `reservation` for a NIC with no lease now) and `list --json`,
+  moved to the new MAC when the VM is re-created, released by `destroy --forget`. It is
+  written through the generators the registered hosts use (`dns_regenerate` reads the
+  published `services/workload_hosts`; same duplicate checks) and dnsmasq is told by the
+  `hps-forget-hook.sh dns-dhcp` hook. `docs/WORKLOADS.md` "DHCP reservation per NIC";
+  `t/285-workload-reservation.t`, `test_ips42_05_workload_hosts.bats`.
 
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 

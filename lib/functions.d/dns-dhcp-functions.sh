@@ -92,6 +92,29 @@ update_dns_dhcp_files() {
 }
 
 #===============================================================================
+# _workload_host_rows
+# -------------------
+# The workload NICs' reservations that hps-workload published (IPS-42): the rows
+# "host <mac> <ip> <label> <dns|->" of <services_dir>/workload_hosts, each checked
+# (MAC, address, label) and printed as "<mac:colons> <ip> <label> <dns|->". A
+# missing file is no rows; a row that does not check is dropped.
+#
+# Usage: _workload_host_rows <services_dir>
+#===============================================================================
+_workload_host_rows() {
+  local file="${1:-}/workload_hosts" kind mac ip label dns extra
+  [[ -r "$file" ]] || return 0
+  while read -r kind mac ip label dns extra; do
+    [[ "$kind" == host && -z "${extra:-}" ]] || continue
+    mac=$(format_mac_colons "$mac" 2> /dev/null) || continue
+    validate_ip_address "$ip" || continue
+    [[ "$label" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || continue
+    [[ "$dns" == dns || "$dns" == - ]] || continue
+    printf '%s %s %s %s\n' "$mac" "$ip" "$label" "$dns"
+  done < "$file"
+}
+
+#===============================================================================
 # build_dhcp_addresses_file
 # -------------------------
 # Build DHCP reservations file for dnsmasq from cluster host configurations.
@@ -176,6 +199,7 @@ build_dhcp_addresses_file() {
   # Arrays to track seen MACs and IPs for duplicate detection
   declare -A seen_macs
   declare -A seen_ips
+  declare -A seen_names
   
   # Process each host
   for mac in $hosts; do
@@ -239,10 +263,26 @@ build_dhcp_addresses_file() {
     
     # Track this IP (the MACs are tracked above)
     seen_ips[$ip]="$mac"
+    seen_names["${hostname%%.*}"]=1
     
     entry_count=$((entry_count + 1))
   done
   
+  # The reservations of workload NICs (IPS-42): the same file, the same checks.
+  # A MAC, address or name a registered host holds is not given again.
+  local w_mac w_ip w_label w_dns
+  while read -r w_mac w_ip w_label w_dns; do
+    if [[ ${seen_macs[$w_mac]+isset} || ${seen_ips[$w_ip]+isset} || ${seen_names[$w_label]+isset} ]]; then
+      hps_log warn "Skipping workload NIC $w_mac ($w_label, $w_ip): a MAC, address or name already assigned"
+      continue
+    fi
+    echo "${w_mac},${w_ip},${w_label}" >> "$dhcp_addresses_tmp"
+    seen_macs[$w_mac]="$w_label"
+    seen_ips[$w_ip]="$w_label"
+    seen_names[$w_label]=1
+    entry_count=$((entry_count + 1))
+  done < <(_workload_host_rows "$services_dir")
+
   # Move temp file to final location
   if ! mv "$dhcp_addresses_tmp" "$dhcp_addresses"; then
     hps_log error "Failed to write DHCP addresses file: $dhcp_addresses"
@@ -323,6 +363,7 @@ build_dns_hosts_file() {
   
   declare -A seen_names=()
   declare -A seen_ips=()
+  declare -A seen_macs=()
   
   if ! echo "$ips_ip ips.${dns_domain} ips ntp syslog dhcp dns" > "$tmp_file"; then
     hps_log error "Failed to write $tmp_file"
@@ -366,6 +407,12 @@ build_dns_hosts_file() {
     seen_names["$label"]=1
     seen_ips["$ip"]=1
     count=$((count + 1))
+    # The host's MACs, so a workload NIC with one of them is left out here as it is
+    # in dhcp_addresses (the two files must agree on what a workload NIC gets).
+    local hm hmf
+    for hm in $(host_macs_of "$mac"); do
+      hmf=$(format_mac_colons "$hm") && seen_macs["$hmf"]=1
+    done
     
     # Storage-network addresses recorded for this host
     for i in 0 1 2 3 4 5 6 7; do
@@ -384,6 +431,24 @@ build_dns_hosts_file() {
     done
   done
   
+  # Workload NICs that resolve (IPS-42): a name for each reservation of a
+  # workload that exists, under the same duplicate rules as the registry hosts.
+  local w_mac w_ip w_label w_dns
+  while read -r w_mac w_ip w_label w_dns; do
+    [[ "$w_dns" == dns ]] || continue
+    fqdn="${w_label}.${dns_domain}"
+    if [[ -n "${seen_macs[$w_mac]:-}" ]] || [[ -n "${seen_names[$fqdn]:-}" ]] || [[ -n "${seen_names[$w_label]:-}" ]] || [[ -n "${seen_ips[$w_ip]:-}" ]]; then
+      hps_log warn "dns_hosts: skipping workload NIC $w_mac: $fqdn / $w_ip repeats an earlier entry"
+      continue
+    fi
+    echo "$w_ip $fqdn $w_label" >> "$tmp_file"
+    seen_names["$fqdn"]=1
+    seen_names["$w_label"]=1
+    seen_ips["$w_ip"]=1
+    seen_macs["$w_mac"]=1
+    count=$((count + 1))
+  done < <(_workload_host_rows "$services_dir")
+
   if ! mv "$tmp_file" "$dns_hosts_file"; then
     hps_log error "Failed to write DNS hosts file: $dns_hosts_file"
     rm -f "$tmp_file"
