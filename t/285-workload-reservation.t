@@ -89,6 +89,18 @@ $again = HPS::Workload::Net::reserve($wl, 't0');
 is(scalar @{ $again->{changes} }, 0, 'an address of a registered host is refused');
 like(join("\n", @{ $again->{notes} }), qr/10\.0\.0\.15 is already held by registered host/, 'and said');
 
+# a VM that is a registered host keeps the registry's address: no reservation is published for its MAC
+# (the lab: a node onboarded from a workload VM that held a dynamic lease when the reservation was made)
+$f->{reg}->cluster_unset('lab', 'workloadnet_t0');
+$f->{reg}->cluster_set('lab', 'workloadnet_t0', { 't0-app' => [ { nic => 0, net => 'mgmt', mac => '52:54:00:00:00:79', ip => '10.0.0.40', since => 'x' } ],
+    't0-db' => [ { nic => 0, net => 'mgmt', mac => '52:54:00:00:00:78', ip => '10.0.0.41', since => 'x' } ] });
+$f->{reg}->host_set('525400000079', 'IP', '10.0.0.20');
+HPS::Workload::Net::publish($wl);
+open($fh, '<', $hosts) or die; $pub = do { local $/; <$fh> }; close $fh;
+unlike($pub, qr/52:54:00:00:00:79/, 'the MAC of a registered host is not in the published file');
+like($pub, qr/^host 52:54:00:00:00:78 10\.0\.0\.41 t0-db dns$/m, 'another VM of the workload is');
+$f->{reg}->cluster_unset('lab', 'workloadnet_t0');
+
 # another workload's reservation is never taken
 leases("2000000000 52:54:00:00:00:77 10.0.0.16 t0-app *\n");
 $f->{reg}->cluster_set('lab', 'workloadnet_other', { vm1 => [ { nic => 0, net => 'mgmt', mac => '52:54:00:aa:00:01', ip => '10.0.0.16', since => 'x' } ] });

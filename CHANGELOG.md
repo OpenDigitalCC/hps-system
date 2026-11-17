@@ -212,6 +212,7 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** a workload VM that is also a registered host (a nested node) no longer gets a DHCP reservation published for its MAC: the registry's address wins. A reservation recorded from the dynamic lease the VM held before it was assigned gave dnsmasq a second address for the MAC and the node was refused pairing ("request source address does not match the allocation": sch-003 on the full Alpine trial, 10.100.1.151 against 10.100.1.14).
 - **Fixed** init's lock (fd 9) was inherited by the services rc-service starts and held for as long as they live, so a refresh through `hps-refresh-watch` said "another init is running"; the adapter closes it for them.
 - **Fixed** `bundle-refresh` on Alpine: nsenter into the namespace of PID 1 is refused (CAP_SYS_CHROOT), so a service `hps-refresh-watch` in the init namespace runs the bootstrap on a request file the action makes.
 - **Fixed** zvols had no /dev/zvol links on Alpine (no udev): `zfs-udev`'s `zvol_id` with an mdev rule and hook.

@@ -230,6 +230,15 @@ sub publish ($wl) {
     my $file = _services_file($wl);
     my @lines;
     my (%mac, %ip, %label);
+    # A VM that is also a registered host (a nested node onboarded from a workload) has the address
+    # the registry gave it, in dhcp_addresses: a reservation recorded from the dynamic lease it held
+    # before it was assigned would give dnsmasq a second, different address for the MAC, and the node
+    # would be refused pairing ("request source address does not match the allocation").
+    my %is_host;
+    for my $h (eval { $wl->{registry}->host_list_all }) {
+        (my $m = lc $h) =~ s/[^0-9a-f]//g;
+        $is_host{$m} = 1 if eval { $wl->{registry}->host_exists($h, 'IP') };
+    }
     for my $name (reservation_names($wl)) {
         my $live = $wl->record($name) ? 1 : 0;
         my $r = HPS::Workload::List::reserved($wl, $name);
@@ -240,6 +249,8 @@ sub publish ($wl) {
         for my $vm (sort keys %$r) {
             for my $e (@{ $r->{$vm} }) {
                 my $label = nic_label($vm, $e->{nic});
+                (my $em = lc $e->{mac}) =~ s/[^0-9a-f]//g;
+                next if $is_host{$em};
                 next if $mac{ $e->{mac} }++ || $ip{ $e->{ip} }++ || $label{$label}++;
                 push @lines, "host $e->{mac} $e->{ip} $label " . ($live ? 'dns' : '-');
                 push @lines, "wild $label $e->{ip}" if $live && $e->{nic} == 0 && $pat{'*'};
