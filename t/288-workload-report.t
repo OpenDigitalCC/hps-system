@@ -291,4 +291,17 @@ my $healthy = sub {
     ok(!-d "$f->{base}/clusters/lab/jobs/new", 'no job was queued');
 }
 
+#--- (z) one node log line that answers the VM grep and the mirror grep is listed once
+{
+    package FakeLog;
+    sub new { return bless {}, shift }
+    sub host_log { return { lines => [ { epoch => 1_799_999_000, time => "2026-11-17T09:00:00Z", source => "kern", message => "guest t1-app-root leg failed" } ] } }
+    sub ips_log  { return { lines => [] } }
+    package main;
+    my $f = fixture();
+    my $r = reporter($f, FakeNodes->new(up => {}), log => FakeLog->new)->report("t1");
+    my @sys = grep { $_->{source} eq "syslog of tch-001" } @{ $r->{vms}[0]{last_errors} };
+    is(scalar @sys, 1, "a node log line matched by the VM and by the mirror name is listed once");
+}
+
 done_testing;

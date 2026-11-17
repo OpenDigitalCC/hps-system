@@ -329,7 +329,9 @@ sub _node_syslog ($self, $compute, $vm, $mirrors) {
         push @out, map { +{ epoch => $_->{epoch}, at => $_->{time}, source => "syslog of $compute->{name}", verb => NOT_RECORDED, step => NOT_RECORDED,
             line => $_->{message}, text => $_->{message} } } @{ $r->{lines} };
     }
-    return @out;
+    # a mirror name holds the VM name, so one line answers both greps: keep it once
+    my %seen;
+    return grep { !$seen{ "$_->{epoch}|$_->{line}" }++ } @out;
 }
 
 #--- the report ------------------------------------------------------------------------

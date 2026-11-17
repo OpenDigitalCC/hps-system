@@ -58,7 +58,7 @@ is($e && $e->kind, 'notfound', 'unknown --vm: not found');
         $w->run('start', 't0');
         my $x = err_of(sub { $w->plan('suspend', 't0') });
         is($x && $x->kind, 'refused', 'a host with no pool: refused');
-        like($x->message, qr/no storage pool of its own.*storage_pool/, 'with a fixable message');
+        like($x->message, qr/no storage pool of its own.*hps-storage <host> create <pool> --disk/, 'with a fixable message');
         $g->{reg}->host_set($StorageFixture::MAC, 'storage_pool', 'lab');
         ok(!err_of(sub { $w->plan('suspend', 't0') }), 'with a storage_pool identity it plans');
     }

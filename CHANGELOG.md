@@ -30,6 +30,12 @@ capabilities and removals are called out explicitly.
   extra leg fields (the report reads the leg specs and the storage host's `storage_exports`
   instead); no migration is written.
 
+## Report and suspend wording (2026-11-17)
+
+- **Fixed** `hps-workload report` listing one node syslog line twice when it matched both the VM name and
+  its mirror name; and the `suspend` refusal for a compute host with no pool naming a verb that does not
+  exist (`hps-storage pool-create`): it now names `hps-storage <host> create <pool> --disk <by-id>`.
+
 ## A new host is not given an address another MAC still leases (2026-11-17)
 
 - **Fixed** pairing refused ("request source address does not match the allocation") for a host that

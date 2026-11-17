@@ -1086,7 +1086,7 @@ sub _refuse_suspended ($rec, $vname, $op) {
 # with its mountpoint set: a pool is made with mountpoint=none).
 sub _state_file ($self, $in, $op) {
     _fail('refused', "$op: the compute host $in->{host} of VM $in->{name} has no storage pool of its own, so there is nowhere to keep the "
-        . 'saved memory. Give the host a pool (its storage_pool identity, hps-storage pool-create) or put a local disk leg of the VM on it, then run it again')
+        . 'saved memory. Give the host a pool (hps-storage <host> create <pool> --disk <by-id>) or put a local disk leg of the VM on it, then run it again')
         unless $in->{has_pool};
     return "/$in->{pool}/enc/state/$in->{name}.save";
 }
