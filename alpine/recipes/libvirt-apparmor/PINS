@@ -30,25 +30,24 @@ alpine_mirror=https://dl-cdn.alpinelinux.org/alpine
 alpine_release=3.24
 # the minirootfs of that release (record mode reads the name and sha256 from the mirror's
 # latest-releases.yaml and from the file itself)
-minirootfs_file=RECORD-ME
-minirootfs_sha256=RECORD-ME
+minirootfs_file=alpine-minirootfs-3.24.4-x86_64.tar.gz
+minirootfs_sha256=cdaa38cb8de3537967ee5b6c9b6cd00cc962da2b018e6eea48696bb274923012
 
 aports_raw=https://gitlab.alpinelinux.org/alpine/aports/-/raw
 aports_api=https://gitlab.alpinelinux.org/api/v4/projects/alpine%2Faports/repository/commits
 # the branch record mode resolves to a commit; never used to fetch the files of a real build
 aports_ref=3.24-stable
-aports_commit=RECORD-ME
+aports_commit=ef3daca558b17ac1a3f8c19b8b8f8536227effd9
 aports_dir=community/libvirt
 
-# The APKBUILD below is the copy the step 5 fetch read from 3.24-stable on 2026-11-17 (libvirt
-# 12.3.0-r0), the one APKBUILD.patch was written against. Its sha256 is computed from that
-# copy; the first run confirms it at the commit that gets pinned. The other files are the
-# source= and install= files of that APKBUILD; their sha256 is not known yet.
+# Recorded 2026-11-17 from a record-mode run on the builder (PIN-OBSERVED lines of job 20261117T092041Z), the minirootfs
+# name and sha256 also checked against Alpine's latest-releases.yaml by the owner. The aports commit is the tip of
+# 3.24-stable that day; its APKBUILD is byte for byte the copy APKBUILD.patch was written against.
 file APKBUILD 5331a9465afd6f39850cef453a882fe818b56c41c6406c5672bd84117564ce56
-file libvirt.confd RECORD-ME
-file libvirt.initd RECORD-ME
-file libvirt-guests.confd RECORD-ME
-file libvirt-guests.initd RECORD-ME
-file virtlogd.initd RECORD-ME
-file virtlockd.initd RECORD-ME
-file libvirt.post-install RECORD-ME
+file libvirt.confd 4e83dec01819c41648777a25e14b29a20bcea8f2e408d054842de11e9650f03e
+file libvirt.initd 4569fb9a1e76b59611903350ff03d7864e756e1f4c744734e963c404f369005d
+file libvirt-guests.confd d5f85bb8c1d2010347f23badc422e98046b97a0066254739b5829fce07837d63
+file libvirt-guests.initd 482adfaecb3d7f515744dc8123bf147699e1f9d120b7bb7520d5b669b3d15c51
+file virtlogd.initd 5c43dc08f0e2f553fe8cf5730b925cf93489f4e66266a9b4fc3c61ff8f9a3b69
+file virtlockd.initd 44711cab89b6e55fdaa2e7196c0027ab1f884a57d4c29a6ad5ac82d062cf13ce
+file libvirt.post-install a4befd9a8aea75891c1727b5e343f7d7514bad4739f12e6a4aac883ab0426a65

@@ -91,6 +91,7 @@ case "$cmd" in
     lib="usr/lib/libvirt.so.12.3.0=ELF....../usr/lib/libvirt/virt-aa-helper......"
     [[ "$sc" == *" nodriver "* ]] && lib="usr/lib/libvirt.so.12.3.0=ELF...virCommandSetAppArmorProfile..."
     extra=()
+    if [[ "$sc" == *" big "* ]]; then for i in $(seq 1 3000); do extra+=("usr/share/doc/libvirt/a-fairly-long-directory-name-to-fill-the-listing-quickly/another-long-component-for-the-same-purpose/f$i=x"); done; fi
     [[ "$sc" == *" forbid "* ]] && extra=("etc/apparmor.d/usr.sbin.libvirtd=profile")
     od="libvirt-daemon=$V openrc"
     [[ "$sc" == *" baddep "* ]] && od="libvirt-daemon=12.3.0-r5 openrc"
@@ -205,6 +206,13 @@ pins() { echo "$TEST_DIR/srctree/alpine/recipes/libvirt-apparmor/PINS"; }
   [ "$(find "$OUTP" -type f | wc -l)" -eq 10 ]
 }
 
+@test "run: the helper is found in a package with a long listing (grep -q would end early and pipefail would report it missing)" {
+  scenario big
+  job
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verified: usr/lib/libvirt/virt-aa-helper in libvirt-daemon;"* ]]
+}
+
 @test "run: the meta package depends on exactly the built subpackages at their built version-release, none written down" {
   job
   [ "$status" -eq 0 ]
@@ -263,6 +271,7 @@ SHIM
   grep -q "^mount -t proc proc $CH/proc$" "$SHIM_LOG"
   grep -q "^mount -t tmpfs -o mode=0755,size=16m tmpfs $CH/dev$" "$SHIM_LOG"
   [ "$(grep -c '^mknod -m 0666 ' "$SHIM_LOG")" -eq 6 ]
+  grep -q "^mount -t tmpfs -o mode=1777,size=1g tmpfs $CH/dev/shm$" "$SHIM_LOG"
   # no bind of the host's /dev, /sys or anything else into the chroot
   run ! grep -qE '^mount .*(--bind|--rbind| bind)' "$SHIM_LOG"
 }

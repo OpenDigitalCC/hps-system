@@ -594,8 +594,8 @@ builder's Alpine chroot (`builder-apk-build`, `docs/BUILDER.md` "Local packages:
 off, so `node-manager/apparmor/` stays the one source), release `-r100`. Its apks keep Alpine's names; `libvirt-apparmor` is the
 meta package that depends on exactly the rebuilt set, which `hps-starter sync alpine` serves from the local repository in the
 place of the stock packages of the same names (`docs/STARTER.md` "Alpine"). **Unverified until a real build:** the set's
-contents, that `abuild` runs as described in the chroot, and the first node that installs it; the pins are not recorded yet
-(`alpine/recipes/libvirt-apparmor/PINS`).
+contents, that `abuild` runs as described in the chroot, and the first node that installs it; the pins were recorded on 2026-11-17
+(`alpine/recipes/libvirt-apparmor/PINS`, aports commit ef3daca558b1).
 
 ## Not in this step
 

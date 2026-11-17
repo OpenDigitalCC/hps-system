@@ -383,6 +383,9 @@ mount_chroot() {
     run mknod -m 0666 "$CH/dev/$1" c "$2" "$3"
   done
   run ln -sfn /proc/self/fd "$CH/dev/fd"
+  # POSIX shared memory (python's semaphores, which meson and docutils may use)
+  run mkdir -p -- "$CH/dev/shm"
+  run mount -t tmpfs -o mode=1777,size=1g tmpfs "$CH/dev/shm"
 }
 
 stage_chroot() {
@@ -405,7 +408,8 @@ pkginfo() {
 
 # apk_has_member <apk> <member>
 apk_has_member() {
-  tar -tzf "$1" 2> /dev/null | grep -qxF -- "$2"
+  # no grep -q: it would end early, tar would die of SIGPIPE and pipefail would say "not found"
+  tar -tzf "$1" 2> /dev/null | grep -xF -- "$2" > /dev/null
 }
 
 # select_set: SEL_NAME[] SEL_FILE[] SEL_VER, from what abuild made.
