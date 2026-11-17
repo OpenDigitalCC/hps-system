@@ -298,7 +298,9 @@ role_storage() {
 # images' nix module reads too) with the store paths of this node's packages put
 # in place of its @@NAME@@ markers.
 role_aa_fill() {
-  sed -e "s|@@LIBVIRT@@|$AA_LIBVIRT|g" -e "s|@@QEMU@@|$AA_QEMU|g" -e "s|@@APPARMOR_PARSER@@|$AA_PARSER|g" "$HERE/apparmor/$1"
+  local -a extra=()
+  mapfile -t extra < <(aa_sed_args)
+  sed -e "s|@@LIBVIRT@@|$AA_LIBVIRT|g" -e "s|@@QEMU@@|$AA_QEMU|g" -e "s|@@APPARMOR_PARSER@@|$AA_PARSER|g" "${extra[@]}" "$HERE/apparmor/$1"
 }
 
 # role_apparmor: AppArmor for the guests, as the pinned images have it
@@ -311,20 +313,17 @@ role_aa_fill() {
 role_apparmor() {
   local enabled="${HPS_AA_ENABLED:-/sys/module/apparmor/parameters/enabled}"
   local profiles="${HPS_AA_PROFILES:-/sys/kernel/security/apparmor/profiles}"
-  local parser f
+  local f
   role_need apparmor_parser || return 1
+  # a libvirt without the AppArmor driver (the adapter says) is no libvirt for this node
+  aa_libvirt_check || return 1
   if [[ "$(cat "$enabled" 2> /dev/null || true)" != Y || ! -r "$profiles" ]]; then
     log "ERROR: AppArmor is not active in this kernel ($enabled is not Y, or $profiles is not there)."
     log "ERROR: the kernel line needs lsm=...,apparmor,... apparmor=1 (the IPS issues it; a node booted before that needs a reboot)."
     log "ERROR: libvirtd is NOT started: guests would run with the DAC model alone, and the pinned images never do."
     return 1
   fi
-  parser="$(readlink -f "$(role_bin apparmor_parser)")"
-  AA_PARSER="${parser%/bin/*}"
-  AA_LIBVIRT="$(readlink -f "$(role_bin libvirtd)")"
-  AA_LIBVIRT="${AA_LIBVIRT%/sbin/*}"
-  AA_QEMU="$(readlink -f "$(role_bin qemu-system-x86_64)")"
-  AA_QEMU="${AA_QEMU%/bin/*}"
+  aa_roots
   [[ -d "$PKG_ETC/apparmor.d/abstractions" ]] || { log "$PKG_ETC/apparmor.d/abstractions is not there (the package apparmor-profiles)"; return 1; }
 
   run install -d -m 0755 "${HPS_ROOT}/etc/apparmor.d/abstractions" "${HPS_ROOT}/etc/apparmor.d/hps" \
@@ -344,17 +343,18 @@ EOF
   role_aa_fill libvirtd | write_if_changed "${HPS_ROOT}/etc/apparmor.d/hps/libvirtd" 0644
   role_aa_fill virt-aa-helper | write_if_changed "${HPS_ROOT}/etc/apparmor.d/hps/virt-aa-helper" 0644
   # virt-aa-helper runs the parser by this absolute path (libvirt's compiled-in name)
-  run ln -sfn "$AA_PARSER/bin/apparmor_parser" "${HPS_ROOT}/sbin/apparmor_parser"
+  # (on an OS where it is that file already, there is nothing to link)
+  [[ "$(aa_parser_path)" -ef "${HPS_ROOT}/sbin/apparmor_parser" ]] || run ln -sfn "$(aa_parser_path)" "${HPS_ROOT}/sbin/apparmor_parser"
 
   for f in libvirtd virt-aa-helper; do
-    run "$AA_PARSER/bin/apparmor_parser" -r -K "${HPS_ROOT}/etc/apparmor.d/hps/$f" || {
+    run "$(aa_parser_path)" -r -K "${HPS_ROOT}/etc/apparmor.d/hps/$f" || {
       log "ERROR: apparmor_parser could not load the $f profile"
       return 1
     }
   done
   # the daemon's profile is what libvirt's probe looks for; without it the driver is unusable
-  if ! grep -qF "$AA_LIBVIRT/sbin/.libvirtd-wrapped (enforce)" "$profiles"; then
-    log "ERROR: the libvirtd profile ($AA_LIBVIRT/sbin/.libvirtd-wrapped) is not in $profiles after loading"
+  if ! grep -qF "$(aa_libvirtd_path) (enforce)" "$profiles"; then
+    log "ERROR: the libvirtd profile ($(aa_libvirtd_path)) is not in $profiles after loading"
     return 1
   fi
   log "AppArmor active; libvirtd and virt-aa-helper profiles loaded (enforce)"
@@ -364,14 +364,10 @@ role_compute() {
   local libvirtd qemu_bin edk2 f
   role_need virsh libvirtd virtlogd qemu-img qemu-system-x86_64 iscsiadm iscsid mdadm tcpdump jq
   libvirtd="$(role_bin libvirtd)"
-  # Confinement first: when it is not there the step stops here, before anything
+  # AppArmor first: when it is not active the step stops here, before anything
   # that starts a guest (libvirtd, the mirror monitor) is started
   role_stock_services
-  if [[ "$GUEST_CONFINEMENT" == apparmor ]]; then
-    role_apparmor
-  else
-    role_unconfined
-  fi
+  role_apparmor
   role_modules vhost_net 8021q bridge raid1 iscsi_tcp
   # KVM: the module of the CPU's vendor (the one that is not there always fails)
   if grep -q '^vendor_id[[:space:]]*:[[:space:]]*GenuineIntel' "${HPS_CPUINFO:-/proc/cpuinfo}"; then
@@ -388,8 +384,7 @@ role_compute() {
   run install -d -m 0755 "${HPS_ROOT}$LIBVIRT_CONF_DIR" "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu"
   # the guests' logs (vm-define sends the serial console to /var/log/libvirt/qemu/<vm>-serial.log)
   run install -d -m 0755 "${HPS_ROOT}/var/log/libvirt/qemu"
-  {
-    cat << 'EOF'
+  write_if_changed "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu.conf" 0644 << 'EOF'
 # written by the HPS node bundle (docs/BUNDLE.md); the settings of nix/modules/profiles/compute.nix
 user = "qemu-libvirtd"
 group = "qemu-libvirtd"
@@ -401,10 +396,8 @@ allow_disk_format_probing = 0
 security_default_confined = 1
 security_require_confined = 0
 set_process_name = 1
+security_driver = "apparmor"
 EOF
-    # the security driver: apparmor where libvirt has it; an OS whose libvirt has none names nothing
-    [[ -z "$QEMU_SECURITY_LINE" ]] || printf '%s\n' "$QEMU_SECURITY_LINE"
-  } | write_if_changed "${HPS_ROOT}$LIBVIRT_CONF_DIR/qemu.conf" 0644
 
   # The UEFI firmware the guest definitions name (vm-define: HPS_OVMF_CODE, HPS_OVMF_VARS):
   # the files QEMU ships, linked where the pinned images have them.
@@ -453,23 +446,6 @@ role_stock_services() {
   for s in ${ENSURE_SERVICES:-}; do svc_ensure "$s"; done
 }
 
-# role_unconfined: the guests of this node are not confined. Alpine's libvirt is built
-# without the AppArmor driver (docs/BUNDLE.md "Alpine: guest confinement"), so there is
-# no confinement to load, and the pinned images never run a guest with the DAC model
-# alone. So the step refuses, loudly, unless the installation accepted it: the cluster
-# key allow_unconfined_guests=true puts hps.unconfined=ack on the kernel line
-# (alpine-boot-functions.sh), and then libvirtd starts with the acknowledgement on the
-# console and in the IPS log, and /run/hps/unconfined says so. Never silent.
-role_unconfined() {
-  if ! guest_confinement_ack; then
-    log "ERROR: guests on this node would run UNCONFINED: this OS's libvirt has no AppArmor driver, and the installation has not accepted that."
-    log "ERROR: libvirtd is NOT started. To accept it, set the cluster key allow_unconfined_guests=true on the IPS (hps-cluster-config set allow_unconfined_guests true) and boot the node again."
-    return 1
-  fi
-  log "WARNING: guests on this node run UNCONFINED (no AppArmor driver in this OS's libvirt); accepted by the installation (hps.unconfined=ack)"
-  ips_log "warning: guests on this node run UNCONFINED (accepted: allow_unconfined_guests=true)"
-  printf 'guests are not confined: libvirt of this OS has no AppArmor driver; accepted by the installation (hps.unconfined=ack)\n' > "$HPS_RUN_DIR/unconfined"
-}
 
 #-------------------------------------------------------------------------------
 # the two entry points

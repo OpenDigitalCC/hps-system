@@ -547,26 +547,30 @@ Differences a person should know, all in the adapter or the packages:
 - **ZFS hostid:** `hps.zfs_hostid=` on the kernel line, written with `zgenhostid` before the module loads.
 - **dbus** is started and **configfs** mounted before targetcli and libvirt.
 
-**Guest confinement: not supported.** The stock Alpine kernel has AppArmor built in
-(`CONFIG_SECURITY_APPARMOR=y`, but `CONFIG_LSM` leaves it out, so `lsm=` and `apparmor=1` would be
-needed) and Alpine packages the AppArmor userland (`apparmor`, `apparmor-profiles`, 4.1.7). Alpine's
-**libvirt 12.3.0 is built without the AppArmor driver**: `libvirt-daemon`, `libvirt-common-drivers`
-and `libvirt-qemu` hold no `virt-aa-helper`, and `libvirt.so` and the QEMU driver have no AppArmor
-security driver (only the generic `virCommandSetAppArmorProfile` symbol). Confinement per guest
-therefore cannot be loaded, and the item stops here. The compute role does not fall back quietly:
-`role_unconfined` refuses (`libvirtd` is not started, the step "compute services" fails, `init` ends
-1 and says why) unless the installation accepted it with the cluster key `allow_unconfined_guests`
-set to `true` (`hps-cluster-config set allow_unconfined_guests true`). The IPS then puts
-`hps.unconfined=ack` on the kernel line, the node starts `libvirtd` with a console warning, an IPS
-log line and `/run/hps/unconfined`, and `qemu.conf` names no security driver. Ways to close it, for
-the owner: a libvirt built with the driver (a local package, plan step 5), or one AppArmor profile on
-the QEMU binary path that does not need libvirt's driver.
+**Guest confinement: AppArmor, as on NixOS, with a libvirt that has the driver.** The stock Alpine
+kernel has AppArmor built in (`CONFIG_SECURITY_APPARMOR=y`) but its built-in `CONFIG_LSM` leaves it
+out, so the kernel line carries `lsm=landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor
+apparmor=1` (`alpine_starter_lsm_args`). Alpine packages the userland (`apparmor`,
+`apparmor-profiles` 4.1.7, the parser and the abstractions). Alpine's own **libvirt 12.3.0 is built
+without the AppArmor driver**: `libvirt-daemon`, `libvirt-common-drivers` and `libvirt-qemu` hold no
+`virt-aa-helper`, and `libvirt.so` and the QEMU driver have no AppArmor security driver (only the
+generic `virCommandSetAppArmorProfile` symbol). So the compute role needs the local package
+`libvirt-apparmor`, the AppArmor build of libvirt (plan step 5; it is on the local-package list and so
+in `missing_local` until it is added; Alpine's own `libvirt-daemon` is not in the repository, so a
+compute role cannot be installed from it by accident). `role_apparmor` is the NixOS one: the profile
+texts of `node-manager/apparmor/` with the markers filled from the node's packages (the adapter's
+`aa_roots`, `aa_sed_args`: all under `/usr`, the daemon's profile for `/usr/sbin/libvirtd` and not the
+nix wrapper's name), the parser from the `apparmor` package, the profiles loaded before `libvirtd`
+starts, `security_driver = "apparmor"` in `qemu.conf`. It refuses, with no fall back, when the libvirt
+has no `libexec/virt-aa-helper` (the message names `libvirt-apparmor`) or when the kernel's AppArmor
+is not active: `libvirtd` is not started, the step "compute services" fails and `init` ends 1. There
+is no setting that accepts an unconfined guest.
 
 **Local packages not yet built.** The Alpine builds of `ctrl-exec-agent` (the Perl tree and the C
-executor), `om3`, `nagios-check` and `hps-nagios-plugins` are plan step 5. The NixOS builds in the lab's
-cache are glibc binaries with `/nix/store` interpreters and do not run on Alpine; `om3`'s `om` and the
-executor must be built for musl (or statically). Until they are added (`hps-starter add-local alpine`)
-an Alpine node cannot pair.
+executor), `om3`, `nagios-check`, `hps-nagios-plugins` and `libvirt-apparmor` come from the builder
+(plan step 5). The NixOS builds in the lab's cache are glibc binaries with `/nix/store` interpreters and
+do not run on Alpine; `om` and the executor must be built for musl (or statically). Until they are
+added (`hps-starter add-local alpine`) an Alpine node cannot pair.
 
 ## Not in this step
 

@@ -37,8 +37,6 @@
 #   PKG_LINE_RE    the shape of a line of the IPS's package list
 #   ADAPTER_PATH_EXTRA  a directory added to the agent's script_path (the compatibility
 #                  programs of an OS without systemd), or empty
-#   GUEST_CONFINEMENT   apparmor | none (role_apparmor, role_unconfined)
-#   QEMU_SECURITY_LINE  the security_driver line of qemu.conf, or empty
 #   ENSURE_SERVICES, MOUNT_CONFIGFS  stock services a role needs started, and whether
 #                  configfs must be mounted for targetcli (OpenRC): empty on NixOS
 #
@@ -64,8 +62,6 @@ adapter_init() {
   LIBVIRT_CONF_DIR=/var/lib/libvirt
   PKG_LINE_RE='^/nix/store/'
   ADAPTER_PATH_EXTRA=""
-  GUEST_CONFINEMENT=apparmor
-  QEMU_SECURITY_LINE='security_driver = "apparmor"'
   ENSURE_SERVICES=""
   MOUNT_CONFIGFS=""
   return 0
@@ -242,6 +238,24 @@ svc_mask() {
   done
   run systemctl daemon-reload
 }
+
+# AppArmor (role_apparmor): the directories the profile texts' markers stand for (a store
+# path each), the parser, the libvirtd profile's name, extra sed expressions for the texts
+# (none: the texts are written for this layout), and a check of libvirt (none: it is built
+# with the driver).
+aa_roots() {
+  local p
+  p="$(readlink -f "$(role_bin apparmor_parser)")"
+  AA_PARSER="${p%/bin/*}"
+  AA_LIBVIRT="$(readlink -f "$(role_bin libvirtd)")"
+  AA_LIBVIRT="${AA_LIBVIRT%/sbin/*}"
+  AA_QEMU="$(readlink -f "$(role_bin qemu-system-x86_64)")"
+  AA_QEMU="${AA_QEMU%/bin/*}"
+}
+aa_parser_path() { printf '%s\n' "$AA_PARSER/bin/apparmor_parser"; }
+aa_libvirtd_path() { printf '%s\n' "$AA_LIBVIRT/sbin/.libvirtd-wrapped"; }
+aa_sed_args() { return 0; }
+aa_libvirt_check() { return 0; }
 
 # user_unlock, sudo_grant: nothing to do here (the wheel group has sudo; sshd takes the
 # account as useradd made it)

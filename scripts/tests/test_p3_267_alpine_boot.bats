@@ -33,7 +33,7 @@ teardown() {
 @test "alpine starter boot lines: the kernel and initramfs of the matched set, the stock arguments, the IPS repository, the apkovl, the hps arguments" {
   run alpine_starter_boot_lines "$MAC" 3.24
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == "kernel http://10.0.0.1/starter/alpine/3.24/vmlinuz-lts initrd=initramfs-lts ip=dhcp modloop=none console=ttyS0,115200 alpine_repo=http://10.0.0.1/packages/alpine/3.24/main,http://10.0.0.1/packages/alpine/3.24/community apkovl=http://10.0.0.1/cgi-bin/boot_manager.sh?cmd=node_apkovl/node.apkovl.tar.gz hps.ips=10.0.0.1 hps.mac=$MAC hps.os=x86_64:alpine:3.24 hps.profile=STARTER"* ]]
+  [[ "${lines[0]}" == "kernel http://10.0.0.1/starter/alpine/3.24/vmlinuz-lts initrd=initramfs-lts ip=dhcp modloop=none lsm=landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor apparmor=1 console=ttyS0,115200 alpine_repo=http://10.0.0.1/packages/alpine/3.24/main,http://10.0.0.1/packages/alpine/3.24/community apkovl=http://10.0.0.1/cgi-bin/boot_manager.sh?cmd=node_apkovl/node.apkovl.tar.gz hps.ips=10.0.0.1 hps.mac=$MAC hps.os=x86_64:alpine:3.24 hps.profile=STARTER"* ]]
   [ "${lines[1]}" = "initrd http://10.0.0.1/starter/alpine/3.24/initramfs-lts" ]
   [ "${lines[2]}" = "boot" ]
   [ "${#lines[@]}" -eq 3 ]
@@ -51,19 +51,13 @@ teardown() {
   [ "${name##*.}" = gz ]
 }
 
-@test "alpine starter boot lines: the ZFS hostid, the DNS domain and the unconfined acknowledgement when the installation has them" {
+@test "alpine starter boot lines: the ZFS hostid and the DNS domain when the installation has them" {
   source "$ROOT/lib/functions.d/network-functions.sh"
   printf 'lab.test' > "$TEST_DIR/cluster/network_dns_domain"
   run alpine_starter_boot_lines "$MAC" 3.24
   [[ "${lines[0]}" == *" hps.zfs_hostid="* ]]
   [[ "${lines[0]}" == *" hps.domain=lab.test"* ]]
-  [[ "${lines[0]}" != *"hps.unconfined"* ]]
-  printf 'true' > "$TEST_DIR/cluster/allow_unconfined_guests"
-  run alpine_starter_boot_lines "$MAC" 3.24
-  [[ "${lines[0]}" == *" hps.unconfined=ack"* ]]
-  printf 'false' > "$TEST_DIR/cluster/allow_unconfined_guests"
-  run alpine_starter_boot_lines "$MAC" 3.24
-  [[ "${lines[0]}" != *"hps.unconfined"* ]]
+
 }
 
 @test "alpine starter boot lines: no starter, no repository, no IPS address, a bad release: refused with a log line" {
@@ -169,4 +163,13 @@ roles_fixture() {
   for n in $(sed 's/#.*//' "$ROOT/lib/starter/alpine.roles" | awk -F: 'NF > 1 {print $2}' | tr ' ' '\n' | sort -u); do
     printf '%s\n' "$names" | grep -qx "$n" || { echo "role names $n, which alpine.packages lacks"; return 1; }
   done
+}
+
+@test "alpine_starter_lsm_args: the stock kernel's list with apparmor added, apparmor=1, no second copy" {
+  run alpine_starter_lsm_args "ip=dhcp modloop=none"
+  [ "$output" = "ip=dhcp modloop=none lsm=landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor apparmor=1" ]
+  run alpine_starter_lsm_args "a lsm=yama,integrity b apparmor=0"
+  [ "$output" = "a lsm=yama,integrity,apparmor b apparmor=1" ]
+  run alpine_starter_lsm_args "a lsm=yama,apparmor"
+  [ "$output" = "a lsm=yama,apparmor apparmor=1" ]
 }

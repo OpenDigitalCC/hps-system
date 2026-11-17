@@ -427,7 +427,6 @@ keys may be empty.
 | `repo_host` | operator | The host that holds the site repository, its registry HOSTNAME or MAC (empty: none, `hps-repo` refuses; `docs/REPOSITORY.md`) | `regex:[A-Za-z0-9][A-Za-z0-9.:-]{0,62}` | (empty) | no |
 | `repo_nix_pubkey` | operator | The site repository's Nix cache public key, `<name>:<base64>` (`hps-repo status` stores it when empty) | `regex:[A-Za-z0-9][A-Za-z0-9._-]{0,63}:[A-Za-z0-9+/]{43}=` | (empty) | no |
 | `repo_upstream` | operator | Whether repo build may also substitute from upstream caches through `egress_proxy` (false: the repository alone) | `bool` | `false` | no |
-| `allow_unconfined_guests` | resources | Accept guests that run unconfined on Alpine nodes, whose libvirt has no AppArmor driver (false: their compute role refuses to start libvirtd; `docs/BUNDLE.md` "Alpine") | `bool` | `false` | no |
 | `host_reserve_cpus` | resources | Logical CPUs every node keeps from its guests for itself (0-1024; 0 = none; empty: 1, or 2 on a host with 16 or more) | `int0:1..1024` | (empty) | no |
 | `host_reserve_mem_mib` | resources | MiB of RAM every node keeps from its guests for itself (256-16777216; empty: 10% of RAM, at least 2048) | `int:256..16777216` | (empty) | no |
 | `zfs_arc_max_pct` | resources | ZFS ARC cap on storage nodes, percent of RAM, at least 1024 MiB (1-90) | `int:1..90` | `25` | no |

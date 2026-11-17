@@ -83,16 +83,14 @@ starter nodes behave as before; the only changes to files they use are small que
   unsigned index.
 - **New** the boot: `alpine_starter_boot_lines`, the stock `apkovl=` hook (`cmd=node_apkovl`,
   `node-manager/apkovl-alpine/`), `node_role_packages` for Alpine (names, local ones marked),
-  the cluster key `allow_unconfined_guests`.
 - **New** `node-manager/bundle/adapter/alpine.sh`: apk, OpenRC services, a systemctl and a udevadm
   for the node scripts, setpriv for the agent, syslog forwarding, the ZFS hostid, sudo.
 - **Changed** `init` and `role` ask the adapter (`pkg_kind`, `user_unlock`, `log_forward`, ...) where
   they named NixOS paths or units; the NixOS adapter has the same functions and its tests are unchanged
   but three that said "Alpine has no code". `bundle-refresh` uses `nsenter` where there is no `systemd-run`.
-- **Finding** guests on Alpine cannot be confined: libvirt 12.3.0 is built without the AppArmor
-  driver. The compute role refuses to start `libvirtd` unless `allow_unconfined_guests` is true.
-- **Missing** the Alpine builds of the agent with its executor, om3, nagios-check and
-  hps-nagios-plugins (plan step 5); an Alpine node cannot pair until they are added.
+- **New** guests on Alpine are confined by AppArmor as on NixOS: `lsm=` on the kernel line, the same profile texts with Alpine's paths. Alpine's libvirt 12.3.0 has no AppArmor driver, so the compute role needs the local package `libvirt-apparmor` (plan step 5) and refuses loudly without it; no setting accepts an unconfined guest.
+- **Missing** the Alpine builds of the agent with its executor, om3, nagios-check,
+  hps-nagios-plugins and libvirt-apparmor (plan step 5); an Alpine node cannot pair until they are added.
 
 ## AppArmor and the monitoring checks on the stock starter (2026-11-16)
 

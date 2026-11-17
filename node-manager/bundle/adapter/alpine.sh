@@ -21,7 +21,8 @@
 #   - no systemd: a small systemctl and udevadm for the scripts of the bundle (os_compat)
 #   - the agent has no unit sandbox: it runs through setpriv with no capability, no
 #     bounding set and no_new_privs, as the unprivileged user (svc_start)
-#   - libvirt has no AppArmor driver: GUEST_CONFINEMENT=none (role_unconfined)
+#   - libvirt: Alpine's own has no AppArmor driver, so the compute role needs the local
+#     package libvirt-apparmor (plan step 5) and refuses without it (aa_libvirt_check)
 #
 # Every command is logged with run (defined by init) before it executes.
 
@@ -46,9 +47,6 @@ adapter_init() {
   PKG_LINE_RE='^(local/)?[A-Za-z0-9][A-Za-z0-9._+-]*$'
   # where the scripts the node bundle runs find their systemctl and udevadm
   ADAPTER_PATH_EXTRA="$HPS_RUN_DIR/bin"
-  # guests are confined by AppArmor on NixOS; Alpine's libvirt cannot (role_unconfined)
-  GUEST_CONFINEMENT=none
-  QEMU_SECURITY_LINE=''
   # dbus: targetcli and libvirt expect it; configfs: targetcli (LIO) needs it mounted
   ENSURE_SERVICES="dbus"
   MOUNT_CONFIGFS=1
@@ -411,9 +409,25 @@ zfs_hostid_set() {
   run zgenhostid -f "$id"
 }
 
-# guest_confinement_ack: true when the installation accepted unconfined guests
-guest_confinement_ack() {
-  [[ "$(cmdline_value hps.unconfined 2> /dev/null || true)" == ack ]]
+# AppArmor (role_apparmor). The profile texts are written for the nix layout
+# (libvirtd as sbin/.libvirtd-wrapped, the parser in bin/); here everything is under
+# /usr, so the markers all stand for $PKG_PREFIX and two sed expressions put the real
+# paths in. Alpine's own libvirt is built without the AppArmor driver (no virt-aa-helper):
+# the compute role needs the local package libvirt-apparmor, the AppArmor build, and says
+# so when it is not what is installed. There is no fall back.
+aa_roots() { AA_PARSER="$PKG_PREFIX"; AA_LIBVIRT="$PKG_PREFIX"; AA_QEMU="$PKG_PREFIX"; }
+aa_parser_path() { readlink -f "$(role_bin apparmor_parser)"; }
+aa_libvirtd_path() { readlink -f "$(role_bin libvirtd)"; }
+aa_sed_args() {
+  printf '%s\n' -e "s|$AA_PARSER/bin/apparmor_parser|$(aa_parser_path)|g" -e "s|$AA_LIBVIRT/sbin/\\.libvirtd-wrapped|$(aa_libvirtd_path)|g"
+}
+aa_libvirt_check() {
+  if [[ ! -x "$PKG_PREFIX/libexec/virt-aa-helper" ]]; then
+    log "ERROR: this node's libvirt has no AppArmor driver (no $PKG_PREFIX/libexec/virt-aa-helper): Alpine's own libvirt is built without it."
+    log "ERROR: the compute role needs the local package libvirt-apparmor (the AppArmor build of libvirt, plan step 5; hps-starter add-local alpine)."
+    log "ERROR: libvirtd is NOT started: guests would run unconfined, and no node of HPS does."
+    return 1
+  fi
 }
 
 # iscsid_conf_source: the open-iscsi package's own iscsid.conf. Its file is the one the

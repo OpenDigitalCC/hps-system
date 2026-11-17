@@ -249,36 +249,75 @@ svc() { cat "$HPS_OPENRC_DIR/$1"; }
   grep -q 'PROGRAM ' "$HPS_ROOT/etc/mdadm.conf"
 }
 
-# --- compute: the confinement finding -------------------------------------------
+# --- compute: AppArmor, as on NixOS, and no libvirt without the driver ---------------
 
-@test "init, Alpine, TCH: guests would be unconfined (libvirt has no AppArmor driver): libvirtd is NOT started, loudly, and the step is a failed one" {
+tch_node() {
   echo TCH > "$TEST_DIR/serve/type"
-  printf '%s\n' linux-lts local/ctrl-exec-agent jq libvirt-daemon qemu-system-x86_64 open-iscsi local/nagios-check local/hps-nagios-plugins > "$TEST_DIR/serve/packages"
+  printf '%s\n' linux-lts local/ctrl-exec-agent jq local/libvirt-apparmor apparmor apparmor-profiles qemu-system-x86_64 open-iscsi local/nagios-check local/hps-nagios-plugins > "$TEST_DIR/serve/packages"
+  # the AppArmor parser: lists what it was given as loaded, in enforce mode, in the file standing for the kernel's list
+  cat > "$TEST_DIR/usr/sbin/apparmor_parser" <<'EOS'
+#!/bin/bash
+echo "apparmor_parser $*" >> "$CALLS"
+f="${*: -1}"
+[[ -f "$f" ]] || exit 1
+name="$(grep -m1 -E ' (flags=\(.*\) )?\{$' "$f" | cut -d' ' -f1)"
+echo "$name (enforce)" >> "$HPS_AA_PROFILES"
+EOS
+  chmod +x "$TEST_DIR/usr/sbin/apparmor_parser"
+  mkdir -p "$HPS_PKG_ETC/apparmor.d/abstractions"
+  export HPS_AA_ENABLED="$TEST_DIR/aa-enabled" HPS_AA_PROFILES="$TEST_DIR/aa-profiles"
+  echo Y > "$HPS_AA_ENABLED"
+  : > "$HPS_AA_PROFILES"
+}
+
+with_driver() {
+  mkdir -p "$TEST_DIR/usr/libexec"
+  printf '#!/bin/bash\n' > "$TEST_DIR/usr/libexec/virt-aa-helper"
+  chmod +x "$TEST_DIR/usr/libexec/virt-aa-helper"
+}
+
+@test "init, Alpine, TCH: a libvirt without the AppArmor driver is refused, loudly, naming the local package: libvirtd is NOT started" {
+  tch_node
   run bash "$TEST_DIR/bundle/init" boot
   [ "$status" -eq 1 ]
-  [[ "$output" == *"ERROR: guests on this node would run UNCONFINED"* ]]
+  [[ "$output" == *"ERROR: this node's libvirt has no AppArmor driver"* ]]
+  [[ "$output" == *"the local package libvirt-apparmor"* ]]
   [[ "$output" == *"libvirtd is NOT started"* ]]
-  [[ "$output" == *"role step failed"*"compute services"* || "$output" == *"a role step failed: compute services"* ]]
+  [[ "$output" == *"a role step failed: compute services"* ]]
   [ ! -e "$HPS_OPENRC_DIR/libvirtd" ]
   ! grep -qx 'rc-service libvirtd start' "$CALLS"
-  [ ! -e "$HPS_RUN_DIR/unconfined" ]
   grep -q 'role step failed: compute services' "$TEST_DIR/iplog"
 }
 
-@test "init, Alpine, TCH, acknowledged by the installation (hps.unconfined=ack): libvirtd starts with a warning, the IPS is told, a file says so, qemu.conf names no security driver" {
-  echo TCH > "$TEST_DIR/serve/type"
-  printf '%s\n' linux-lts local/ctrl-exec-agent jq libvirt-daemon qemu-system-x86_64 open-iscsi local/nagios-check local/hps-nagios-plugins > "$TEST_DIR/serve/packages"
-  sed -i 's/$/ hps.unconfined=ack/' "$HPS_CMDLINE"
+@test "init, Alpine, TCH: AppArmor not active in the kernel is refused, with no fall back to the DAC model" {
+  tch_node
+  with_driver
+  echo N > "$HPS_AA_ENABLED"
+  run bash "$TEST_DIR/bundle/init" boot
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ERROR: AppArmor is not active in this kernel"* ]]
+  [[ "$output" == *"libvirtd is NOT started"* ]]
+  [ ! -e "$HPS_OPENRC_DIR/libvirtd" ]
+}
+
+@test "init, Alpine, TCH, with the driver and AppArmor active: the profiles are loaded in enforce mode with Alpine's paths before libvirtd starts; qemu.conf names apparmor" {
+  tch_node
+  with_driver
   run bash "$TEST_DIR/bundle/init" boot
   ok0
-  [[ "$output" == *"WARNING: guests on this node run UNCONFINED"* ]]
-  grep -q 'UNCONFINED' "$TEST_DIR/iplog"
-  [[ "$(cat "$HPS_RUN_DIR/unconfined")" == *"not confined"* ]]
+  [[ "$output" == *"AppArmor active; libvirtd and virt-aa-helper profiles loaded (enforce)"* ]]
+  # the profile of the daemon is for the real binary, not the nix wrapper's name
+  grep -qx "$TEST_DIR/usr/bin/libvirtd (enforce)" "$HPS_AA_PROFILES"
+  grep -q "^$TEST_DIR/usr/bin/libvirtd flags=" "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
+  ! grep -q 'libvirtd-wrapped' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd" "$HPS_ROOT/etc/apparmor.d/abstractions/libvirt-qemu"
+  grep -q "$TEST_DIR/usr/sbin/apparmor_parser Ux" "$HPS_ROOT/etc/apparmor.d/hps/virt-aa-helper"
+  # loaded before libvirtd starts
+  [ "$(grep -n '^apparmor_parser' "$CALLS" | head -1 | cut -d: -f1)" -lt "$(grep -n '^rc-service libvirtd start' "$CALLS" | head -1 | cut -d: -f1)" ]
+  grep -qx 'security_driver = "apparmor"' "$HPS_ROOT/etc/libvirt/qemu.conf"
   run svc libvirtd
   [[ "$output" == *"need virtlogd"* && "$output" == *'rc_ulimit="-l unlimited"'* ]]
-  grep -qx 'rc-service libvirtd start' "$CALLS"
-  grep -q '^user = "qemu-libvirtd"' "$HPS_ROOT/etc/libvirt/qemu.conf"
-  ! grep -q 'security_driver' "$HPS_ROOT/etc/libvirt/qemu.conf"
+  # the parser is where /sbin/apparmor_parser would be: no link over itself
+  [ ! -L "$HPS_ROOT/sbin/apparmor_parser" ] || [ "$(readlink -f "$HPS_ROOT/sbin/apparmor_parser")" = "$TEST_DIR/usr/sbin/apparmor_parser" ]
   # the UEFI firmware the guest definitions name
   [ -L "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-x86_64-code.fd" ] && [ -L "$HPS_ROOT/run/libvirt/nix-ovmf/edk2-i386-vars.fd" ]
   # the initiator: the package's own iscsid.conf kept once beside the node's, the fail-fast lines once
@@ -286,6 +325,10 @@ svc() { cat "$HPS_OPENRC_DIR/$1"; }
   [ "$(grep -c 'replacement_timeout = 15' "$HPS_ROOT/etc/iscsi/iscsid.conf")" -eq 1 ]
   run bash "$TEST_DIR/bundle/init" refresh
   [ "$(grep -c 'replacement_timeout = 15' "$HPS_ROOT/etc/iscsi/iscsid.conf")" -eq 1 ]
+}
+
+@test "no cluster key makes an unconfined guest acceptable: the key is gone" {
+  ! grep -rq 'allow_unconfined_guests\|hps.unconfined' "$ROOT/lib" "$ROOT/node-manager" "$ROOT/docs"
 }
 
 # --- the compatibility programs --------------------------------------------------
@@ -323,11 +366,10 @@ svc() { cat "$HPS_OPENRC_DIR/$1"; }
   names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
   # the interface init and role call: every one is in both
   for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
-    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set iscsid_conf_source; do
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
   done
-  grep -qE '^guest_confinement_ack\(\)' "$ROOT/node-manager/bundle/adapter/alpine.sh"
 }
 
 @test "bundle-refresh without systemd runs the bootstrap in the namespace of PID 1 (nsenter), with no argument from a dispatcher" {

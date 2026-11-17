@@ -24,6 +24,28 @@
 # drops a query), and it has no "&" and no ";" so that iPXE passes it as it is.
 #===============================================================================
 
+# alpine_starter_lsm_args <stock cmdline>
+# The boot-arguments part of AppArmor on an Alpine node (docs/BUNDLE.md "Alpine"): the
+# stock kernel has AppArmor built in (CONFIG_SECURITY_APPARMOR=y) but its built-in list
+# (CONFIG_LSM=landlock,lockdown,yama,loadpin,safesetid,integrity) leaves it out. The line
+# gets that list with apparmor added, and apparmor=1; a stock lsm= is kept and gains
+# apparmor. Prints the stock arguments followed by these.
+alpine_starter_lsm_args() {
+  local word out="" lsm_seen=""
+  for word in $1; do
+    case "$word" in
+      lsm=*)
+        lsm_seen=1
+        [[ ",${word#lsm=}," == *",apparmor,"* ]] || word="${word},apparmor"
+        ;;
+      apparmor=*) continue ;;
+    esac
+    out="${out:+$out }$word"
+  done
+  [[ -n "$lsm_seen" ]] || out="${out:+$out }lsm=landlock,lockdown,yama,loadpin,safesetid,integrity,apparmor"
+  printf '%s apparmor=1\n' "$out"
+}
+
 # alpine_starter_boot_lines <mac> <version>
 # The iPXE kernel/initrd/boot lines; returns 1 with a log line when the starter
 # is not usable.
@@ -57,7 +79,7 @@ alpine_starter_boot_lines() {
   cmdline="$(jq -r '.cmdline // ""' "$manifest")" || return 1
   os_id="$(host_registry "$mac" get os_id 2>/dev/null)" || os_id=""
   base="http://${ips}/starter/alpine/${version}"
-  args="initrd=initramfs-lts ${cmdline} console=ttyS0,115200"
+  args="initrd=initramfs-lts $(alpine_starter_lsm_args "$cmdline") console=ttyS0,115200"
   args="${args} alpine_repo=http://${ips}/packages/alpine/${version}/main,http://${ips}/packages/alpine/${version}/community"
   args="${args} apkovl=http://${ips}/cgi-bin/boot_manager.sh?cmd=node_apkovl/node.apkovl.tar.gz"
   args="${args} hps.ips=${ips} hps.mac=${HPS_BOOT_MAC:-$mac} hps.os=${os_id} hps.profile=STARTER"
@@ -79,14 +101,6 @@ alpine_starter_boot_lines() {
   fi
   if [[ "$domain" =~ ^[a-z0-9][a-z0-9.-]*$ ]]; then
     args="${args} hps.domain=${domain}"
-  fi
-  # Guests of an Alpine node are not confined: Alpine's libvirt has no AppArmor driver
-  # (docs/BUNDLE.md "Alpine: guest confinement"). The compute role refuses to start
-  # libvirtd on that footing unless the installation says so: the cluster key
-  # allow_unconfined_guests=true puts hps.unconfined=ack on the line, and the node then
-  # starts libvirtd loudly, with the acknowledgement in the IPS log.
-  if [[ -n "$cluster" && "$(cluster_registry "$cluster" get allow_unconfined_guests 2>/dev/null)" == true ]]; then
-    args="${args} hps.unconfined=ack"
   fi
   printf 'kernel %s/vmlinuz-lts %s\n' "$base" "$args"
   printf 'initrd %s/initramfs-lts\n' "$base"

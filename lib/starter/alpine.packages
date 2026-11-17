@@ -64,9 +64,12 @@ mdadm
 smartmontools
 dbus
 
-# compute
-libvirt-daemon
-libvirt-client
+# compute: libvirt is the AppArmor build, a local package (plan step 5). Alpine's own
+# libvirt-daemon has no AppArmor driver and is not held, so that a compute role cannot be
+# installed from it by accident; the compute role refuses without the driver.
+apparmor
+apparmor-profiles
+libvirt-apparmor local
 qemu-system-x86_64
 qemu-img
 open-iscsi

@@ -211,13 +211,6 @@ my @CATALOGUE = (
         prompt => 'Whether repo build may also substitute from upstream caches through egress_proxy (false: the repository alone)',
         rule => 'bool', default => 'false'),
 
-    # Guests of an Alpine node are not confined (docs/BUNDLE.md "Alpine: guest confinement"):
-    # libvirt of that OS has no AppArmor driver. A compute node refuses to start libvirtd on
-    # that footing until the installation says it accepts it.
-    _q(key => 'allow_unconfined_guests', group => 'resources', menu => 0,
-        prompt => 'Accept guests that run unconfined on Alpine nodes, whose libvirt has no AppArmor driver (false: their compute role refuses to start libvirtd)',
-        rule => 'bool', default => 'false'),
-
     # Host reserve (docs/CLUSTER-CONFIG.md "Host reserve"): read at every node
     # boot by host-reserve-apply. Empty: the default sized from the host.
     _q(key => 'host_reserve_cpus', group => 'resources', menu => 0,
