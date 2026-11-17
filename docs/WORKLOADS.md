@@ -323,6 +323,22 @@ checked against strict patterns before anything runs, and the remote commands ar
 fixed text: nothing a caller passes reaches a shell. It adds verbs only; `hps-ssh`
 is as it was.
 
+### Names and lifetime: the date suffix means "destroy me"
+
+A workload cannot be renamed: its name is the definition's file name, the key of
+its record, the prefix of its zvols and mirrors, and (through the seed) the
+guest's hostname and any agent identity made from it. The skill's naming rule
+reads accordingly. A transient VM is `<project>-<purpose>-<YYYYMMDD>`, and the
+date suffix marks "destroy me after this task", not "made on". A VM that may
+live beyond one task is named without the date from the start
+(`<project>-<purpose>`), with the reason in the request and in the project's
+docs. A transient VM that turns out to be wanted for longer keeps its name and
+its date, and is said to be persistent where the project records it; there is no
+`rename` verb: a rename would have to reseed the guest and change every record
+that holds the name. A new name is a new workload (`destroy --forget` the old one,
+`define` and `create` the new), which does not carry the address over; decide the
+name before the first create.
+
 ## Operations
 
 `hps-workload create|start|stop|destroy|status <name> [--vm $VM] [--dry-run] [--json] [--resume] [--forget]`,

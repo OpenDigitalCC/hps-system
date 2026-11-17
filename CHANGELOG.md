@@ -89,6 +89,11 @@ capabilities and removals are called out explicitly.
   regeneration stays a reload. Removed by `destroy`, with the reservation by `--forget`.
   `docs/WORKLOADS.md` "DNS for a workload's names"; `t/286-workload-dns.t`,
   `test_ips42_06_dns_wildcard.bats`.
+- **Changed** the naming rule is said plainly (no rename verb; a workload's name is in its
+  definition, record, zvols and the guest's hostname): the date suffix of
+  `<project>-<purpose>-<YYYYMMDD>` marks "destroy me after this task", and a VM that may live
+  beyond one task is named without the date from the start. In the skill and in
+  `docs/WORKLOADS.md` "Names and lifetime"; `test_ips42_07_name_rule.bats`.
 
 ## AppArmor: two md queue limits for a guest on a mirror (2026-11-16)
 
