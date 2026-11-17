@@ -362,7 +362,7 @@ zvol_links() {
 time_sync() {
   mkdir -p "${HPS_ROOT}/etc/conf.d"
   printf 'NTPD_OPTS="-N -p %s"\n' "$1" | write_if_changed "${HPS_ROOT}/etc/conf.d/ntpd" 0644
-  "${HPS_RC_SERVICE:-rc-service}" ntpd status > /dev/null 2>&1 && run "${HPS_RC_SERVICE:-rc-service}" ntpd restart || run "${HPS_RC_SERVICE:-rc-service}" ntpd start
+  "${HPS_RC_SERVICE:-rc-service}" ntpd status > /dev/null 2>&1 && _rc ntpd restart || _rc ntpd start
 }
 
 # net_keep_lease: the stock initramfs got the address from DHCP and nothing renews it
@@ -374,7 +374,7 @@ net_keep_lease() {
   [[ -n "$dev" ]] || { log "net_keep_lease: no interface reaches $ADAPTER_IPS; no lease to keep"; return 0; }
   pidf="/run/hps-udhcpc.$dev.pid"
   if [[ -f "$pidf" ]] && kill -0 "$(cat "$pidf")" 2> /dev/null; then return 0; fi
-  run "${HPS_UDHCPC:-udhcpc}" -b -i "$dev" -p "$pidf" -s "$HPS_RUN_DIR/bin/udhcpc-hps" -t 5 || log "warning: udhcpc did not start on $dev: the lease will not be renewed"
+  run "${HPS_UDHCPC:-udhcpc}" -b -i "$dev" -p "$pidf" -s "$HPS_RUN_DIR/bin/udhcpc-hps" -t 5 9>&- || log "warning: udhcpc did not start on $dev: the lease will not be renewed"
 }
 
 # host_cgroups: cgroup v2 is mounted where the host reserve writes (systemd does it on NixOS)
@@ -389,6 +389,10 @@ host_cgroups() {
 # services
 #-------------------------------------------------------------------------------
 _sq() { printf '%q' "$1"; }
+
+# _rc <rc-service args>: rc-service, with init's lock (fd 9, flock) closed for it: a daemon it starts
+# must not inherit the lock, or it holds "another init is running" against every later refresh
+_rc() { run "${HPS_RC_SERVICE:-rc-service}" "$@" 9>&-; }
 
 # _arg_q <word>: a word of a command as the OpenRC script holds it: $NAME stays a
 # variable (read from the service's environment file when it runs), the rest is quoted
@@ -527,7 +531,7 @@ svc_start() {
     log "$name: $when is not there yet; not started"
     return 0
   fi
-  run "${HPS_RC_SERVICE:-rc-service}" "$name" start
+  _rc "$name" start
 }
 
 # svc_restart_later <name>...: restart these services a few seconds from now, detached
@@ -536,22 +540,22 @@ svc_restart_later() {
   local s cmd=""
   for s in "$@"; do cmd="$cmd ${HPS_RC_SERVICE:-rc-service} $s restart;"; done
   log "+ (sleep 5;$cmd) detached"
-  setsid sh -c "sleep 5;$cmd" < /dev/null > /dev/null 2>&1 &
+  setsid sh -c "sleep 5;$cmd" < /dev/null > /dev/null 2>&1 9>&- &
 }
 
 # svc_reload <name>: re-read the configuration of a service of the OS; start it when it
 # is not running (sshd is installed by the package and not started by anything)
 svc_reload() {
   if "${HPS_RC_SERVICE:-rc-service}" "$1" status > /dev/null 2>&1; then
-    run "${HPS_RC_SERVICE:-rc-service}" "$1" reload
+    _rc "$1" reload
   else
-    run "${HPS_RC_SERVICE:-rc-service}" "$1" start
+    _rc "$1" start
   fi
 }
 
 # svc_ensure <name>: a service the OS ships is running (dbus, for libvirt and targetcli)
 svc_ensure() {
-  "${HPS_RC_SERVICE:-rc-service}" "$1" status > /dev/null 2>&1 || run "${HPS_RC_SERVICE:-rc-service}" "$1" start
+  "${HPS_RC_SERVICE:-rc-service}" "$1" status > /dev/null 2>&1 || _rc "$1" start
 }
 
 # fw_open <port>...: Alpine runs no firewall; the ports are open
@@ -574,7 +578,7 @@ svc_env() { return 0; }
 log_forward() {
   mkdir -p "${HPS_ROOT}/etc/conf.d"
   printf 'SYSLOGD_OPTS="-t -R %s:514 -L"\n' "$ADAPTER_IPS" | write_if_changed "${HPS_ROOT}/etc/conf.d/syslog" 0644
-  run "${HPS_RC_SERVICE:-rc-service}" syslog restart
+  _rc syslog restart
 }
 
 # md_monitor: nothing starts mdadm's monitor by itself here (NixOS's udev does): the

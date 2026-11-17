@@ -74,6 +74,7 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** init's lock (fd 9) was inherited by the services rc-service starts and held for as long as they live, so a refresh through `hps-refresh-watch` said "another init is running"; the adapter closes it for them.
 - **Fixed** `bundle-refresh` on Alpine: nsenter into the namespace of PID 1 is refused (CAP_SYS_CHROOT), so a service `hps-refresh-watch` in the init namespace runs the bootstrap on a request file the action makes.
 - **Fixed** zvols had no /dev/zvol links on Alpine (no udev): `zfs-udev`'s `zvol_id` with an mdev rule and hook.
 - **Fixed** the OpenRC scripts the Alpine adapter writes kept a `PATH` without OpenRC's own helpers (`ebegin: not found`; three role steps failed on the first paired node).

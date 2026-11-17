@@ -96,10 +96,11 @@ EOF
   printf '#!/bin/bash\nif [[ $# -gt 0 ]]; then printf "%%s\\n" "$1" > "$TEST_DIR/khost"; else cat "$TEST_DIR/khost" 2> /dev/null || echo localhost; fi\n' > "$b/hostname"
   printf '#!/bin/bash\n[[ "$1" == -r ]] && echo 6.18.63-0-lts || /usr/bin/uname "$@"\n' > "$b/uname"
   # apk: logs, and the services of a package appear as the test needs them
-  printf '#!/bin/bash\necho "apk $*" >> "$CALLS"\n[[ "$1" == info ]] && echo "${*: -1}-1.0-r0"\nexit 0\n' > "$b/apk"
+  printf '#!/bin/bash\n[ -e /proc/self/fd/9 ] && echo "apk-fd9-open" >> "$CALLS"\necho "apk $*" >> "$CALLS"\n[[ "$1" == info ]] && echo "${*: -1}-1.0-r0"\nexit 0\n' > "$b/apk"
   # rc-service: a service is started once it has been started
   cat > "$b/rc-service" <<'EOF'
 #!/bin/bash
+[ -e /proc/self/fd/9 ] && echo "rc-fd9-open $*" >> "$CALLS"
 echo "rc-service $*" >> "$CALLS"
 case "$2" in
   status) [[ -e "$TEST_DIR/svc/$1" ]] ;;
@@ -540,4 +541,13 @@ LOG
   rm -f "$TEST_DIR/svc/ntpd"
   PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/timedatectl" show
   [[ "$output" == *"NTPSynchronized=no"* ]]
+}
+
+@test "init's lock (fd 9) is not inherited by what rc-service starts: a daemon holding it makes every later refresh fail with 'another init is running' (the lab, bundle-refresh through hps-refresh-watch)" {
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  # the lock was held while init ran (apk, which init does not close it for, saw it) ...
+  grep -qx 'apk-fd9-open' "$CALLS"
+  # ... and no rc-service call that starts something saw it
+  ! grep -E '^rc-fd9-open .* (start|restart|reload)$' "$CALLS"
 }
