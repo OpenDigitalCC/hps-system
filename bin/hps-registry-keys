@@ -3,11 +3,13 @@
 #   hps-registry-keys --markdown   the text of docs/REGISTRY-KEYS.md
 #   hps-registry-keys --list       one line per key: scope name type
 #   hps-registry-keys --type <scope> <key>   the declared type of a key
+#   hps-registry-keys --check [--config-base DIR]   read-only: stored values mangled into a number (host, key, value); exit 1 if any
 use strict;
 use warnings;
 use FindBin qw($RealBin);
 use lib "$RealBin/../lib/perl";
 use HPS::Registry::Keys;
+use HPS::Registry::Check;
 
 sub main {
     my @argv = @_;
@@ -23,7 +25,23 @@ sub main {
         print "$t\n";
         return 0;
     }
-    print STDERR "Usage: hps-registry-keys --markdown | --list | --type <scope> <key>\n";
+    if ($mode eq '--check') {
+        # Read-only: list stored values that were mangled into a number.
+        my $base = $ENV{HPS_CONFIG_BASE} // '/srv/hps-config';
+        my $sys  = $ENV{HPS_SYSTEM_REGISTRY} // "$base/system.db";
+        while (@argv) {
+            my $o = shift @argv;
+            if    ($o eq '--config-base' && @argv) { $base = shift @argv; $sys = "$base/system.db" }
+            elsif ($o eq '--system-db'   && @argv) { $sys  = shift @argv }
+            else { print STDERR "Usage: hps-registry-keys --check [--config-base <dir>] [--system-db <dir>]\n"; return 2 }
+        }
+        my @f = HPS::Registry::Check::scan($base, $sys);
+        printf "%s %s %s %s (%s)\n", @{$_}{qw(scope owner key value reason)} for @f;
+        print STDERR scalar(@f) ? scalar(@f) . " mangled value(s) found; nothing was changed\n"
+                               : "no mangled values found\n";
+        return @f ? 1 : 0;
+    }
+    print STDERR "Usage: hps-registry-keys --markdown | --list | --type <scope> <key> | --check [--config-base <dir>]\n";
     return 2;
 }
 

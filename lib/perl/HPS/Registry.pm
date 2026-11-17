@@ -118,19 +118,18 @@ sub _db_get_json ($db, $key) {
     return $data;
 }
 
-# Like the Bash wrappers: a value that is valid JSON is stored as JSON,
-# anything else is stored as a JSON string. A reference is encoded as JSON.
+# Like the Bash wrappers (registry_encode_value): a value that parses as a JSON
+# object or array is stored as that structure, a reference is encoded as JSON,
+# and every other value is stored as the JSON string of exactly the text given.
+# A scalar is never stored as a JSON number, true or null: a number-looking
+# value (5254000870e4, a hex id 8187e907, 007) would be re-printed by jq as a
+# float.
 sub _encode_value ($value) {
     my $pretty = JSON::PP->new->utf8->canonical->pretty->indent_length(2)->allow_nonref;
     return $pretty->encode($value) if ref $value;
     $value //= '';
     my $data = eval { JSON::PP->new->allow_nonref->decode($value) };
-    if (!$@) {
-        return $pretty->encode($data) if ref $data;
-        (my $t = $value) =~ s/^\s+|\s+\z//g;
-        utf8::encode($t);
-        return "$t\n";
-    }
+    return $pretty->encode($data) if !$@ && (ref $data eq 'HASH' || ref $data eq 'ARRAY');
     return $pretty->encode("$value");
 }
 

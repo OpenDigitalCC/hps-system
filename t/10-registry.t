@@ -35,7 +35,7 @@ is($reg->system_get('S'), 'hello world', 'string raw');
 like(do { local $/; open my $f, '<', "$base/system.db/S.json"; <$f> }, qr/^"hello world"\s*$/, 'non-JSON stored as JSON string');
 $reg->system_set('N', '42');
 is($reg->system_get('N'), '42', 'number raw');
-like(do { local $/; open my $f, '<', "$base/system.db/N.json"; <$f> }, qr/^42\s*$/, 'number stored as number');
+like(do { local $/; open my $f, '<', "$base/system.db/N.json"; <$f> }, qr/^"42"\s*$/, 'a number-looking value is stored as the string given (it is never re-printed as a float)');
 $reg->system_set('O', '{"a":1,"b":[1,2]}');
 is_deeply($reg->system_get_json('O'), { a => 1, b => [ 1, 2 ] }, 'object round-trip');
 $reg->system_set('R', { x => 'y' });

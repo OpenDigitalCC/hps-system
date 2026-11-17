@@ -29,6 +29,22 @@ export HPS_REGISTRY_RAW_MODE="${HPS_REGISTRY_RAW_MODE:-true}"
 export HPS_SYSTEM_REGISTRY="${HPS_SYSTEM_REGISTRY:-${HPS_CONFIG_BASE:-/srv/hps-config}/system.db}"
 
 #===============================================================================
+# registry_encode_value <text>
+# ----------------------------
+# The JSON document to store for a value given on the command line. A value
+# that parses as a JSON object or array is stored as that structure; every
+# other value (text, digits, true, null, 5254000870e4, 007) is stored as the
+# JSON string of exactly the text given. Storing a scalar "as JSON" let
+# jq re-print a number-looking value (5254000870e4 became 5.254000870E+13,
+# a hex id 8187e907 became 8.187E+910, 007 became 7).
+#===============================================================================
+registry_encode_value() {
+  jq -n --arg v "${1-}" '
+    ($v | try fromjson catch null) as $d
+    | if ($d | type) == "object" or ($d | type) == "array" then $d else $v end'
+}
+
+#===============================================================================
 # json_registry
 # ------------
 # Core JSON registry function for managing JSON documents.
@@ -339,10 +355,8 @@ host_registry() {
       ;;
       
     set)
-      # Wrap non-JSON values in quotes
-      if ! echo "$value" | jq . >/dev/null 2>&1; then
-        value="\"$value\""
-      fi
+      # Scalars are stored as the string given; only an object or array stays JSON.
+      value=$(registry_encode_value "$value") || return 2
       
       json_registry "$db_path" set "$key" "$value"
       
@@ -518,10 +532,8 @@ cluster_registry() {
           ;;
           
         set)
-          # Wrap non-JSON values in quotes
-          if ! echo "$value" | jq . >/dev/null 2>&1; then
-            value="\"$value\""
-          fi
+          # Scalars are stored as the string given; only an object or array stays JSON.
+          value=$(registry_encode_value "$value") || return 2
           json_registry "$db_path" set "$key" "$value"
           return $?
           ;;
@@ -583,10 +595,8 @@ system_registry() {
   
   case "$cmd" in
     set)
-      # Wrap non-JSON values in quotes
-      if ! echo "$value" | jq . >/dev/null 2>&1; then
-        value="\"$value\""
-      fi
+      # Scalars are stored as the string given; only an object or array stays JSON.
+      value=$(registry_encode_value "$value") || return 2
       json_registry "$db_path" set "$key" "$value"
       ;;
     get|delete|exists|list|count|view|destroy)
@@ -687,10 +697,8 @@ os_registry() {
       fi
       ;;
     set)
-      # Wrap non-JSON values in quotes
-      if ! echo "$value" | jq . >/dev/null 2>&1; then
-        value="\"$value\""
-      fi
+      # Scalars are stored as the string given; only an object or array stays JSON.
+      value=$(registry_encode_value "$value") || return 2
       
       # Store the OS ID for reliable listing
       local id_file="$db_path/.os_id"

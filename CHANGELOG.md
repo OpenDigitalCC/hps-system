@@ -12,6 +12,17 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Registry values keep their text (2026-11-17)
+
+- **Fixed** registry values that look like numbers being turned into floats. The Bash wrappers
+  (`host_registry`, `cluster_registry`, `system_registry`, `os_registry`) and
+  `HPS::Registry` stored any scalar that parsed as JSON as a JSON number, and `jq` re-prints
+  a number: a MAC `5254000870e4` became `5.254000870E+13`, a hex hostid `8187e907` became
+  `8.187E+910`, `007` became `7`. Every scalar is now stored as the JSON string of the text
+  given (`registry_encode_value` in Bash, `_encode_value` in Perl); an object or array stays JSON.
+- **Added** `hps-registry-keys --check [--config-base DIR]`, a read-only list of stored values
+  already mangled into a number (host, key, stored value). It repairs nothing.
+
 ## ctrl-exec 0.14.8 and plugins 0.3.13 ready for the next build (2026-11-17)
 
 - **Changed** docs only: `docs/BUILDER.md` says how the `lab/builder` ctrl-exec source copies

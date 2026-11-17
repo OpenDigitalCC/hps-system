@@ -486,6 +486,19 @@ what they do is in `docs/STORAGE-FAULTS.md`.
 Through `hps-op`, values that do not fit an argument go through
 `hps-cluster-config-apply` with `--input`.
 
+## hps-registry-keys
+
+The registry key catalogue, and a read-only check of stored values.
+
+`hps-registry-keys --check [--config-base DIR] [--system-db DIR]`
+: Lists stored values that were turned into a number: a number where the
+  catalogue declares the key as text, and any value in a float-exponent form
+  such as `5.254000870E+13`. Prints scope, host (or cluster), key and the stored
+  value. Exit 0 when clean, 1 when it found something. It changes nothing. A
+  registry value is stored as the string given, so a MAC such as `5254000870e4`
+  or a hex id such as `8187e907` is no longer altered; a value stored before
+  that fix is set again with its right text.
+
 ## hps-operator
 
 Operator credentials, run on the IPS.
