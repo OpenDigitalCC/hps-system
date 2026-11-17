@@ -658,3 +658,19 @@ LOG
   [[ "$output" == *'command_args="--monitor --scan"'* ]]
   [[ "$output" != *"--foreground"* ]]
 }
+
+@test "the host reserve on a real cgroup directory: a property whose file the kernel does not offer (io.weight without bfq or iocost) is said and skipped, the others are applied (the lab: host-reserve-apply failed on io.weight and never set memory.max)" {
+  run bash "$TEST_DIR/bundle/init" boot
+  cgfake
+  mkdir -p "$HPS_CGROUP_ROOT/machine"
+  : > "$HPS_CGROUP_ROOT/machine/cgroup.procs"
+  : > "$HPS_CGROUP_ROOT/machine/cpuset.cpus"
+  : > "$HPS_CGROUP_ROOT/machine/cpu.weight"
+  : > "$HPS_CGROUP_ROOT/machine/memory.max"
+  PATH="$TEST_DIR/bin:$PATH" run "$HPS_RUN_DIR/bin/systemctl" set-property --runtime machine.slice AllowedCPUs=1 CPUWeight=50 IOWeight=50 MemoryMax=3875M
+  ok0
+  [[ "$output" == *"io.weight is not offered by this kernel (IOWeight skipped)"* ]]
+  [ "$(cat "$HPS_CGROUP_ROOT/machine/memory.max")" = 4063232000 ]
+  [ "$(cat "$HPS_CGROUP_ROOT/machine/cpuset.cpus")" = 1 ]
+  [ ! -e "$HPS_CGROUP_ROOT/machine/io.weight" ]
+}

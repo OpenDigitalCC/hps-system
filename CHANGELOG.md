@@ -212,6 +212,7 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** the Alpine host reserve skips a cgroup property the kernel does not offer (`io.weight` without bfq or iocost) instead of failing before `memory.max`. libvirt puts the guests under `/machine`, the group the reserve writes.
 - **Fixed** on the full Alpine trial: the mirror monitor ran `mdadm --monitor --scan --foreground`, an option mdadm does not have (no leg event reached the IPS); syslog is restarted when pairing set the host name (lines said "localhost"); `acpid` runs so a graceful stop (the ACPI power button) shuts a node down.
 - **Fixed** the first confined guest on Alpine: /dev/md is made 0755 (QEMU runs as an unprivileged user), the guest profile reads /usr/lib, /usr/share and /lib where the nix text reads the store, the daemon may start programs from /sbin and /bin, and `vm-confinement-report` knows the Alpine daemon profile name and qemu.conf place.
 - **Fixed** the Alpine compute role lacked `partx`, util-linux's `mount`/`umount`/`losetup`, `e2fsprogs` and `wipefs`: `vm-seed-write` said "has no partition 1 (partx found none)".

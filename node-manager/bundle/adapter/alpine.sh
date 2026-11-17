@@ -220,6 +220,9 @@ case "$verb" in
           case "$v" in infinity) v=max ;; *M) v=$(( ${v%M} * 1048576 )) ;; *G) v=$(( ${v%G} * 1073741824 )) ;; esac ;;
         *) echo "systemctl set-property: $k is not available on this OS (OpenRC)" >&2; exit 1 ;;
       esac
+      # a real cgroup directory has the files its controllers give; io.weight is not there without bfq or iocost
+      # (systemd skips what the kernel does not offer): said, not an error
+      if [ -e "$CG/cgroup.procs" ] && [ ! -e "$CG/$f" ]; then echo "systemctl set-property: $CG/$f is not offered by this kernel ($k skipped)" >&2; continue; fi
       echo "$v" > "$CG/$f" || { echo "systemctl set-property: cannot write $v to $CG/$f" >&2; exit 1; }
     done ;;
   show)
