@@ -358,6 +358,13 @@ exec /usr/share/udhcpc/default.script "$@"
 EOF
 }
 
+# md_dev_dir: mdadm makes /dev/md when it first assembles a mirror, with the umask of whoever runs it (the executor
+# runs the actions with 0077): drwx------, and QEMU, which runs as qemu-libvirtd, cannot open /dev/md/<name>
+# ("Could not open '/dev/md/st5-probe-root': Permission denied", the lab). Made 0755 first, mdadm uses it.
+md_dev_dir() {
+  run install -d -m 0755 "${HPS_ROOT}/dev/md"
+}
+
 # libvirt_prepare: the package autostarts libvirt's own NAT network (virbr0, dnsmasq, iptables); HPS makes
 # its bridges itself (net-bridge-ensure), and the libvirtd profile does not allow dnsmasq or xtables
 # (the first lab compute node: apparmor="DENIED" operation="exec" ... name="/usr/sbin/dnsmasq"). Not started.
@@ -670,7 +677,11 @@ aa_sed_args() {
   # the programs the daemon starts (qemu to probe its capabilities, qemu-img, ip, ...): the nix text allows
   # the store's bin and sbin and the system path with PUx; here they are /usr/bin, /usr/sbin and /usr/local/bin
   # (the first lab compute node: apparmor="DENIED" operation="exec" ... name="/usr/bin/qemu-system-x86_64")
-  printf '%s\n' -e 's#^\([[:space:]]*\)/nix/store/\*/bin/\* PUx,#\1/usr/bin/* PUx,#' -e 's#^\([[:space:]]*\)/nix/store/\*/sbin/\* PUx,#\1/usr/sbin/* PUx,#' -e 's#^\([[:space:]]*\)/run/current-system/sw/bin/\* PUx,#\1/usr/local/bin/* PUx,#'
+  printf '%s\n' -e 's#^\([[:space:]]*\)/nix/store/\*/bin/\* PUx,#\1/usr/bin/* PUx,#' -e 's#^\([[:space:]]*\)/nix/store/\*/sbin/\* PUx,#\1/usr/sbin/* PUx,#' -e 's#^\([[:space:]]*\)/run/current-system/sw/bin/\* PUx,#\1/usr/local/bin/* PUx,\n\1/sbin/* PUx,\n\1/bin/* PUx,#'
+  # the guest (abstraction libvirt-qemu, and the bridge helper's child): the nix text lets QEMU read the whole store
+  # (its libraries, firmware, ROMs); Alpine's are under /usr/lib, /usr/share and /lib (the first lab guest: DENIED
+  # open /usr/share/qemu/efi-virtio.rom and kvmvapic.bin, then "failed to find romfile")
+  printf '%s\n' -e 's#^\([[:space:]]*\)/nix/store/\*\* mr,#\1/usr/lib/** mr,\n\1/usr/share/** r,\n\1/lib/** mr,#'
 }
 aa_libvirt_check() {
   if [[ ! -x "$(aa_helper_path)" ]]; then

@@ -256,6 +256,7 @@ AUTO -all
 EOF
   svc_mask mdadm-last-resort@.timer mdadm-last-resort@.service
   md_monitor
+  md_dev_dir
 }
 
 #-------------------------------------------------------------------------------

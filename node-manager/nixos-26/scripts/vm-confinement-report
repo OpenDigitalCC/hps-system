@@ -31,6 +31,8 @@ set -euo pipefail
 : "${HPS_PROC:=/proc}"
 : "${HPS_SYS:=/sys}"
 : "${HPS_QEMU_CONF:=/var/lib/libvirt/qemu.conf}"
+# a node without the nix layout keeps it where libvirt reads it
+[[ -r "$HPS_QEMU_CONF" || ! -r /etc/libvirt/qemu.conf ]] || HPS_QEMU_CONF=/etc/libvirt/qemu.conf
 
 log() {
   printf '[vm-confinement-report] %s\n' "$*" >&2
@@ -144,7 +146,7 @@ check4_apparmor() {
   prof="$HPS_SYS/kernel/security/apparmor/profiles"
   if [[ -r "$prof" ]]; then
     n=$(wc -l < "$prof")
-    lv=$(grep -cE '^(libvirtd|/nix/store/[^ ]*/sbin/\.libvirtd-wrapped) ' "$prof" || true)
+    lv=$(grep -cE '^(libvirtd|/usr/sbin/libvirtd|/nix/store/[^ ]*/sbin/\.libvirtd-wrapped) ' "$prof" || true)
     gl=$(grep -c '^libvirt-' "$prof" || true)
     printf 'CHECK4 apparmor profiles: total=%s libvirtd=%s guest=%s\n' "$n" "$lv" "$gl"
   else

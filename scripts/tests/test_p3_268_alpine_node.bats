@@ -322,6 +322,13 @@ with_driver() {
   # the programs the daemon starts are allowed as the nix text allows the store's (qemu's capability probe was denied)
   grep -qxF '  /usr/bin/* PUx,' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
   grep -qxF '  /usr/sbin/* PUx,' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
+  grep -qxF '  /sbin/* PUx,' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd"
+  # the guest reads QEMU's firmware and ROMs and its libraries from /usr (the nix text: the whole store)
+  grep -qxF '/usr/share/** r,' "$HPS_ROOT/etc/apparmor.d/abstractions/libvirt-qemu"
+  grep -qxF '/usr/lib/** mr,' "$HPS_ROOT/etc/apparmor.d/abstractions/libvirt-qemu"
+  ! grep -q '^/nix/store' "$HPS_ROOT/etc/apparmor.d/abstractions/libvirt-qemu"
+  # /dev/md exists 0755 before mdadm makes it (QEMU runs as an unprivileged user)
+  [ "$(stat -c %a "$HPS_ROOT/dev/md")" = 755 ]
   ! grep -q 'libvirtd-wrapped' "$HPS_ROOT/etc/apparmor.d/hps/libvirtd" "$HPS_ROOT/etc/apparmor.d/abstractions/libvirt-qemu"
   grep -q "$TEST_DIR/usr/sbin/apparmor_parser Ux" "$HPS_ROOT/etc/apparmor.d/hps/virt-aa-helper"
   # loaded before libvirtd starts
@@ -407,7 +414,7 @@ with_driver() {
   names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
   # the interface init and role call: every one is in both
   for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
-    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare libvirt_prepare iscsi_links refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare md_dev_dir libvirt_prepare iscsi_links refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
   done

@@ -128,3 +128,14 @@ teardown() {
   run bash "$S/vm-confinement-report" -x
   [ "$status" -eq 2 ]
 }
+
+@test "an Alpine layout: libvirtd's profile is /usr/sbin/libvirtd, and a node without /var/lib/libvirt/qemu.conf reads /etc/libvirt/qemu.conf" {
+  p3_20_fake_dom vm1 running
+  p3_20_proc 4242 vm1 1000 0000000000000000 2 "libvirt-aaaa (enforce)"
+  printf '/usr/sbin/libvirtd (enforce)\nlibvirt-aaaa (enforce)\nother (complain)\n' > "$HPS_SYS/kernel/security/apparmor/profiles"
+  run bash "$S/vm-confinement-report" vm1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CHECK4 apparmor profiles: total=3 libvirtd=1 guest=1"* ]]
+  # the script's own default and fallback (not the test hook): a missing nix path with an etc one is read from etc
+  grep -q 'HPS_QEMU_CONF=/etc/libvirt/qemu.conf' "$S/vm-confinement-report"
+}
