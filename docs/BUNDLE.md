@@ -203,6 +203,29 @@ installation's key extraction is outside this step). The IPS serves only
 well-formed lines without options in front (no `command=`, no `from=`), and the
 node checks the same again. A public key is not a secret.
 
+The operator keeps the file with `hps-cluster-config sysadmin-key`, run on the IPS:
+
+```
+hps-cluster-config sysadmin-key list
+hps-cluster-config sysadmin-key add key.pub          # or: ... add -   (the key on stdin)
+hps-cluster-config sysadmin-key remove <fingerprint-or-comment>
+```
+
+`list` prints the type, the SHA256 fingerprint and the comment of each key (the
+fingerprint is computed by the tool, so `ssh-keygen` is not needed on the IPS).
+`add` takes one line only: an `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521` or
+`ssh-rsa` key (RSA of at least 3072 bits; DSA is refused), valid base64 whose
+embedded type matches the line, no options field, and nothing that looks like a
+private key (a refused input is never echoed). A key already in the file, found by
+comparing the key itself and not the comment, is refused. The file is written
+whole and renamed into place, mode 0644. `remove` refuses to take the last key
+unless `--allow-empty` is given, because nodes would then have no human access
+at their next refresh. Lines other than keys (comments) are kept as they are.
+
+Nodes take a change at the next `bundle-refresh` (`hps-run <host> bundle-refresh`,
+no reboot) or at their next boot; a running node keeps the keys it has until
+then.
+
 ## The refresh and the upgrade
 
 `bundle-refresh` is an allowlisted action with no arguments. It runs the
@@ -486,7 +509,7 @@ the boot (`plans/step3-trial.md`).
 
 | to | do |
 | --- | --- |
-| give the installation's sysadmin key | write `<config>/sysadmin_authorized_keys` |
+| give the installation's sysadmin key, or change it | `hps-cluster-config sysadmin-key add key.pub` (`list`, `remove`), then `hps-run <host> bundle-refresh` on each node, or the next boot |
 | put a locally built package (a new agent) on the IPS | `hps-starter add-local nixos --from <cache> <store path>`, name it in `nixos.packages`, then `hps-starter sync nixos --only repository` |
 | bring running nodes to the new agent | `hps-run <host> bundle-refresh` on each (no reboot) |
 | see what a node will get | `curl 'http://<ips>/cgi-bin/boot_manager.sh?cmd=node_packages'` from the node; or the IPS log `node packages served` |

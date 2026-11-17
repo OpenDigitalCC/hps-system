@@ -483,6 +483,20 @@ The storage-fault keys `vm_disk_error_policy`, `iscsi_max_sectors_kb`,
 `iscsi_replacement_timeout` and `storage_min_free_pct` are set the same way;
 what they do is in `docs/STORAGE-FAULTS.md`.
 
+`hps-cluster-config sysadmin-key list [--json]`
+: Lists the installation's sysadmin SSH public keys: type, SHA256 fingerprint, comment.
+
+`hps-cluster-config sysadmin-key add FILE|-`
+: Adds the one public key in FILE (or on stdin). Refused: more than one line,
+  options, DSA, RSA under 3072 bits, a base64 error, a private key, a duplicate
+  key. Written atomically, mode 0644.
+
+`hps-cluster-config sysadmin-key remove FINGERPRINT|COMMENT [--allow-empty]`
+: Removes one key. The last key is refused without `--allow-empty`. Nodes take a
+  change at the next `bundle-refresh` or boot. `--config-base DIR` selects another
+  config base; the file is for the installation, not a cluster, so `--cluster` does not
+  apply. Exit 3 refused, 4 no such key.
+
 Through `hps-op`, values that do not fit an argument go through
 `hps-cluster-config-apply` with `--input`.
 

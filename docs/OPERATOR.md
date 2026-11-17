@@ -73,6 +73,7 @@ executor.
 | --- | --- | --- |
 | `hps-onboard` | `bin/hps-onboard` | - |
 | `hps-cluster-config` | `bin/hps-cluster-config` | arguments only (no `apply FILE`: no argument names a file) |
+| `hps-cluster-config sysadmin-key` | `bin/hps-cluster-config` | `list` and `remove <comment>` work as arguments; `add` needs a file or stdin, so it is run on the IPS (a fingerprint contains `/` for some keys, so remove those by comment) |
 | `hps-cluster-config-apply` | `bin/hps-cluster-config apply -` | `--dry-run`, `--json`; the `key = value` lines are the run's input (`input=raw`) |
 | `hps-bmc` | `bin/hps-bmc` | `status`, `list`, `set`, `select` |
 | `hps-bmc-credential` | `bin/hps-bmc credential` | the user and password lines are the run's confidential input (`input=raw`) |

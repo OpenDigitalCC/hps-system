@@ -12,6 +12,15 @@ grouped into thematic spans rather than version headings. Full detail always
 lives in the git log; follow a commit ref into the log for the specifics. New
 capabilities and removals are called out explicitly.
 
+## Sysadmin key verb (2026-11-17)
+
+- **Added** `hps-cluster-config sysadmin-key list|add|remove`: the operator's way to keep
+  `<config>/sysadmin_authorized_keys`, which nodes fetch as `cmd=node_sysadmin_keys`. One line,
+  ed25519, ecdsa or rsa of 3072 bits or more (DSA refused), base64 decoded and the embedded
+  type checked, no options, no private key (never echoed), no duplicate by key blob; fingerprint
+  computed in Perl; atomic write, mode 0644; removing the last key needs `--allow-empty`.
+  Nodes take a change at the next `bundle-refresh` or boot. `docs/BUNDLE.md`.
+
 ## Registry values keep their text (2026-11-17)
 
 - **Fixed** registry values that look like numbers being turned into floats. The Bash wrappers

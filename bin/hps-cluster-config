@@ -7,6 +7,7 @@ use lib "$RealBin/../lib/perl";
 use Getopt::Long qw(GetOptionsFromArray);
 use JSON::PP;
 use HPS::ClusterConfig;
+use HPS::SysadminKey;
 
 my %EXIT = (usage => 2, refused => 3, notfound => 4, failed => 1);
 
@@ -21,6 +22,9 @@ Usage:
   hps-cluster-config [--cluster NAME] set KEY VALUE [--dry-run] [--json]
   hps-cluster-config [--cluster NAME] apply FILE|- [--dry-run] [--json]
   hps-cluster-config [--cluster NAME] export [--json]
+  hps-cluster-config [--config-base DIR] sysadmin-key list [--json]
+  hps-cluster-config [--config-base DIR] sysadmin-key add FILE|-
+  hps-cluster-config [--config-base DIR] sysadmin-key remove FINGERPRINT|COMMENT [--allow-empty]
 FILE holds "key = value" lines (# comments, blank lines) or a JSON object.
 The cluster defaults to ACTIVE_CLUSTER.
 Exit: 0 ok, 2 usage, 3 refused (validation errors; nothing written),
@@ -116,11 +120,74 @@ sub do_apply {
     return $bad ? $EXIT{refused} : 0;
 }
 
+# sysadmin-key: the installation's sysadmin SSH public keys, <config>/sysadmin_authorized_keys.
+# Not a cluster key (one file for the installation), so --cluster does not apply.
+sub do_sysadmin_key {
+    my ($config_base, $json, $allow_empty, $verb, @args) = @_;
+    return usage('sysadmin-key needs list, add or remove') unless defined $verb;
+    my $sk = HPS::SysadminKey->new(defined $config_base ? (config_base => $config_base) : ());
+    my $rc = eval {
+        if ($verb eq 'list') {
+            return usage('sysadmin-key list takes no arguments') if @args;
+            my @e = $sk->entries;
+            if ($json) {
+                print $JS->encode([ map { $_->{bad} ? { line => $_->{number}, error => 'unreadable' }
+                    : { type => $_->{type}, bits => $_->{bits}, fingerprint => $_->{fingerprint}, comment => $_->{comment} } } @e ]);
+            }
+            else {
+                print STDERR "hps-cluster-config: no sysadmin key in " . $sk->file . "\n" unless @e;
+                printf "%s %s %s\n", $_->{type}, $_->{fingerprint}, $_->{comment} eq '' ? '(no comment)' : $_->{comment}
+                    for grep { !$_->{bad} } @e;
+                print STDERR "hps-cluster-config: line $_->{number} of " . $sk->file . " is not a readable key\n"
+                    for grep { $_->{bad} } @e;
+            }
+        }
+        elsif ($verb eq 'add') {
+            return usage('sysadmin-key add needs FILE or -') unless @args == 1;
+            my $text = read_key_source($args[0]);
+            my $k = $sk->add($text);
+            print "added $k->{type} $k->{fingerprint} " . ($k->{comment} eq '' ? '(no comment)' : $k->{comment}) . "\n";
+            print "Nodes take the change at their next bundle-refresh or boot.\n";
+        }
+        elsif ($verb eq 'remove') {
+            return usage('sysadmin-key remove needs one fingerprint or comment') unless @args == 1;
+            my $k = $sk->remove($args[0], allow_empty => $allow_empty);
+            print "removed $k->{type} $k->{fingerprint} " . ($k->{comment} eq '' ? '(no comment)' : $k->{comment}) . "\n";
+            print "Nodes take the change at their next bundle-refresh or boot.\n";
+        }
+        else { return usage("unknown sysadmin-key verb '$verb'") }
+        0;
+    };
+    return $rc if defined $rc;
+    my $err = $@;
+    if (ref $err && $err->isa('HPS::SysadminKey::Error')) {
+        print STDERR 'hps-cluster-config: ' . $err->message . "\n";
+        return $EXIT{ $err->kind } // 1;
+    }
+    print STDERR "hps-cluster-config: $err";
+    return 1;
+}
+
+# The key text from a file or, for '-', standard input; bounded, so a wrong file is not slurped whole.
+sub read_key_source {
+    my ($src) = @_;
+    my $fh;
+    if ($src eq '-') { $fh = \*STDIN }
+    else {
+        open($fh, '<', $src) or die HPS::SysadminKey::Error->new(notfound => "Cannot read $src: $!");
+    }
+    my $text = '';
+    read($fh, $text, HPS::SysadminKey::MAX_INPUT + 1);
+    return $text;
+}
+
 sub main {
     my @argv = @_;
-    my ($json, $dry, $cluster);
-    GetOptionsFromArray(\@argv, 'json' => \$json, 'dry-run' => \$dry, 'cluster=s' => \$cluster) or return usage();
+    my ($json, $dry, $cluster, $allow_empty, $config_base);
+    GetOptionsFromArray(\@argv, 'json' => \$json, 'dry-run' => \$dry, 'cluster=s' => \$cluster,
+        'allow-empty' => \$allow_empty, 'config-base=s' => \$config_base) or return usage();
     my $cmd = shift @argv // return usage('command required');
+    return do_sysadmin_key($config_base, $json, $allow_empty, @argv) if $cmd eq 'sysadmin-key';
     my $cc = HPS::ClusterConfig->new(cluster => $cluster);
     my $rc = eval {
         if ($cmd eq 'questions') {
