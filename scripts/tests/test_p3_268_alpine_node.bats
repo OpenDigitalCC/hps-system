@@ -15,9 +15,11 @@ setup() {
   export HPS_RUN_DIR="$TEST_DIR/run" HPS_ROOT="$TEST_DIR/root" HPS_CMDLINE="$TEST_DIR/cmdline"
   export HPS_PKG_PREFIX="$TEST_DIR/usr" HPS_PKG_ETC="$TEST_DIR/root/etc"
   export HPS_OPENRC_DIR="$TEST_DIR/initd" HPS_LIB_MODULES="$TEST_DIR/lib/modules"
+  export HPS_ZVOL_ID="$TEST_DIR/zvol_id"
   export HPS_UDHCPC="$TEST_DIR/bin/udhcpc"
   export HPS_APK="$TEST_DIR/bin/apk" HPS_RC_SERVICE="$TEST_DIR/bin/rc-service"
   export HPS_PATH_EXTRA="$TEST_DIR/bin:$TEST_DIR/usr/bin" HPS_CPUINFO="$TEST_DIR/cpuinfo" HPS_FETCH_RETRY=0
+  printf "#!/bin/bash\n" > "$TEST_DIR/zvol_id"; chmod +x "$TEST_DIR/zvol_id"
   mkdir -p "$TEST_DIR/bin" "$TEST_DIR/serve" "$TEST_DIR/home/sysadmin" "$HPS_ROOT/etc/ssh" "$HPS_ROOT/etc/iscsi" \
     "$TEST_DIR/usr/bin" "$TEST_DIR/usr/sbin" "$TEST_DIR/usr/lib/hps-nagios-plugins" "$HPS_LIB_MODULES/6.18.63-0-lts" "$TEST_DIR/svc"
   echo "BOOT_IMAGE=vmlinuz-lts console=ttyS0 hps.ips=10.9.9.9 hps.mac=aa:bb:cc:dd:ee:ff hps.os=x86_64:alpine:3.24 hps.profile=STARTER hps.domain=lab.test hps.zfs_hostid=1a2b3c4d" > "$HPS_CMDLINE"
@@ -371,22 +373,60 @@ with_driver() {
   names() { grep -oE '^[a-z_]+\(\)' "$1" | sort -u; }
   # the interface init and role call: every one is in both
   for f in adapter_init pkg_add pkg_realise pkg_kind pkg_agent_dir pkg_nagios_check pkg_nagios_plugins pkg_stamp svc_start svc_restart_later \
-    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
+    svc_reload svc_ensure svc_mask svc_env fw_open user_unlock sudo_grant hostname_apply os_compat log_forward md_monitor zfs_hostid_set sshd_prepare refresh_watch zvol_links iscsid_conf_source aa_roots aa_parser_path aa_libvirtd_path aa_sed_args aa_libvirt_check; do
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/nixos.sh" || { echo "nixos.sh lacks $f"; return 1; }
     grep -qE "^$f\(\)" "$ROOT/node-manager/bundle/adapter/alpine.sh" || { echo "alpine.sh lacks $f"; return 1; }
   done
 }
 
-@test "bundle-refresh without systemd runs the bootstrap in the namespace of PID 1 (nsenter), with no argument from a dispatcher" {
+@test "bundle-refresh without systemd asks the node's refresh service (no setns: the first lab try: 'nsenter: reassociate to namespaces failed: Operation not permitted'), waits, relays its output and its status" {
   mkdir -p "$HPS_RUN_DIR/bundle"
   printf '#!/bin/sh\necho "bootstrap ran with: $*"\n' > "$HPS_RUN_DIR/bundle/bootstrap.sh"
-  printf '#!/bin/bash\necho "nsenter $*" >> "$CALLS"\nwhile [[ "$1" == --* ]]; do shift; [[ "$1" == 1 ]] && shift; done\nexec "$@"\n' > "$TEST_DIR/bin/nsenter"
-  chmod +x "$TEST_DIR/bin/nsenter"
-  HPS_SYSTEMD_RUN="$TEST_DIR/bin/no-systemd-run" PATH="$TEST_DIR/bin:$PATH" run bash "$ROOT/node-manager/bundle/actions/bundle-refresh"
+  # the service, run by hand here: the watch script the adapter writes, one pass
+  run bash "$TEST_DIR/bundle/init" boot
+  watch="$HPS_RUN_DIR/bin/hps-refresh-watch"
+  [ -x "$watch" ]
+  [ -e "$HPS_OPENRC_DIR/hps-refresh-watch" ]
+  grep -qx 'rc-service hps-refresh-watch start' "$CALLS"
+  ( HPS_RUN_DIR="$HPS_RUN_DIR" timeout 8 sh "$watch" > /dev/null 2>&1 & )
+  HPS_SYSTEMD_RUN="$TEST_DIR/bin/no-systemd-run" run bash "$ROOT/node-manager/bundle/actions/bundle-refresh"
   ok0
-  [[ "$output" == *"+ nsenter --target 1 --mount sh $HPS_RUN_DIR/bundle/bootstrap.sh refresh"* ]]
+  [[ "$output" == *"+ refresh requested of hps-refresh-watch"* ]]
   [[ "$output" == *"bootstrap ran with: refresh"* ]]
-  grep -q '^nsenter --target 1 --mount sh ' "$CALLS"
+  [ ! -e "$HPS_RUN_DIR/refresh.request" ]
+}
+
+@test "bundle-refresh without systemd: no answer is an error that names the service; the status of the bootstrap is the action's" {
+  mkdir -p "$HPS_RUN_DIR/bundle"
+  printf '#!/bin/sh\nexit 0\n' > "$HPS_RUN_DIR/bundle/bootstrap.sh"
+  HPS_REFRESH_TIMEOUT=2 HPS_SYSTEMD_RUN="$TEST_DIR/bin/no-systemd-run" run bash "$ROOT/node-manager/bundle/actions/bundle-refresh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no answer from hps-refresh-watch in 2 s"* ]]
+  [ ! -e "$HPS_RUN_DIR/refresh.request" ]
+  printf '#!/bin/sh\necho failing\nexit 7\n' > "$HPS_RUN_DIR/bundle/bootstrap.sh"
+  mkdir -p "$HPS_RUN_DIR/bin"
+  run bash "$TEST_DIR/bundle/init" boot
+  ( HPS_RUN_DIR="$HPS_RUN_DIR" timeout 8 sh "$HPS_RUN_DIR/bin/hps-refresh-watch" > /dev/null 2>&1 & )
+  HPS_SYSTEMD_RUN="$TEST_DIR/bin/no-systemd-run" run bash "$ROOT/node-manager/bundle/actions/bundle-refresh"
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"failing"* ]]
+}
+
+@test "init, Alpine, SCH: zvol links for the zvols (mdev rule and hook, a scan), zfs-udev is the package that brings zvol_id" {
+  printf '#!/bin/bash\n' > "$TEST_DIR/zvol_id"; chmod +x "$TEST_DIR/zvol_id"
+  export HPS_ZVOL_ID="$TEST_DIR/zvol_id"
+  run bash "$TEST_DIR/bundle/init" boot
+  ok0
+  head -n 1 "$HPS_ROOT/etc/mdev.conf" | grep -q "^zd\[0-9\]+(p\[0-9\]+)?.root:disk 0660 @$HPS_RUN_DIR/bin/zvol-mdev\$"
+  [ "$(grep -c zvol-mdev "$HPS_ROOT/etc/mdev.conf")" -eq 1 ]
+  run bash "$TEST_DIR/bundle/init" refresh
+  [ "$(grep -c zvol-mdev "$HPS_ROOT/etc/mdev.conf")" -eq 1 ]
+  # the hook: a zvol named by zvol_id gets its link
+  mkdir -p "$TEST_DIR/devfake"
+  grep -q 'ln -sf "/dev/$MDEV" "/dev/zvol/$name"' "$HPS_RUN_DIR/bin/zvol-mdev"
+  sh -n "$HPS_RUN_DIR/bin/zvol-mdev"
+  grep -qx 'zfs-udev' "$ROOT/lib/starter/alpine.packages"
+  grep -q '^SCH: .*zfs-udev' "$ROOT/lib/starter/alpine.roles"
 }
 
 # --- the four gaps: time, lease, host reserve, node-journal --------------------------
@@ -404,6 +444,7 @@ with_driver() {
   printf '#!/bin/bash\n[[ "$1 $2 $3" == "route get 10.9.9.9" ]] && echo "10.9.9.9 dev eth7 src 10.9.9.50 uid 0"\n' > "$TEST_DIR/bin/ip"
   printf '#!/bin/bash\necho "udhcpc $*" >> "$CALLS"\n' > "$TEST_DIR/bin/udhcpc"
   chmod +x "$TEST_DIR/bin/ip" "$TEST_DIR/bin/udhcpc"
+  export HPS_ZVOL_ID="$TEST_DIR/zvol_id"
   export HPS_UDHCPC="$TEST_DIR/bin/udhcpc"
   run bash "$TEST_DIR/bundle/init" boot
   ok0

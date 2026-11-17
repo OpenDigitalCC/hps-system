@@ -74,6 +74,8 @@ escalated. The owner ruled that the healer reassembles the mirror.
 
 ## Alpine on the stock starter (2026-11-16)
 
+- **Fixed** `bundle-refresh` on Alpine: nsenter into the namespace of PID 1 is refused (CAP_SYS_CHROOT), so a service `hps-refresh-watch` in the init namespace runs the bootstrap on a request file the action makes.
+- **Fixed** zvols had no /dev/zvol links on Alpine (no udev): `zfs-udev`'s `zvol_id` with an mdev rule and hook.
 - **Fixed** the OpenRC scripts the Alpine adapter writes kept a `PATH` without OpenRC's own helpers (`ebegin: not found`; three role steps failed on the first paired node).
 - **Changed** `sync alpine` no longer rewrites the assembled starter when its inputs are unchanged (recorded in the manifest) and replaces a file only if its bytes differ, by rename.
 - **New** a `timedatectl show` for `node-facts` on Alpine.

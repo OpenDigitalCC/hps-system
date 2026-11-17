@@ -534,8 +534,7 @@ Differences a person should know, all in the adapter or the packages:
 - **The agent has no unit sandbox.** It runs as `ctrl-exec-agent` through `setpriv` with an empty
   capability and bounding set and `no_new_privs`; `ProtectSystem`, the system call filter and the rest
   of the NixOS unit have no OpenRC equivalent. The executor is root, as on NixOS.
-- **bundle-refresh** runs the bootstrap in the mount namespace of PID 1 with `nsenter` (there is no
-  `systemd-run`), with the capabilities of the node profile.
+- **bundle-refresh** has no `systemd-run` to escape the executor's private mount namespace, and `nsenter` into PID 1's namespace is refused (setns needs `CAP_SYS_CHROOT`, which the node profile lacks). The node runs `hps-refresh-watch`, an OpenRC service in the init namespace; the action makes an empty request file, waits and relays the output and exit status of the bootstrap.
 - **`systemctl` and `udevadm`** are two small scripts in `/run/hps/bin` (`os_compat`): `start`, `stop`,
   `restart`, `try-restart`, `cat` over `rc-service`; `set-property` and `show` say they are not available.
   `udevadm settle` is an `mdev -s` and a second. The node scripts are not forked.

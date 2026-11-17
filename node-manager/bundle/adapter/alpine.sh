@@ -291,6 +291,37 @@ cat "$log" | {
   if [ -n "$levels" ]; then grep -E " [a-z0-9]+\.($levels) "; else cat; fi
 } | tail -n "$n"
 EOF
+  # runs in the init namespace as a service; the bundle-refresh action asks it (no systemd-run here)
+  write_if_changed "$d/hps-refresh-watch" 0755 << 'EOF'
+#!/bin/sh
+# hps-refresh-watch (written by the HPS node bundle, adapter/alpine.sh): waits for the request
+# file the bundle-refresh action makes, runs the bootstrap of the bundle in this namespace
+# and leaves its output and exit status where the action reads them.
+R="${HPS_RUN_DIR:-/run/hps}"
+while :; do
+  if [ -e "$R/refresh.request" ]; then
+    rm -f "$R/refresh.request"
+    sh "$R/bundle/bootstrap.sh" refresh > "$R/refresh.out" 2>&1
+    echo $? > "$R/refresh.rc.new"
+    mv "$R/refresh.rc.new" "$R/refresh.rc"
+  fi
+  sleep 1
+done
+EOF
+  # mdev's rule and hook for zvols: the /dev/zvol/<pool>/<dataset> links that udev's 60-zvol.rules make
+  write_if_changed "$d/zvol-mdev" 0755 << 'EOF'
+#!/bin/sh
+# mdev hook for zvols (written by the HPS node bundle, adapter/alpine.sh)
+case "$ACTION" in
+  add)
+    name="$(/usr/lib/udev/zvol_id "/dev/$MDEV" 2> /dev/null)" || exit 0
+    [ -n "$name" ] || exit 0
+    mkdir -p "/dev/zvol/$(dirname "$name")"
+    ln -sf "/dev/$MDEV" "/dev/zvol/$name" ;;
+  remove)
+    find /dev/zvol -type l -lname "/dev/$MDEV" -delete 2> /dev/null ;;
+esac
+EOF
   write_if_changed "$d/udhcpc-hps" 0755 << 'EOF'
 #!/bin/sh
 # udhcpc's script for a node that is already on the network (written by the HPS node
@@ -305,6 +336,24 @@ EOF
 # init checks the configuration (sshd -t, which needs a key) before it starts the service.
 sshd_prepare() {
   run ssh-keygen -A
+}
+
+# refresh_watch: the service the bundle-refresh action asks (see os_compat)
+refresh_watch() {
+  svc_start hps-refresh-watch "PATH=$(role_path)" "HPS_RUN_DIR=$HPS_RUN_DIR" "$HPS_RUN_DIR/bin/hps-refresh-watch"
+}
+
+# zvol_links: zfs-udev's zvol_id names a zvol, mdev's rule runs the hook for each zd device (there is
+# no udev here to make /dev/zvol/<pool>/<dataset>), and a scan makes the links of the zvols there are
+zvol_links() {
+  local conf="${HPS_ROOT}/etc/mdev.conf"
+  [[ -x "${HPS_ZVOL_ID:-/usr/lib/udev/zvol_id}" ]] || { log "zvol_id (the package zfs-udev) is not installed: no /dev/zvol links"; return 1; }
+  grep -q 'zvol-mdev' "$conf" 2> /dev/null || {
+    { printf 'zd[0-9]+(p[0-9]+)?\troot:disk 0660 @%s/bin/zvol-mdev\n' "$HPS_RUN_DIR"; cat "$conf" 2> /dev/null || true; } > "$conf.new"
+    run mv -f "$conf.new" "$conf"
+  }
+  command -v mdev > /dev/null 2>&1 && run mdev -s
+  return 0
 }
 
 # time_sync <ips>: the clock is kept in step with the IPS after boot, the source the NixOS

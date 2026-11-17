@@ -275,6 +275,10 @@ hostname_apply() {
 # os_compat: the programs the OS lacks, for the scripts: none (systemd is here)
 os_compat() { return 0; }
 
+# refresh_watch, zvol_links: systemd-run runs the refresh; udev makes the zvol links
+refresh_watch() { return 0; }
+zvol_links() { return 0; }
+
 # sshd_prepare: sshd's host keys exist already
 sshd_prepare() { return 0; }
 

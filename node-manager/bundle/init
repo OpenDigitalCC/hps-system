@@ -389,6 +389,7 @@ step_packages
 step_agent
 step_legacy
 net_keep_lease
+refresh_watch
 role_pre
 step_pair
 persist_hostname

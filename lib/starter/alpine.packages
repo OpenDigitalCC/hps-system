@@ -64,6 +64,7 @@ xxd
 # storage
 targetcli
 py3-rtslib
+zfs-udev
 mdadm
 smartmontools
 dbus

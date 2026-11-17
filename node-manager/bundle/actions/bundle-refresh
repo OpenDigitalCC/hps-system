@@ -39,12 +39,29 @@ if [[ ! -f "$BOOTSTRAP" ]]; then
 fi
 
 # No systemd (Alpine): the executor runs this action in a private mount namespace with the
-# agent's configuration read-only. The refresh must write that configuration and start
-# services, so it runs in the namespace of PID 1 (nsenter, util-linux), with the same
-# capabilities the action has (the node profile of agent.conf).
-if ! command -v "$HPS_SYSTEMD_RUN" > /dev/null 2>&1 && command -v nsenter > /dev/null 2>&1; then
-  printf '+ nsenter --target 1 --mount sh %s refresh\n' "$BOOTSTRAP" >&2
-  exec nsenter --target 1 --mount sh "$BOOTSTRAP" refresh < /dev/null
+# agent's configuration read-only, and the refresh must write that configuration and start
+# services. nsenter into PID 1's namespace is refused (setns needs CAP_SYS_CHROOT, which the
+# node profile does not have), so the node runs a small service in the init namespace
+# (hps-refresh-watch, adapter/alpine.sh) that waits for a request file. This action makes the
+# request, waits for the answer and relays its output. The request has no content: nothing a
+# dispatcher sends names an address or a file.
+if ! command -v "$HPS_SYSTEMD_RUN" > /dev/null 2>&1; then
+  req="$HPS_RUN_DIR/refresh.request"
+  rm -f "$HPS_RUN_DIR/refresh.rc" "$HPS_RUN_DIR/refresh.out"
+  : > "$req"
+  printf '+ refresh requested of hps-refresh-watch (%s)\n' "$req" >&2
+  waited=0
+  while [[ ! -e "$HPS_RUN_DIR/refresh.rc" ]]; do
+    if ((waited >= ${HPS_REFRESH_TIMEOUT:-600})); then
+      rm -f "$req"
+      echo "bundle-refresh: no answer from hps-refresh-watch in ${HPS_REFRESH_TIMEOUT:-600} s (is the service running: rc-service hps-refresh-watch status)" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  cat "$HPS_RUN_DIR/refresh.out" 2> /dev/null || true
+  exit "$(cat "$HPS_RUN_DIR/refresh.rc")"
 fi
 
 printf '+ systemd-run --wait --pipe sh %s refresh\n' "$BOOTSTRAP" >&2

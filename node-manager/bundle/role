@@ -279,6 +279,7 @@ role_storage() {
   role_need zpool zfs targetcli mdadm smartctl xxd jq
   zfs_hostid_set
   role_stock_services
+  zvol_links
   role_modules zfs target_core_mod iscsi_target_mod target_core_iblock
   # targetcli drives LIO through configfs; systemd mounts it, OpenRC does not
   if [[ -n "${MOUNT_CONFIGFS:-}" ]]; then mountpoint -q /sys/kernel/config || run mount -t configfs none /sys/kernel/config; fi
